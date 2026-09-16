@@ -1,0 +1,255 @@
+# Runs what `make all` runs, plus the two things the project's own guides put
+# in the definition of done: the race detector, and a check that no dependency
+# crept in; and then the deployment guide itself, under the runner's systemd,
+# and the relay kit, under another runner's.
+#
+# See .claude/guides/TESTING.md for what these are meant to prove.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Nothing here needs to write to the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: vet, test, build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Developed on macOS, deployed on Linux. modernc.org/sqlite is pure Go,
+        # so both must work and neither is the one that matters.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # The one place the version is written down is go.mod, which needs
+          # 1.27 for crypto/hpke and crypto/mldsa.
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: make vet test build
+        run: make vet test build
+
+      # A test that passes four times in five is a failing test, and a single
+      # run will not tell you which one it is. Several of these use real
+      # sockets and a real clock, so the repeat is worth its minute.
+      - name: repeat the suite, to catch flakes
+        run: go test -count=3 ./...
+
+      # The agent's hardening, peer-credential and lock files are
+      # build-tagged per platform, and Windows is the platform nobody here
+      # runs. A cross-compile and vet is what catches a build tag that
+      # leaves a platform with no definition, or two; it proves nothing
+      # about behaviour, and the README says the project is not tested
+      # there.
+      - name: the build tags cover windows
+        if: matrix.os == 'ubuntu-latest'
+        run: GOOS=windows go vet ./...
+
+  windows:
+    name: the agent on windows
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # Everything builds for Windows, and nothing else in this file runs
+      # there: the relay is deployed on Linux, and auu-ca and the relay
+      # refuse files by Unix mode, which Go makes up on Windows. What is
+      # run is the part that has a Windows-specific implementation — the
+      # agent's socket, the lock file (internal/lockfile, which the agent
+      # and a fetch share), the detached start, and the client's reading of
+      # a dead socket — through the packages that are it and the agent's
+      # end-to-end tests in internal/auu, which start the agent as a real
+      # second process. 'auu serve' runs here too: it starts a handler
+      # through the platform shell, cmd /c here and /bin/sh -c everywhere
+      # else, and its tests use this binary as the handler rather than a
+      # shell script so that they can. The two of them that are about Unix
+      # — a pipeline in an exec line, killing a process group — skip
+      # themselves. The rest of internal/auu assumes a shell
+      # and Unix file modes and is not run here; the alternation names the
+      # tests that do run and is the thing to extend when one is added.
+      - name: go build ./...
+        run: go build ./...
+
+      - name: the agent, the lock file, the store and the key formats
+        run: go test -count=1 ./internal/agent/ ./internal/lockfile/ ./internal/store/ ./internal/keyfile/ ./internal/identity/ ./internal/term/
+
+      - name: the agent end to end, and serve, as second processes
+        run: go test -count=1 -run 'Agent|Passphrase|Unlock|Locked|PublicCommandsNeedNoAgent|InitForceRefusesAnEncryptedHome|HalfConvertedHome|SkillsExitCode|Serve' ./internal/auu/
+
+  race:
+    name: race detector
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: make race
+        run: make race
+
+  dependencies:
+    name: no new dependencies
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # The project is standard library only, plus modernc.org/sqlite, plus
+      # golang.org/x/crypto/argon2 scoped to internal/keyfile, which encrypts
+      # auu-ca's private keys under a passphrase. It brings x/crypto/blake2b,
+      # which Argon2 is built on. Anything else is a design conversation, not
+      # a pull request.
+      - name: go.mod and go.sum are tidy and unchanged
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+      # A third-party package is one whose first path element is a domain, so
+      # it contains a dot. awk rather than a regex over the whole path: grep
+      # implementations disagree about backtracking, and this check must mean
+      # the same thing on a contributor's machine as it does here.
+      - name: the dependency tree is the one CLAUDE.md allows
+        run: |
+          set -euo pipefail
+          allowed='^(github\.com/tropeforce7/agentuucp|modernc\.org/|golang\.org/x/crypto/(argon2|blake2b)$|github\.com/dustin/go-humanize|github\.com/google/uuid|github\.com/mattn/go-isatty|github\.com/ncruces/go-strftime|github\.com/remyoudompheng/bigfft|golang\.org/x/sys)'
+          unexpected=$(go list -deps ./... | awk -F/ '$1 ~ /\./' | grep -Ev "$allowed" || true)
+          if [ -n "$unexpected" ]; then
+            echo "unexpected dependencies:"
+            echo "$unexpected"
+            exit 1
+          fi
+          echo "dependency tree is within the allowed set"
+
+      # crypto/hpke, crypto/ed25519, crypto/sha256 and crypto/rand are the
+      # whole of the message cryptography. The step above already refuses
+      # anything outside the allowed set, so this is a backstop for the case
+      # where somebody widens that list: allowing golang.org/x/crypto wholesale
+      # would let a construction in, and this still fires on it. The two
+      # packages let through are the Argon2id internal/keyfile derives a file
+      # key with and the BLAKE2b inside it; no message and no connection
+      # touches either. Matching on names is a heuristic and will not catch a
+      # crypto package with an innocuous name, which is why it is second and
+      # not first.
+      - name: no third-party cryptography
+        run: |
+          set -euo pipefail
+          crypto=$(go list -deps ./... \
+            | awk -F/ '$1 ~ /\./' \
+            | grep -Ei 'crypt|cipher|hash|hmac|curve|ecdsa|ed25519|mlkem|hpke|kyber|dilithium' \
+            | grep -Ev '^golang\.org/x/crypto/(argon2|blake2b)$' || true)
+          if [ -n "$crypto" ]; then
+            echo "a third-party cryptography package appeared in the dependency tree:"
+            echo "$crypto"
+            exit 1
+          fi
+          echo "message cryptography is standard library only"
+
+  systemd:
+    name: the deployment guide under systemd
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      - name: make build
+        run: make build
+
+      # docs/deploy-linux.md steps 2 to 7 on the runner, whose systemd is
+      # PID 1: the shipped unit and settings, the bundle sealed by
+      # systemd-creds and unsealed by LoadCredentialEncrypted=, a machine
+      # enrolling over the certificate the relay minted from it, a rotation,
+      # and the unit with its credential line taken away. systemd only warns
+      # about a directive it does not know, which is how a misspelled
+      # LoadCredentialEncrypted= would silently start a relay with no bundle;
+      # the script turns that warning into a failure. It installs a relay on
+      # the runner and removes it, which is why it runs as root and why it
+      # refuses a machine that already has one.
+      - name: docs/deploy-linux.md, steps 2 to 7, as root
+        run: sudo env AUU_BIN="$PWD/bin" bash scripts/systemd-check.sh
+
+  install:
+    name: the install script on a machine with nothing
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # No setup-go: the point of the script is a host that has none, and
+      # the check runs inside ubuntu:24.04, which has no curl, no git and
+      # no Go. It holds GO_MIN to go.mod's floor, parses the script, runs
+      # shellcheck — the runner has one — and then installs four times over
+      # in the container: from a checkout, again to prove it changes
+      # nothing, --relay for the fourth binary, and unprivileged, which has
+      # to find the Go the first install put on the machine. The token path
+      # needs a secret and is not run here; it is proved by hand.
+      - name: scripts/install-check.sh
+        run: sh scripts/install-check.sh
+
+  kit:
+    name: the relay kit under systemd
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+
+      # The installer is POSIX sh a stranger is meant to read, and the
+      # check script is bash; both are held to shellcheck, which the
+      # runner has.
+      - name: shellcheck
+        run: shellcheck -s sh internal/kit/install.sh && shellcheck scripts/kit-check.sh
+
+      # Static, so the relay the kit carries is the one a maker is told to
+      # build; a default Linux build with a C compiler present is
+      # dynamically linked, and the kit refuses it.
+      - name: CGO_ENABLED=0 make build
+        run: CGO_ENABLED=0 make build
+
+      # auu-ca kit and its install.sh on the runner, whose systemd is PID
+      # 1: a kit installed on a host with no relay, the relay up from the
+      # credential the script sealed, a machine enrolled; what the script
+      # refuses; a kit without its bundle; then update — a rotation, a kit
+      # that names no administrator, edited settings and administrators
+      # kept, a deleted unit put back — and the two refusals. Its own
+      # runner, since it and the guide's script each want a machine with
+      # no relay on it.
+      - name: auu-ca kit and install.sh, fresh and update, as root
+        run: sudo env AUU_BIN="$PWD/bin" bash scripts/kit-check.sh

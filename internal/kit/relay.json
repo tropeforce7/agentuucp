@@ -1,0 +1,18 @@
+{
+  "listen": ":9443",
+  "db": "/var/lib/auu/relay.db",
+  "registration": "token",
+  "public_url": "https://relay.example.com:9443",
+  "access_log": "minimal",
+  "admin": {
+    "authorized_file": "/etc/auu/admins",
+    "token_max_age": "720h"
+  },
+  "client_certs": {
+    "mode": "off"
+  },
+  "tls": {
+    "mode": "files",
+    "bundle_credential": "relay-bundle"
+  }
+}

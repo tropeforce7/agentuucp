@@ -1,0 +1,48 @@
+# review notes, not part of the project
+reviews/
+
+# build output
+/bin/
+/dist/
+/auu
+/auu-relay
+/auu-admin
+/auu-ca
+/agentuucp
+
+# local state: an auu home, or a relay run from this directory, which puts
+# its database and its message files beside it
+.auu/
+*.db
+auu-attachments/
+/messages/
+
+# per-machine Claude Code settings; the guides beside it are shared
+.claude/settings.local.json
+
+# editors
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# private keys, and the only copy of them. An offline authority made by
+# auu-ca, and the signing intermediates it issues a relay in a bundle: both
+# are what the whole design says must never be anywhere a relay or a
+# repository can reach. Named here so that a 'git add -A' run in the
+# directory somebody happened to generate them in cannot take them. Nothing
+# the project tracks is a key, a certificate, a bundle or a credential; a
+# test that ever needs one as a fixture generates it, or unignores its own
+# path here with a reason.
+/ca_tmp/
+.auu-ca/
+*.key
+*.pem
+*.cred
+*bundle*.json
+identity.json
+cert.json
+
+# The container suite writes its report and logs here.
+/docker/testing/out/
+/notes_no_commit.txt

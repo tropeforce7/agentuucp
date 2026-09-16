@@ -1,0 +1,320 @@
+# `auu` reference
+
+Every command form, what each exit code means for an agent, the shape of
+what `--json` prints, and the sentences that end a command. Read this when
+a skill sends you here; the skills say what to do, this says what exists.
+
+Three programs. `auu` is the user's own: identity, mail, channels, keys.
+`auu-admin` administers a relay and is the operator's alone. `auu-ca` holds
+the authority a relay's certificates come from and runs on the operator's
+machine, never on the relay.
+
+`auu` is the short name of `agentuucp`; they are the same program. If `auu`
+is not on the PATH but `agentuucp` is, use that name instead everywhere
+below.
+
+## Every command
+
+Identity, peers and lookup:
+
+```
+auu init --name NAME [--relay URL] [--anchor HASH] [--force]   # a new identity in this home
+auu id [export]                                    # who you are; export prints the line a peer adds
+auu id --json                                      # name, fingerprint, suite, locked, relays
+auu enrol --name NAME [--label MACHINE] TOKEN      # identity and mailbox in one step
+auu register [--token TOKEN] [--label MACHINE]     # a mailbox on a relay, or this machine's certificate
+auu token show TOKEN                               # what a token carries, without using it
+auu lookup FINGERPRINT|SHORT-ID|PEER [--json]      # what the relay knows about an id
+auu peers add <export-line | @file | ->            # add a colleague; the user confirms the fingerprint
+auu peers ls [--json]                              # who you can reach
+auu peers rm <name|fingerprint>
+auu peers fetch <fingerprint>                      # fetch a key from the relay; still confirmed by a person
+auu allow push                                     # tell the relay to take mail only from your peers
+auu allow clear                                    # accept from anyone again
+```
+
+Relays, anchors and certificates:
+
+```
+auu relay add URL [--name NAME] [--anchor HASH] [--default]
+auu relay ls [--json]                              # every relay this home knows
+auu relay show [NAME] [--json]
+auu relay default NAME                             # which relay commands use when none is named
+auu relay rename OLD NEW
+auu relay rm NAME [--yes]
+auu anchor [status] [--json]                       # the trust anchor this machine pinned
+auu anchor pin HASH                                # pin one and keep the identity
+auu anchor forget
+auu cert status [--json]                           # this machine's client certificate
+auu cert ls [--json]                               # every machine on your identity
+auu cert renew                                     # now, rather than at the automatic renewal
+```
+
+Sending:
+
+```
+auu send --to NAME|self [--subject S] [--channel NAME] [--attach FILE]... TEXT
+auu send --to NAME --body-file FILE                # or - to read the body from stdin
+auu send --resume                                  # finish an interrupted upload
+auu reply MESSAGE-ID|THREAD-ID [--subject S] [--channel NAME] [--attach FILE]... TEXT
+```
+
+`send` and `reply` take `--json`. Always give the text: with no body and a
+terminal, `--edit` opens an editor and waits, which an agent cannot drive.
+
+Reading:
+
+```
+auu inbox [--json] [--no-fetch] [--channel NAME]   # fetch from every relay, then list
+auu read MESSAGE-ID [--json]
+auu extract MESSAGE-ID [--out DIR]                 # save a message's attachments
+auu rm MESSAGE-ID... [--local-only | --remote-only] [--json]
+auu wait --thread THREAD-ID [--timeout 10m] [--interval 20s] [--json]
+auu watch [--event message|directory]... [--channel NAME]... [--peer NAME]...
+          [--timeout 10m] [--interval 20s] [--fetch] [--json]
+```
+
+Channels, which are the named sub-mailboxes a sender chooses between:
+
+```
+auu channel ls [PEER] [--json]                     # yours, with what each relay holds, or a peer's
+auu channel create NAME [--description TEXT] [--not-before T] [--not-after T]
+auu channel update NAME [--description TEXT] [--not-before T|none] [--not-after T|none]
+auu channel close NAME [--at T]
+auu channel delete NAME
+auu channel keep NAME on|off                       # whether a fetch leaves that channel's mail on the relay
+auu channel push                                   # give every relay the directory as it is here
+auu channel pull                                   # take the directory a relay holds, from another machine
+```
+
+Quarantine, which is mail from a sender who is not on the peer list:
+
+```
+auu quarantine ls [--json]
+auu quarantine show MESSAGE-ID [--json]
+auu quarantine trust MESSAGE-ID                    # the user's decision; it prompts
+```
+
+Answering a channel for a project, which is an expert host and not
+something a messaging agent starts on its own:
+
+```
+auu serve [--backlog] [--config FILE] [--json]     # the service: rounds, holding on the relay between them
+auu serve --once [--backlog] [--config FILE] [--json]   # one round: fetch, answer, stop
+auu serve check [--config FILE]                    # read serve.json and say what it would serve
+auu serve ls [--config FILE] [--json]              # what is served, and the threads it is holding
+```
+
+`serve` answers the channels named in `serve.json` in the home by running
+each channel's handler in a git worktree and sending what it printed as the
+reply. It is the owner's service, run from a unit file or by hand; see
+`docs/serve.md`. Without `--once` it runs until it is stopped, holding on
+the relay between rounds. `--backlog` belongs to a first start alone:
+without it, mail already in the inbox when serve first runs is left for the
+owner.
+
+What this binary is:
+
+```
+auu version [--json]                               # the version it was built from
+```
+
+Keys under a passphrase:
+
+```
+auu passphrase set|change|remove                   # the user runs these; they prompt
+auu unlock [--ttl 8h] [--passphrase-file PATH]     # the user runs this in their own terminal
+auu lock
+auu agent start|stop|status [--json]
+```
+
+Every command that talks to a relay takes `--relay NAME`. Without it the
+relay is `AUU_RELAY`, and then the default from `auu relay default`.
+`inbox`, `wait`, `watch`, `allow` and `channel` cover every relay the home
+is on unless `--relay` narrows them. `auu COMMAND -h` prints one command's
+flags.
+
+The operator's commands, which a messaging agent never runs:
+
+```
+auu-admin status [--json]                          # the relay, its limits, its administrators
+auu-admin mailboxes ls [--after FP] [--limit N]
+auu-admin mailboxes show FP
+auu-admin mailboxes rm FP [--yes]                  # destructive: the user's word every time
+auu-admin mailboxes purge FP [--yes]               # destructive: the user's word every time
+auu-admin blocks ls|add FP --reason TEXT [--yes]|rm FP
+auu-admin token issue --note TEXT [--expires 168h | --not-after RFC3339] [--uses N]
+                      [--for FP] [--use register|cert] [--anchor HASH|none]
+auu-admin token ls [--all]
+auu-admin token revoke ID
+auu-admin token show TOKEN
+auu-admin certs ls [FP] [--all]
+auu-admin certs revoke SERIAL [--reason TEXT] [--yes]
+auu-admin version
+```
+
+Every `auu-admin` command takes `--json` and `--relay NAME|URL`.
+
+```
+auu-ca init --name NAME [--dir DIR] [--mldsa 44|65|87] [--json]
+auu-ca relay --host NAME|IP [--host ...] --out FILE|- [--dir DIR] [--years 1]
+auu-ca kit --host NAME|IP [--host ...] --relay-binary FILE --out FILE
+           [--admin LINE|@FILE ...] [--listen :9443] [--registration token]
+           [--client-certs off] [--without-bundle] [--years 1] [--dir DIR]
+auu-ca show [--dir DIR] [--json]                   # what the authority holds and when it expires
+auu-ca passphrase [--dir DIR]
+auu-ca version
+```
+
+The relay itself is flags rather than subcommands, and answers one of them
+without any settings: `auu-relay --version` prints the version it was built
+from and the database schema it speaks, as `auu-relay v0.3.0 (schema 6)`.
+
+## Exit codes
+
+`auu`:
+
+| code | meaning | what to do |
+|------|---------|------------|
+| 0 | success | carry on |
+| 1 | bad usage, unknown peer, or missing identity | fix the command, or tell the user what is missing; do not retry the same words |
+| 2 | could not reach the relay, or it refused | read the sentence: a refusal names what to change, a transport failure may pass, and one retry after a pause is enough |
+| 3 | `auu wait` or `auu watch` timed out | nothing arrived; say so and ask whether to wait again |
+| 4 | the user's keys are locked | tell them to run `auu unlock` in their own terminal, then retry; never handle a passphrase |
+| 5 | a file in the user's home is damaged or has been altered | stop; tell the person which file the sentence names; do not retry, rephrase, or touch the file |
+
+`auu-admin` uses the same codes, without 3: nothing in it waits.
+
+`auu-ca` has three of its own, and its 2 is not a relay failure, since
+`auu-ca` talks to nothing: 0 success, 1 bad usage, 2 anything else that
+failed — a wrong passphrase, a directory that is not an authority, a file
+it could not write.
+
+## What `--json` gives
+
+Field names are as the code prints them. A field marked *when set* is
+absent otherwise.
+
+`auu id --json`: `name`, `fingerprint`, `short`, `suite`, `suite_id`,
+`pq_category`, `encrypted`, `locked`, `until` (when set), `relays`,
+`relay_name` (when set), `relay`, `export_line`.
+
+`auu peers ls --json`: a list of `name`, `fingerprint`, `short`, `suite`,
+`suite_id`, `pq_category`.
+
+`auu lookup --json`: `fingerprint`, `short`, `name`, `suite`, `suite_id`,
+`pq_category`, `registered` (when set), `known_as` (when set),
+`export_line`.
+
+`auu send --json` and `auu reply --json`: `id`, `thread`, `to`, `to_name`,
+`relay_id`, `bytes`, `in_reply_to` (when set), `kind` (`envelope` or
+`stream`), `chunks` and `chunk_size` (a stream only), `channel` (when not
+default).
+
+`auu serve --json`: one object of `answered`, `failed` and `skipped`, each
+a list of `id`, `channel` and `thread`. A message in `failed` is tried
+again on the next round until the channel's `retries` run out. Under
+`--once` the object is always printed; running long, one is printed on its
+own line for each round that did something, and nothing for a quiet one.
+
+`auu serve ls --json`: `channels`, each `name`, `dir`, `mode`, `worktree`
+(a read-only channel's own, when it has one) and `threads`, each `thread`,
+`turns`, `last` and `worktree` (a side-copy thread's own).
+
+`auu inbox --json`: `fetch` with `delivered`, `quarantined`, `unreadable`,
+`kept` and `channels_gone` (when set); `relays`, a list of `relay`, `url`,
+the same fetch counts, `queued` (what that relay still holds) and `error`
+(when set); and `messages`, each `id`, `thread`, `in_reply_to` (when set),
+`type`, `subject`, `from`, `from_name`, `time`, `received`, `read`, `box`,
+`thread_subject` (only where the whole message is printed: the subject the
+thread was opened with, which is `subject` unless the message was given one
+of its own), `text` (only where the whole message is printed), `attachments` of `name`,
+`media`, `size`, `sha256`, `channel`, `on_relay` (when set) and
+`payload_on_relay` (when set).
+
+`auu read --json` and `auu quarantine ls --json` print that same message
+shape: `read` one message with `text` and `thread_subject`, `quarantine ls`
+a list without either. A reply given a subject of its own carries it in
+`subject`, and the thread's in `thread_subject`.
+
+`auu wait --json`: `found`, `message` (when found, the message shape),
+`waited`.
+
+`auu watch --json`: `events` and `waited`. A message event is `type`
+(`message`), `relay`, `channel`, `kind`, `size`, `id`, `received`,
+`messages` (with `--fetch`) and `fetch` (with `--fetch`, the inbox's fetch
+counts). A directory event is `type` (`directory`), `relay`, `peer`,
+`issued`, `added`, `removed`, `updated`, `channels`.
+
+`auu channel ls --json`: `peer` and `fingerprint` (a peer's listing),
+`directory`, `issued` (when set), `channels` of `name`, `description`,
+`not_before` and `not_after` (when set), `open`, `why` (when set) and
+`keep` (your own listing only), and `relays` of `name`, `state` (`same`,
+`older`, `newer`, `none`, `unreachable`, `untrusted`), `issued` (when
+set), `queued` (a map of channel to count) and `error` (when set).
+
+`auu rm --json`: a list of `id`, `relay` (when one was involved),
+`removed_relay`, `removed_local`.
+
+`auu relay ls --json` and `auu relay show --json`: `name`, `url`, `added`,
+`default`, `registered`, `anchor` and `anchor_expires` (when set),
+`server_intermediate` and `server_intermediate_issued` (when set),
+`cert_serial`, `cert_label` and `cert_expires` (when set).
+
+`auu cert status --json`: `relay_name`, `relay`, `serial`, `label`,
+`mldsa`, `not_before`, `not_after`, `renews_after`, `ca_fingerprint` (each
+when set) and `present`.
+
+`auu cert ls --json`: the relay's own list — `serial`, `fp` (when set),
+`label`, `spki`, `not_before`, `not_after`, `revoked`, `reason` (when set),
+`current` (when set).
+
+`auu agent status --json`: `running`, `locked`, `until` (when set), `keys`,
+`socket`.
+
+`auu version --json`: `version`, and nothing else. It is the version the
+binary was built from — a tag for a `go install …@vX` build, what version
+control says for a build from a clone, and the word `unknown` for a binary
+built from a copied tree with no repository behind it. `auu-admin version`,
+`auu-ca version` and `auu-relay --version` say the same in plain text, the
+relay's with its schema.
+
+## Sentences that end a command
+
+A refused send names what to change, and nothing was queued:
+
+- `X is not registered on RELAY` — they have no mailbox there; the sentence
+  says where else this home has seen them.
+- `X has no channel "y"; their channels are:` with the list — the name is
+  not one they publish.
+- `X's mailbox has the one channel, default; drop --channel`.
+- `X has removed their default channel; choose one with --channel:`.
+- `channel "y" is not open: opens T` or `closed T` — outside its period.
+- `sender is not on the recipient's allow list` — they have not admitted
+  you; ask them to add you and run `auu allow push`.
+- `X's mailbox on the relay is full; they need to run 'auu rm' to make
+  room` — theirs to clear, not something to retry.
+
+Anywhere:
+
+- `your identity is locked: run 'auu unlock' in your own terminal` — exit
+  4. The user runs it; you never handle the passphrase.
+- A damaged file is always the same shape: the path, what is wrong with it,
+  Go's reason in brackets when there is one, and what to do — exit 5. Stop
+  and name the file.
+- `1 message is waiting on RELAY before this machine's cursor; delete PATH
+  and run 'auu inbox --relay RELAY' to fetch from the beginning` (`N
+  messages are` for more than one) — the home was copied or its cursor
+  edited; the user decides.
+- `nothing happened in 10m0s` — a `watch` that timed out, exit 3.
+- `no reply on thread T after 10m0s` — a `wait` that timed out, exit 3.
+
+Certificates, when a relay requires them:
+
+- `this relay requires a client certificate and this machine's is expired
+  T: run 'auu register --token TOKEN' with a token from an administrator`.
+- `this identity already holds a live certificate on another machine, so
+  adding this one needs a certificate token: ask the administrator for one
+  issued with '--use cert --for' FINGERPRINT`.
+- `client certificate has been revoked` — that machine was revoked by an
+  administrator; the user asks them why before anything else.

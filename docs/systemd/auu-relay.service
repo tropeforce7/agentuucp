@@ -1,0 +1,77 @@
+# auu-relay: the AgentUUCP relay, as a system service.
+#
+# Install as /etc/systemd/system/auu-relay.service. Everything the relay
+# writes lives under /var/lib/auu, which systemd creates and owns for it;
+# everything else on the filesystem is read-only to it. Ports 80 and 443 are
+# bound with one capability rather than by running as root.
+#
+# The full walk-through is docs/deploy-linux.md.
+
+[Unit]
+Description=AgentUUCP relay
+Documentation=https://github.com/tropeforce7/agentuucp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=auu
+Group=auu
+ExecStart=/usr/local/bin/auu-relay --config /etc/auu/relay.json
+
+# The relay's signing bundle, sealed to this host by 'systemd-creds encrypt'
+# and unsealed into $CREDENTIALS_DIRECTORY at start, readable by this unit
+# alone. The name here is the one relay.json's tls.bundle_credential gives
+# and the one 'systemd-creds encrypt --name=' was run with; all three must
+# agree. To read a plain file instead, drop this line and set tls.bundle.
+LoadCredentialEncrypted=relay-bundle:/etc/auu/relay-bundle.cred
+
+# The relay finishes in-flight requests on SIGTERM; give it time to.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5s
+
+# State. systemd creates /var/lib/auu owned by auu:auu at this mode, and it is
+# the one place the relay may write: the database, the message files, and the
+# ACME account key and certificates all live there.
+StateDirectory=auu
+StateDirectoryMode=0700
+UMask=0077
+
+# No capability at all: the relay makes its own certificate, so it needs no
+# particular port and the example settings use 9443. If you do put it on 443,
+# add back:
+#   AmbientCapabilities=CAP_NET_BIND_SERVICE
+#   CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=
+
+# Confinement. The relay is a single static binary that needs the network,
+# its state directory, and read access to /etc/auu and its credentials
+# directory, which systemd provides inside the service's own mount namespace
+# and which needs no line here. Nothing here is exotic; each line removes
+# something the relay never uses.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6
+
+# A busy relay holds one descriptor per connection plus one per open upload.
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

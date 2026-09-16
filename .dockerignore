@@ -1,0 +1,9 @@
+# The container suite builds from the repository root; nothing here is
+# needed to build the binaries.
+.git
+bin
+dist
+reviews
+docker/testing/out
+*.db
+*.log

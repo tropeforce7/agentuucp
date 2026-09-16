@@ -1,0 +1,94 @@
+package message
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strings"
+	"testing"
+)
+
+func goodBody(t *testing.T) Body {
+	t.Helper()
+	a, err := NewAttachment("Report.java", []byte("class Report {}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return Body{Type: TypeAsk, Subject: "s", Thread: "t1", Text: "hello", Attachments: []Attachment{a}}
+}
+
+func TestValidateAccepts(t *testing.T) {
+	b := goodBody(t)
+	if err := b.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if b.Attachments[0].Media != "text/x-java-source; charset=utf-8" && !strings.HasPrefix(b.Attachments[0].Media, "text/") {
+		// Media type tables vary by platform; only require a non-default guess or the default.
+		if b.Attachments[0].Media != DefaultMedia {
+			t.Fatalf("unexpected media %q", b.Attachments[0].Media)
+		}
+	}
+}
+
+func TestValidateRejectsType(t *testing.T) {
+	b := goodBody(t)
+	b.Type = "exec"
+	if err := b.Validate(); err == nil {
+		t.Fatal("accepted unknown type")
+	}
+	b.Type = ""
+	if err := b.Validate(); err == nil {
+		t.Fatal("accepted empty type")
+	}
+}
+
+func TestValidateRejectsMissingThread(t *testing.T) {
+	b := goodBody(t)
+	b.Thread = ""
+	if err := b.Validate(); err == nil {
+		t.Fatal("accepted empty thread")
+	}
+}
+
+func TestValidateRejectsBadAttachmentNames(t *testing.T) {
+	data := []byte("x")
+	sum := sha256.Sum256(data)
+	for _, name := range []string{"", "..", ".", "a/b", "../x", "..\\x", "dir/../x", strings.Repeat("n", 256)} {
+		a := Attachment{Name: name, Media: DefaultMedia, Size: 1, SHA256: hex.EncodeToString(sum[:]), Data: data}
+		b := Body{Type: TypeNote, Thread: "t", Attachments: []Attachment{a}}
+		if err := b.Validate(); err == nil {
+			t.Fatalf("accepted attachment name %q", name)
+		}
+	}
+}
+
+func TestValidateRejectsDigestAndSizeMismatch(t *testing.T) {
+	b := goodBody(t)
+	b.Attachments[0].Data = append(b.Attachments[0].Data, '!')
+	if err := b.Validate(); err == nil {
+		t.Fatal("accepted size mismatch")
+	}
+
+	b = goodBody(t)
+	b.Attachments[0].SHA256 = strings.Repeat("0", 64)
+	if err := b.Validate(); err == nil {
+		t.Fatal("accepted digest mismatch")
+	}
+}
+
+func TestValidateRejectsDuplicateNames(t *testing.T) {
+	a, _ := NewAttachment("x.txt", []byte("a"))
+	b := Body{Type: TypeNote, Thread: "t", Attachments: []Attachment{a, a}}
+	if err := b.Validate(); err == nil {
+		t.Fatal("accepted duplicate attachment names")
+	}
+}
+
+func TestNewAttachmentStripsDirectories(t *testing.T) {
+	a, err := NewAttachment("/etc/passwd", []byte("root:x:0:0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Name != "passwd" {
+		t.Fatalf("name %q", a.Name)
+	}
+}

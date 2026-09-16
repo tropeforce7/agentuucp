@@ -1,0 +1,1057 @@
+package relay
+
+import (
+	"crypto/x509"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"slices"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/clientca"
+	"github.com/tropeforce7/agentuucp/internal/envelope"
+	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/token"
+)
+
+// Config configures a relay server.
+type Config struct {
+	// MaxBytes caps one posted envelope. Zero means relayapi.DefaultMaxBytes.
+	MaxBytes int64
+	// Registration is open, token, or closed. Empty means open.
+	Registration string
+	// PublicURL is the URL users reach this relay at, and the audience every
+	// enrolment token must name. Empty skips the audience check.
+	PublicURL string
+	// AdminFile holds the export lines of this relay's administrators. Empty
+	// means the relay has none and the whole admin API answers 403.
+	AdminFile string
+	// Admins is AdminFile as the caller loaded it at start, so the relay
+	// serves its first request from the set start logged. Nil with AdminFile
+	// set means the relay loads the file itself when it is built.
+	Admins *Admins
+	// TokenMaxAge is the longest lifetime a token may be registered with.
+	TokenMaxAge time.Duration
+	// Streams says whether the relay accepts stream uploads at all. The zero
+	// value is off: it is a new capability, and a library embedder should ask
+	// for it. auu-relay asks by default.
+	Streams bool
+	// streamsSet lets the tests tell "off" from "not mentioned".
+	streamsSet bool
+	// MaxStreamBytes is the largest declared stream. Zero is unlimited.
+	MaxStreamBytes int64
+	// UploadTTL is how long an unfinished upload is kept. Zero means 24h.
+	UploadTTL time.Duration
+	// Logger receives one line per request. Never receives request bodies.
+	Logger *slog.Logger
+	// Limits is the rate limit and quota policy. The zero value is unlimited;
+	// DefaultLimits is what auu-relay starts from.
+	Limits Limits
+	// AccessLog is AccessLogFull or AccessLogMinimal. Empty means full.
+	AccessLog string
+	// ClientCerts, when set, requires a live client certificate on every
+	// mailbox route and issues one at enrolment. Nil is off, which is the
+	// zero value: client certificates are a new requirement, and a library
+	// embedder must ask for them.
+	ClientCerts *ClientCertPolicy
+	// TrustAnchor is the root this relay's own certificate chains to, when
+	// it serves from an auu-ca bundle: what a machine pins, and what the
+	// trust anchor route hands out. It is set whenever a bundle is loaded,
+	// whether or not client certificates are required. The two are separate
+	// settings: a relay serves its own certificate without asking for
+	// anyone else's, and a machine must be able to pin it either way.
+	TrustAnchor *x509.Certificate
+	// Now is the clock the rate limiters read. Nil means time.Now. Tests
+	// inject one so they need not sleep; request freshness and nonce expiry
+	// always use the real clock, because those are agreements with a client.
+	Now func() time.Time
+}
+
+// Server is the relay's HTTP surface.
+type Server struct {
+	store    *Store
+	cfg      Config
+	log      *slog.Logger
+	mux      *http.ServeMux
+	requests atomic.Int64
+
+	lim      limiters
+	inflight chan struct{}
+	minimal  bool
+	admins   *adminSet
+	started  time.Time
+	// notify wakes a listing held open for a mailbox when a row arrives in
+	// it, or a directory it watches is replaced; holds counts the listings
+	// held, against the caps; maxWait is the longest hold, relayapi.MaxWait
+	// unless a test shortens it.
+	notify  *notifier
+	holds   *holds
+	maxWait time.Duration
+}
+
+// Refusals whose exact words two packages depend on.
+const (
+	msgBlocked           = "this identity is blocked on this relay"
+	msgNotAccepting      = "this relay is not accepting new registrations"
+	msgTokenNotFromAdmin = "enrolment token was not issued by an administrator of this relay"
+	msgTokenWrongUse     = "enrolment token does not authorise this"
+	msgNeedCertToken     = "a certificate for another machine needs a certificate token bound to this identity"
+	msgNeedAnyToken      = "this relay requires client certificates and this identity has no live one: enrol again with a token from an administrator"
+)
+
+// msgCertTokenForNew is a certificate token presented where a mailbox has
+// yet to be made.
+const msgCertTokenForNew = "enrolment token is a certificate token, which adds a machine to an identity " +
+	"already on this relay, and this identity has no mailbox here: ask the administrator for a registration token"
+
+// expiredTokenRetention is how long a spent or expired token is kept so an
+// administrator can still see what happened.
+const expiredTokenRetention = 30 * 24 * time.Hour
+
+// healthPath is exempt from every limit, so monitoring does not flap during an
+// attack and an operator can still tell a busy relay from a dead one.
+const healthPath = "/v1/health"
+
+// trustAnchorPath serves the root a machine pins. Like health it is reachable
+// before a machine holds anything at all.
+const trustAnchorPath = "/v1/trust-anchor"
+
+// legacyTokenHeader is the header an enrolment token used to travel in. It is
+// never read: the token is inside the certificate request now, where the
+// signature covers it. It is named only so a client still sending one is told
+// what changed instead of being refused for a missing token.
+const legacyTokenHeader = "X-CCX-Token"
+
+// NewServer wires up the routes.
+func NewServer(store *Store, cfg Config) *Server {
+	if cfg.MaxBytes <= 0 {
+		cfg.MaxBytes = relayapi.DefaultMaxBytes
+	}
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+	if cfg.Registration == "" {
+		cfg.Registration = relayapi.RegistrationOpen
+	}
+	store.SetFaultLog(cfg.Logger, cfg.Now)
+	s := &Server{
+		store:   store,
+		cfg:     cfg,
+		log:     cfg.Logger,
+		mux:     http.NewServeMux(),
+		lim:     newLimiters(cfg.Limits, cfg.Now),
+		minimal: cfg.AccessLog == AccessLogMinimal,
+		admins:  newAdminSet(cfg.AdminFile, cfg.Admins, cfg.Logger),
+		started: time.Now(),
+		notify:  &notifier{},
+		holds:   newHolds(cfg.Limits.MaxWaiting),
+		maxWait: relayapi.MaxWait,
+	}
+	if cfg.Limits.MaxInflight > 0 {
+		s.inflight = make(chan struct{}, cfg.Limits.MaxInflight)
+	}
+
+	s.route("GET "+healthPath, s.handleHealth)
+	s.route("POST /v1/register", s.handleRegister)
+	s.route("GET /v1/keys/{fp}", s.handleKeys)
+	s.route("GET "+trustAnchorPath, s.handleTrustAnchor)
+	s.route("PUT /v1/mailbox/{fp}/allow", s.authed(s.handleAllow))
+	s.route("PUT /v1/mailbox/{fp}/channels", s.authed(s.handleSetChannels))
+	s.route("GET /v1/mailbox/{fp}/channels", s.authed(s.handleGetChannels))
+	s.route("POST /v1/mailbox/{fp}", s.authed(s.handlePost))
+	s.route("GET /v1/mailbox/{fp}", s.authed(s.handleList))
+	s.route("DELETE /v1/mailbox/{fp}/{id}", s.authed(s.handleDelete))
+
+	s.route("POST /v1/mailbox/{fp}/certs", s.authedWithCert(s.handleIssueCert))
+	s.route("GET /v1/mailbox/{fp}/certs", s.authedWithCert(s.handleListCerts))
+
+	s.route("POST /v1/mailbox/{fp}/streams", s.authed(s.handleOpenStream))
+	s.route("GET /v1/mailbox/{fp}/{id}/blob", s.authed(s.handleBlob))
+	s.route("PATCH /v1/uploads/{id}", s.uploadAuthed(s.handleAppendStream))
+	s.route("HEAD /v1/uploads/{id}", s.uploadAuthed(s.handleHeadStream))
+	s.route("DELETE /v1/uploads/{id}", s.uploadAuthed(s.handleAbortStream))
+	s.route("POST /v1/uploads/{id}/complete", s.authedNoMailbox(s.handleCompleteStream))
+
+	s.route("GET /v1/admin/status", s.adminAuthed(s.handleAdminStatus))
+	s.route("GET /v1/admin/mailboxes", s.adminAuthed(s.handleAdminMailboxes))
+	s.route("GET /v1/admin/mailboxes/{fp}", s.adminAuthed(s.handleAdminMailbox))
+	s.route("DELETE /v1/admin/mailboxes/{fp}", s.adminAuthed(s.handleAdminDeregister))
+	s.route("DELETE /v1/admin/mailboxes/{fp}/messages", s.adminAuthed(s.handleAdminPurge))
+	s.route("GET /v1/admin/blocks", s.adminAuthed(s.handleAdminBlocks))
+	s.route("PUT /v1/admin/blocks/{fp}", s.adminAuthed(s.handleAdminBlock))
+	s.route("DELETE /v1/admin/blocks/{fp}", s.adminAuthed(s.handleAdminUnblock))
+	s.route("GET /v1/admin/certs", s.adminAuthed(s.handleAdminCerts))
+	s.route("DELETE /v1/admin/certs/{serial}", s.adminAuthed(s.handleAdminRevokeCert))
+	s.route("POST /v1/admin/tokens", s.adminAuthed(s.handleAdminAddToken))
+	s.route("GET /v1/admin/tokens", s.adminAuthed(s.handleAdminTokens))
+	s.route("DELETE /v1/admin/tokens/{id}", s.adminAuthed(s.handleAdminRevokeToken))
+	return s
+}
+
+// Close wakes every request the relay is holding open, so each answers with
+// what it has, and holds no more. The relay calls it before its listener is
+// shut down: a shutdown drains the requests in flight, and one held for a
+// minute would otherwise be waited on for a minute.
+func (s *Server) Close() {
+	s.notify.Close()
+}
+
+// route registers a handler and records which route matched, so the access log
+// can name the route without naming the mailbox in the path.
+//
+// ServeMux does set Request.Pattern, but on the copy it hands the handler,
+// which the outermost middleware never sees. The registered string is the same
+// thing. The method is dropped from it because it is logged in its own field.
+func (s *Server) route(pattern string, h http.HandlerFunc) {
+	_, routePath, _ := strings.Cut(pattern, " ")
+	s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+		if rec, ok := w.(*statusRecorder); ok {
+			rec.pattern = routePath
+		}
+		h(w, r)
+	})
+}
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+
+	if r.Method == http.MethodGet && r.URL.Path == healthPath {
+		s.mux.ServeHTTP(rec, r)
+		s.logRequest(rec, r, start)
+		return
+	}
+
+	if !s.acquire() {
+		// Nothing has been read or looked up yet, which is the point: the cap
+		// exists to stop slow callers from occupying the process.
+		rec.Header().Set("Retry-After", "1")
+		rec.limit = limitInflight
+		s.fail(rec, http.StatusServiceUnavailable, "relay is busy")
+		s.logRequest(rec, r, start)
+		return
+	}
+	// Deferred: a handler that panics is recovered by net/http per connection,
+	// and a slot leaked there would never come back.
+	defer s.release()
+
+	s.mux.ServeHTTP(rec, r)
+	s.logRequest(rec, r, start)
+
+	if s.requests.Add(1)%100 == 0 {
+		now := time.Now()
+		if err := s.store.PurgeNonces(now); err != nil {
+			s.log.Warn("nonce purge failed", "err", err)
+		}
+		// Long-dead tokens. Anything an administrator could still act on,
+		// including one that expired yesterday, stays.
+		if err := s.store.PurgeTokens(now.Add(-expiredTokenRetention)); err != nil {
+			s.log.Warn("token purge failed", "err", err)
+		}
+		// Certificates long dead. One revoked yesterday stays, so an
+		// administrator can still see what happened.
+		if err := s.store.PurgeCerts(now.Add(-expiredTokenRetention)); err != nil {
+			s.log.Warn("certificate purge failed", "err", err)
+		}
+		if n, err := s.store.PurgeUploads(now); err != nil {
+			s.log.Warn("upload purge failed", "err", err)
+		} else if n > 0 {
+			s.log.Info("abandoned uploads removed", "count", n)
+		}
+	}
+}
+
+// acquire takes an in-flight slot without waiting for one.
+func (s *Server) acquire() bool {
+	if s.inflight == nil {
+		return true
+	}
+	select {
+	case s.inflight <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Server) release() {
+	if s.inflight != nil {
+		<-s.inflight
+	}
+}
+
+// logRequest writes the one line per request the relay keeps.
+//
+// Bodies are never logged: they are the only thing the relay is trusted not to
+// spread around. The fingerprint is logged only once a signature has proven it,
+// so the log cannot be seeded with an identity anyone can claim, and in minimal
+// mode it is not logged at all.
+func (s *Server) logRequest(rec *statusRecorder, r *http.Request, start time.Time) {
+	attrs := []any{"method", r.Method}
+	if s.minimal {
+		// The route, not the path. A path names the recipient's mailbox, and
+		// the caller plus the recipient is the social graph this relay is
+		// otherwise built not to hold.
+		attrs = append(attrs, "path", orDash(rec.pattern))
+	} else {
+		// Truncated: a log line is an allocation and a log file is a disk,
+		// and the path arrives from the caller.
+		attrs = append(attrs, "path", truncateForLog(r.URL.Path))
+	}
+	attrs = append(attrs, "status", rec.status)
+	if !s.minimal {
+		attrs = append(attrs, "fp", orDash(rec.fp))
+	}
+	if rec.limit != "" {
+		attrs = append(attrs, "limit", rec.limit)
+	}
+	attrs = append(attrs, "dur", time.Since(start).Round(time.Millisecond).String())
+	s.log.Info("request", attrs...)
+}
+
+// maxLoggedPath bounds a path taken from the wire before it reaches a log.
+const maxLoggedPath = 256
+
+func truncateForLog(s string) string {
+	if len(s) <= maxLoggedPath {
+		return s
+	}
+	return s[:maxLoggedPath] + "…"
+}
+
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status  int
+	fp      string // set only once the caller's signature has been verified
+	pattern string // the route that matched, for the minimal access log
+	limit   string // which limit refused this request, if any
+}
+
+// verified records who the caller turned out to be, for the access log.
+func verified(w http.ResponseWriter, fp string) {
+	if rec, ok := w.(*statusRecorder); ok {
+		rec.fp = fp[:16]
+	}
+}
+
+// setLimit records which limit refused a request, for the access log.
+func setLimit(w http.ResponseWriter, name string) {
+	if rec, ok := w.(*statusRecorder); ok {
+		rec.limit = name
+	}
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		s.log.Warn("write failed", "err", err)
+	}
+}
+
+func (s *Server) fail(w http.ResponseWriter, status int, msg string) {
+	s.writeJSON(w, status, relayapi.ErrorResponse{Error: msg})
+}
+
+// rateLimited answers a request that ran out of budget. detail is appended to
+// the error text when there is something useful to say beyond the limit's name.
+func (s *Server) rateLimited(w http.ResponseWriter, which string, retryAfter time.Duration, detail string) {
+	setLimit(w, which)
+	seconds := int64(retryAfter / time.Second)
+	if seconds < 1 {
+		seconds = 1
+	}
+	// Always an integer number of seconds, never a date: the client turns this
+	// straight into a sleep.
+	w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+	s.fail(w, http.StatusTooManyRequests, "rate limited: "+which+detail)
+}
+
+// readBody drains the request under a hard ceiling, so an oversize post cannot
+// consume memory before it is rejected.
+func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBytes+relayapi.FramingAllowance)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			s.fail(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return nil, false
+		}
+		s.fail(w, http.StatusBadRequest, "could not read request body")
+		return nil, false
+	}
+	return body, true
+}
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	resp := relayapi.HealthResponse{OK: true}
+	if s.clientCerts() {
+		resp.MLDSA = clientca.ParameterNumber(s.cfg.ClientCerts.Issuer.Parameters())
+	}
+	s.writeJSON(w, http.StatusOK, resp)
+}
+
+// checkSignature applies the timestamp window, verifies the signature, and only
+// then consumes the nonce.
+//
+// The ordering matters. Consuming first would let anyone on the internet write
+// rows into the relay's nonce table without holding any key at all. Verifying
+// first means a database write requires a signature, and replay protection is
+// unaffected: a replayed request has a good signature but a spent nonce.
+func (s *Server) checkSignature(auth *relayapi.Auth, pub *identity.Public, r *http.Request, body []byte) error {
+	if !auth.FreshAt(time.Now()) {
+		return errUnauthorized
+	}
+	if !auth.Verify(pub, r.Method, relayapi.RequestPath(r), body) {
+		return errUnauthorized
+	}
+	if err := s.store.UseNonce(auth.Nonce, time.Now().Add(relayapi.NonceTTL)); err != nil {
+		if errors.Is(err, ErrReplay) {
+			return errUnauthorized
+		}
+		return err // a real storage fault, which must not masquerade as a 401
+	}
+	return nil
+}
+
+// errUnauthorized is the single reason given for every authentication failure,
+// so a caller cannot learn which check it tripped.
+var errUnauthorized = errors.New("unauthorized")
+
+// authFailed writes the response for a failed authentication.
+//
+// A genuine rejection is charged to the source address and answered 401, or 429
+// once that address has spent its budget. A storage fault is neither: it is the
+// relay's problem, and must not masquerade as a 401 or cost the caller a token.
+func (s *Server) authFailed(w http.ResponseWriter, r *http.Request, err error) {
+	if !errors.Is(err, errUnauthorized) {
+		s.log.Error("authentication could not be completed", "err", err)
+		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		return
+	}
+	if ok, retry := s.lim.unauthenticated.Allow(s.clientIP(r)); !ok {
+		s.rateLimited(w, limitUnauthenticated, retry, "")
+		return
+	}
+	s.fail(w, http.StatusUnauthorized, "unauthorized")
+}
+
+// chargeIdentity spends one request token against a caller who has proved who
+// they are. It reports whether the request may continue.
+//
+// The key is always the verified fingerprint, never the claimed one, so nobody
+// can spend somebody else's budget by naming them.
+func (s *Server) chargeIdentity(w http.ResponseWriter, fp string) bool {
+	ok, retry := s.lim.requests.Allow(fp)
+	if !ok {
+		s.rateLimited(w, limitRequests, retry, "")
+	}
+	return ok
+}
+
+// authed wraps a handler that requires a registered caller. The wrapped handler
+// receives the verified caller fingerprint and the already-read body.
+func (s *Server) authed(fn func(w http.ResponseWriter, r *http.Request, body []byte, callerFP string)) http.HandlerFunc {
+	return s.authedWithCert(func(w http.ResponseWriter, r *http.Request, body []byte, callerFP string, _ *CertRow) {
+		fn(w, r, body, callerFP)
+	})
+}
+
+// authedWithCert is authed for the handlers that need to know which
+// certificate the request arrived on.
+func (s *Server) authedWithCert(fn func(w http.ResponseWriter, r *http.Request, body []byte, callerFP string, cert *CertRow)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		fp := r.PathValue("fp")
+		if !identity.ValidFingerprint(fp) {
+			s.fail(w, http.StatusBadRequest, "bad mailbox fingerprint")
+			return
+		}
+		// Before the body is read: a caller without a certificate this relay
+		// honours is refused without the relay accepting what they wanted to
+		// send, which is most of what a transport credential buys.
+		cert, ok := s.clientCert(w, r)
+		if !ok {
+			return
+		}
+		body, ok := s.readBody(w, r)
+		if !ok {
+			return
+		}
+		auth, err := relayapi.ParseAuth(r.Header.Get(relayapi.AuthHeader))
+		if err != nil {
+			// A header that will not parse cannot have come from a working
+			// client, so it is refused without touching the database at all.
+			s.authFailed(w, r, errUnauthorized)
+			return
+		}
+		caller, err := s.store.Mailbox(auth.FP)
+		if err != nil {
+			s.authFailed(w, r, errUnauthorized)
+			return
+		}
+		pub, err := identity.ParseBundle(caller.Bundle)
+		if err != nil {
+			s.authFailed(w, r, errUnauthorized)
+			return
+		}
+		// A well-formed but wrong signature is verified before it is charged,
+		// deliberately. Charging first would let a neighbour behind the same
+		// address empty the bucket and lock a legitimate user out of
+		// authenticating. That neighbour costs one signature check a request,
+		// which the in-flight cap bounds.
+		if err := s.checkSignature(auth, pub, r, body); err != nil {
+			s.authFailed(w, r, err)
+			return
+		}
+		verified(w, auth.FP)
+		if !s.certMatches(w, r, cert, auth.FP) {
+			return
+		}
+		if !s.chargeIdentity(w, auth.FP) {
+			return
+		}
+		// After verification, deliberately: answering this before the
+		// signature has proved who the caller is would turn the block list
+		// into something anyone could read a fingerprint out of.
+		if caller.Blocked {
+			s.fail(w, http.StatusForbidden, msgBlocked)
+			return
+		}
+		fn(w, r, body, auth.FP, cert)
+	}
+}
+
+// handleRegister is the one authenticated route where the caller is not yet
+// known: the key that signs the request is the key being registered.
+func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
+	ip := s.clientIP(r)
+	if ok, retry := s.lim.unauthenticated.Allow(ip); !ok {
+		s.rateLimited(w, limitUnauthenticated, retry, "")
+		return
+	}
+	if ok, retry := s.lim.registrations.Allow(ip); !ok {
+		s.rateLimited(w, limitRegistrations, retry, "")
+		return
+	}
+	body, ok := s.readBody(w, r)
+	if !ok {
+		return
+	}
+	auth, err := relayapi.ParseAuth(r.Header.Get(relayapi.AuthHeader))
+	if err != nil {
+		s.fail(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	// A client of the earlier protocol, whose token was a header outside the
+	// signature. Told plainly rather than refused for a missing token.
+	if r.Header.Get(legacyTokenHeader) != "" {
+		s.fail(w, http.StatusBadRequest, relayapi.MsgTokenInHeader)
+		return
+	}
+	var req relayapi.RegisterRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		s.fail(w, http.StatusBadRequest, "malformed register request")
+		return
+	}
+	pub, err := identity.ParseBundle(req.Bundle)
+	if err != nil {
+		s.fail(w, http.StatusBadRequest, "malformed key bundle")
+		return
+	}
+	// The address is derived from the submitted key material, never taken from
+	// the header, so nobody can claim someone else's fingerprint.
+	fp := pub.Fingerprint()
+	if fp != auth.FP {
+		s.fail(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if err := s.checkSignature(auth, pub, r, body); err != nil {
+		s.authFailed(w, r, err)
+		return
+	}
+	verified(w, fp)
+	if !s.chargeIdentity(w, fp) {
+		return
+	}
+
+	exists, blocked, err := s.store.MailboxState(fp)
+	if err != nil {
+		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		return
+	}
+	// Blocks and the mailbox cap apply in every registration mode, and both
+	// are settled before a token is looked at, so a refusal here costs the
+	// holder no part of their token.
+	if blocked {
+		s.fail(w, http.StatusForbidden, msgBlocked)
+		return
+	}
+
+	// The certificate request, always: it is where the enrolment token
+	// lives, so a relay that issues no certificates still reads one. Checked
+	// before the token, because the token is inside it.
+	csr, ok := s.parseCSR(w, req.CSR, true)
+	if !ok {
+		return
+	}
+
+	opt := RegisterOptions{MaxMailboxes: s.cfg.Limits.MaxMailboxes, Now: time.Now()}
+	var enrolling *token.Claims
+	switch {
+	case !exists:
+		// A new mailbox. What it costs is the registration mode's business.
+		switch s.cfg.Registration {
+		case relayapi.RegistrationClosed:
+			s.fail(w, http.StatusForbidden, msgNotAccepting)
+			return
+		case relayapi.RegistrationToken:
+			claims, ok := s.enrolmentToken(w, r, fp, csrToken(csr), token.UseRegister)
+			if !ok {
+				return
+			}
+			enrolling = claims
+			opt.TokenID, opt.TokenUse = claims.ID, claims.Use
+		}
+	case s.clientCerts() && s.cfg.Registration != relayapi.RegistrationOpen:
+		// An existing mailbox asking for a certificate. With a live one on
+		// record this is another machine, and it costs a certificate token
+		// bound to this identity, which is the whole point of the feature:
+		// without that cost, a copied identity could mint itself a
+		// certificate and the certificate would add nothing against exactly
+		// the attacker it exists for. With none live it is the identity
+		// enrolling, not adding a machine: the relay began requiring
+		// certificates after it registered, or its only certificate expired
+		// or was revoked. That costs an enrolment token, as joining does,
+		// and a certificate token bound to it is accepted too. Either way
+		// there is no token-free path.
+		live, err := s.store.Certs(fp, false, opt.Now)
+		if err != nil {
+			s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+			return
+		}
+		uses := []string{token.UseCert}
+		if len(live) == 0 {
+			uses = []string{token.UseRegister, token.UseCert}
+		}
+		claims, ok := s.enrolmentToken(w, r, fp, csrToken(csr), uses...)
+		if !ok {
+			return
+		}
+		enrolling = claims
+		opt.TokenID, opt.TokenUse = claims.ID, claims.Use
+	}
+
+	// Signed before the transaction, so a failure to issue costs no token,
+	// and inserted inside it, so a mailbox and its first certificate arrive
+	// together or not at all.
+	var issued *clientca.Issued
+	if s.clientCerts() {
+		if issued, err = s.issueCert(csr, fp, opt.Now); err != nil {
+			s.log.Error("issuing a client certificate", "err", err)
+			s.fail(w, http.StatusInternalServerError, "could not issue a certificate")
+			return
+		}
+		row := NewCertRow(issued, fp, opt.Now)
+		opt.Cert = &row
+	}
+
+	if err := s.store.Register(fp, req.Bundle, req.Name, opt); err != nil {
+		outcome := "refused"
+		switch {
+		case errors.Is(err, ErrTooManyMailboxes):
+			s.fail(w, http.StatusForbidden, msgNotAccepting)
+		case errors.Is(err, ErrTokenUnknown):
+			s.fail(w, http.StatusForbidden, "enrolment token is unknown to this relay")
+		case errors.Is(err, ErrTokenRevoked):
+			s.fail(w, http.StatusForbidden, "enrolment token has been revoked")
+		case errors.Is(err, ErrTokenSpent):
+			s.fail(w, http.StatusForbidden, "enrolment token has already been used")
+		case errors.Is(err, ErrTokenWrongUse):
+			s.fail(w, http.StatusForbidden, msgTokenWrongUse)
+		default:
+			s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+			outcome = "error"
+		}
+		if enrolling != nil {
+			s.audit("enrol", "", fp, outcome, "token", enrolling.ID)
+		}
+		return
+	}
+	if enrolling != nil {
+		s.audit("enrol", "", fp, "ok", "token", enrolling.ID, "use", enrolling.Use)
+	}
+	resp := relayapi.RegisterResponse{FP: fp}
+	if issued != nil {
+		notAfter := issued.NotAfter
+		resp.Cert, resp.NotAfter = issued.Cert, &notAfter
+		// The anchor, which is what the machine pins and what a token names.
+		resp.CA = s.cfg.ClientCerts.Verifier.Anchor().Raw
+		s.audit("cert issue", "", fp, "ok", "serial", issued.Serial, "label", issued.Label)
+	}
+	s.writeJSON(w, http.StatusOK, resp)
+}
+
+// csrToken is the enrolment token a certificate request carried, if any.
+func csrToken(csr *clientca.Request) string {
+	if csr == nil {
+		return ""
+	}
+	return csr.Token
+}
+
+// enrolmentToken applies every check that can be made before the database is
+// touched, and writes its own refusal.
+//
+// The order is deliberate. Nothing about the relay's token table is revealed
+// until the signature has proved the token came from one of this relay's
+// administrators, and the cheap checks come before the transaction, so a
+// failed enrolment consumes nothing.
+func (s *Server) enrolmentToken(w http.ResponseWriter, r *http.Request, fp, raw string, uses ...string) (*token.Claims, bool) {
+	if raw == "" {
+		s.fail(w, http.StatusForbidden, needTokenMessage(uses))
+		return nil, false
+	}
+	u, err := token.Parse(raw)
+	if err != nil {
+		s.fail(w, http.StatusBadRequest, "malformed enrolment token")
+		return nil, false
+	}
+	issuer, ok := s.admins.lookup(u.IssuerFingerprint())
+	if !ok {
+		s.fail(w, http.StatusForbidden, msgTokenNotFromAdmin)
+		return nil, false
+	}
+	claims, err := u.Verify(issuer, time.Now(), relayapi.MaxSkew)
+	switch {
+	case err == nil:
+	case errors.Is(err, token.ErrForm):
+		s.fail(w, http.StatusBadRequest, "malformed enrolment token")
+		return nil, false
+	case errors.Is(err, token.ErrUse):
+		s.fail(w, http.StatusForbidden, "enrolment token is not for registration")
+		return nil, false
+	case errors.Is(err, token.ErrExpired):
+		s.fail(w, http.StatusForbidden, "enrolment token has expired")
+		return nil, false
+	case errors.Is(err, token.ErrNotYetValid):
+		s.fail(w, http.StatusForbidden, "enrolment token is not yet valid")
+		return nil, false
+	default:
+		// Signature, or a key that is not the claimed issuer's.
+		s.fail(w, http.StatusForbidden, msgTokenNotFromAdmin)
+		return nil, false
+	}
+	if s.cfg.PublicURL != "" &&
+		token.NormaliseRelay(claims.Relay) != token.NormaliseRelay(s.cfg.PublicURL) {
+		s.fail(w, http.StatusForbidden, "enrolment token is for a different relay")
+		return nil, false
+	}
+	if claims.Subject != "" && claims.Subject != fp {
+		s.fail(w, http.StatusForbidden, "enrolment token was issued to a different identity")
+		return nil, false
+	}
+	// The use is checked here and again inside the transaction that spends
+	// it, so a token cannot be redeemed for something it does not authorise
+	// even if the two checks were ever to race.
+	if !slices.Contains(uses, claims.Use) {
+		s.fail(w, http.StatusForbidden, wrongUseMessage(uses, fp))
+		return nil, false
+	}
+	return claims, true
+}
+
+// wrongUseMessage says which token would have done, when the one presented
+// does not authorise this. There are two uses, so a token refused for its
+// use is the other one: a register token where a certificate token is
+// needed — the identity has a live certificate on another machine, and the
+// person holding a fresh enrolment token is told what to ask for instead,
+// with their own fingerprint filled in, since the signature proved it — or
+// a certificate token where a mailbox has yet to be made. The container
+// suite's K21 found the first refused as "does not authorise this".
+func wrongUseMessage(uses []string, fp string) string {
+	switch {
+	case slices.Contains(uses, token.UseCert) && !slices.Contains(uses, token.UseRegister):
+		return fmt.Sprintf("this identity already holds a live certificate on another machine, so adding this one "+
+			"needs a certificate token: ask the administrator for one issued with --use cert --for %s", fp)
+	case slices.Contains(uses, token.UseRegister) && !slices.Contains(uses, token.UseCert):
+		return msgCertTokenForNew
+	}
+	return msgTokenWrongUse
+}
+
+// needTokenMessage says what kind of token is missing, because they are
+// obtained differently: a register token invites someone onto the relay, a
+// cert token adds a machine to an identity already on it, and an identity
+// with a mailbox but no live certificate takes either.
+func needTokenMessage(uses []string) string {
+	switch {
+	case slices.Contains(uses, token.UseRegister) && slices.Contains(uses, token.UseCert):
+		return msgNeedAnyToken
+	case slices.Contains(uses, token.UseCert):
+		return msgNeedCertToken
+	}
+	return "this relay requires an enrolment token"
+}
+
+// handleKeys is a convenience lookup, by a whole fingerprint or by the
+// 16-character short id that listings print. It is not a trust anchor: the
+// human still confirms the fingerprint out of band before adding a peer.
+func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
+	// A certificate for any identity, not this one: looking a peer up is
+	// something every enrolled machine does, and nothing about it is the
+	// caller's own mailbox.
+	if _, ok := s.clientCert(w, r); !ok {
+		return
+	}
+	if ok, retry := s.lim.unauthenticated.Allow(s.clientIP(r)); !ok {
+		s.rateLimited(w, limitUnauthenticated, retry, "")
+		return
+	}
+	query := r.PathValue("fp")
+	var mb *Mailbox
+	var err error
+	switch {
+	case identity.ValidFingerprint(query):
+		mb, err = s.store.Mailbox(query)
+	case identity.ValidShortID(query):
+		mb, err = s.store.MailboxByShort(query)
+	default:
+		s.fail(w, http.StatusBadRequest, "bad fingerprint")
+		return
+	}
+	switch {
+	case errors.Is(err, ErrNoMailbox):
+		s.fail(w, http.StatusNotFound, "no such mailbox")
+		return
+	case errors.Is(err, ErrAmbiguousShort):
+		s.fail(w, http.StatusBadRequest, "more than one mailbox begins with that short id; use the full fingerprint")
+		return
+	case err != nil:
+		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		return
+	}
+	created := mb.Created
+	s.writeJSON(w, http.StatusOK, relayapi.KeysResponse{Bundle: mb.Bundle, Name: mb.Name, Created: &created})
+}
+
+func (s *Server) handleAllow(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {
+	fp := r.PathValue("fp")
+	if fp != callerFP {
+		s.fail(w, http.StatusForbidden, "not your mailbox")
+		return
+	}
+	var req relayapi.AllowRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		s.fail(w, http.StatusBadRequest, "malformed allow request")
+		return
+	}
+	// Before validating an entry and before the database: the body limit is
+	// not a bound on this by itself, and every entry past the cap is work an
+	// attacker chose for us.
+	if len(req.Allow) > relayapi.MaxAllowlist {
+		s.fail(w, http.StatusBadRequest, fmt.Sprintf(
+			"allow list has %d entries; the most is %d", len(req.Allow), relayapi.MaxAllowlist))
+		return
+	}
+	for _, sender := range req.Allow {
+		if !identity.ValidFingerprint(sender) {
+			s.fail(w, http.StatusBadRequest, "bad fingerprint in allow list")
+			return
+		}
+	}
+	if err := s.store.SetAllowlist(fp, req.Allow); err != nil {
+		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {
+	fp := r.PathValue("fp")
+	size := int64(len(body))
+	if size > s.cfg.MaxBytes {
+		s.fail(w, http.StatusRequestEntityTooLarge, "envelope too large")
+		return
+	}
+	// Both post budgets are spent before the envelope is parsed or the
+	// recipient looked up, so a refused post costs the relay as little as
+	// possible.
+	if ok, retry := s.lim.posts.Allow(callerFP); !ok {
+		s.rateLimited(w, limitPosts, retry, "")
+		return
+	}
+	if ok, retry := s.lim.postBytes.AllowN(callerFP, size); !ok {
+		detail := ""
+		if burst := s.lim.postBytes.Burst(); burst > 0 && size > burst {
+			detail = fmt.Sprintf("; this message is %d bytes and a sender's whole "+
+				"post_bytes_per_hour budget is %d, so %s",
+				size, burst, relayapi.MsgWaitingWillNotHelp)
+		}
+		s.rateLimited(w, limitPostBytes, retry, detail)
+		return
+	}
+
+	var env envelope.Envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		s.fail(w, http.StatusBadRequest, "malformed envelope")
+		return
+	}
+	if env.To != fp {
+		s.fail(w, http.StatusBadRequest, "envelope is not addressed to this mailbox")
+		return
+	}
+	exists, blocked, err := s.store.MailboxState(fp)
+	if err != nil {
+		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		return
+	}
+	if !exists {
+		s.fail(w, http.StatusNotFound, "no such mailbox")
+		return
+	}
+	if blocked {
+		s.fail(w, http.StatusForbidden, "recipient is blocked on this relay")
+		return
+	}
+	allowed, err := s.store.MayPost(fp, callerFP)
+	if err != nil {
+		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		return
+	}
+	if !allowed {
+		s.fail(w, http.StatusForbidden, "sender is not on the recipient's allow list")
+		return
+	}
+	// After the allow list, deliberately: which channels exist is the
+	// owner's to publish to the senders they admit, and nobody else.
+	channel, ok := s.channelForPost(w, fp, env.Ch)
+	if !ok {
+		return
+	}
+	id, err := s.store.Put(fp, channel, body, s.cfg.Limits.Quotas())
+	switch {
+	case errors.Is(err, ErrMailboxFull):
+		// Not the sender's fault and not something they can retry around: the
+		// recipient has to collect their mail.
+		setLimit(w, limitMailboxFull)
+		s.fail(w, http.StatusInsufficientStorage, relayapi.MsgMailboxFull)
+		return
+	case errors.Is(err, ErrRelayFull):
+		setLimit(w, limitRelayFull)
+		s.fail(w, http.StatusInsufficientStorage, relayapi.MsgRelayFull)
+		return
+	case errors.Is(err, ErrNoMailbox):
+		s.fail(w, http.StatusNotFound, "no such mailbox")
+		return
+	case err != nil:
+		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		return
+	}
+	// After the store has the row, so a listing woken by this finds it.
+	s.notify.Wake(mailKey(fp))
+	s.writeJSON(w, http.StatusOK, relayapi.PostResponse{ID: id})
+}
+
+func (s *Server) handleList(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {
+	fp := r.PathValue("fp")
+	if fp != callerFP {
+		s.fail(w, http.StatusForbidden, "not your mailbox")
+		return
+	}
+	after, err := intParam(r, "after", 0)
+	if err != nil || after < 0 {
+		s.fail(w, http.StatusBadRequest, "bad after parameter")
+		return
+	}
+	limit, err := intParam(r, "limit", relayapi.DefaultListLimit)
+	if err != nil || limit <= 0 {
+		s.fail(w, http.StatusBadRequest, "bad limit parameter")
+		return
+	}
+	if limit > relayapi.MaxListLimit {
+		limit = relayapi.MaxListLimit
+	}
+	// stubs answers every row without its envelope, whatever its kind: a
+	// client checking which of the messages it kept are still queued needs
+	// the ids and nothing else, and a mailbox of kept mail would otherwise
+	// be downloaded again on every check. A relay from before it ignores
+	// the parameter and sends the envelopes, which that client discards.
+	stubs, err := boolParam(r, "stubs")
+	if err != nil {
+		s.fail(w, http.StatusBadRequest, "bad stubs parameter")
+		return
+	}
+	wait, peers, ok := s.watchParams(w, r, callerFP)
+	if !ok {
+		return
+	}
+	s.listing(w, r, fp, after, int(limit), stubs, wait, peers)
+}
+
+func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {
+	fp := r.PathValue("fp")
+	if fp != callerFP {
+		s.fail(w, http.StatusForbidden, "not your mailbox")
+		return
+	}
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		s.fail(w, http.StatusBadRequest, "bad message id")
+		return
+	}
+	deleted, err := s.store.Delete(fp, id)
+	if err != nil {
+		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		return
+	}
+	if !deleted {
+		s.fail(w, http.StatusNotFound, "no such message")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// boolParam reads a flag parameter: absent or empty is false, 1 and true
+// are true, and anything else is the caller's mistake, said rather than
+// taken for either.
+func boolParam(r *http.Request, name string) (bool, error) {
+	switch raw := r.URL.Query().Get(name); raw {
+	case "", "0", "false":
+		return false, nil
+	case "1", "true":
+		return true, nil
+	default:
+		return false, fmt.Errorf("relay: %s=%q is neither 1 nor 0", name, raw)
+	}
+}
+
+func intParam(r *http.Request, name string, def int64) (int64, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return def, nil
+	}
+	return strconv.ParseInt(raw, 10, 64)
+}

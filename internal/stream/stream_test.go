@@ -1,0 +1,992 @@
+package stream
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/testutil"
+)
+
+func pair(t *testing.T) (from *identity.Identity, to *identity.Identity) {
+	t.Helper()
+	var err error
+	if from, err = identity.Generate("alice"); err != nil {
+		t.Fatal(err)
+	}
+	if to, err = identity.Generate("bob"); err != nil {
+		t.Fatal(err)
+	}
+	return from, to
+}
+
+func source(name string, data []byte) Source {
+	return Source{
+		Name: name, Media: "application/octet-stream", Size: int64(len(data)),
+		Open: func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil },
+	}
+}
+
+func body() Body {
+	return Body{Type: "ask", Subject: "a big one", Thread: "t1", Text: "please look"}
+}
+
+// build seals a stream and returns its bytes and its manifest.
+func build(t *testing.T, from, to *identity.Identity, chunkSize int, files map[string][]byte) ([]byte, *Manifest) {
+	t.Helper()
+	var sources []Source
+	// Deterministic order: the manifest is the framing, so order matters.
+	for _, name := range sortedNames(files) {
+		sources = append(sources, source(name, files[name]))
+	}
+	m, err := BuildManifest(from, to.Public(), strings.Repeat("a", 32), body(), sources, chunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Seal(&buf, from, to.Public(), m, sources); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes(), m
+}
+
+func sortedNames(files map[string][]byte) []string {
+	var out []string
+	for n := range files {
+		out = append(out, n)
+	}
+	for i := range out {
+		for j := i + 1; j < len(out); j++ {
+			if out[j] < out[i] {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
+}
+
+// openAll runs the whole receive path and returns what came out.
+func openAll(t *testing.T, self *identity.Identity, blob []byte) (*Opened, map[string][]byte, error) {
+	t.Helper()
+	if len(blob) < HeaderSize {
+		return nil, nil, ErrTruncated
+	}
+	n, err := ManifestLength(blob[:HeaderSize])
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(blob) < HeaderSize+n {
+		return nil, nil, ErrTruncated
+	}
+	o, err := OpenManifest(self, blob[:HeaderSize], blob[HeaderSize:HeaderSize+n])
+	if err != nil {
+		return nil, nil, err
+	}
+	// A correct caller writes somewhere temporary and keeps the result only
+	// when OpenPayload returns nil; ToDirectory is that shape. The map is
+	// therefore populated only on success, and every "was anything delivered"
+	// assertion below means what it says.
+	partial := map[string][]byte{}
+	err = o.OpenPayload(bytes.NewReader(blob[HeaderSize+n:]), func(a Attachment) (io.WriteCloser, error) {
+		buf := &closableBuffer{}
+		buf.onClose = func(b []byte) { partial[a.Name] = b }
+		return buf, nil
+	})
+	if err != nil {
+		return o, nil, err
+	}
+	return o, partial, nil
+}
+
+type closableBuffer struct {
+	bytes.Buffer
+	onClose func([]byte)
+}
+
+func (c *closableBuffer) Close() error {
+	if c.onClose != nil {
+		c.onClose(append([]byte(nil), c.Bytes()...))
+	}
+	return nil
+}
+
+func TestRoundTripRandom(t *testing.T) {
+	r, seed := testutil.Seed(t)
+	from, to := pair(t)
+
+	const cs = MinChunkSize
+	// Lengths that must appear whatever the seed: the empty payload, the
+	// boundaries of a chunk, and several multiples.
+	lengths := []int{0, 1, cs - 1, cs, cs + 1, 2 * cs, 2*cs + 1, 3 * cs}
+	for range 12 {
+		lengths = append(lengths, r.IntN(4*cs))
+	}
+
+	for _, n := range lengths {
+		files := map[string][]byte{}
+		if n > 0 {
+			files["one.bin"] = testutil.Bytes(r, n)
+		}
+		if n > cs {
+			// Split across two attachments, so the concatenation is exercised.
+			files["one.bin"] = testutil.Bytes(r, n-cs)
+			files["two.bin"] = testutil.Bytes(r, cs)
+		}
+		blob, _ := build(t, from, to, cs, files)
+
+		o, out, err := openAll(t, to, blob)
+		if err != nil {
+			t.Fatalf("seed %d: payload %d bytes: %v", seed, n, err)
+		}
+		if o.Sender.Fingerprint() != from.Fingerprint() {
+			t.Fatalf("seed %d: wrong sender", seed)
+		}
+		if o.Manifest.Body.Text != body().Text {
+			t.Fatalf("seed %d: body did not survive", seed)
+		}
+		if len(out) != len(files) {
+			t.Fatalf("seed %d: %d attachments out, %d in", seed, len(out), len(files))
+		}
+		for name, want := range files {
+			if !bytes.Equal(out[name], want) {
+				t.Fatalf("seed %d: %q did not survive at payload %d", seed, name, n)
+			}
+		}
+	}
+}
+
+// The wire size must be predictable from the manifest alone: a receiver checks
+// it against Content-Length before fetching any payload.
+func TestSizeMatchesTheWire(t *testing.T) {
+	from, to := pair(t)
+	for _, n := range []int{0, 1, MinChunkSize, MinChunkSize + 1, 5 * MinChunkSize} {
+		files := map[string][]byte{}
+		if n > 0 {
+			files["f.bin"] = bytes.Repeat([]byte("x"), n)
+		}
+		blob, m := build(t, from, to, MinChunkSize, files)
+		sealedManifest, err := ManifestLength(blob[:HeaderSize])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := Size(sealedManifest, m.PayloadBytes, m.ChunkSize); want != int64(len(blob)) {
+			t.Fatalf("payload %d: Size says %d, the blob is %d", n, want, len(blob))
+		}
+	}
+}
+
+// Every stream ends with a chunk sealed as final, including one with nothing
+// to carry, so truncation has exactly one rule.
+func TestEmptyPayloadStillHasAFinalChunk(t *testing.T) {
+	from, to := pair(t)
+	blob, m := build(t, from, to, MinChunkSize, nil)
+	if m.Chunks != 2 {
+		t.Fatalf("an empty stream has %d chunks, want 2", m.Chunks)
+	}
+	if m.PayloadBytes != 0 {
+		t.Fatalf("payload_bytes %d", m.PayloadBytes)
+	}
+	sealedManifest, _ := ManifestLength(blob[:HeaderSize])
+	// enc + prefix + manifest + one empty sealed chunk.
+	if want := HeaderSize + sealedManifest + TagSize; len(blob) != want {
+		t.Fatalf("blob is %d bytes, want %d", len(blob), want)
+	}
+	if _, out, err := openAll(t, to, blob); err != nil || len(out) != 0 {
+		t.Fatalf("an empty stream did not open: %v", err)
+	}
+}
+
+func TestTruncation(t *testing.T) {
+	from, to := pair(t)
+	files := map[string][]byte{"f.bin": bytes.Repeat([]byte("x"), 3*MinChunkSize)}
+	blob, _ := build(t, from, to, MinChunkSize, files)
+
+	cases := map[string][]byte{
+		"one byte short":           blob[:len(blob)-1],
+		"one whole chunk short":    blob[:len(blob)-(MinChunkSize+TagSize)],
+		"the final tag removed":    blob[:len(blob)-TagSize],
+		"only the header":          blob[:HeaderSize],
+		"header and manifest only": blob[:HeaderSize+mustLen(t, blob)],
+		"nothing at all":           nil,
+		"half the encapsulation":   blob[:EncSize/2],
+	}
+	for name, bad := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, out, err := openAll(t, to, bad)
+			if err == nil {
+				t.Fatal("a truncated stream opened cleanly")
+			}
+			for f, data := range out {
+				if len(data) != 0 {
+					t.Fatalf("%q was delivered anyway (%d bytes)", f, len(data))
+				}
+			}
+		})
+	}
+}
+
+func mustLen(t *testing.T, blob []byte) int {
+	t.Helper()
+	n, err := ManifestLength(blob[:HeaderSize])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestExtension(t *testing.T) {
+	from, to := pair(t)
+	files := map[string][]byte{"f.bin": bytes.Repeat([]byte("x"), 2*MinChunkSize)}
+	blob, _ := build(t, from, to, MinChunkSize, files)
+
+	for name, bad := range map[string][]byte{
+		"one byte appended": append(append([]byte(nil), blob...), 0),
+		"a chunk appended":  append(append([]byte(nil), blob...), bytes.Repeat([]byte("z"), MinChunkSize+TagSize)...),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, _, err := openAll(t, to, bad); !errors.Is(err, ErrTrailing) {
+				t.Fatalf("gave %v, want ErrTrailing", err)
+			}
+		})
+	}
+}
+
+// The HPKE sequence number binds a chunk to its position, so reordering and
+// duplication fail without anything being added to the additional data.
+func TestReorderingAndDuplication(t *testing.T) {
+	from, to := pair(t)
+	const cs = MinChunkSize
+	files := map[string][]byte{"f.bin": bytes.Repeat([]byte("x"), 3*cs)}
+	blob, _ := build(t, from, to, cs, files)
+	m0 := mustLen(t, blob)
+	start := HeaderSize + m0
+	sealedChunk := cs + TagSize
+
+	chunk := func(i int) []byte {
+		return blob[start+i*sealedChunk : start+(i+1)*sealedChunk]
+	}
+
+	swapped := append([]byte(nil), blob[:start]...)
+	swapped = append(swapped, chunk(1)...)
+	swapped = append(swapped, chunk(0)...)
+	swapped = append(swapped, chunk(2)...)
+	if _, _, err := openAll(t, to, swapped); err == nil {
+		t.Fatal("two swapped chunks opened")
+	}
+
+	duplicated := append([]byte(nil), blob[:start]...)
+	duplicated = append(duplicated, chunk(0)...)
+	duplicated = append(duplicated, chunk(0)...)
+	duplicated = append(duplicated, chunk(2)...)
+	if _, _, err := openAll(t, to, duplicated); err == nil {
+		t.Fatal("a duplicated chunk opened")
+	}
+}
+
+// A body chunk moved to the last position must not open, because the last
+// position is sealed under a different role.
+func TestFinalChunkRoleIsEnforced(t *testing.T) {
+	from, to := pair(t)
+	const cs = MinChunkSize
+	// Two payload chunks, so there is a body chunk and a final chunk.
+	files := map[string][]byte{"f.bin": bytes.Repeat([]byte("x"), 2*cs)}
+	blob, _ := build(t, from, to, cs, files)
+	start := HeaderSize + mustLen(t, blob)
+	sealedChunk := cs + TagSize
+
+	// Replace the final chunk with a copy of the body chunk.
+	bad := append([]byte(nil), blob[:start+sealedChunk]...)
+	bad = append(bad, blob[start:start+sealedChunk]...)
+	if _, _, err := openAll(t, to, bad); err == nil {
+		t.Fatal("a body chunk in the final position opened")
+	}
+}
+
+// Chunks from one stream must not open in another, even between the same two
+// identities: each context has its own encapsulation and key schedule.
+func TestChunksDoNotTransplantBetweenStreams(t *testing.T) {
+	from, to := pair(t)
+	const cs = MinChunkSize
+	files := map[string][]byte{"f.bin": bytes.Repeat([]byte("x"), 2*cs)}
+	a, _ := build(t, from, to, cs, files)
+	b, _ := build(t, from, to, cs, files)
+	start := HeaderSize + mustLen(t, a)
+	if mustLen(t, b) != mustLen(t, a) {
+		t.Skip("manifests differ in length; the transplant would not line up")
+	}
+
+	mixed := append([]byte(nil), a[:start+cs+TagSize]...)
+	mixed = append(mixed, b[start+cs+TagSize:]...)
+	if _, _, err := openAll(t, to, mixed); err == nil {
+		t.Fatal("a chunk from another stream opened")
+	}
+}
+
+// One flipped bit in each structurally distinct region. Offsets come from the
+// format's constants, never from a literal.
+func TestBitFlipInEveryRegion(t *testing.T) {
+	r, seed := testutil.Seed(t)
+	from, to := pair(t)
+	const cs = MinChunkSize
+	files := map[string][]byte{"f.bin": bytes.Repeat([]byte("x"), 2*cs)}
+	blob, _ := build(t, from, to, cs, files)
+	m0 := mustLen(t, blob)
+	start := HeaderSize + m0
+
+	regions := map[string]int{
+		"first byte of the encapsulation": 0,
+		"middle of the encapsulation":     EncSize / 2,
+		"last byte of the encapsulation":  EncSize - 1,
+		"prefix byte 0":                   EncSize,
+		"prefix byte 1":                   EncSize + 1,
+		"prefix byte 2":                   EncSize + 2,
+		"prefix byte 3":                   EncSize + 3,
+		"first byte of chunk 0":           HeaderSize,
+		"middle of chunk 0":               HeaderSize + m0/2,
+		"last byte of chunk 0's tag":      HeaderSize + m0 - 1,
+		"first byte of chunk 1":           start,
+		"last byte of chunk 1's tag":      start + cs + TagSize - 1,
+		"first byte of the final chunk":   start + cs + TagSize,
+		"last byte of the final chunk":    len(blob) - 1,
+	}
+	for name, offset := range regions {
+		t.Run(name, func(t *testing.T) {
+			bad := testutil.FlipByteBit(blob, offset, r.IntN(8))
+			_, out, err := openAll(t, to, bad)
+			if err == nil {
+				t.Fatalf("seed %d: a flipped bit at %d opened cleanly", seed, offset)
+			}
+			for f, data := range out {
+				if len(data) != 0 {
+					t.Fatalf("seed %d: %q was delivered anyway", seed, f)
+				}
+			}
+		})
+	}
+}
+
+// The prefix is a length the peer states, so it is bounded before it is used
+// for anything, and every edge of that bound is tested.
+func TestManifestLengthBounds(t *testing.T) {
+	from, to := pair(t)
+	blob, _ := build(t, from, to, MinChunkSize, nil)
+	header := append([]byte(nil), blob[:HeaderSize]...)
+
+	set := func(n uint32) []byte {
+		h := append([]byte(nil), header...)
+		h[EncSize] = byte(n >> 24)
+		h[EncSize+1] = byte(n >> 16)
+		h[EncSize+2] = byte(n >> 8)
+		h[EncSize+3] = byte(n)
+		return h
+	}
+	for _, c := range []struct {
+		name   string
+		n      uint32
+		accept bool
+	}{
+		{"zero", 0, false},
+		{"one below the minimum", MinChunk0 - 1, false},
+		{"exactly the minimum", MinChunk0, true},
+		{"one above the minimum", MinChunk0 + 1, true},
+		{"one below the maximum", MaxChunk0 - 1, true},
+		{"exactly the maximum", MaxChunk0, true},
+		{"one above the maximum", MaxChunk0 + 1, false},
+		{"the largest uint32", ^uint32(0), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := ManifestLength(set(c.n))
+			if c.accept {
+				if err != nil {
+					t.Fatalf("%d was refused: %v", c.n, err)
+				}
+				if got != int(c.n) {
+					t.Fatalf("read %d, want %d", got, c.n)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("%d was accepted", c.n)
+			}
+			if !errors.Is(err, ErrForm) && !errors.Is(err, ErrTruncated) {
+				t.Fatalf("unexpected error kind: %v", err)
+			}
+		})
+	}
+
+	// A header shorter than the fixed part is truncation, not a bad length.
+	if _, err := ManifestLength(header[:HeaderSize-1]); !errors.Is(err, ErrTruncated) {
+		t.Fatalf("a short header gave %v, want ErrTruncated", err)
+	}
+}
+
+// The bound must be applied before anything is allocated from the length, and
+// before the second fetch it would drive. Proven by which error comes back: a
+// blob that is both over the cap and far too short must fail on the cap.
+func TestOversizePrefixIsRefusedBeforeReading(t *testing.T) {
+	from, to := pair(t)
+	blob, _ := build(t, from, to, MinChunkSize, nil)
+	bad := append([]byte(nil), blob[:HeaderSize]...)
+	bad[EncSize] = 0xff // a length of about 4 GiB
+	bad[EncSize+1] = 0xff
+	bad[EncSize+2] = 0xff
+	bad[EncSize+3] = 0xff
+
+	_, err := ManifestLength(bad)
+	if err == nil {
+		t.Fatal("a 4 GiB manifest length was accepted")
+	}
+	if !strings.Contains(err.Error(), "outside") {
+		t.Fatalf("error %q is not the bound's; something else fired first", err)
+	}
+}
+
+func TestWrongRecipient(t *testing.T) {
+	from, to := pair(t)
+	stranger, err := identity.Generate("stranger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, _ := build(t, from, to, MinChunkSize, map[string][]byte{"f.bin": []byte("hello")})
+	if _, _, err := openAll(t, stranger, blob); err == nil {
+		t.Fatal("a stream opened for the wrong recipient")
+	}
+}
+
+// The manifest is what the signature covers, so every claim in it that the
+// payload must satisfy is checked on the way out as well as on the way in.
+func TestManifestLies(t *testing.T) {
+	from, to := pair(t)
+	for name, mutate := range map[string]func(*Manifest){
+		"chunks one too many":          func(m *Manifest) { m.Chunks++ },
+		"chunks one too few":           func(m *Manifest) { m.Chunks-- },
+		"payload one byte over":        func(m *Manifest) { m.PayloadBytes++ },
+		"payload one byte under":       func(m *Manifest) { m.PayloadBytes-- },
+		"chunk size below the minimum": func(m *Manifest) { m.ChunkSize = MinChunkSize - 1 },
+		"chunk size above the maximum": func(m *Manifest) { m.ChunkSize = MaxChunkSize + 1 },
+		"attachment size wrong":        func(m *Manifest) { m.Attachments[0].Size++ },
+		"digest changed":               func(m *Manifest) { m.Attachments[0].SHA256 = strings.Repeat("0", 64) },
+		"name with a separator":        func(m *Manifest) { m.Attachments[0].Name = "../escape" },
+		"unknown version":              func(m *Manifest) { m.V = 99 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			sources := []Source{source("f.bin", []byte("hello"))}
+			m, err := BuildManifest(from, to.Public(), strings.Repeat("a", 32), body(), sources, MinChunkSize)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutate(m)
+			var buf bytes.Buffer
+			// Either Seal refuses it, or it produces something that will not
+			// open. Both are correct; silently working is not.
+			if err := Seal(&buf, from, to.Public(), m, sources); err != nil {
+				return
+			}
+			if _, _, err := openAll(t, to, buf.Bytes()); err == nil {
+				t.Fatal("a manifest that lies about its payload opened cleanly")
+			}
+		})
+	}
+}
+
+// A digest that does not match must fail even though the manifest is
+// internally consistent and correctly signed.
+func TestDigestMismatchIsCaught(t *testing.T) {
+	from, to := pair(t)
+	data := []byte("the real bytes")
+	sources := []Source{{
+		Name: "f.bin", Media: "text/plain", Size: int64(len(data)),
+		Open: func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil },
+	}}
+	m, err := BuildManifest(from, to.Public(), strings.Repeat("b", 32), body(), sources, MinChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A correctly signed manifest whose digest is for different bytes.
+	other := sha256.Sum256([]byte("different bytes"))
+	m.Attachments[0].SHA256 = hex.EncodeToString(other[:])
+
+	var buf bytes.Buffer
+	if err := Seal(&buf, from, to.Public(), m, sources); err != nil {
+		t.Fatal(err)
+	}
+	_, out, err := openAll(t, to, buf.Bytes())
+	if !errors.Is(err, ErrDigest) {
+		t.Fatalf("gave %v, want ErrDigest", err)
+	}
+	if len(out["f.bin"]) != 0 {
+		t.Fatal("the attachment was delivered despite a digest mismatch")
+	}
+}
+
+// Seal refuses to sign a manifest that names somebody else, so a stream whose
+// signature is not its sender's cannot be produced by this package at all.
+func TestSealRefusesAMismatchedSigner(t *testing.T) {
+	from, to := pair(t)
+	mallory, err := identity.Generate("mallory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := []Source{source("f.bin", []byte("x"))}
+	m, err := BuildManifest(from, to.Public(), strings.Repeat("c", 32), body(), sources, MinChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := Seal(&buf, mallory, to.Public(), m, sources); err == nil {
+		t.Fatal("sealing with a key the manifest does not name was allowed")
+	}
+}
+
+// The same identity key signs four things now. None of the four may verify as
+// any other.
+func TestSignatureDomainIsSeparate(t *testing.T) {
+	from, to := pair(t)
+	manifestJSON := []byte(`{"v":1}`)
+	streamSig := mustSign(t, from, sigInput(to.Fingerprint(), manifestJSON))
+
+	// The envelope's domain over the same bytes.
+	envelopeInput := append([]byte("ccx-sig-v1"), append([]byte(to.Fingerprint()), manifestJSON...)...)
+	if from.Public().Verify(envelopeInput, streamSig) {
+		t.Fatal("a stream signature verified as an envelope signature")
+	}
+	envelopeSig := mustSign(t, from, envelopeInput)
+	if from.Public().Verify(sigInput(to.Fingerprint(), manifestJSON), envelopeSig) {
+		t.Fatal("an envelope signature verified as a stream signature")
+	}
+	// The token domain.
+	tokenInput := append([]byte("ccx-token-v1"), manifestJSON...)
+	if from.Public().Verify(tokenInput, streamSig) {
+		t.Fatal("a stream signature verified as a token signature")
+	}
+	if from.Public().Verify(sigInput(to.Fingerprint(), manifestJSON), mustSign(t, from, tokenInput)) {
+		t.Fatal("a token signature verified as a stream signature")
+	}
+	// The request domain.
+	requestInput := append([]byte("ccx-http-v1\n"), manifestJSON...)
+	if from.Public().Verify(requestInput, streamSig) {
+		t.Fatal("a stream signature verified as a request signature")
+	}
+	if from.Public().Verify(sigInput(to.Fingerprint(), manifestJSON), mustSign(t, from, requestInput)) {
+		t.Fatal("a request signature verified as a stream signature")
+	}
+}
+
+// A stream and an envelope must not be openable as one another, which is what
+// the distinct info string buys.
+func TestStreamIsNotAnEnvelope(t *testing.T) {
+	from, to := pair(t)
+	blob, _ := build(t, from, to, MinChunkSize, map[string][]byte{"f.bin": []byte("x")})
+	// The envelope package would need the whole ciphertext; the point is that
+	// the key schedule differs, so opening the stream's chunk 0 with the
+	// envelope's info fails. Exercised through the recipient context.
+	if _, err := recipientContext(blob[:EncSize], to); err != nil {
+		t.Fatalf("the stream's own context did not build: %v", err)
+	}
+	wrong, err := identity.Generate("other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenManifest(wrong, blob[:HeaderSize], blob[HeaderSize:HeaderSize+mustLen(t, blob)]); err == nil {
+		t.Fatal("chunk 0 opened for an identity it was not sealed to")
+	}
+}
+
+// Memory is the whole point: a large payload must cost one chunk, not its
+// own size.
+func TestMemoryIsBoundedByOneChunk(t *testing.T) {
+	from, to := pair(t)
+	const cs = 64 << 10
+	const payload = 64 << 20
+
+	sources := []Source{{
+		Name: "big.bin", Media: "application/octet-stream", Size: payload,
+		Open: func() (io.ReadCloser, error) { return io.NopCloser(&zeroReader{n: payload}), nil },
+	}}
+	m, err := BuildManifest(from, to.Public(), strings.Repeat("d", 32), body(), sources, cs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	var sink countingWriter
+	if err := Seal(&sink, from, to.Public(), m, sources); err != nil {
+		t.Fatal(err)
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	if grew := int64(after.HeapAlloc) - int64(before.HeapAlloc); grew > 8<<20 {
+		t.Fatalf("sealing %d MiB grew the heap by %d bytes", payload>>20, grew)
+	}
+}
+
+type zeroReader struct{ n int64 }
+
+func (z *zeroReader) Read(p []byte) (int, error) {
+	if z.n <= 0 {
+		return 0, io.EOF
+	}
+	n := int64(len(p))
+	if n > z.n {
+		n = z.n
+	}
+	for i := range p[:n] {
+		p[i] = 0
+	}
+	z.n -= n
+	return int(n), nil
+}
+
+type countingWriter struct{ n int64 }
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	c.n += int64(len(p))
+	return len(p), nil
+}
+
+func TestSourceThatChangesSize(t *testing.T) {
+	from, to := pair(t)
+	data := []byte("twelve bytes")
+	sources := []Source{{
+		Name: "f.bin", Media: "text/plain", Size: int64(len(data)),
+		Open: func() (io.ReadCloser, error) {
+			// Grows between the hash and the seal.
+			return io.NopCloser(bytes.NewReader(append(data, "extra"...))), nil
+		},
+	}}
+	m, err := BuildManifest(from, to.Public(), strings.Repeat("e", 32), body(), sources, MinChunkSize)
+	if err == nil {
+		var buf bytes.Buffer
+		if err := Seal(&buf, from, to.Public(), m, sources); err == nil {
+			t.Fatal("a source that grew was sealed anyway")
+		}
+		return
+	}
+	if !errors.Is(err, ErrForm) {
+		t.Fatalf("gave %v, want ErrForm", err)
+	}
+	_ = fmt.Sprint(err)
+}
+
+// ToDirectory is the delivery contract: on success the directory appears whole,
+// and on any failure nothing is left behind at all.
+func TestToDirectoryIsAtomic(t *testing.T) {
+	from, to := pair(t)
+	const cs = MinChunkSize
+	files := map[string][]byte{
+		"one.bin": bytes.Repeat([]byte("a"), 2*cs),
+		"two.bin": bytes.Repeat([]byte("b"), 100),
+	}
+	blob, _ := build(t, from, to, cs, files)
+	n := mustLen(t, blob)
+
+	deliver := func(t *testing.T, b []byte) (string, error) {
+		t.Helper()
+		dir := filepath.Join(t.TempDir(), "message.d")
+		o, err := OpenManifest(to, b[:HeaderSize], b[HeaderSize:HeaderSize+n])
+		if err != nil {
+			return dir, err
+		}
+		return dir, o.ToDirectory(bytes.NewReader(b[HeaderSize+n:]), dir)
+	}
+
+	t.Run("a whole stream arrives", func(t *testing.T) {
+		dir, err := deliver(t, blob)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for name, want := range files {
+			got, err := os.ReadFile(filepath.Join(dir, name))
+			if err != nil {
+				t.Fatalf("%q missing: %v", name, err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("%q differs", name)
+			}
+		}
+		if _, err := os.Stat(dir + ".part"); !os.IsNotExist(err) {
+			t.Fatal("the temporary directory was left behind")
+		}
+	})
+
+	for name, bad := range map[string][]byte{
+		"truncated by a byte":             blob[:len(blob)-1],
+		"truncated by a chunk":            blob[:len(blob)-(cs+TagSize)],
+		"a flipped bit in the last chunk": testutil.FlipByteBit(blob, len(blob)-1, 3),
+		"a flipped bit mid-payload":       testutil.FlipByteBit(blob, HeaderSize+n+10, 1),
+	} {
+		t.Run("nothing survives "+name, func(t *testing.T) {
+			dir, err := deliver(t, bad)
+			if err == nil {
+				t.Fatal("a broken stream was delivered")
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Fatal("the delivery directory exists after a failure")
+			}
+			if _, err := os.Stat(dir + ".part"); !os.IsNotExist(err) {
+				t.Fatal("the temporary directory was left behind after a failure")
+			}
+		})
+	}
+}
+
+// The same claim on the receiving side. Sealing a large payload one chunk at a
+// time is only half of it: opening one must cost a chunk too, or a two
+// gigabyte message could be sent but never read.
+func TestOpeningIsBoundedByOneChunk(t *testing.T) {
+	from, to := pair(t)
+	const cs = 64 << 10
+	const payload = 64 << 20
+
+	sources := []Source{{
+		Name: "big.bin", Media: "application/octet-stream", Size: payload,
+		Open: func() (io.ReadCloser, error) { return io.NopCloser(&zeroReader{n: payload}), nil },
+	}}
+	m, err := BuildManifest(from, to.Public(), strings.Repeat("d", 32), body(), sources, cs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sealed to a file rather than to memory, so the test's own copy is not
+	// what is being measured.
+	path := filepath.Join(t.TempDir(), "sealed")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Seal(f, from, to.Public(), m, sources); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	in, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	header := make([]byte, HeaderSize)
+	if _, err := io.ReadFull(in, header); err != nil {
+		t.Fatal(err)
+	}
+	length, err := ManifestLength(header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chunk0 := make([]byte, length)
+	if _, err := io.ReadFull(in, chunk0); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := OpenManifest(to, header, chunk0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	// Written to a counting sink rather than to files: what is measured is the
+	// opening, not the filesystem.
+	err = opened.OpenPayload(in, func(Attachment) (io.WriteCloser, error) {
+		return nopWriteCloser{&countingWriter{}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	grew := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	if grew > 8<<20 {
+		t.Fatalf("opening %d MiB grew the heap by %d bytes", payload>>20, grew)
+	}
+	t.Logf("opening %d MiB in %d KiB chunks grew the heap by %d KiB", payload>>20, cs>>10, grew>>10)
+}
+
+type nopWriteCloser struct{ io.Writer }
+
+func (nopWriteCloser) Close() error { return nil }
+
+// TestSignatureSizeMatchesTheDefaultSuite is a guard, not a property.
+//
+// The manifest chunk is signature || manifest with a fixed-width split, and
+// the only thing that says which identity suite signed it is FromBundle,
+// inside the manifest. A reader therefore cannot learn the signature's length
+// before it needs it. So this format works for exactly one signature size, and
+// if the default suite ever signs with another the failure would be every
+// stream failing to open with a confusing form error.
+//
+// If this test fails, the fix is not to change the constant. It is manifest
+// version 2, with the signature after the manifest instead of before it, so
+// that the JSON delimits itself and the remainder is a signature of whatever
+// length. See the note on SigSize.
+func TestSignatureSizeMatchesTheDefaultSuite(t *testing.T) {
+	if got := identity.DefaultSuite().SignatureSize; got != SigSize {
+		t.Fatalf("the default identity suite signs with %d bytes but this format reserves %d.\n"+
+			"This format cannot carry a variable-length signature: chunk 0 is signature||manifest\n"+
+			"and the suite is named inside the manifest. Adding a suite means manifest version 2,\n"+
+			"with the signature moved after the manifest.", got, SigSize)
+	}
+}
+
+// TestEncapsulationSizeMatchesTheDefaultSuite is the same guard for the other
+// fixed width in this format. A suite with a different KEM produces a
+// different encapsulation, and the stream's framing reserves one length for
+// it. The envelope has no equivalent problem: it carries its ciphertext as a
+// length-delimited field rather than at a fixed offset.
+func TestEncapsulationSizeMatchesTheDefaultSuite(t *testing.T) {
+	id, err := identity.Generate("measurer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc, _, err := senderContext(id.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(enc) != EncSize {
+		t.Fatalf("the default suite's KEM encapsulates to %d bytes but this format reserves %d.\n"+
+			"Adding a suite with another KEM means manifest version 2.", len(enc), EncSize)
+	}
+}
+
+// A chunk whose bytes all arrived and did not open is ErrOpenFailed,
+// whichever chunk it is; a stream that ended before the bytes did is
+// ErrTruncated. The two words are what a receiver keeps beside the bytes,
+// and a flipped byte in the final chunk used to be called a truncation.
+func TestAFinalChunkThatDoesNotOpenIsNotATruncation(t *testing.T) {
+	from, to := pair(t)
+	cs := MinChunkSize
+	files := map[string][]byte{"f.bin": bytes.Repeat([]byte("x"), 2*cs)}
+	blob, _ := build(t, from, to, cs, files)
+	start := HeaderSize + mustLen(t, blob)
+
+	flipped := append([]byte{}, blob...)
+	flipped[len(flipped)-1] ^= 1
+	for name, tc := range map[string]struct {
+		blob []byte
+		is   error
+		not  error
+	}{
+		"last byte of the final chunk flipped": {flipped, ErrOpenFailed, ErrTruncated},
+		"first byte of chunk 1 flipped": {func() []byte {
+			b := append([]byte{}, blob...)
+			b[start] ^= 1
+			return b
+		}(), ErrOpenFailed, ErrTruncated},
+		"one byte short":        {blob[:len(blob)-1], ErrTruncated, ErrOpenFailed},
+		"the final tag removed": {blob[:len(blob)-TagSize], ErrTruncated, ErrOpenFailed},
+	} {
+		_, _, err := openAll(t, to, tc.blob)
+		if !errors.Is(err, tc.is) || errors.Is(err, tc.not) {
+			t.Errorf("%s: %v, want %v and not %v", name, err, tc.is, tc.not)
+		}
+	}
+}
+
+// A manifest carries the channel it was opened for under the signature,
+// and one from before channels, which has no field, opens as it did. The
+// decode stays strict, so a receiver from before channels refuses a
+// manifest that carries the field as malformed rather than filing the
+// stream somewhere it was not sent; that is the cost of a signed format two
+// builds cannot silently disagree about.
+func TestAManifestCarriesItsChannel(t *testing.T) {
+	from, to := pair(t)
+	sources := []Source{source("f.bin", []byte("x"))}
+	for _, channel := range []string{"", "bug reports"} {
+		m, err := BuildManifest(from, to.Public(), strings.Repeat("a", 32), body(), sources, MinChunkSize)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.Channel = channel
+		var buf bytes.Buffer
+		if err := Seal(&buf, from, to.Public(), m, sources); err != nil {
+			t.Fatal(err)
+		}
+		blob := buf.Bytes()
+		opened, err := OpenManifest(to, blob[:HeaderSize], blob[HeaderSize:HeaderSize+mustLen(t, blob)])
+		if err != nil {
+			t.Fatalf("channel %q: %v", channel, err)
+		}
+		if opened.Manifest.Channel != channel {
+			t.Fatalf("the channel came back as %q, want %q", opened.Manifest.Channel, channel)
+		}
+	}
+	// On the wire, the field is named channel and is absent for default.
+	m, err := BuildManifest(from, to.Public(), strings.Repeat("a", 32), body(), sources, MinChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, _ := json.Marshal(m)
+	if bytes.Contains(plain, []byte(`"channel"`)) {
+		t.Fatalf("a manifest for default names a channel: %s", plain)
+	}
+	m.Channel = "bug reports"
+	named, _ := json.Marshal(m)
+	if !bytes.Contains(named, []byte(`"channel":"bug reports"`)) {
+		t.Fatalf("a manifest for a channel does not name it: %s", named)
+	}
+}
+
+// A receiver from before channels reads a manifest strictly, into the
+// shape it knew, so one that carries channel is refused there as malformed
+// and one that does not opens as it always did. The old shape is written
+// out here, not derived, so that the edge is what it is on record: a
+// stream sent with --channel to an old receiver is kept under damaged/
+// there, and the cure is to upgrade the receiver, not to resend.
+func TestAReceiverFromBeforeChannelsRefusesAManifestWithOne(t *testing.T) {
+	type oldAttachment struct {
+		Name   string `json:"name"`
+		Media  string `json:"media"`
+		Size   int64  `json:"size"`
+		SHA256 string `json:"sha256"`
+	}
+	type oldManifest struct {
+		V            int             `json:"v"`
+		ID           string          `json:"id"`
+		From         string          `json:"from"`
+		FromBundle   []byte          `json:"from_bundle"`
+		To           string          `json:"to"`
+		Time         time.Time       `json:"time"`
+		ChunkSize    int             `json:"chunk_size"`
+		Chunks       int64           `json:"chunks"`
+		PayloadBytes int64           `json:"payload_bytes"`
+		Body         Body            `json:"body"`
+		Attachments  []oldAttachment `json:"attachments"`
+	}
+	from, to := pair(t)
+	sources := []Source{source("f.bin", []byte("x"))}
+	m, err := BuildManifest(from, to.Public(), strings.Repeat("a", 32), body(), sources, MinChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodeOld := func(m *Manifest) error {
+		raw, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.DisallowUnknownFields()
+		var old oldManifest
+		return dec.Decode(&old)
+	}
+	if err := decodeOld(m); err != nil {
+		t.Fatalf("an old receiver refuses a manifest for default: %v", err)
+	}
+	m.Channel = "bug reports"
+	err = decodeOld(m)
+	if err == nil || !strings.Contains(err.Error(), `unknown field "channel"`) {
+		t.Fatalf("an old receiver took a manifest with a channel: %v", err)
+	}
+}

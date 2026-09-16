@@ -1,0 +1,105 @@
+# The container suite
+
+The deployment guide and the enrolling guide, run in four containers, and
+then a matrix of what goes wrong in the wild: files vandalised, keys and
+settings damaged, tokens and certificates run out, disks full, things pasted
+wrong. Every row records what each party saw, word for word, with its exit
+code and the relay's log, and judges it: `ok` when the programs said enough,
+`gap` when a person would have needed more, `observed` when it is simply
+recorded. The report is the deliverable as much as the pass.
+
+    make e2e
+
+needs Docker with Compose v2 and takes about five minutes. It builds one
+image from the repository, brings the stack up, runs the tests, writes
+`out/report.md` and `out/test.log`, and takes the stack down. It is run by
+hand, not by CI: the containers cost minutes of a paid runner on every
+push, for a suite that changes only when a guide or a fault row does.
+
+## The machines
+
+| container  | who                                   | what it holds                                        |
+|------------|---------------------------------------|------------------------------------------------------|
+| `relay`    | the relay host, reached as `relay.example.com:9443` | `/etc/auu`, `/var/lib/auu`, the credential |
+| `operator` | the person who runs it, `you`         | `~/.auu-ca` (the offline authority) and the administrator's `~/.auu` |
+| `alice`    | a user                                | `~/.auu`                                             |
+| `bob`      | another user                          | `~/.auu`, and a second home for his other machine    |
+
+They share one image, built by `Dockerfile` from the repository root: the
+four binaries as `docs/deploy-linux.md` builds them, plus `forge`, which
+exists only here (see below). `entrypoint-relay.sh` is the container form of
+the systemd unit: it waits for a bundle to be delivered to
+`/etc/auu/delivered/`, installs it as the credential the shipped settings
+name, and runs the relay as `auu` on those settings, unchanged. The users'
+containers run nothing until the test runs something.
+
+The driver runs on the host and reaches each machine only with `docker exec`
+and `docker cp`, the container form of ssh and scp. Nothing is published to
+the host, and nothing in the suite can reach a file except the way a person
+would: as that user, or as root on that box.
+
+## The tests
+
+`cycle_test.go` is the two guides in order, twenty-one steps from `auu-ca
+init` to the day-two backup, each asserting the guide's own words. Its end
+state, two enrolled users who are peers with certificates, a rotation behind
+them, and bob's mailbox with a channel directory holding `default` and `bug
+reports`, is snapshotted for the matrix.
+
+`matrix_*_test.go` is the matrix, one file per family:
+
+| family | what                                          |
+|--------|-----------------------------------------------|
+| M      | stored messages vandalised, on the relay and on the client |
+| K      | the user's keys and settings                  |
+| R      | the relay: settings, files, disk              |
+| X      | expiry and rotation                           |
+| N      | the network and the agent                     |
+| C      | channels: the sender's listing, a closed and a not-yet-open channel, `default` removed, a channel deleted with mail queued, `close` |
+| W      | watching: mail already queued, a post during the hold, a channel filter, `--fetch`, a colleague's channel added, the relay restarted under a watch, your own channels changed from the other machine |
+| L      | mail left on the relay: a fetch that keeps it, a channel set to off, `auu rm` and its two flags, the same mail read on a second machine, and a mailbox filled by mail already read |
+
+Each family restores every machine from the snapshot before it starts, and
+each row undoes its own fault, so a row runs alone:
+
+    AUU_E2E_KEEP=1 make e2e                  # once, to leave the stack up
+    cd docker/testing
+    go test -tags e2e -run 'TestMatrix/K/K13' -v .
+
+Rows are written as things a person did, with the reason they would have,
+and every assertion is the exact sentence the code prints today. Where the
+survey behind the plan found the reporting poor, the row asserts that
+behaviour and marks itself `gap`; the suite is green, and the report says
+what is missing. Fixing gaps is another plan's work.
+
+Two switches:
+
+- `AUU_E2E_SLOW=1` adds the rows that wait real time: a one-hour certificate
+  expiring, a token five minutes past its expiry.
+- `AUU_E2E_NOFAULT=1` turns every fault helper into a no-op. The rows that
+  still pass are the ones whose assertion does not depend on the fault,
+  which for a row about silence is expected; `reviews/IMPLEMENTATION_NOTES.md`
+  lists them from the last run. Such a run writes `out/report-nofault.md`
+  and `out/test-nofault.log`, and its report says in its first line that
+  the faults were off: it is meant to fail, and it must never take the
+  real report's name.
+
+## The forge
+
+No shipped binary can be told the time, and a static Go binary cannot be
+lied to by a preloaded library. `forge/main.go` calls the same library
+functions `auu-ca` calls, handed a different "now": an authority created
+eleven years ago, or a bundle whose signing intermediates run out a hundred
+seconds from now, then meets the real clock in the relay and the clients
+exactly as one that had aged would. It is built into the image and never by
+`make build`, and it adds no construction and no dependency.
+
+## What is not here
+
+`systemd-creds`, the unit and `systemd-analyze` are the systemd job's
+(`scripts/systemd-check.sh`), and the relay kit's `install.sh`, fresh and
+`update`, is the kit job's (`scripts/kit-check.sh`): neither can run here,
+since the containers have no systemd. Clock skew and nonce windows are unit tests
+with an injected clock. The relay container has `CAP_SYS_ADMIN` for exactly
+one row, the one that puts the message directory on a tmpfs of a megabyte;
+the relay process itself runs as `auu` with nothing, as the unit runs it.

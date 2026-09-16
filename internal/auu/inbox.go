@@ -1,0 +1,1265 @@
+package auu
+
+import (
+	"bufio"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/channels"
+	"github.com/tropeforce7/agentuucp/internal/client"
+	"github.com/tropeforce7/agentuucp/internal/envelope"
+	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/lockfile"
+	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/store"
+)
+
+// fetchResult summarises one drain of a relay mailbox.
+type fetchResult struct {
+	Delivered   int `json:"delivered"`
+	Quarantined int `json:"quarantined"`
+	// Unreadable is every message nobody will read: kept under damaged/,
+	// too large to keep, or dropped by the relay as damaged there. Kept
+	// is the first of those alone, so a sentence about damaged/ never
+	// claims a file that is not there.
+	Unreadable int `json:"unreadable"`
+	Kept       int `json:"kept"`
+	// Gone counts the messages delivered under each channel that is no
+	// longer in this machine's directory: a channel deleted with mail
+	// still queued, which arrives as usual and is filed under its name.
+	Gone map[string]int `json:"channels_gone,omitempty"`
+}
+
+func (f *fetchResult) add(o fetchResult) {
+	f.Delivered += o.Delivered
+	f.Quarantined += o.Quarantined
+	f.Unreadable += o.Unreadable
+	f.Kept += o.Kept
+	for name, n := range o.Gone {
+		if f.Gone == nil {
+			f.Gone = map[string]int{}
+		}
+		f.Gone[name] += n
+	}
+}
+
+// empty reports that a fetch delivered, held, kept and noted nothing.
+func (f fetchResult) empty() bool {
+	return f.Delivered == 0 && f.Quarantined == 0 && f.Unreadable == 0 && f.Kept == 0 && len(f.Gone) == 0
+}
+
+// noteGone records a delivered message's channel when this machine's
+// directory no longer lists it. A home with no directory defines nothing
+// and says nothing.
+func (f *fetchResult) noteGone(d *channels.Directory, channel string) {
+	if d == nil {
+		return
+	}
+	if channel == "" {
+		channel = channels.Default
+	}
+	if d.Find(channel) != nil {
+		return
+	}
+	if f.Gone == nil {
+		f.Gone = map[string]int{}
+	}
+	f.Gone[channel]++
+}
+
+// relayFetch is what one relay gave up, or why it did not.
+type relayFetch struct {
+	Relay string `json:"relay"`
+	URL   string `json:"url"`
+	fetchResult
+	// Queued is what this relay said it holds in all when the fetch
+	// finished: with a channel set to keep, the mail read and left there,
+	// which 'auu rm' is what removes.
+	Queued int64  `json:"queued"`
+	Error  string `json:"error,omitempty"`
+}
+
+// fetch drains one relay's mailbox into the local spool.
+//
+// The order matters: a message is only acknowledged to the relay after it is
+// safely on local disk, and the cursor only advances after the acknowledgement.
+// A crash anywhere in between costs a duplicate fetch, never a lost message.
+//
+// Each relay has its own cursor, in its own directory, because the ids are
+// each relay's own counter and mean nothing at another.
+//
+// ctx bounds every request made here. A drain has no deadline of its own
+// and passes ctx(); a wait passes its own deadline, so that a relay which
+// accepts and never answers is cut off when the wait is over.
+//
+// hold is passed to the first page's listing and no further: a wait asks
+// the relay to hold that page open until something arrives, so a reply
+// comes back when it is sent rather than at the next poll; every page
+// after the first has mail to fetch, and a drain asks for no hold at all.
+// A relay from before the hold answers at once, and nothing here can tell.
+func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay, hold time.Duration) (fetchResult, int64, error) {
+	// The local directory, for saying which delivered mail was for a
+	// channel no longer in it. Read through the damaged path: a file this
+	// machine cannot read is a person's to look at, whichever command met
+	// it.
+	directory, _, err := s.Directory()
+	if err != nil {
+		return fetchResult{}, 0, err
+	}
+	// This machine's own policy per channel, read once before anything is
+	// fetched: a file that will not read decides nothing here, and
+	// guessing at it would acknowledge away mail its owner meant to keep.
+	settings, err := s.ChannelSettings()
+	if err != nil {
+		return fetchResult{}, 0, err
+	}
+	var (
+		res fetchResult
+		// queued is what the relay said it holds in all, from the last
+		// page of this fetch: the count the refresh and the caller's
+		// count line both read.
+		queued int64
+	)
+	// The peer list is what sorts what arrives into the inbox and the
+	// quarantine, so it is read once, before anything is fetched: a line
+	// that will not parse is refused by number here, where before it made
+	// every sender a stranger and said nothing about why. The container
+	// suite's K18 found the quarantine full and the file unmentioned.
+	if _, err := s.Peers(); err != nil {
+		return res, queued, err
+	}
+	// One fetch at a time per relay, for the length of the fetch: two
+	// running at once on one machine list the same messages, save them
+	// twice and count them twice, and one advances the cursor past mail
+	// the other had not yet saved. The lock is a file in the relay's own
+	// directory, so it is per relay and per home, and the kernel releases
+	// it however this process ends. The container suite's N03 found both
+	// of two fetches delivering all three messages.
+	// The wait for it runs under ctx too: a wait's poll that meets the
+	// lock is cut off at the wait's deadline, like one that meets a relay
+	// which never answers. Anything that waits inside a poll takes the
+	// poll's context.
+	lock, waited, err := lockfile.Take(ctx, filepath.Join(s.RelayDir(r), fetchLockName), fetchLockWait, fetchLockSleep)
+	if errors.Is(err, lockfile.ErrHeld) {
+		return res, queued, transportErr(fmt.Errorf("another %s is fetching from %s; try again in a moment: %w",
+			prog, r.Name, err))
+	}
+	if err != nil {
+		// The lock is a file in this home: one that cannot be made is
+		// this home's trouble, not the relay's, and is said with the path
+		// at the plain exit code, as a message that cannot be saved is.
+		// The container suite's K29 found a read-only home reported as a
+		// transport failure.
+		return res, queued, fmt.Errorf("taking the fetch lock for %s: %w", r.Name, err)
+	}
+	defer lock.Release()
+	if waited {
+		fmt.Fprintf(os.Stderr, "%s: another %s was fetching from %s; it has finished, carrying on\n", prog, prog, r.Name)
+	}
+	cursor, err := s.CursorFor(r)
+	if err != nil {
+		return res, queued, err
+	}
+	for {
+		page, err := c.ListWait(ctx, client.ListRequest{After: cursor, Limit: relayapi.MaxListLimit, Wait: hold})
+		if err != nil {
+			return res, queued, transportErr(err)
+		}
+		hold = 0
+		queued = page.Queued
+		if len(page.Messages) == 0 {
+			// Nothing after the cursor, and yet the relay holds mail: the
+			// cursor is past it. The relay says how many, the sentence
+			// names the file, and nothing here is touched, since only a
+			// person can decide the cursor is wrong. A relay from before
+			// the count says zero, which is silence. The container suite's
+			// K17 found mail sitting on the relay with nothing to say so.
+			//
+			// Less what this machine left there on purpose: mail fetched
+			// from a channel set to keep, a stranger's stream quarantined
+			// from its manifest with the payload left on the relay until
+			// a person decides, and a message removed here alone. The
+			// relay counts them; this machine knows it did that. The
+			// spool is read only here, on an empty page beside a count,
+			// so an ordinary fetch does not read it.
+			if page.Queued != 0 {
+				left, err := s.LeftOn(r.Name)
+				if err != nil {
+					return res, queued, err
+				}
+				if page.Queued > left {
+					return res, queued, s.CursorSkipsMail(r, page.Queued-left)
+				}
+			}
+			// Everything after the cursor is here; now the marks on what
+			// was left behind, which another machine or an administrator
+			// may have removed since.
+			refreshKept(ctx, s, c, r, page.Queued)
+			return res, queued, nil
+		}
+		for _, m := range page.Messages {
+			if m.IsStream() {
+				if err := fetchOneStream(ctx, s, id, c, r, m, directory, settings, &res); err != nil {
+					return res, queued, transportErr(err)
+				}
+				cursor = m.ID
+				if err := s.SetCursorFor(r, cursor); err != nil {
+					return res, queued, err
+				}
+				continue
+			}
+			inner, sender, err := envelope.Open(id, m.Envelope)
+			if isLocked(err) {
+				// Not unreadable: the key is not here. The agent locked
+				// between the start of this command and now, and the
+				// message stays queued for the next fetch.
+				return res, queued, err
+			}
+			if err != nil {
+				// Nobody will ever be able to read this, so leaving it queued
+				// would block the mailbox forever. Keep the bytes, say why
+				// in a word, and acknowledge it.
+				if err := keepDamaged(s, r, m.ID, m.Received, m.Raw, openCause(err), &res); err != nil {
+					return res, queued, err
+				}
+				if err := c.Ack(ctx, m.ID); err != nil {
+					return res, queued, transportErr(err)
+				}
+				cursor = m.ID
+				if err := s.SetCursorFor(r, cursor); err != nil {
+					return res, queued, err
+				}
+				continue
+			}
+
+			// The channel it was sealed for, against the one the relay
+			// posted and listed it under. A relay that filed it elsewhere
+			// is found out here, not obeyed: the message is kept, said to
+			// be, and acknowledged like the other kept ones.
+			channel, filedAs, agrees := filedUnder(inner.Channel, m.Envelope.Ch, m)
+			if !agrees {
+				if err := keepMisfiled(s, r, m.ID, m.Received, m.Raw, filedAs, inner.Channel, &res); err != nil {
+					return res, queued, err
+				}
+				if err := c.Ack(ctx, m.ID); err != nil {
+					return res, queued, transportErr(err)
+				}
+				cursor = m.ID
+				if err := s.SetCursorFor(r, cursor); err != nil {
+					return res, queued, err
+				}
+				continue
+			}
+
+			box := store.Quarantine
+			if s.IsAuthorized(sender.Fingerprint()) {
+				box = store.Inbox
+			}
+			// Kept on the relay, or acknowledged away, as this machine's
+			// setting for the channel says. Kept is the default, and the
+			// record says so, since nothing else would remember.
+			keep := keepFor(settings, channel)
+			stored := &store.Stored{
+				RelayID:    m.ID,
+				Relay:      r.Name,
+				Received:   m.Received,
+				Inner:      inner,
+				SenderName: s.PeerName(sender.Fingerprint()),
+				Channel:    channel,
+				OnRelay:    keep,
+			}
+			if err := s.Save(box, stored); err != nil {
+				return res, queued, fmt.Errorf("saving message locally: %w", err)
+			}
+			if !keep {
+				if err := c.Ack(ctx, m.ID); err != nil {
+					return res, queued, transportErr(err)
+				}
+			}
+			cursor = m.ID
+			if err := s.SetCursorFor(r, cursor); err != nil {
+				return res, queued, err
+			}
+			if box == store.Inbox {
+				res.Delivered++
+				res.noteGone(directory, channel)
+			} else {
+				res.Quarantined++
+			}
+		}
+	}
+}
+
+type attachmentJSON struct {
+	Name   string `json:"name"`
+	Media  string `json:"media"`
+	Size   int64  `json:"size"`
+	SHA256 string `json:"sha256"`
+}
+
+type messageJSON struct {
+	ID        string    `json:"id"`
+	Thread    string    `json:"thread"`
+	InReplyTo string    `json:"in_reply_to,omitempty"`
+	Type      string    `json:"type"`
+	Subject   string    `json:"subject"`
+	From      string    `json:"from"`
+	FromName  string    `json:"from_name"`
+	Time      time.Time `json:"time"`
+	Received  time.Time `json:"received"`
+	Read      bool      `json:"read"`
+	Box       string    `json:"box"`
+	// ThreadSubject is the subject the thread was opened with, which is
+	// this message's own unless it was given one of its own. Set where a
+	// whole message is shown — read, wait and quarantine show — and not in
+	// a listing, where every line is its own message's subject.
+	ThreadSubject string           `json:"thread_subject,omitempty"`
+	Text          string           `json:"text,omitempty"`
+	Attachments   []attachmentJSON `json:"attachments"`
+	// Channel is the channel the message is filed under, default when the
+	// sender named none.
+	Channel string `json:"channel"`
+	// OnRelay says the message is still queued on the relay it came
+	// through, and PayloadOnRelay that a quarantined stream's body is.
+	OnRelay        bool `json:"on_relay,omitempty"`
+	PayloadOnRelay bool `json:"payload_on_relay,omitempty"`
+}
+
+func toJSON(box store.Box, m *store.Stored, includeText bool) messageJSON {
+	out := messageJSON{
+		ID:          m.Inner.ID,
+		Thread:      m.Inner.Body.Thread,
+		InReplyTo:   m.Inner.Body.InReplyTo,
+		Type:        m.Inner.Body.Type,
+		Subject:     m.Inner.Body.Subject,
+		From:        m.Inner.From,
+		FromName:    m.SenderName,
+		Time:        m.Inner.Time,
+		Received:    m.Received,
+		Read:        m.Read,
+		Box:         string(box),
+		Attachments: make([]attachmentJSON, 0, len(m.Inner.Body.Attachments)),
+		Channel:     channelName(m.Channel),
+
+		OnRelay:        m.OnRelay,
+		PayloadOnRelay: m.PayloadOnRelay,
+	}
+	if includeText {
+		out.Text = m.Inner.Body.Text
+	}
+	for _, a := range m.Inner.Body.Attachments {
+		out.Attachments = append(out.Attachments, attachmentJSON{
+			Name: a.Name, Media: a.Media, Size: a.Size, SHA256: a.SHA256,
+		})
+	}
+	return out
+}
+
+type inboxJSON struct {
+	Fetch fetchResult `json:"fetch"`
+	// Relays says what each relay gave up, or why it did not. The totals in
+	// Fetch are the sum of them.
+	Relays   []relayFetch  `json:"relays"`
+	Messages []messageJSON `json:"messages"`
+}
+
+// fetchEvery drains every relay given, each with its own cursor.
+//
+// A relay that cannot be reached is reported and skipped: mail on the others
+// is still mail, and one relay being down must not stop somebody reading it.
+// The exception is a run narrowed to one relay, where a failure is the
+// command's failure, because there is nothing else it could have been doing.
+func fetchEvery(s *store.Store, id *identity.Identity, relays []*store.Relay, narrowed bool) (fetchResult, []relayFetch, error) {
+	var (
+		total    fetchResult
+		reports  []relayFetch
+		firstErr error
+		ok       int
+	)
+	for _, r := range relays {
+		report := relayFetch{Relay: r.Name, URL: r.URL}
+		c, err := dial(s, id, r)
+		if err == nil {
+			report.fetchResult, report.Queued, err = fetch(ctx(), s, id, c, r, 0)
+		}
+		if err == nil {
+			// A relay this identity has drained is a relay it has a mailbox
+			// on, whatever the home thought before. An empty mailbox writes
+			// no cursor of its own, so say it here.
+			err = s.MarkRegistered(r)
+		}
+		if err != nil {
+			// A damaged file is not a relay that could not be reached: it
+			// is a person's to look at, whichever relay it was met at, and
+			// the command stops there so that its code says so. Carrying
+			// on would print the sentence as one relay's trouble among
+			// several and exit 0 on the strength of the others.
+			if narrowed || errors.Is(err, store.ErrDamaged) {
+				return total, nil, err
+			}
+			report.Error = err.Error()
+			fmt.Fprintf(os.Stderr, "%s: %s could not be reached: %v\n", prog, r.Name, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", r.Name, err)
+			}
+		} else {
+			ok++
+			total.add(report.fetchResult)
+		}
+		reports = append(reports, report)
+	}
+	// Every relay failed: there is no mail to show and nothing succeeded, so
+	// this is a failure like any other.
+	if ok == 0 && firstErr != nil {
+		return total, reports, firstErr
+	}
+	return total, reports, nil
+}
+
+func cmdInbox(args []string) error {
+	fs := newFlagSet("inbox")
+	asJSON := fs.Bool("json", false, "machine readable output")
+	noFetch := fs.Bool("no-fetch", false, "list what is already local, without contacting the relay")
+	channel := fs.String("channel", "", "list only the messages filed under this channel; the fetch is whole")
+	relay := relayFlag(fs)
+	positional, err := parseArgs(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) > 0 {
+		return usageErrf("unexpected argument %q", positional[0])
+	}
+	if err := validChannelFlag(*channel); err != nil {
+		return err
+	}
+	// Listing what is on disk needs no key. Fetching does, and is what
+	// asks for the agent.
+	s, _, err := requireIdentity()
+	if err != nil {
+		return err
+	}
+
+	var (
+		res     fetchResult
+		reports []relayFetch
+	)
+	if !*noFetch {
+		var id *identity.Identity
+		if s, id, err = loadIdentity(); err != nil {
+			return err
+		}
+		relays, err := selectedRelays(s, *relay)
+		if err != nil {
+			return err
+		}
+		narrowed := len(relays) == 1
+		if res, reports, err = fetchEvery(s, id, relays, narrowed); err != nil {
+			return err
+		}
+	}
+
+	msgs, err := s.List(store.Inbox)
+	if err != nil {
+		return err
+	}
+	// A local filter only: the fetch above was the whole mailbox, and the
+	// cursor is one per relay.
+	if *channel != "" {
+		kept := msgs[:0:0]
+		for _, m := range msgs {
+			if channelName(m.Channel) == *channel {
+				kept = append(kept, m)
+			}
+		}
+		msgs = kept
+	}
+	if *asJSON {
+		out := inboxJSON{Fetch: res, Relays: reports, Messages: make([]messageJSON, 0, len(msgs))}
+		for _, m := range msgs {
+			out.Messages = append(out.Messages, toJSON(store.Inbox, m, false))
+		}
+		return printJSON(out)
+	}
+
+	if res.Delivered > 0 || res.Quarantined > 0 {
+		fmt.Printf("fetched %d new message(s)", res.Delivered)
+		if res.Quarantined > 0 {
+			fmt.Printf(", %d quarantined from unknown senders", res.Quarantined)
+		}
+		fmt.Println()
+	}
+	if len(msgs) == 0 {
+		fmt.Println("inbox is empty")
+	} else {
+		for _, m := range msgs {
+			printInboxLine(m)
+		}
+		fmt.Printf("\nRead one with: %s read <id>\n", prog)
+	}
+	if res.Quarantined > 0 {
+		fmt.Printf("Unknown senders are held back: %s quarantine ls\n", prog)
+	}
+	// What each relay is still holding, which with a channel set to keep
+	// is the mail already read: the count is the relay's own, and 'auu
+	// rm' is what brings it down.
+	for _, rep := range reports {
+		if rep.Queued > 0 {
+			fmt.Printf("%s: %d message(s) on the relay; %s rm removes them\n", rep.Relay, rep.Queued, prog)
+		}
+	}
+	if len(res.Gone) > 0 {
+		names := make([]string, 0, len(res.Gone))
+		n := 0
+		for name, count := range res.Gone {
+			names = append(names, fmt.Sprintf("%q", name))
+			n += count
+		}
+		sort.Strings(names)
+		fmt.Printf("%d message(s) arrived for channels no longer in your directory: %s\n", n, strings.Join(names, ", "))
+	}
+	// What is under damaged/ is said every time, not only the time it was
+	// kept: it stays until a person removes it, and the point of keeping
+	// it is that a person knows it is there.
+	if kept, _, err := s.DamagedKept(); err == nil && kept > 0 {
+		fmt.Printf("%d damaged message(s) kept under %s; ask their senders to send them again\n", kept, s.DamagedDir())
+	}
+	return nil
+}
+
+// printInboxLine is one message as the inbox lists it: unread flag, the
+// id, sender, type, subject, when it arrived, attachments, channel, and
+// where it still is besides here.
+func printInboxLine(m *store.Stored) {
+	flag := " "
+	if !m.Read {
+		flag = "*"
+	}
+	att := ""
+	if n := len(m.Inner.Body.Attachments); n > 0 {
+		att = fmt.Sprintf("  [%d file(s)]", n)
+	}
+	ch := ""
+	if m.Channel != "" {
+		ch = fmt.Sprintf("  in %q", m.Channel)
+	}
+	fmt.Printf("%s %s  %-14s %-8s %-32s %s%s%s%s\n",
+		flag,
+		m.Inner.ID[:12],
+		truncate(orNone(m.SenderName), 14),
+		m.Inner.Body.Type,
+		truncate(orNone(m.Inner.Body.Subject), 32),
+		m.Received.Local().Format("2006-01-02 15:04"),
+		att, ch, whereElse(m))
+}
+
+// whereElse says what of a message is not here: the message itself still
+// queued on the relay it came through, kept there by its channel's setting
+// until 'auu rm' removes it, and a quarantined stream whose body was never
+// fetched, which waits on a decision about its sender. The second is a
+// statement about this machine, so it holds whether or not the relay still
+// has the body to give.
+func whereElse(m *store.Stored) string {
+	switch {
+	case m.OnRelay && m.PayloadOnRelay:
+		return "  on relay, body not fetched"
+	case m.OnRelay:
+		return "  on relay"
+	case m.PayloadOnRelay:
+		return "  body not fetched"
+	}
+	return ""
+}
+
+func cmdRead(args []string) error {
+	fs := newFlagSet("read")
+	asJSON := fs.Bool("json", false, "machine readable output")
+	positional, err := parseArgs(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return usageErrf("usage: %s read MESSAGE-ID", prog)
+	}
+	s, _, err := requireIdentity()
+	if err != nil {
+		return err
+	}
+	box, m, err := s.Find(positional[0])
+	if err != nil {
+		return usageErrf("%v", err)
+	}
+	if err := s.MarkRead(box, m.Inner.ID); err != nil {
+		return err
+	}
+	if *asJSON {
+		return printJSON(wholeMessage(s, box, m))
+	}
+	printMessage(s, box, m)
+	return nil
+}
+
+// threadSubject is the subject the thread was opened with, which is the
+// subject of the first message on it. Nothing on the thread being here is
+// not possible from a message that is, so the error is the store's to
+// report and this answers with the message's own subject either way.
+func threadSubject(s *store.Store, m *store.Stored) string {
+	if thread := m.Inner.Body.Thread; thread != "" {
+		if _, first, err := s.FirstOnThread(thread); err == nil {
+			return first.Inner.Body.Subject
+		}
+	}
+	return m.Inner.Body.Subject
+}
+
+// wholeMessage is one message in full, with the thread's subject alongside
+// its own.
+func wholeMessage(s *store.Store, box store.Box, m *store.Stored) messageJSON {
+	out := toJSON(box, m, true)
+	out.ThreadSubject = threadSubject(s, m)
+	return out
+}
+
+func printMessage(s *store.Store, box store.Box, m *store.Stored) {
+	if box == store.Quarantine {
+		fmt.Println("!! QUARANTINED: this sender is not in your peer list.")
+	}
+	fmt.Printf("from:    %s <%s>\n", orNone(m.SenderName), m.Inner.From[:16])
+	fmt.Printf("type:    %s\n", m.Inner.Body.Type)
+	// The thread's subject, and under it this message's own when it was
+	// given one: a reply can be about something of its own without
+	// starting a thread of its own, and both are worth seeing.
+	subject := threadSubject(s, m)
+	fmt.Printf("subject: %s\n", orNone(subject))
+	if m.Inner.Body.Subject != subject {
+		fmt.Printf("%-9s%s\n", "  "+m.Inner.Body.Type+":", orNone(m.Inner.Body.Subject))
+	}
+	fmt.Printf("channel: %s\n", channelName(m.Channel))
+	// Where it is besides here: kept on the relay until 'auu rm' removes
+	// it, or acknowledged away when it was fetched.
+	if m.RelayID != 0 {
+		relayState := "removed"
+		if m.OnRelay {
+			relayState = "kept"
+		}
+		fmt.Printf("relay:   %s\n", relayState)
+	}
+	fmt.Printf("thread:  %s\n", m.Inner.Body.Thread)
+	fmt.Printf("id:      %s\n", m.Inner.ID)
+	fmt.Printf("time:    %s\n", m.Inner.Time.Local().Format(time.RFC1123))
+	if len(m.Inner.Body.Attachments) > 0 {
+		fmt.Println("files:")
+		for _, a := range m.Inner.Body.Attachments {
+			fmt.Printf("  %-32s %10s  %s\n", a.Name, humanBytes(a.Size), a.SHA256[:16])
+		}
+		if box == store.Sent && m.Streamed {
+			// A sent stream was read from the sender's own files and never
+			// copied. Listing them is useful; offering to save them is not.
+			fmt.Println("  sent as a stream, from your own copies of these files")
+		} else {
+			fmt.Printf("  save them with: %s extract %s\n", prog, m.Inner.ID[:12])
+		}
+	}
+	fmt.Printf("\n%s\n", strings.TrimRight(m.Inner.Body.Text, "\n"))
+}
+
+func cmdExtract(args []string) error {
+	fs := newFlagSet("extract")
+	out := fs.String("out", "", "directory to write into (default ./auu-attachments/<id>)")
+	positional, err := parseArgs(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return usageErrf("usage: %s extract MESSAGE-ID [--out DIR]", prog)
+	}
+	s, _, err := requireIdentity()
+	if err != nil {
+		return err
+	}
+	box, m, err := s.Find(positional[0])
+	if err != nil {
+		return usageErrf("%v", err)
+	}
+	if len(m.Inner.Body.Attachments) == 0 {
+		return usageErrf("message %s has no attachments", m.Inner.ID[:12])
+	}
+	if box == store.Sent && m.Streamed {
+		return usageErrf("message %s was sent as a stream: its files were read from your own disk "+
+			"and never copied into the store, so there is nothing here to extract",
+			m.Inner.ID[:12])
+	}
+	if m.PayloadOnRelay {
+		return usageErrf("message %s is from somebody you have not added as a peer, so its "+
+			"attachments are still on the relay; run '%s quarantine trust %s' to fetch them",
+			m.Inner.ID[:12], prog, m.Inner.ID[:12])
+	}
+	dir := *out
+	if dir == "" {
+		dir = filepath.Join("auu-attachments", m.Inner.ID)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	written, err := extractInto(s, box, m, dir)
+	if err != nil {
+		return err
+	}
+	for i, path := range written {
+		fmt.Printf("wrote %s (%s)\n", path, humanBytes(m.Inner.Body.Attachments[i].Size))
+	}
+	fmt.Println("\nThese files came from another machine. Read them; do not run them.")
+	return nil
+}
+
+// extractInto writes a message's attachments into a directory that already
+// exists, and answers with what it wrote, in the order the message carries
+// them. It is the whole of 'auu extract' but the printing and the refusals
+// that are a person's: serve uses it to put the files an asker sent where
+// the handler can read them.
+//
+// Every file is checked again as it is written rather than only when the
+// message was opened, and a streamed one is copied without ever being held
+// in memory.
+func extractInto(s *store.Store, box store.Box, m *store.Stored, dir string) ([]string, error) {
+	var written []string
+	for _, a := range m.Inner.Body.Attachments {
+		// The name was validated when the message was opened. Take the base
+		// again anyway: this is the step that touches the filesystem.
+		target := filepath.Join(dir, filepath.Base(a.Name))
+		if _, err := os.Stat(target); err == nil {
+			return written, usageErrf("%s already exists; move it or choose another --out directory", target)
+		}
+		if m.Streamed {
+			// A streamed attachment is already a file and may be far larger
+			// than memory, so it is copied rather than loaded.
+			src := filepath.Join(s.AttachmentDir(box, m.Inner.ID), filepath.Base(a.Name))
+			if err := copyStreamed(src, target, a); err != nil {
+				return written, err
+			}
+		} else {
+			// Re-check the digest at the moment of writing, not only at open time.
+			check := message.Attachment{Name: a.Name, Media: a.Media, Size: a.Size, SHA256: a.SHA256, Data: a.Data}
+			if err := check.Validate(); err != nil {
+				return written, fmt.Errorf("refusing to write %s: %w", a.Name, err)
+			}
+			if err := os.WriteFile(target, a.Data, 0o600); err != nil {
+				return written, err
+			}
+		}
+		written = append(written, target)
+	}
+	return written, nil
+}
+
+// copyStreamed writes a delivered stream attachment to target without ever
+// holding it in memory. It makes the same four checks Validate makes, with the
+// size and the digest taken as the bytes go past, and puts the file in place
+// only once they agree: a mismatch leaves nothing behind to be mistaken for
+// the real thing.
+func copyStreamed(src, target string, a message.Attachment) error {
+	if err := message.ValidAttachmentName(a.Name); err != nil {
+		return fmt.Errorf("refusing to write %s: %w", a.Name, err)
+	}
+	if a.Media == "" {
+		return fmt.Errorf("refusing to write %s: empty media type", a.Name)
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", a.Name, err)
+	}
+	defer in.Close()
+
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".auu-extract-*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		tmp.Close()
+		os.Remove(tmp.Name())
+	}()
+
+	h := sha256.New()
+	n, err := io.Copy(io.MultiWriter(tmp, h), in)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", a.Name, err)
+	}
+	if n != a.Size {
+		return fmt.Errorf("refusing to write %s: size %d does not match %d bytes of data", a.Name, a.Size, n)
+	}
+	if !strings.EqualFold(a.SHA256, hex.EncodeToString(h.Sum(nil))) {
+		return fmt.Errorf("refusing to write %s: sha256 does not match data", a.Name)
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), target)
+}
+
+type waitJSON struct {
+	Found   bool         `json:"found"`
+	Message *messageJSON `json:"message,omitempty"`
+	Waited  string       `json:"waited"`
+}
+
+func cmdWait(args []string) error {
+	fs := newFlagSet("wait")
+	thread := fs.String("thread", "", "thread id to wait on")
+	timeout := fs.Duration("timeout", 10*time.Minute, "give up after this long")
+	interval := fs.Duration("interval", 20*time.Second, "how often to check the relay")
+	asJSON := fs.Bool("json", false, "machine readable output")
+	relay := relayFlag(fs)
+	positional, err := parseArgs(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) > 0 {
+		return usageErrf("unexpected argument %q", positional[0])
+	}
+	if *thread == "" {
+		return usageErrf("--thread is required")
+	}
+	if *interval < 5*time.Second {
+		return usageErrf("--interval must be at least 5s; polling harder does not make replies arrive sooner")
+	}
+	s, id, err := loadIdentity()
+	if err != nil {
+		return err
+	}
+	// A reply comes back the way the thread came, so that is the relay to
+	// watch. A thread with nothing stored — waiting on an id somebody was
+	// given out of band — could be anywhere, so every relay is watched.
+	relays, err := waitRelays(s, *thread, *relay)
+	if err != nil {
+		return err
+	}
+
+	// Anything already in the thread is old news: wait means wait for new.
+	seen := map[string]bool{}
+	existing, err := s.List(store.Inbox)
+	if err != nil {
+		return err
+	}
+	for _, m := range existing {
+		if m.Inner.Body.Thread == *thread {
+			seen[m.Inner.ID] = true
+		}
+	}
+
+	start := time.Now()
+	deadline := start.Add(*timeout)
+	// Every request made by every poll runs under the wait's own deadline,
+	// so a relay that accepts a connection and never answers is cut off
+	// when the wait is over, rather than when the transport gives up on
+	// it. The container suite's N02 found a ten-second wait answering
+	// after the transport's handshake timeout, with the transport's exit
+	// code.
+	pollCtx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	for {
+		// floor is a delay a relay asked for, which the poll interval must
+		// not undercut.
+		var (
+			floor    time.Duration
+			ok       int
+			firstErr error
+		)
+		began := time.Now()
+		// Each poll asks the relay to hold its first listing open, so a
+		// reply arrives when it is sent; a relay from before the hold
+		// answers at once and the poll sleeps the interval as it always
+		// did.
+		hold := holdFor(*interval, deadline)
+		for _, r := range relays {
+			c, err := dial(s, id, r)
+			if err == nil {
+				_, _, err = fetch(pollCtx, s, id, c, r, hold)
+			}
+			if err == nil {
+				ok++
+				continue
+			}
+			// A relay that is refusing requests for now has told us how long
+			// to leave it alone, and waiting is what this command does.
+			if d, temporary := relayAskedToWait(err); temporary {
+				if d > floor {
+					floor = d
+				}
+				continue
+			}
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", r.Name, err)
+			}
+		}
+		// Every relay failed outright. A failure that waiting may outlast
+		// — the relay unreachable, the connection lost, the relay failing
+		// — is said and tried again at the next interval, since the point
+		// of this command is to wait; one that will not pass without a
+		// person, or the deadline itself, ends it.
+		// The pause before the next poll is what is left of the interval
+		// since this one began: a relay that held the listing for the
+		// whole interval is asked again at once, and one that answered in
+		// a moment is asked again after the interval, as before. A delay
+		// the relay asked for is a floor under it either way.
+		pause := max(*interval-time.Since(began), floor)
+		if ok == 0 && firstErr != nil {
+			if !pollFailedForNow(firstErr) {
+				return firstErr
+			}
+			if pollCtx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "warning: %v; trying again in %s\n",
+					firstErr, min(pause, time.Until(deadline)).Round(time.Second))
+			}
+		}
+		if ok > 0 {
+			msgs, err := s.List(store.Inbox)
+			if err != nil {
+				return err
+			}
+			for _, m := range msgs {
+				if m.Inner.Body.Thread == *thread && !seen[m.Inner.ID] {
+					if err := s.MarkRead(store.Inbox, m.Inner.ID); err != nil {
+						return err
+					}
+					if *asJSON {
+						out := wholeMessage(s, store.Inbox, m)
+						return printJSON(waitJSON{Found: true, Message: &out, Waited: time.Since(start).Round(time.Second).String()})
+					}
+					printMessage(s, store.Inbox, m)
+					return nil
+				}
+			}
+		}
+		// The pause is capped at what is left of the wait, and the deadline
+		// is looked at after it rather than before, so a pause that ran to
+		// the deadline is followed by the timeout and not by a poll that
+		// would leave this machine with its context already expired. A
+		// poll that ran to the deadline itself has nothing to pause for
+		// and meets the same check. A pause that ended a moment early is
+		// followed by one more poll, which asks for no hold; that is the
+		// clock's, and watch is the same.
+		if pause = min(pause, time.Until(deadline)); pause > 0 {
+			waitSleep(pause)
+		}
+		if time.Until(deadline) <= 0 {
+			if *asJSON {
+				if err := printJSON(waitJSON{Found: false, Waited: time.Since(start).Round(time.Second).String()}); err != nil {
+					return err
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "no reply on thread %s after %s\n", *thread, timeout.String())
+			}
+			return &exitError{code: exitTimeout, err: fmt.Errorf("timed out waiting for thread %s", *thread)}
+		}
+	}
+}
+
+// holdMargin is how much shorter than what is left of a wait its last hold
+// is asked for, so the relay's answer arrives before the deadline rather
+// than being cut off by it: the request's round trip, with room to spare.
+const holdMargin = time.Second
+
+// holdFor is how long a poll asks the relay to hold its listing open: the
+// interval, or the relay's ceiling if that is shorter, or what is left
+// before the deadline less the margin if that is shorter still, so the
+// last hold ends inside the deadline, answered by the relay rather than
+// cut off here. A zero deadline is none. A hold of nothing or less asks
+// for no hold at all.
+func holdFor(interval time.Duration, deadline time.Time) time.Duration {
+	hold := min(interval, relayapi.MaxWait)
+	if !deadline.IsZero() {
+		hold = min(hold, time.Until(deadline)-holdMargin)
+	}
+	return hold
+}
+
+// fetchLockName is the file under a relay's directory that a fetch holds.
+const fetchLockName = "fetch.lock"
+
+// fetchLockWait is how long a fetch waits for another to finish before
+// giving up: longer than any one fetch should take, shorter than a person's
+// patience. A test shortens it.
+var fetchLockWait = time.Minute
+
+// fetchLockSleep is the pause between asks for the lock. A test replaces it
+// to see the ask.
+var fetchLockSleep = time.Sleep
+
+// waitSleep is the pause between polls. A test replaces it, since the
+// interval is at least five seconds and a test of the polling is not a test
+// of the clock.
+var waitSleep = time.Sleep
+
+// pollFailedForNow reports a poll failure that waiting may outlast: the
+// relay unreachable or the connection lost, a 5xx from it, or the wait's
+// own deadline cutting the request off. A refused or unverifiable
+// certificate, a locked agent, a 4xx the relay meant, and this machine's
+// own files are a person's, and no interval will change them.
+func pollFailedForNow(err error) bool {
+	if isLocked(err) || client.VerificationFailure(err) {
+		return false
+	}
+	var refused *client.CertRefused
+	if errors.As(err, &refused) {
+		return false
+	}
+	var httpErr *client.HTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.Status >= 500
+	}
+	var urlErr *url.Error
+	// Another fetch on this machine finishing is exactly the kind of
+	// thing waiting outlasts.
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, lockfile.ErrHeld) || errors.As(err, &urlErr)
+}
+
+// waitRelays is what a wait watches: the relay the thread's latest message
+// came through, or every relay the home is on when the thread is new here.
+// --relay narrows it either way.
+func waitRelays(s *store.Store, thread, flag string) ([]*store.Relay, error) {
+	if strings.TrimSpace(flag) != "" {
+		r, err := selectRelay(s, flag)
+		if err != nil {
+			return nil, err
+		}
+		return []*store.Relay{r}, nil
+	}
+	if _, latest, err := s.FindThread(thread); err == nil && latest.Relay != "" {
+		if r, err := s.Relay(latest.Relay); err == nil {
+			return []*store.Relay{r}, nil
+		}
+	}
+	return selectedRelays(s, "")
+}
+
+// relayAskedToWait reports the delay a relay asked for when it refused a
+// request for now rather than for good.
+func relayAskedToWait(err error) (time.Duration, bool) {
+	var httpErr *client.HTTPError
+	if !errors.As(err, &httpErr) {
+		return 0, false
+	}
+	if httpErr.Status != http.StatusTooManyRequests && httpErr.Status != http.StatusServiceUnavailable {
+		return 0, false
+	}
+	if strings.Contains(httpErr.Message, relayapi.MsgWaitingWillNotHelp) {
+		return 0, false
+	}
+	return httpErr.RetryAfter, true
+}
+
+func cmdQuarantine(args []string) error {
+	if len(args) == 0 {
+		return usageErrf("usage: %s quarantine ls|show|trust", prog)
+	}
+	sub, rest := args[0], args[1:]
+	s, _, err := requireIdentity()
+	if err != nil {
+		return err
+	}
+	switch sub {
+	case "ls", "list":
+		fs := newFlagSet("quarantine ls")
+		asJSON := fs.Bool("json", false, "machine readable output")
+		positional, err := parseArgs(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(positional) > 0 {
+			return usageErrf("unexpected argument %q", positional[0])
+		}
+		msgs, err := s.List(store.Quarantine)
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			out := make([]messageJSON, 0, len(msgs))
+			for _, m := range msgs {
+				out = append(out, toJSON(store.Quarantine, m, false))
+			}
+			return printJSON(out)
+		}
+		if len(msgs) == 0 {
+			fmt.Println("quarantine is empty")
+			return nil
+		}
+		for _, m := range msgs {
+			fmt.Printf("%s  from %s  %s%s\n", m.Inner.ID[:12], m.Inner.From[:16],
+				truncate(orNone(m.Inner.Body.Subject), 40), whereElse(m))
+		}
+		fmt.Println("\nThese senders are not in your peer list. Confirm who they are out of band,")
+		fmt.Printf("then run: %s quarantine trust <id>\n", prog)
+		return nil
+
+	case "show":
+		fs := newFlagSet("quarantine show")
+		asJSON := fs.Bool("json", false, "machine readable output")
+		positional, err := parseArgs(fs, rest)
+		if err != nil {
+			return err
+		}
+		if len(positional) != 1 {
+			return usageErrf("usage: %s quarantine show MESSAGE-ID", prog)
+		}
+		m, err := s.Load(store.Quarantine, positional[0])
+		if err != nil {
+			box, found, ferr := s.Find(positional[0])
+			if ferr != nil || box != store.Quarantine {
+				return usageErrf("no quarantined message %s", positional[0])
+			}
+			m = found
+		}
+		if *asJSON {
+			return printJSON(wholeMessage(s, store.Quarantine, m))
+		}
+		printMessage(s, store.Quarantine, m)
+		return nil
+
+	case "trust":
+		if len(rest) != 1 {
+			return usageErrf("usage: %s quarantine trust MESSAGE-ID", prog)
+		}
+		box, m, err := s.Find(rest[0])
+		if err != nil {
+			return usageErrf("%v", err)
+		}
+		if box != store.Quarantine {
+			return usageErrf("message %s is not in quarantine", rest[0])
+		}
+		pub, err := identity.ParseBundle(m.Inner.FromBundle)
+		if err != nil {
+			return fmt.Errorf("quarantined message carries a malformed sender key: %w", err)
+		}
+		if pub.Fingerprint() != m.Inner.From {
+			return fmt.Errorf("quarantined message has an inconsistent sender key")
+		}
+		pub.Name = promptName(pub.Fingerprint())
+		if _, err := s.AddPeer(pub); err != nil {
+			return usageErrf("%v", err)
+		}
+		m.SenderName = pub.Name
+		// A quarantined stream has only its manifest: the payload is still on
+		// the relay, deliberately, so that a stranger cannot make anybody
+		// download two gigabytes. Trusting them is what fetches it.
+		if box == store.Sent && m.Streamed {
+			return usageErrf("message %s was sent as a stream: its files were read from your own disk "+
+				"and never copied into the store, so there is nothing here to extract",
+				m.Inner.ID[:12])
+		}
+		if m.PayloadOnRelay {
+			_, id, err := loadIdentity()
+			if err != nil {
+				return err
+			}
+			// The payload is on the relay the manifest came through, and on
+			// no other: a relay id means nothing anywhere else.
+			r, err := relayOf(s, m, "")
+			if err != nil {
+				return err
+			}
+			c, err := dial(s, id, r)
+			if err != nil {
+				return err
+			}
+			opened, _, err := fetchManifest(ctx(), c, id, m.RelayID)
+			if err != nil {
+				// The body was never fetched, and the relay no longer
+				// has it: an administrator's purge, or another machine
+				// of this identity removing the message. Nothing here
+				// changes; the record still says the body is not here.
+				if isMissingOnRelay(err) {
+					return bodyGone(m)
+				}
+				return transportErr(err)
+			}
+			if opened.Sender.Fingerprint() != m.Inner.From {
+				return fmt.Errorf("the stream on the relay is no longer the one that was quarantined")
+			}
+			// The body is here now, so the payload is no longer on the
+			// relay; whether the message is depends on the channel, as
+			// it does for any other fetch.
+			keep, err := s.KeepOnRelay(m.Channel)
+			if err != nil {
+				return err
+			}
+			if err := deliverStream(ctx(), s, id, c, r, m.RelayID, opened, store.Quarantine, keep); err != nil {
+				// The body was never fetched, and the relay no longer
+				// has it: an administrator's purge, or another machine
+				// of this identity removing the message. Nothing here
+				// changes; the record still says the body is not here.
+				if isMissingOnRelay(err) {
+					return bodyGone(m)
+				}
+				return transportErr(err)
+			}
+			if !keep {
+				if err := c.Ack(ctx(), m.RelayID); err != nil {
+					return transportErr(err)
+				}
+			}
+			trusted, err := s.Load(store.Quarantine, m.Inner.ID)
+			if err != nil {
+				return err
+			}
+			trusted.SenderName = pub.Name
+			m = trusted
+		}
+		if err := s.Save(store.Quarantine, m); err != nil {
+			return err
+		}
+		if err := s.Move(store.Quarantine, store.Inbox, m.Inner.ID); err != nil {
+			return err
+		}
+		fmt.Printf("trusted %s and moved message %s to the inbox\n", pub.Fingerprint()[:16], m.Inner.ID[:12])
+		fmt.Printf("run '%s allow push' if your relay mailbox is restricted\n", prog)
+		return nil
+
+	default:
+		return usageErrf("unknown quarantine subcommand %q", sub)
+	}
+}
+
+// bodyGone is the answer when a quarantined stream's body is no longer on
+// the relay to fetch: the message left the mailbox while its body sat
+// there unfetched, and nothing this machine holds can replace it.
+func bodyGone(m *store.Stored) error {
+	return &exitError{code: exitTransport, err: fmt.Errorf(
+		"%s: its body is no longer on the relay; ask the sender to send it again", m.Inner.ID[:12])}
+}
+
+// promptName asks for a local name for a newly trusted sender. A name the
+// sender chose for themselves is not used: names are local labels, and letting
+// the wire pick them invites impersonation.
+func promptName(fp string) string {
+	fallback := "peer-" + fp[:8]
+	fmt.Printf("Local name for %s [%s]: ", fp[:16], fallback)
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil && line == "" {
+		fmt.Println()
+		return fallback
+	}
+	name := strings.TrimSpace(line)
+	if name == "" || strings.ContainsAny(name, "\r\n") {
+		return fallback
+	}
+	return name
+}
+
+// channelName is a stored channel for printing: default when none.
+func channelName(channel string) string {
+	if channel == "" {
+		return channels.Default
+	}
+	return channel
+}

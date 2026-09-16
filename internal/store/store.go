@@ -1,0 +1,959 @@
+// Package store manages a user's local auu state: identity, configuration, the
+// authorized peer list, and the spool of received and sent mail.
+//
+// The peer list is the trust anchor of the whole system. It is exchanged out of
+// band, the way ssh public keys are, and nothing on the network can add to it.
+package store
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/envelope"
+	"github.com/tropeforce7/agentuucp/internal/identity"
+)
+
+const (
+	dirMode  os.FileMode = 0o700
+	fileMode os.FileMode = 0o600
+
+	identityFile = "identity.json"
+	configFile   = "config.json"
+	peersFile    = "authorized_peers"
+	cursorFile   = "cursor"
+
+	inboxDir      = "inbox"
+	sentDir       = "sent"
+	quarantineDir = "quarantine"
+	serveDir      = "serve"
+
+	// minPrefix is the shortest fingerprint prefix accepted for lookups.
+	minPrefix = 8
+)
+
+// ErrNoIdentity means auu init has not been run.
+var ErrNoIdentity = errors.New("no identity: run 'auu init --name YOUR-NAME' first")
+
+// ErrAmbiguous means a lookup matched more than one peer.
+type ErrAmbiguous struct {
+	Query      string
+	Candidates []string
+	// What the candidates are: "peers" or "messages". The same error serves
+	// both lookups, and an id that matches two messages is not two peers.
+	What string
+}
+
+func (e *ErrAmbiguous) Error() string {
+	return fmt.Sprintf("%q matches %d %s: %s", e.Query, len(e.Candidates), e.What, strings.Join(e.Candidates, ", "))
+}
+
+// Config is the user's local settings. What it does not hold is anything
+// about one relay: that lives under relays/, one directory per relay, because
+// a home may know several.
+type Config struct {
+	Name string `json:"name"`
+	// DefaultRelay is the relay a command acts on when --relay and AUU_RELAY
+	// say nothing. It is the name, not the URL.
+	DefaultRelay string `json:"default_relay,omitempty"`
+	// StreamThreshold is the estimated size above which a message is sent as
+	// a stream rather than an envelope. Zero means the default.
+	StreamThreshold int64 `json:"stream_threshold,omitempty"`
+	// ChunkSize is the plaintext bytes per stream chunk. Zero means the
+	// default.
+	ChunkSize int `json:"chunk_size,omitempty"`
+	// Editor composes a message when none is given at a terminal. Empty
+	// means VISUAL, then EDITOR, then vi; AUU_EDITOR in the environment
+	// beats all of them.
+	Editor string `json:"editor,omitempty"`
+}
+
+// Store is a handle on the auu home directory.
+type Store struct {
+	root string
+	// self is the owner's public bundle, loaded on first use. Several
+	// questions the peer list answers — who is this, may they write to me,
+	// what are they called — have the same answer for the owner, and the
+	// peer list is not where it lives.
+	self *identity.Public
+}
+
+// ErrSelfPeer is refused by AddPeer: an owner does not need to be on their
+// own list to write to themselves, and a list entry for yourself is a thing
+// people then wonder about.
+var ErrSelfPeer = errors.New("that is your own key: messages to yourself need no peer entry, use --to self")
+
+// Self is the owner's public bundle, with their name. In an encrypted home
+// it is read from identity.json's public form and touches no key and no
+// agent, which is what lets every command that needs only the public half
+// run with the identity locked.
+func (s *Store) Self() (*identity.Public, error) {
+	if s.self != nil {
+		return s.self, nil
+	}
+	data, err := os.ReadFile(s.path(identityFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ErrNoIdentity
+	}
+	if err != nil {
+		return nil, err
+	}
+	form, err := sniffIdentity(s.path(identityFile), data)
+	if err != nil {
+		return nil, err
+	}
+	if form == "locked" {
+		l, err := s.locked()
+		if err != nil {
+			return nil, err
+		}
+		pub, err := l.Public()
+		if err != nil {
+			return nil, err
+		}
+		s.self = pub
+		return s.self, nil
+	}
+	id, err := s.plainIdentity()
+	if err != nil {
+		return nil, err
+	}
+	s.self = id.Public()
+	return s.self, nil
+}
+
+// isSelfAlias reports whether a query names the owner by convention rather
+// than by key. There is one word for it, and it is reserved as a name so it
+// can never be anyone else.
+func isSelfAlias(query string) bool { return query == "self" }
+
+// DefaultRoot is $AUU_HOME, or ~/.auu.
+func DefaultRoot() (string, error) {
+	if root := os.Getenv("AUU_HOME"); root != "" {
+		return root, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".auu"), nil
+}
+
+// Open returns a store rooted at path, creating the directory tree if needed.
+func Open(root string) (*Store, error) {
+	s := &Store{root: root}
+	for _, dir := range []string{root,
+		filepath.Join(root, inboxDir),
+		filepath.Join(root, sentDir),
+		filepath.Join(root, quarantineDir),
+		filepath.Join(root, relaysDir),
+	} {
+		if err := os.MkdirAll(dir, dirMode); err != nil {
+			return nil, err
+		}
+	}
+	if err := privateHome(root); err != nil {
+		return nil, err
+	}
+	warnWritable(filepath.Join(root, peersFile), "who you trust", false)
+	for _, dir := range []string{inboxDir, sentDir, quarantineDir} {
+		warnWritable(filepath.Join(root, dir), "your mail", true)
+	}
+	if err := s.migrateRelays(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// OpenDefault opens the store at DefaultRoot.
+func OpenDefault() (*Store, error) {
+	root, err := DefaultRoot()
+	if err != nil {
+		return nil, err
+	}
+	return Open(root)
+}
+
+func (s *Store) Root() string            { return s.root }
+func (s *Store) path(p ...string) string { return filepath.Join(append([]string{s.root}, p...)...) }
+
+// writeFileAtomic writes through a temporary file in the same directory, so a
+// crash or a concurrent reader never sees a half-written peer list.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+// HasIdentity reports whether an identity has been created.
+func (s *Store) HasIdentity() bool {
+	_, err := os.Stat(s.path(identityFile))
+	return err == nil
+}
+
+// SaveIdentity writes the identity, secrets included, mode 0600. It refuses
+// an encrypted home: a plain identity.json beside a home.key is the state a
+// crash leaves, and writing one on purpose would be the same thing.
+func (s *Store) SaveIdentity(id *identity.Identity) error {
+	if exists(s.path(homeKeyFile)) || exists(s.path(identityKeyFile)) {
+		return fmt.Errorf("%w; run 'auu passphrase remove' first", ErrEncrypted)
+	}
+	data, err := json.MarshalIndent(id, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(s.path(identityFile), append(data, '\n'), fileMode)
+}
+
+// Identity loads the user's identity.
+//
+// In a plain home it is the keys, from identity.json. In an encrypted home
+// it is a remote identity: the public half from identity.json, and every
+// private operation performed by the agent on first use. Opening it
+// connects to nothing. A home that is neither — a crash between the renames
+// of a passphrase change — is refused by name.
+func (s *Store) Identity() (*identity.Identity, error) {
+	h, err := s.state()
+	if err != nil {
+		return nil, err
+	}
+	if h.identity == "" {
+		if err := s.diagnose(h); err != nil {
+			return nil, err
+		}
+		return nil, ErrNoIdentity
+	}
+	if err := s.diagnose(h); err != nil {
+		return nil, err
+	}
+	if h.encrypted() {
+		return s.remoteIdentity()
+	}
+	return s.plainIdentity()
+}
+
+// SaveConfig writes the local configuration.
+func (s *Store) SaveConfig(c Config) error {
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(s.path(configFile), append(data, '\n'), fileMode)
+}
+
+// Config loads the local configuration. A missing file is not an error.
+func (s *Store) Config() (Config, error) {
+	var c Config
+	data, err := os.ReadFile(s.path(configFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return c, nil
+	}
+	if err != nil {
+		return c, err
+	}
+	if err := json.Unmarshal(data, &c); err != nil {
+		return Config{}, s.configDamaged(err)
+	}
+	return c, nil
+}
+
+// configDamaged is a config.json nothing can read, met by Config and by
+// the migration that reads it first, at Open. Deleting it costs the
+// default relay and the settings, and nothing that cannot be set again.
+func (s *Store) configDamaged(cause error) error {
+	return damaged(s.path(configFile), "is not valid JSON", cause,
+		"delete it and set the default relay again with 'auu relay default NAME'; "+
+			"it holds only that, the stream settings and your editor")
+}
+
+// Peers returns the authorized peer list in file order.
+func (s *Store) Peers() ([]*identity.Public, error) {
+	data, err := os.ReadFile(s.path(peersFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var peers []*identity.Public
+	for n, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		pub, err := identity.ParseExportLine(trimmed)
+		if err != nil {
+			// A line of the wrong length in a file of lines is, as often
+			// as not, a line an editor or a mail client wrapped: the rest
+			// of it is the next line. The question is asked here, since
+			// the parser sees one line at a time and the break is between
+			// them. A person has to fix the file, so it is damaged.
+			wrapped := ""
+			if errors.Is(err, identity.ErrLineLength) {
+				wrapped = " (was the line wrapped?)"
+			}
+			return nil, &damagedFile{msg: fmt.Sprintf("%s line %d: %v%s", s.path(peersFile), n+1, err, wrapped)}
+		}
+		peers = append(peers, pub)
+	}
+	return peers, nil
+}
+
+// AddPeer appends a peer. Re-adding the same key is a no-op; presenting a
+// different key for a fingerprint that is already known is refused, since a
+// fingerprint commits to its key material and a mismatch means something is
+// wrong rather than updated.
+func (s *Store) AddPeer(pub *identity.Public) (added bool, err error) {
+	if self, err := s.Self(); err == nil && self.Fingerprint() == pub.Fingerprint() {
+		return false, ErrSelfPeer
+	}
+	peers, err := s.Peers()
+	if err != nil {
+		return false, err
+	}
+	for _, existing := range peers {
+		if existing.Fingerprint() == pub.Fingerprint() {
+			return false, nil
+		}
+		if existing.Name != "" && pub.Name != "" && strings.EqualFold(existing.Name, pub.Name) {
+			return false, fmt.Errorf("peer name %q is already used by %s; choose a different name",
+				pub.Name, existing.Short())
+		}
+	}
+	line := pub.ExportLine()
+	existing, err := os.ReadFile(s.path(peersFile))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	buf := string(existing)
+	if buf != "" && !strings.HasSuffix(buf, "\n") {
+		buf += "\n"
+	}
+	buf += line + "\n"
+	if err := writeFileAtomic(s.path(peersFile), []byte(buf), fileMode); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// RemovePeer drops a peer by fingerprint. It reports whether anything went.
+func (s *Store) RemovePeer(fp string) (bool, error) {
+	peers, err := s.Peers()
+	if err != nil {
+		return false, err
+	}
+	var kept []string
+	found := false
+	for _, p := range peers {
+		if p.Fingerprint() == fp {
+			found = true
+			continue
+		}
+		kept = append(kept, p.ExportLine())
+	}
+	if !found {
+		return false, nil
+	}
+	out := ""
+	if len(kept) > 0 {
+		out = strings.Join(kept, "\n") + "\n"
+	}
+	return true, writeFileAtomic(s.path(peersFile), []byte(out), fileMode)
+}
+
+// Resolve finds a peer by exact fingerprint, exact name, unique fingerprint
+// prefix, or unique case-insensitive name prefix, in that order.
+func (s *Store) Resolve(query string) (*identity.Public, error) {
+	if query == "" {
+		return nil, errors.New("empty peer name")
+	}
+	// The owner first, by the word or by exact fingerprint, and before the
+	// peer list is consulted at all: a note to yourself needs no peers.
+	if self, err := s.Self(); err == nil && (isSelfAlias(query) || query == self.Fingerprint()) {
+		return self, nil
+	}
+	peers, err := s.Peers()
+	if err != nil {
+		return nil, err
+	}
+	if len(peers) == 0 {
+		return nil, errors.New("no peers yet: add one with 'auu peers add'")
+	}
+	for _, p := range peers {
+		if p.Fingerprint() == query {
+			return p, nil
+		}
+	}
+	var byName []*identity.Public
+	for _, p := range peers {
+		if p.Name == query {
+			byName = append(byName, p)
+		}
+	}
+	if len(byName) == 1 {
+		return byName[0], nil
+	}
+	if len(byName) > 1 {
+		return nil, ambiguous(query, byName)
+	}
+
+	lower := strings.ToLower(query)
+	if len(query) >= minPrefix {
+		var byFP []*identity.Public
+		for _, p := range peers {
+			if strings.HasPrefix(p.Fingerprint(), lower) {
+				byFP = append(byFP, p)
+			}
+		}
+		if len(byFP) == 1 {
+			return byFP[0], nil
+		}
+		if len(byFP) > 1 {
+			return nil, ambiguous(query, byFP)
+		}
+	}
+
+	var byPrefix []*identity.Public
+	for _, p := range peers {
+		if p.Name != "" && strings.HasPrefix(strings.ToLower(p.Name), lower) {
+			byPrefix = append(byPrefix, p)
+		}
+	}
+	if len(byPrefix) == 1 {
+		return byPrefix[0], nil
+	}
+	if len(byPrefix) > 1 {
+		return nil, ambiguous(query, byPrefix)
+	}
+	return nil, fmt.Errorf("no peer matches %q", query)
+}
+
+func ambiguous(query string, candidates []*identity.Public) error {
+	e := &ErrAmbiguous{Query: query, What: "peers"}
+	for _, c := range candidates {
+		label := c.Short()
+		if c.Name != "" {
+			label = c.Name + " (" + c.Short() + ")"
+		}
+		e.Candidates = append(e.Candidates, label)
+	}
+	return e
+}
+
+// PeerName returns the local name for a fingerprint, or an empty string when
+// the sender is not a known peer.
+func (s *Store) PeerName(fp string) string {
+	if self, err := s.Self(); err == nil && self.Fingerprint() == fp {
+		return self.Name
+	}
+	peers, err := s.Peers()
+	if err != nil {
+		return ""
+	}
+	for _, p := range peers {
+		if p.Fingerprint() == fp {
+			return p.Name
+		}
+	}
+	return ""
+}
+
+// IsAuthorized reports whether a fingerprint is on the peer list.
+func (s *Store) IsAuthorized(fp string) bool {
+	if self, err := s.Self(); err == nil && self.Fingerprint() == fp {
+		return true
+	}
+	peers, err := s.Peers()
+	if err != nil {
+		return false
+	}
+	for _, p := range peers {
+		if p.Fingerprint() == fp {
+			return true
+		}
+	}
+	return false
+}
+
+// readCursor reads one relay's cursor. A missing file is zero: nothing has
+// been fetched from that relay yet.
+// readCursor reads one relay's cursor. The relay is named in the advice for
+// a cursor that will not parse, because the cursor is also the record that
+// this identity has a mailbox on that relay: deleted, the relay would be
+// passed by as one nobody has joined, and 'auu inbox --relay NAME' is what
+// selects it regardless.
+func readCursor(path, relay string) (int64, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	text := strings.TrimSpace(string(data))
+	n, err := strconv.ParseInt(text, 10, 64)
+	if err != nil {
+		// Whatever is in the file, shown but bounded: it is going into a
+		// sentence a person reads.
+		if len(text) > 40 {
+			text = text[:40] + "…"
+		}
+		return 0, damaged(path, fmt.Sprintf("is not a number (%q)", text), nil,
+			fmt.Sprintf("delete it and run 'auu inbox --relay %s'; that starts from the beginning and delivers nothing twice", relay))
+	}
+	return n, nil
+}
+
+func writeCursor(path string, n int64) error {
+	return writeFileAtomic(path, []byte(strconv.FormatInt(n, 10)+"\n"), fileMode)
+}
+
+// Stored is one message as kept on disk.
+type Stored struct {
+	RelayID int64 `json:"relay_id"`
+	// Relay is the name of the relay this message arrived through, which is
+	// what a reply goes back the way of. A message stored before a home
+	// could know more than one relay has none, and is taken to have come
+	// through the default, which is where it did come from.
+	Relay      string          `json:"relay,omitempty"`
+	Received   time.Time       `json:"received"`
+	Read       bool            `json:"read"`
+	Inner      *envelope.Inner `json:"inner"`
+	SenderName string          `json:"sender_name"`
+	// Streamed says the attachments are files in a directory beside this
+	// record rather than bytes inside it.
+	Streamed bool `json:"streamed,omitempty"`
+	// PayloadOnRelay says only the manifest has been fetched: the body is
+	// still on the relay, waiting for somebody to decide about the sender.
+	PayloadOnRelay bool `json:"payload_on_relay,omitempty"`
+	// OnRelay says the message is still queued on the relay it came
+	// through: this machine fetched it from a channel set to keep, and it
+	// stays there until somebody removes it with 'auu rm'. A record
+	// written before the setting existed has it false, which is true of
+	// it: everything was acknowledged away then.
+	OnRelay bool `json:"on_relay,omitempty"`
+	// Channel is the channel the message was sent to, or filed under on
+	// receipt; empty is default.
+	Channel string `json:"channel,omitempty"`
+}
+
+// Box names a spool directory.
+type Box string
+
+const (
+	Inbox      Box = inboxDir
+	Sent       Box = sentDir
+	Quarantine Box = quarantineDir
+)
+
+func (s *Store) msgPath(box Box, id string) string {
+	return s.path(string(box), id+".json")
+}
+
+// Save writes a message into a spool directory.
+func (s *Store) Save(box Box, m *Stored) error {
+	if m.Inner == nil || m.Inner.ID == "" {
+		return errors.New("message has no id")
+	}
+	if !validMessageID(m.Inner.ID) {
+		return fmt.Errorf("refusing to store message with malformed id %q", m.Inner.ID)
+	}
+	data, err := json.MarshalIndent(m, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(s.msgPath(box, m.Inner.ID), append(data, '\n'), fileMode)
+}
+
+// validMessageID guards the filesystem: message ids arrive inside signed but
+// otherwise untrusted records, and they become file names.
+func validMessageID(id string) bool {
+	if len(id) != 32 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// Load reads one message from a spool directory.
+func (s *Store) Load(box Box, id string) (*Stored, error) {
+	if !validMessageID(id) {
+		return nil, fmt.Errorf("malformed message id %q", id)
+	}
+	data, err := os.ReadFile(s.msgPath(box, id))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("no message %s", id)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var m Stored
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, err
+	}
+	if m.Inner == nil {
+		return nil, errors.New("the record holds no message")
+	}
+	return &m, nil
+}
+
+// warnedSpool is the spool files already warned about in this process, so
+// a command that lists a box more than once says it once.
+var warnedSpool sync.Map
+
+// warnUnreadable says, once per file per command, that a record in a box
+// could not be read and is left out of the listing.
+func (s *Store) warnUnreadable(box Box, name string, err error) {
+	path := s.path(string(box), name)
+	if _, already := warnedSpool.LoadOrStore(path, true); already {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "warning: %s could not be read (%v) and is not listed\n", path, err)
+}
+
+// List returns every message in a spool directory, oldest first.
+func (s *Store) List(box Box) ([]*Stored, error) {
+	entries, err := os.ReadDir(s.path(string(box)))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []*Stored
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		m, err := s.Load(box, strings.TrimSuffix(e.Name(), ".json"))
+		if err != nil {
+			// A stray file must not break the whole listing, and must not
+			// vanish from it in silence either: a record that will not
+			// read is a message a person thinks they have. Said once per
+			// file per command, since a listing is read more than once
+			// in one. The container suite's M09 found a flipped record
+			// simply absent.
+			s.warnUnreadable(box, e.Name(), err)
+			continue
+		}
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Received.Equal(out[j].Received) {
+			return out[i].Inner.ID < out[j].Inner.ID
+		}
+		return out[i].Received.Before(out[j].Received)
+	})
+	return out, nil
+}
+
+// LeftOn counts the messages this machine has left on one relay on
+// purpose, which is what the relay still counts behind this machine's
+// cursor: mail fetched from a channel set to keep, in the inbox or the
+// quarantine; a quarantined stream whose payload was recorded from its
+// manifest and deliberately not fetched, so that a stranger cannot make
+// anybody download two gigabytes; and a message removed here alone with
+// 'auu rm --local-only', which has no record left to say so and is
+// remembered in the relay's own left-behind file. A fetch that finds the
+// relay counting more than these has a cursor past mail.
+//
+// A record from before a home could know more than one relay names none,
+// and counts against every relay: the mistake that allows is silence,
+// never a sentence about mail that is not there.
+func (s *Store) LeftOn(relay string) (int64, error) {
+	var n int64
+	for _, box := range []Box{Inbox, Quarantine} {
+		msgs, err := s.List(box)
+		if err != nil {
+			return 0, err
+		}
+		for _, m := range msgs {
+			if (m.OnRelay || m.PayloadOnRelay) && (m.Relay == relay || m.Relay == "") {
+				n++
+			}
+		}
+	}
+	left, err := s.LeftBehind(relay)
+	if err != nil {
+		return 0, err
+	}
+	return n + int64(len(left)), nil
+}
+
+// Move relocates a message between boxes, taking its attachment directory with
+// it when it has one. A streamed message's files live beside its record, so
+// moving the record alone would strand them.
+func (s *Store) Move(from, to Box, id string) error {
+	m, err := s.Load(from, id)
+	if err != nil {
+		return err
+	}
+	if err := s.Save(to, m); err != nil {
+		return err
+	}
+	if m.Streamed {
+		src, dst := s.AttachmentDir(from, id), s.AttachmentDir(to, id)
+		if _, err := os.Stat(src); err == nil {
+			if err := os.RemoveAll(dst); err != nil {
+				return err
+			}
+			if err := os.Rename(src, dst); err != nil {
+				return err
+			}
+		}
+	}
+	return os.Remove(s.msgPath(from, id))
+}
+
+// Remove deletes a stored message and its attachment directory, if it has
+// one. A message that is not there is not an error: the caller asked for
+// it to be gone, and it is.
+func (s *Store) Remove(box Box, id string) error {
+	if err := os.RemoveAll(s.AttachmentDir(box, id)); err != nil {
+		return err
+	}
+	err := os.Remove(s.msgPath(box, id))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+// AttachmentDir is where a streamed message's files live: beside its record,
+// named for the message.
+func (s *Store) AttachmentDir(box Box, id string) string {
+	return filepath.Join(s.root, string(box), id+".d")
+}
+
+// ServeDir is where 'auu serve' keeps its state: its lock, its ledger, and a
+// directory apiece for each channel, thread and worktree. It is the store's
+// to name, as the relays' directory is, and serve's to fill; nothing is
+// created here.
+func (s *Store) ServeDir() string { return s.path(serveDir) }
+
+// Find looks a message up in the inbox, then sent, then quarantine, accepting a
+// unique id prefix of at least 4 characters.
+func (s *Store) Find(idOrPrefix string) (Box, *Stored, error) {
+	if len(idOrPrefix) < 4 {
+		return "", nil, errors.New("message id prefix must be at least 4 characters")
+	}
+	lower := strings.ToLower(idOrPrefix)
+	var (
+		hits  []*Stored
+		boxes []Box
+	)
+	for _, box := range []Box{Inbox, Sent, Quarantine} {
+		msgs, err := s.List(box)
+		if err != nil {
+			return "", nil, err
+		}
+		for _, m := range msgs {
+			if m.Inner.ID == lower {
+				return box, m, nil
+			}
+			if strings.HasPrefix(m.Inner.ID, lower) {
+				hits = append(hits, m)
+				boxes = append(boxes, box)
+			}
+		}
+	}
+	// A message to yourself is in sent/ and in inbox/ under one id. That is
+	// one message in two places, not two messages, and the boxes are walked
+	// inbox first so the copy that was received is the one found. Only
+	// different ids are an ambiguity.
+	var distinct []string // full ids, in the order first seen
+	for _, m := range hits {
+		known := false
+		for _, d := range distinct {
+			if d == m.Inner.ID {
+				known = true
+				break
+			}
+		}
+		if !known {
+			distinct = append(distinct, m.Inner.ID)
+		}
+	}
+	switch len(distinct) {
+	case 0:
+		return "", nil, fmt.Errorf("no message matches %q", idOrPrefix)
+	case 1:
+		return boxes[0], hits[0], nil
+	default:
+		short := make([]string, len(distinct))
+		for i, d := range distinct {
+			short[i] = d[:12]
+		}
+		return "", nil, &ErrAmbiguous{Query: idOrPrefix, Candidates: short, What: "messages"}
+	}
+}
+
+// FindThread finds the latest message on a thread, in the inbox or in sent,
+// by thread id or a unique prefix of one. Quarantine is not searched: a
+// stranger's thread is not one to reply on.
+//
+// "Latest" is by the message's own timestamp, and then — since timestamps are
+// whole seconds and two messages in one second are ordinary — by the id the
+// relay gave the message. The relay numbers every message it accepts from one
+// counter across all mailboxes, and both the copy in sent/ and the copy in
+// inbox/ carry that number, so the order is the same on both ends of a
+// conversation and never depends on which file was listed first.
+func (s *Store) FindThread(idOrPrefix string) (Box, *Stored, error) {
+	if len(idOrPrefix) < 4 {
+		return "", nil, errors.New("thread id prefix must be at least 4 characters")
+	}
+	lower := strings.ToLower(idOrPrefix)
+	var (
+		latest    *Stored
+		latestBox Box
+		threads   []string
+	)
+	for _, box := range []Box{Inbox, Sent} {
+		msgs, err := s.List(box)
+		if err != nil {
+			return "", nil, err
+		}
+		for _, m := range msgs {
+			tid := m.Inner.Body.Thread
+			if !strings.HasPrefix(tid, lower) {
+				continue
+			}
+			known := false
+			for _, t := range threads {
+				if t == tid {
+					known = true
+					break
+				}
+			}
+			if !known {
+				threads = append(threads, tid)
+			}
+			if latest == nil || laterThan(m, latest) {
+				latest, latestBox = m, box
+			}
+		}
+	}
+	switch len(threads) {
+	case 0:
+		return "", nil, fmt.Errorf("no thread matches %q", idOrPrefix)
+	case 1:
+		return latestBox, latest, nil
+	default:
+		short := make([]string, len(threads))
+		for i, t := range threads {
+			short[i] = t[:12]
+		}
+		return "", nil, &ErrAmbiguous{Query: idOrPrefix, Candidates: short, What: "threads"}
+	}
+}
+
+// FirstOnThread is the message a thread was opened with, by its full id: the
+// earliest of the messages on the thread that are here, preferring one that
+// is a reply to nothing, since that is what opens a thread. A thread is not
+// named after the message that started it — it is given an id of its own —
+// so this is a walk and not a lookup.
+//
+// It is how the thread's subject is known, the subject being the opener's.
+// A thread whose first message has been removed here answers with the
+// earliest of what is left that answers nothing, and failing that with the
+// earliest of all, which is the best that can be said; a thread with
+// nothing on it is not found.
+//
+// Quarantine is not searched, for the same reason FindThread does not search
+// it: a message from somebody who is not a peer is not part of anyone's
+// thread, and letting one in would let a stranger who learned a thread id
+// choose what a trusted message says it is about.
+func (s *Store) FirstOnThread(thread string) (Box, *Stored, error) {
+	var (
+		first    *Stored
+		firstBox Box
+	)
+	for _, box := range []Box{Inbox, Sent} {
+		msgs, err := s.List(box)
+		if err != nil {
+			return "", nil, err
+		}
+		for _, m := range msgs {
+			if m.Inner.Body.Thread != thread {
+				continue
+			}
+			if first == nil || opensBefore(m, first) {
+				first, firstBox = m, box
+			}
+		}
+	}
+	if first == nil {
+		return "", nil, fmt.Errorf("no message on thread %q", thread)
+	}
+	return firstBox, first, nil
+}
+
+// opensBefore orders two messages on a thread by how likely each is to be
+// the one it was opened with: a message that answers nothing comes before
+// one that answers something, whatever the clocks say, and otherwise the
+// earlier of the two by laterThan's ordering.
+func opensBefore(a, b *Stored) bool {
+	if opensA, opensB := a.Inner.Body.InReplyTo == "", b.Inner.Body.InReplyTo == ""; opensA != opensB {
+		return opensA
+	}
+	return laterThan(b, a)
+}
+
+// laterThan orders two messages on a thread: by the sender's timestamp, then
+// by the relay's id, then by when they were stored here.
+func laterThan(a, b *Stored) bool {
+	switch {
+	case !a.Inner.Time.Equal(b.Inner.Time):
+		return a.Inner.Time.After(b.Inner.Time)
+	case a.RelayID != b.RelayID:
+		return a.RelayID > b.RelayID
+	default:
+		return a.Received.After(b.Received)
+	}
+}
+
+// MarkRead flags a message as read in place.
+func (s *Store) MarkRead(box Box, id string) error {
+	m, err := s.Load(box, id)
+	if err != nil {
+		return err
+	}
+	if m.Read {
+		return nil
+	}
+	m.Read = true
+	return s.Save(box, m)
+}

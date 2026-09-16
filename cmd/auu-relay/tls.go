@@ -1,0 +1,185 @@
+package main
+
+import (
+	"crypto/tls"
+	"fmt"
+	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/clientca"
+	"github.com/tropeforce7/agentuucp/internal/pki"
+	"github.com/tropeforce7/agentuucp/internal/relay"
+)
+
+// loadKeyPair reads a certificate and key from disk.
+func loadKeyPair(certFile, keyFile string) (tls.Certificate, error) {
+	return tls.LoadX509KeyPair(certFile, keyFile)
+}
+
+// clientCertParts is what a bundle gives the relay: the policy the server
+// package needs, and the certificate source for its own listener.
+type clientCertParts struct {
+	policy *relay.ClientCertPolicy
+	server *clientca.Server
+	loaded *pki.Loaded
+}
+
+// openBundle reads an auu-ca bundle and builds everything derived from it.
+//
+// Everything is checked here, at startup, with the path in the message: a
+// relay that cannot serve or cannot issue should say so now rather than at
+// the first handshake.
+func openBundle(cfg Config) (*clientCertParts, error) {
+	path, ok, err := cfg.BundlePath()
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	loaded, err := pki.LoadBundle(path)
+	if err != nil {
+		return nil, err
+	}
+	server, err := clientca.NewServer(loaded, time.Now())
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	parts := &clientCertParts{server: server, loaded: loaded}
+	if cfg.ClientCerts.Required() {
+		lifetime, err := cfg.ClientCerts.ParsedLifetime()
+		if err != nil {
+			return nil, err
+		}
+		parts.policy = &relay.ClientCertPolicy{
+			Issuer:   clientca.NewIssuer(loaded),
+			Verifier: clientca.NewVerifier(loaded),
+			Lifetime: lifetime,
+		}
+	}
+	return parts, nil
+}
+
+// buildTLS turns a validated configuration into the TLS config for the
+// listener. It is nil in mode off, which is plain HTTP for a relay on a
+// private network or a test.
+//
+// There is no ACME arm: a relay's certificate comes from its own authority,
+// which is what frees it from ports 80 and 443. See PLAN-SELFCA.md.
+func buildTLS(cfg Config, parts *clientCertParts) (*tls.Config, error) {
+	switch cfg.TLS.Mode {
+	case ModeOff:
+		return nil, nil
+
+	case ModeFiles:
+		out := &tls.Config{MinVersion: tls.VersionTLS12}
+		if parts != nil {
+			// The relay mints its own leaf and renews it in process, so the
+			// certificate comes from a function rather than a field.
+			out.GetCertificate = parts.server.GetCertificate
+			out.MinVersion = tls.VersionTLS13
+		} else {
+			cert, err := loadKeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
+			if err != nil {
+				return nil, fmt.Errorf("loading certificate and key: %w", err)
+			}
+			out.Certificates = []tls.Certificate{cert}
+		}
+		if parts != nil && parts.policy != nil {
+			parts.policy.Verifier.TLSConfig(out)
+		}
+		return out, nil
+
+	default:
+		return nil, fmt.Errorf("unknown tls mode %q", cfg.TLS.Mode)
+	}
+}
+
+// renewLeaf keeps the relay's own certificate fresh. It is short-lived by
+// design — the relay mints it itself, so there is no reason for it not to be
+// — and a renewal takes over between one handshake and the next.
+//
+// It is also where the relay repeats, once a day, the one warning that
+// matters operationally: a signing intermediate is the thing an operator has
+// to make a trip to the offline machine for, a relay runs for longer than
+// anyone remembers its startup log, and the leaf renewal is the first thing
+// that fails when it expires.
+func renewLeaf(parts *clientCertParts, log logger, stop <-chan struct{}) {
+	if parts == nil {
+		return
+	}
+	t := time.NewTicker(leafCheckInterval)
+	defer t.Stop()
+	var lastWarned time.Time
+	for {
+		select {
+		case <-stop:
+			return
+		case <-t.C:
+			now := time.Now()
+			renewed, err := parts.server.RenewIfDue(now, leafRenewBefore)
+			switch {
+			case err != nil:
+				log.Error("could not renew this relay's certificate", "err", err)
+			case renewed:
+				log.Info("renewed this relay's certificate",
+					"expires", parts.server.NotAfter().Format(time.DateOnly))
+			}
+			if now.Sub(lastWarned) >= intermediateWarnEvery {
+				lastWarned = now
+				for _, w := range intermediateWarnings(parts, now) {
+					log.Warn(w.msg, "expires", w.when.Format(time.DateOnly))
+				}
+			}
+		}
+	}
+}
+
+// expiryWarning is one signing intermediate near the end of its life.
+type expiryWarning struct {
+	msg  string
+	when time.Time
+}
+
+// intermediateWarnings is what an operator has to hear before a trip to the
+// offline machine becomes urgent: each signing intermediate within
+// intermediateWarnBefore of expiry, and each already past it.
+func intermediateWarnings(parts *clientCertParts, now time.Time) []expiryWarning {
+	var out []expiryWarning
+	for _, w := range []struct {
+		what string
+		when time.Time
+	}{
+		{"server signing intermediate", parts.server.IntermediateNotAfter()},
+		{"client signing intermediate", parts.loaded.ClientInt.Cert.NotAfter},
+	} {
+		switch {
+		case now.After(w.when):
+			out = append(out, expiryWarning{"this relay's " + w.what + " has expired; " +
+				"run 'auu-ca relay' on the offline machine and replace the bundle", w.when})
+		case w.when.Sub(now) < intermediateWarnBefore:
+			out = append(out, expiryWarning{"this relay's " + w.what + " expires soon; " +
+				"run 'auu-ca relay' on the offline machine and replace the bundle", w.when})
+		}
+	}
+	return out
+}
+
+// logger is what renewLeaf needs, so a test can pass its own.
+type logger interface {
+	Info(msg string, args ...any)
+	Warn(msg string, args ...any)
+	Error(msg string, args ...any)
+}
+
+const (
+	// leafRenewBefore is how much of the relay's own certificate must remain
+	// before it is replaced.
+	leafRenewBefore = 10 * 24 * time.Hour
+	// leafCheckInterval is how often that is looked at.
+	leafCheckInterval = time.Hour
+	// intermediateWarnBefore is how close to expiry a signing intermediate
+	// is before the relay starts saying so.
+	intermediateWarnBefore = 60 * 24 * time.Hour
+	// intermediateWarnEvery is how often it repeats itself.
+	intermediateWarnEvery = 24 * time.Hour
+)

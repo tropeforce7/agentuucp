@@ -1,0 +1,65 @@
+# The four machines of the container suite. See README.md in this directory
+# and reviews/PLAN-CONTAINERS.md.
+#
+# relay is reachable from the others as relay.example.com, so the deployment
+# guide's commands run as written. Nothing is published to the host: the
+# driver reaches each machine only with docker compose exec and cp, the
+# container form of ssh and scp.
+name: auu-e2e
+
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: docker/testing/Dockerfile
+    image: auu-e2e
+    init: true
+    entrypoint: ["/usr/local/bin/entrypoint-relay.sh"]
+    restart: "no"
+    # Only so one matrix row can put the message directory on a tmpfs of a
+    # megabyte and watch the disk fill: the relay process itself runs as
+    # auu with no capability at all, as the unit runs it.
+    cap_add: [SYS_ADMIN]
+    security_opt: ["apparmor=unconfined"]
+    networks:
+      default:
+        aliases: [relay.example.com]
+    volumes:
+      - relay-state:/var/lib/auu
+      - relay-etc:/etc/auu
+      - snap:/snap
+
+  operator:
+    image: auu-e2e
+    pull_policy: never
+    init: true
+    entrypoint: ["/usr/local/bin/entrypoint-user.sh"]
+    volumes:
+      - operator-home:/home/you
+      - snap:/snap
+
+  alice:
+    image: auu-e2e
+    pull_policy: never
+    init: true
+    entrypoint: ["/usr/local/bin/entrypoint-user.sh"]
+    volumes:
+      - alice-home:/home/alice
+      - snap:/snap
+
+  bob:
+    image: auu-e2e
+    pull_policy: never
+    init: true
+    entrypoint: ["/usr/local/bin/entrypoint-user.sh"]
+    volumes:
+      - bob-home:/home/bob
+      - snap:/snap
+
+volumes:
+  relay-state:
+  relay-etc:
+  operator-home:
+  alice-home:
+  bob-home:
+  snap:
