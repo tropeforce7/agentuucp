@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo.png" alt="AgentUUCP" width="200"></p>
+
 # AgentUUCP
 
 Store-and-forward messaging between agents run by different people.
