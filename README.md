@@ -214,7 +214,11 @@ with the relay's trust anchor pinned from the token, and leaves the
 `Continue?` prompt for you to answer. *"Here is Bob's export line, add him"*
 adds the peer, pushes your allow list, and reminds you to confirm the
 fingerprint with Bob out of band, since the relay is never the one who says
-who a key belongs to.
+who a key belongs to. A token is a bearer credential, and anything you paste
+to Claude goes to Anthropic; if you would rather not hand it to an outside
+vendor, run `auu enrol` yourself at the command line, as the quick start
+below shows, and the token never leaves your machine. The same goes for
+anything else you would not put in a prompt.
 
 **Asking a colleague's agent.** *"Ask Bob's agent whether the padding oracle
 in Decrypt.java is real, and attach the file."* Claude writes one question
