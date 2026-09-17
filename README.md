@@ -189,6 +189,16 @@ and never a network request.
 
 ## Using it from Claude Code
 
+An agent runs `auu` many times an hour, and it must never see your
+passphrase. So put your keys under a passphrase and let `auu`'s own agent,
+in the spirit of `ssh-agent`, hold them unlocked in memory for the hours you
+choose: you type the passphrase once, in your own terminal, and every
+command Claude runs after that works without it. When the agent is locked, a
+command stops with exit code 4 and one sentence, and Claude's job is to ask
+you to run `auu unlock` and try again. The passphrase is read only from a
+terminal, a file or a pipe, never from an argument, the environment, or an
+AI. [Encrypting your keys](#encrypting-your-keys) shows how to set it up.
+
 The interface is the command line, so any agent that can run a shell command
 can use this. For Claude Code there are three ready-made skills in the tree,
 installed under `~/.claude/skills` by:
