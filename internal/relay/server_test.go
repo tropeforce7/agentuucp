@@ -287,47 +287,6 @@ func TestDeliveryRoundTrip(t *testing.T) {
 	}
 }
 
-func TestAllowlistBlocksUnlistedSender(t *testing.T) {
-	h := newHarness(t, Config{})
-	people := ids(t, "alice", "bob", "carol")
-	alice, bob, carol := people[0], people[1], people[2]
-	for _, id := range people {
-		h.register(id)
-	}
-
-	// With no allowlist, any registered sender may post.
-	if status, body := h.do(carol, "POST", "/v1/mailbox/"+bob.Fingerprint(),
-		sealed(t, carol, bob.Public(), "hi"), nil); status != http.StatusOK {
-		t.Fatalf("expected open mailbox to accept carol: %d %s", status, body)
-	}
-
-	// Bob restricts his mailbox to alice.
-	status, body := h.do(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow",
-		relayapi.AllowRequest{Allow: []string{alice.Fingerprint()}}, nil)
-	if status != http.StatusNoContent {
-		t.Fatalf("allow push: %d %s", status, body)
-	}
-
-	if status, body := h.do(carol, "POST", "/v1/mailbox/"+bob.Fingerprint(),
-		sealed(t, carol, bob.Public(), "hi again"), nil); status != http.StatusForbidden {
-		t.Fatalf("expected 403 for unlisted sender, got %d %s", status, body)
-	}
-	if status, body := h.do(alice, "POST", "/v1/mailbox/"+bob.Fingerprint(),
-		sealed(t, alice, bob.Public(), "hello"), nil); status != http.StatusOK {
-		t.Fatalf("expected listed sender to pass: %d %s", status, body)
-	}
-
-	// Clearing the list reopens the mailbox.
-	if status, _ := h.do(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow",
-		relayapi.AllowRequest{Allow: []string{}}, nil); status != http.StatusNoContent {
-		t.Fatal("allow clear failed")
-	}
-	if status, _ := h.do(carol, "POST", "/v1/mailbox/"+bob.Fingerprint(),
-		sealed(t, carol, bob.Public(), "third"), nil); status != http.StatusOK {
-		t.Fatal("expected cleared allowlist to reopen the mailbox")
-	}
-}
-
 func TestUnregisteredSenderRejected(t *testing.T) {
 	h := newHarness(t, Config{})
 	people := ids(t, "bob", "mallory")

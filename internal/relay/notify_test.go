@@ -235,7 +235,7 @@ func TestAPostAndACompletedStreamWakeTheRecipient(t *testing.T) {
 	stranger := ids(t, "stranger")[0]
 	h.register(stranger)
 	if status, body := h.do(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow",
-		relayapi.AllowRequest{Allow: []string{alice.Fingerprint()}}, nil); status != http.StatusNoContent {
+		h.allowReq(bob, alice.Fingerprint()), nil); status != http.StatusNoContent {
 		t.Fatalf("allow: %d %s", status, body)
 	}
 	if status, body := h.postTo(stranger, bob, ""); status != http.StatusForbidden {

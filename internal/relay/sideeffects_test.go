@@ -69,7 +69,7 @@ func TestRefusalsHaveNoSideEffects(t *testing.T) {
 			cfg:  Config{},
 			send: func(h *harness) (int, []byte) {
 				h.send(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow",
-					relayapi.AllowRequest{Allow: []string{boss.Fingerprint()}}, nil)
+					h.allowReq(bob, boss.Fingerprint()), nil)
 				status, body, _ := h.send(alice, "POST", "/v1/mailbox/"+bob.Fingerprint(),
 					sealed(t, alice, bob.Public(), "blocked"), nil)
 				return status, body

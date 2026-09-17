@@ -29,7 +29,7 @@ func buildV2(t *testing.T, dir string, bodies map[int64][]byte, fp string, bundl
 	db := openRaw(t, path)
 	defer db.Close()
 
-	stmts := mailboxesTable + "\n" + allowlistTable + "\n" + schemaV2Messages + "\n" +
+	stmts := mailboxesTable + "\n" + schemaV6Allowlist + "\n" + schemaV2Messages + "\n" +
 		noncesTable + "\n" + statsTable + "\n" + tokensTable + "\n" + blocksTable
 	if _, err := db.Exec(stmts); err != nil {
 		t.Fatal(err)

@@ -50,7 +50,7 @@ func TestMigrationFromVersionFive(t *testing.T) {
 	fp := bob.Fingerprint()
 
 	db := openRaw(t, dbPath)
-	stmts := mailboxesTable + "\n" + allowlistTable + "\n" + schemaV5Messages + "\n" +
+	stmts := mailboxesTable + "\n" + schemaV6Allowlist + "\n" + schemaV5Messages + "\n" +
 		noncesTable + "\n" + statsTable + "\n" + tokensTable + "\n" + blocksTable + "\n" +
 		schemaV5Uploads + "\n" + certsTable
 	if _, err := db.Exec(stmts); err != nil {

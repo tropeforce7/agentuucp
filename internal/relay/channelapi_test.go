@@ -199,7 +199,7 @@ func TestADirectoryIsReadByWhoMayPost(t *testing.T) {
 	// Bob admits alice and pushes a directory with two channels, one of
 	// which has mail; dave's mail sits under a name that is not listed.
 	if status, body := h.do(bob, "PUT", "/v1/mailbox/"+fp+"/allow",
-		relayapi.AllowRequest{Allow: []string{alice.Fingerprint()}}, nil); status != http.StatusNoContent {
+		h.allowReq(bob, alice.Fingerprint()), nil); status != http.StatusNoContent {
 		t.Fatalf("allow push: %d %s", status, body)
 	}
 	status, body, pushed := h.pushDirectory(bob, bob, time.Now(), dflt, bugs)
@@ -220,7 +220,7 @@ func TestADirectoryIsReadByWhoMayPost(t *testing.T) {
 		t.Fatalf("a refused sender: %d %s", status, body)
 	}
 	if status, body := h.do(dave, "PUT", "/v1/mailbox/"+dave.Fingerprint()+"/allow",
-		relayapi.AllowRequest{Allow: []string{alice.Fingerprint()}}, nil); status != http.StatusNoContent {
+		h.allowReq(dave, alice.Fingerprint()), nil); status != http.StatusNoContent {
 		t.Fatalf("dave's allow push: %d %s", status, body)
 	}
 	status, body, _ = h.getDirectory(carol, dave.Fingerprint())

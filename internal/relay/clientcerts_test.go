@@ -889,8 +889,12 @@ func TestMigrationFromVersionFour(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Wind it back to version 4 by dropping the table this version adds.
-	if _, err := fresh.db.Exec(`DROP TABLE certs; PRAGMA user_version = 4`); err != nil {
+	// Wind it back to version 4: drop the table this version adds, and put
+	// the allow list table of the time in place of the signed one, since
+	// the migration from 6 reads it.
+	if _, err := fresh.db.Exec(`DROP TABLE certs; DROP TABLE allowlists;
+` + schemaV6Allowlist + `
+PRAGMA user_version = 4`); err != nil {
 		t.Fatal(err)
 	}
 	fresh.Close()

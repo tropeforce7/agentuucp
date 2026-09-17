@@ -29,8 +29,9 @@ auu peers add <export-line | @file | ->            # add a colleague; the user c
 auu peers ls [--json]                              # who you can reach
 auu peers rm <name|fingerprint>
 auu peers fetch <fingerprint>                      # fetch a key from the relay; still confirmed by a person
-auu allow push                                     # tell the relay to take mail only from your peers
+auu allow push                                     # tell the relay to take mail only from your peers, signed
 auu allow clear                                    # accept from anyone again
+auu allow show [--json]                            # what each relay holds for you, verified with your own key
 ```
 
 Relays, anchors and certificates:
@@ -206,6 +207,11 @@ absent otherwise.
 `pq_category`, `registered` (when set), `known_as` (when set),
 `export_line`.
 
+`auu allow show --json`: a list, one per relay, of `relay`, `state`
+(`signed`, `legacy`, `none` or `broken`), `issued` (when set),
+`senders` — each `fingerprint` and `name` (when the peer list knows them)
+— and `error` (when broken). A broken pair exits 1.
+
 `auu send --json` and `auu reply --json`: `id`, `thread`, `to`, `to_name`,
 `relay_id`, `bytes`, `in_reply_to` (when set), `kind` (`envelope` or
 `stream`), `chunks` and `chunk_size` (a stream only), `channel` (when not
@@ -223,8 +229,10 @@ own line for each round that did something, and nothing for a quiet one.
 
 `auu inbox --json`: `fetch` with `delivered`, `quarantined`, `unreadable`,
 `kept` and `channels_gone` (when set); `relays`, a list of `relay`, `url`,
-the same fetch counts, `queued` (what that relay still holds) and `error`
-(when set); and `messages`, each `id`, `thread`, `in_reply_to` (when set),
+the same fetch counts, `queued` (what that relay still holds), `allow`
+(the state of your allow list there: `signed`, `legacy`, `none` or
+`broken`; absent from a relay from before signed lists) and `error` (when
+set); and `messages`, each `id`, `thread`, `in_reply_to` (when set),
 `type`, `subject`, `from`, `from_name`, `time`, `received`, `read`, `box`,
 `thread_subject` (only where the whole message is printed: the subject the
 thread was opened with, which is `subject` unless the message was given one
@@ -308,6 +316,25 @@ Anywhere:
   edited; the user decides.
 - `nothing happened in 10m0s` — a `watch` that timed out, exit 3.
 - `no reply on thread T after 10m0s` — a `wait` that timed out, exit 3.
+
+On stderr after the messages of `auu inbox` or `auu wait`, once per run,
+about your own allow list on one relay; the exit code is the run's own:
+
+- `your allow list on RELAY predates signing; run auu allow push` — the
+  relay was upgraded and converted the old list; run the command.
+- `your allow list on RELAY is missing or unsigned, though you pushed one
+  on DATE; run auu allow push and tell the relay's operator` — the relay
+  has lost what this machine pushed; run the command, and the user tells
+  the operator.
+- `your allow list on RELAY does not verify, so nobody can post to you
+  there; run auu allow push, and if you did not change it, tell the
+  relay's operator` — the list on the relay is not what was signed, and
+  every post to the mailbox is refused until the push; if the user did not
+  change it, it was edited on the relay's host, which is the operator's
+  incident.
+- `this relay needs a signed allow list; update auu to v0.5.0 or later` —
+  a relay refusing `allow push` or `allow clear` from an `auu` older than
+  the relay; nothing was stored, and the update is the whole fix.
 
 Certificates, when a relay requires them:
 

@@ -433,13 +433,18 @@ func (s *Store) MarkRegistered(r *Relay) error {
 
 // ForgetIdentityAt drops everything in a relay's directory that belonged to
 // the identity rather than to the relay: this machine's certificate and the
-// key with it, and how far that identity's mailbox there had been drained.
+// key with it, how far that identity's mailbox there had been drained, and
+// when its allow list was last pushed.
 //
 // The relay's record and its pinned anchor stay. They are facts about the
 // relay, and a new identity meets the same relay with the same authority; the
-// certificate and the cursor are facts about an identity that has gone.
+// certificate, the cursor and the push are facts about an identity that has
+// gone.
 func (s *Store) ForgetIdentityAt(r *Relay) error {
 	if err := s.RemoveCertFor(r); err != nil {
+		return err
+	}
+	if err := s.ClearAllowPushed(r); err != nil {
 		return err
 	}
 	err := os.Remove(s.relayPath(r, cursorFile))

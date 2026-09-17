@@ -319,6 +319,26 @@ caught it start the service against a home that has never served. A
 behaviour that is only true the first time needs a fixture that has never
 run.
 
+**Policy the relay enforces for a user is signed by that user and verified
+where it is enforced, not where it was stored.** The allow list was a plain
+table, `allowlist (fp, sender_fp)`, written from a JSON array the owner
+sent: the one piece of a user's policy the relay held that it could not
+prove came from the user, so that whoever could write the database could
+admit a stranger, whose mail the relay then accepted for the mailbox. It
+is now a document the owner signs, as the channel directory always was,
+and `MayPost` verifies the signature against the mailbox's registered
+bundle on every post, with no cache: a cache would hide an edit made while
+the relay runs until it restarted, which is the edit the signature exists
+to catch. An edited row therefore refuses every sender rather than
+admitting one, and the owner's listing says `broken` until they push
+again. Verifying at store time alone would have proved only that the row
+was once the owner's. The signature does not close the whole gap: a row
+converted from before signing has none, and is honoured so that an upgrade
+locks nobody out, so an editor who blanks a signature and rewrites the
+document is refused by nothing on the relay — what catches that is the
+owner's machine, which remembers it pushed a signed list (`allow_pushed`)
+and says so at its next fetch.
+
 **A failed insert is only a duplicate if the row is actually there
 afterwards.** `UseNonce` and `AddToken` re-query after a failed insert. Reporting
 every failure as a replay or a duplicate would hide a broken database behind a
@@ -326,13 +346,13 @@ every failure as a replay or a duplicate would hide a broken database behind a
 
 ## Signatures and tokens
 
-**One identity key signs five things, so each has its own domain string.**
+**One identity key signs six things, so each has its own domain string.**
 `ccx-http-v1` for requests, `ccx-sig-v1` for messages, `ccx-token-v1` for
 enrolment tokens, `ccx-stream-sig-v1` for a stream's manifest,
-`ccx-channels-v1` for a mailbox's channel directory. There is a test that a
-signature over the same bytes in one domain does not verify in another, in
-both directions. Add a sixth thing to sign and you add a sixth domain and a
-sixth test.
+`ccx-channels-v1` for a mailbox's channel directory, `ccx-allow-v1` for its
+allow list. There is a test that a signature over the same bytes in one
+domain does not verify in another, in both directions. Add a seventh thing
+to sign and you add a seventh domain and a seventh test.
 
 **An HPKE context cannot be rewound, so seal to disk before you upload.** A
 stream is one context and a run of chunks; the nonce counter advances on every

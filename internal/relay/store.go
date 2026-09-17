@@ -56,7 +56,7 @@ var (
 // schemaVersion is the shape this build understands. Version zero means a
 // database from before any of this, which is refused rather than migrated:
 // nothing was ever deployed, so no migration path back that far is owed.
-const schemaVersion = 6
+const schemaVersion = 7
 
 // SchemaVersion is schemaVersion for the start-up log.
 const SchemaVersion = schemaVersion
@@ -121,10 +121,21 @@ const (
 	queued_messages INTEGER NOT NULL DEFAULT 0,
 	queued_bytes    INTEGER NOT NULL DEFAULT 0
 );`
-	allowlistTable = `CREATE TABLE IF NOT EXISTS allowlist (
-	fp        TEXT NOT NULL REFERENCES mailboxes(fp) ON DELETE CASCADE,
-	sender_fp TEXT NOT NULL,
-	PRIMARY KEY (fp, sender_fp)
+	// allowlists is one row per mailbox whose owner has pushed an allow
+	// list: the signed document and its signature, verified against the
+	// mailbox's bundle every time the list is enforced and served back to
+	// the owner verbatim, its issue time for refusing an older one, and
+	// how many senders it names, which is for the administrator's listing
+	// and decides nothing. A row whose sig is empty is a list converted
+	// from the table kept before lists were signed, honoured as it was
+	// until the owner pushes again. A mailbox with no row takes mail from
+	// any registered sender.
+	allowlistsTable = `CREATE TABLE IF NOT EXISTS allowlists (
+	fp     TEXT PRIMARY KEY REFERENCES mailboxes(fp) ON DELETE CASCADE,
+	doc    BLOB NOT NULL,
+	sig    BLOB NOT NULL,
+	issued TEXT NOT NULL,
+	count  INTEGER NOT NULL
 );`
 	// The body is not here: it is a file, and size is what the counters and
 	// the quotas are computed from.
@@ -248,9 +259,10 @@ CREATE INDEX IF NOT EXISTS certs_fp ON certs(fp, not_after);`
 )
 
 // schema creates a database from nothing.
-const schema = mailboxesTable + "\n" + allowlistTable + "\n" + messagesTable + "\n" +
+const schema = mailboxesTable + "\n" + messagesTable + "\n" +
 	noncesTable + "\n" + statsTable + "\n" + tokensTable + "\n" + blocksTable + "\n" +
-	uploadsTable + "\n" + certsTable + "\n" + directoriesTable + "\n" + channelsTable
+	uploadsTable + "\n" + certsTable + "\n" + directoriesTable + "\n" + channelsTable + "\n" +
+	allowlistsTable
 
 // migrations[v] upgrades a database from version v to version v+1. Each runs
 // in its own transaction and sets user_version on the way out, so an
@@ -312,6 +324,12 @@ INSERT INTO uploads (id, to_fp, from_fp, size, received, created, expires, chann
 	SELECT id, to_fp, from_fp, size, received, created, expires, 'default' FROM uploads_v5;
 DROP TABLE uploads_v5;
 ` + directoriesTable + "\n" + channelsTable,
+	// Signed allow lists. preMigrations[6] has already created allowlists
+	// from its constant and written one row per mailbox that had a list;
+	// the constant here is a no-op that keeps the fresh and the migrated
+	// DDL the same text, and the old table goes.
+	6: allowlistsTable + `
+DROP TABLE allowlist;`,
 }
 
 // OpenStore opens or creates the relay database at dbPath, with message bodies
@@ -443,6 +461,7 @@ func (s *Store) prepareSchema() error {
 // version, and the next start runs it again.
 var preMigrations = map[int]func(*Store) error{
 	2: writeBlobsToFiles,
+	6: convertAllowlists,
 }
 
 // writeBlobsToFiles is the file half of migrating 2 to 3. It copies every
@@ -799,75 +818,6 @@ func (s *Store) Exists(fp string) (bool, error) {
 		return false, nil
 	}
 	return err == nil, err
-}
-
-// SetAllowlist replaces a mailbox's allowlist. An empty list removes it, which
-// reopens the mailbox to any registered sender.
-func (s *Store) SetAllowlist(fp string, senders []string) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(`DELETE FROM allowlist WHERE fp = ?`, fp); err != nil {
-		return err
-	}
-	stmt, err := tx.Prepare(`INSERT OR IGNORE INTO allowlist (fp, sender_fp) VALUES (?, ?)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-	for _, sender := range senders {
-		if _, err := stmt.Exec(fp, sender); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
-// MayPost reports whether sender is allowed to post to fp. A mailbox with no
-// allowlist accepts mail from any registered sender.
-func (s *Store) MayPost(fp, sender string) (bool, error) {
-	// An allow list is about other people. The owner writing to their own
-	// mailbox — a note to themselves, from any machine holding their key —
-	// is always allowed, and never needs to be listed.
-	if sender == fp {
-		return true, nil
-	}
-	var count int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM allowlist WHERE fp = ?`, fp).Scan(&count); err != nil {
-		return false, err
-	}
-	if count == 0 {
-		return true, nil
-	}
-	var one int
-	err := s.db.QueryRow(`SELECT 1 FROM allowlist WHERE fp = ? AND sender_fp = ?`, fp, sender).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-// Allowlist returns the current allowlist for a mailbox.
-func (s *Store) Allowlist(fp string) ([]string, error) {
-	rows, err := s.db.Query(`SELECT sender_fp FROM allowlist WHERE fp = ? ORDER BY sender_fp`, fp)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var s string
-		if err := rows.Scan(&s); err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
 }
 
 // Put stores a sealed envelope under a channel and returns its relay id.

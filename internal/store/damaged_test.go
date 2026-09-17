@@ -132,6 +132,14 @@ func TestDamagedFilesAreNamed(t *testing.T) {
 			read: func(s *Store, r *Relay) error { _, err := s.CursorFor(r); return err },
 		},
 		{
+			name: "allow_pushed holds something that is not a time",
+			damage: func(t *testing.T, s *Store, r *Relay) string {
+				write(t, s.relayPath(r, allowPushedFile), "yesterday\n")
+				return s.relayPath(r, allowPushedFile) + ` is not a time ("yesterday"): delete it, or run 'auu allow push', which writes it again; it records only when this machine last pushed its allow list`
+			},
+			read: func(s *Store, r *Relay) error { _, _, err := s.AllowPushed(r); return err },
+		},
+		{
 			name: "cert.json truncated, met by CertFor",
 			damage: func(t *testing.T, s *Store, r *Relay) string {
 				write(t, s.relayPath(r, certFile), `{"relay": "https://work.ex`)

@@ -649,7 +649,7 @@ func TestAPeerTheWatcherMayNotPostToIsNeitherNamedNorWokenOn(t *testing.T) {
 	// bob admits carol and not alice; dave is blocked; nobody is the fp
 	// of a mailbox that is not there.
 	if status, body := h.do(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow",
-		relayapi.AllowRequest{Allow: []string{carol.Fingerprint()}}, nil); status != http.StatusNoContent {
+		h.allowReq(bob, carol.Fingerprint()), nil); status != http.StatusNoContent {
 		t.Fatalf("allow: %d %s", status, body)
 	}
 	if err := h.store.SetBlock(dave.Fingerprint(), "test", alice.Fingerprint(), start); err != nil {
@@ -757,9 +757,10 @@ func TestMoreThanMaxWatchPeersIsRefused(t *testing.T) {
 }
 
 // A listing that asks for nothing new is what it was: the same bytes as
-// the v5 client reads in TestAnOldClientReadsThisRelaysAnswers, with no
-// field it has not heard of, and a watch that finds nothing changed adds
-// nothing to them.
+// the v5 client reads in TestAnOldClientReadsThisRelaysAnswers, but for
+// the one field every listing now carries, the state of the owner's allow
+// list, which a client from before it does not read; and a watch that
+// finds nothing changed adds nothing to them.
 func TestAListingWithoutWaitIsUnchanged(t *testing.T) {
 	h := newHarness(t, Config{})
 	people := ids(t, "alice", "bob")
@@ -787,12 +788,14 @@ func TestAListingWithoutWaitIsUnchanged(t *testing.T) {
 	want, err := json.Marshal(struct {
 		Messages []v6Message `json:"messages"`
 		Queued   int64       `json:"queued"`
+		Allow    string      `json:"allow"`
 	}{
 		Messages: []v6Message{{
 			ID: row.Rows[0].ID, Received: row.Rows[0].Received, Kind: row.Rows[0].Kind,
 			Size: row.Rows[0].Size, Channel: row.Rows[0].Channel, Envelope: json.RawMessage(row.Rows[0].Envelope),
 		}},
 		Queued: 1,
+		Allow:  "none",
 	})
 	if err != nil {
 		t.Fatal(err)

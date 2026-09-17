@@ -87,8 +87,21 @@ type relayFetch struct {
 	// Queued is what this relay said it holds in all when the fetch
 	// finished: with a channel set to keep, the mail read and left there,
 	// which 'auu rm' is what removes.
-	Queued int64  `json:"queued"`
-	Error  string `json:"error,omitempty"`
+	Queued int64 `json:"queued"`
+	// Allow is the state of this identity's allow list on the relay, as
+	// the relay said it: signed, legacy, none or broken. Absent from a
+	// relay from before signed lists.
+	Allow string `json:"allow,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// relaySaid is what a relay's last listing said beside the messages: how
+// many it holds in all, which the refresh and the caller's count line
+// read, and the state of the allow list, which the warning after the
+// messages reads.
+type relaySaid struct {
+	Queued int64
+	Allow  string
 }
 
 // fetch drains one relay's mailbox into the local spool.
@@ -109,28 +122,27 @@ type relayFetch struct {
 // comes back when it is sent rather than at the next poll; every page
 // after the first has mail to fetch, and a drain asks for no hold at all.
 // A relay from before the hold answers at once, and nothing here can tell.
-func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay, hold time.Duration) (fetchResult, int64, error) {
+func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay, hold time.Duration) (fetchResult, relaySaid, error) {
 	// The local directory, for saying which delivered mail was for a
 	// channel no longer in it. Read through the damaged path: a file this
 	// machine cannot read is a person's to look at, whichever command met
 	// it.
 	directory, _, err := s.Directory()
 	if err != nil {
-		return fetchResult{}, 0, err
+		return fetchResult{}, relaySaid{}, err
 	}
 	// This machine's own policy per channel, read once before anything is
 	// fetched: a file that will not read decides nothing here, and
 	// guessing at it would acknowledge away mail its owner meant to keep.
 	settings, err := s.ChannelSettings()
 	if err != nil {
-		return fetchResult{}, 0, err
+		return fetchResult{}, relaySaid{}, err
 	}
 	var (
 		res fetchResult
-		// queued is what the relay said it holds in all, from the last
-		// page of this fetch: the count the refresh and the caller's
-		// count line both read.
-		queued int64
+		// said is what the relay said beside the messages, from the last
+		// page of this fetch.
+		said relaySaid
 	)
 	// The peer list is what sorts what arrives into the inbox and the
 	// quarantine, so it is read once, before anything is fetched: a line
@@ -138,7 +150,7 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 	// every sender a stranger and said nothing about why. The container
 	// suite's K18 found the quarantine full and the file unmentioned.
 	if _, err := s.Peers(); err != nil {
-		return res, queued, err
+		return res, said, err
 	}
 	// One fetch at a time per relay, for the length of the fetch: two
 	// running at once on one machine list the same messages, save them
@@ -153,7 +165,7 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 	// poll's context.
 	lock, waited, err := lockfile.Take(ctx, filepath.Join(s.RelayDir(r), fetchLockName), fetchLockWait, fetchLockSleep)
 	if errors.Is(err, lockfile.ErrHeld) {
-		return res, queued, transportErr(fmt.Errorf("another %s is fetching from %s; try again in a moment: %w",
+		return res, said, transportErr(fmt.Errorf("another %s is fetching from %s; try again in a moment: %w",
 			prog, r.Name, err))
 	}
 	if err != nil {
@@ -162,7 +174,7 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 		// at the plain exit code, as a message that cannot be saved is.
 		// The container suite's K29 found a read-only home reported as a
 		// transport failure.
-		return res, queued, fmt.Errorf("taking the fetch lock for %s: %w", r.Name, err)
+		return res, said, fmt.Errorf("taking the fetch lock for %s: %w", r.Name, err)
 	}
 	defer lock.Release()
 	if waited {
@@ -170,15 +182,15 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 	}
 	cursor, err := s.CursorFor(r)
 	if err != nil {
-		return res, queued, err
+		return res, said, err
 	}
 	for {
 		page, err := c.ListWait(ctx, client.ListRequest{After: cursor, Limit: relayapi.MaxListLimit, Wait: hold})
 		if err != nil {
-			return res, queued, transportErr(err)
+			return res, said, transportErr(err)
 		}
 		hold = 0
-		queued = page.Queued
+		said = relaySaid{Queued: page.Queued, Allow: page.Allow}
 		if len(page.Messages) == 0 {
 			// Nothing after the cursor, and yet the relay holds mail: the
 			// cursor is past it. The relay says how many, the sentence
@@ -197,26 +209,26 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 			if page.Queued != 0 {
 				left, err := s.LeftOn(r.Name)
 				if err != nil {
-					return res, queued, err
+					return res, said, err
 				}
 				if page.Queued > left {
-					return res, queued, s.CursorSkipsMail(r, page.Queued-left)
+					return res, said, s.CursorSkipsMail(r, page.Queued-left)
 				}
 			}
 			// Everything after the cursor is here; now the marks on what
 			// was left behind, which another machine or an administrator
 			// may have removed since.
 			refreshKept(ctx, s, c, r, page.Queued)
-			return res, queued, nil
+			return res, said, nil
 		}
 		for _, m := range page.Messages {
 			if m.IsStream() {
 				if err := fetchOneStream(ctx, s, id, c, r, m, directory, settings, &res); err != nil {
-					return res, queued, transportErr(err)
+					return res, said, transportErr(err)
 				}
 				cursor = m.ID
 				if err := s.SetCursorFor(r, cursor); err != nil {
-					return res, queued, err
+					return res, said, err
 				}
 				continue
 			}
@@ -225,21 +237,21 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 				// Not unreadable: the key is not here. The agent locked
 				// between the start of this command and now, and the
 				// message stays queued for the next fetch.
-				return res, queued, err
+				return res, said, err
 			}
 			if err != nil {
 				// Nobody will ever be able to read this, so leaving it queued
 				// would block the mailbox forever. Keep the bytes, say why
 				// in a word, and acknowledge it.
 				if err := keepDamaged(s, r, m.ID, m.Received, m.Raw, openCause(err), &res); err != nil {
-					return res, queued, err
+					return res, said, err
 				}
 				if err := c.Ack(ctx, m.ID); err != nil {
-					return res, queued, transportErr(err)
+					return res, said, transportErr(err)
 				}
 				cursor = m.ID
 				if err := s.SetCursorFor(r, cursor); err != nil {
-					return res, queued, err
+					return res, said, err
 				}
 				continue
 			}
@@ -251,14 +263,14 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 			channel, filedAs, agrees := filedUnder(inner.Channel, m.Envelope.Ch, m)
 			if !agrees {
 				if err := keepMisfiled(s, r, m.ID, m.Received, m.Raw, filedAs, inner.Channel, &res); err != nil {
-					return res, queued, err
+					return res, said, err
 				}
 				if err := c.Ack(ctx, m.ID); err != nil {
-					return res, queued, transportErr(err)
+					return res, said, transportErr(err)
 				}
 				cursor = m.ID
 				if err := s.SetCursorFor(r, cursor); err != nil {
-					return res, queued, err
+					return res, said, err
 				}
 				continue
 			}
@@ -281,16 +293,16 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 				OnRelay:    keep,
 			}
 			if err := s.Save(box, stored); err != nil {
-				return res, queued, fmt.Errorf("saving message locally: %w", err)
+				return res, said, fmt.Errorf("saving message locally: %w", err)
 			}
 			if !keep {
 				if err := c.Ack(ctx, m.ID); err != nil {
-					return res, queued, transportErr(err)
+					return res, said, transportErr(err)
 				}
 			}
 			cursor = m.ID
 			if err := s.SetCursorFor(r, cursor); err != nil {
-				return res, queued, err
+				return res, said, err
 			}
 			if box == store.Inbox {
 				res.Delivered++
@@ -392,7 +404,9 @@ func fetchEvery(s *store.Store, id *identity.Identity, relays []*store.Relay, na
 		report := relayFetch{Relay: r.Name, URL: r.URL}
 		c, err := dial(s, id, r)
 		if err == nil {
-			report.fetchResult, report.Queued, err = fetch(ctx(), s, id, c, r, 0)
+			var said relaySaid
+			report.fetchResult, said, err = fetch(ctx(), s, id, c, r, 0)
+			report.Queued, report.Allow = said.Queued, said.Allow
 		}
 		if err == nil {
 			// A relay this identity has drained is a relay it has a mailbox
@@ -517,6 +531,19 @@ func cmdInbox(args []string) error {
 	for _, rep := range reports {
 		if rep.Queued > 0 {
 			fmt.Printf("%s: %d message(s) on the relay; %s rm removes them\n", rep.Relay, rep.Queued, prog)
+		}
+	}
+	// What each relay said about this identity's allow list there, after
+	// the messages and on stderr: a warning, and the run's own exit code
+	// stands.
+	for _, rep := range reports {
+		if rep.Error != "" {
+			continue
+		}
+		if r, err := s.Relay(rep.Relay); err == nil {
+			if err := warnAllowState(s, r, rep.Allow); err != nil {
+				return err
+			}
 		}
 	}
 	if len(res.Gone) > 0 {
@@ -867,6 +894,9 @@ func cmdWait(args []string) error {
 	// code.
 	pollCtx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
+	// What a relay says about this identity's allow list is said once per
+	// run, at the first poll that hears it, not at every poll.
+	warned := map[string]bool{}
 	for {
 		// floor is a delay a relay asked for, which the poll interval must
 		// not undercut.
@@ -883,8 +913,13 @@ func cmdWait(args []string) error {
 		hold := holdFor(*interval, deadline)
 		for _, r := range relays {
 			c, err := dial(s, id, r)
+			var said relaySaid
 			if err == nil {
-				_, _, err = fetch(pollCtx, s, id, c, r, hold)
+				_, said, err = fetch(pollCtx, s, id, c, r, hold)
+			}
+			if err == nil && !warned[r.Name] {
+				warned[r.Name] = true
+				err = warnAllowState(s, r, said.Allow)
 			}
 			if err == nil {
 				ok++

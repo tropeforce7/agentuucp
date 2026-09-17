@@ -370,8 +370,8 @@ func TestAVerifiedDirectoryIsTheSignersAlone(t *testing.T) {
 	})
 }
 
-// The same identity key now signs five things. A directory signature must
-// not verify as any of the other four, nor any of them as a directory.
+// The same identity key now signs six things. A directory signature must
+// not verify as any of the other five, nor any of them as a directory.
 func TestDirectorySignatureDomainIsSeparate(t *testing.T) {
 	id := owner(t)
 	doc, sig, err := Sign(id, base(id))
@@ -380,10 +380,11 @@ func TestDirectorySignatureDomainIsSeparate(t *testing.T) {
 	}
 	pub := id.Public()
 	others := map[string][]byte{
-		"token":    append([]byte("ccx-token-v1"), doc...),
-		"envelope": append([]byte("ccx-sig-v1"+pub.Fingerprint()), doc...),
-		"stream":   append([]byte("ccx-stream-sig-v1"+pub.Fingerprint()), doc...),
-		"request":  relayapi.SigningString("PUT", "/v1/mailbox/x/channels", 0, "n", doc),
+		"token":      append([]byte("ccx-token-v1"), doc...),
+		"envelope":   append([]byte("ccx-sig-v1"+pub.Fingerprint()), doc...),
+		"stream":     append([]byte("ccx-stream-sig-v1"+pub.Fingerprint()), doc...),
+		"allow list": append([]byte("ccx-allow-v1"), doc...),
+		"request":    relayapi.SigningString("PUT", "/v1/mailbox/x/channels", 0, "n", doc),
 	}
 	for name, input := range others {
 		if pub.Verify(input, sig) {

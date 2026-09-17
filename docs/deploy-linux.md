@@ -659,6 +659,20 @@ line through. Take the backup below before an upgrade that mentions a
 schema change — `update` takes one of the database itself, but not of
 the message files, which an update does not touch.
 
+The release that signs allow lists, v0.5.0, takes the database from schema
+version 6 to 7. It converts every user's allow list into one signed-list
+row with no signature, which the relay honours exactly as before, and
+marks it `legacy` in `auu-admin mailboxes ls` until its owner runs `auu
+allow push`; their own `auu inbox` tells them to, on every fetch until they
+do, and nobody is locked out by the upgrade. After it, a list showing
+`broken` in the same listing is an incident on the host and not a user
+error: the row no longer verifies against its owner's key, so it was
+changed by something other than that owner's push, and the relay refuses
+every post to the mailbox until the owner pushes again — the journal says
+`allow list for FP does not verify; refusing every post to it until the
+owner pushes again`, once a minute while it goes on. Look at who could
+write `relay.db` before asking the owner to push.
+
 The release that added channels takes the database from schema version 5 to
 6. It rebuilds the `messages` and `uploads` tables to record the channel a
 message was posted to, filing every existing row under `default`, and adds

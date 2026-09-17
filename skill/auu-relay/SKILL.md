@@ -162,7 +162,20 @@ user thinks the relay has been compromised.
 **Upgrading** is the same: a new kit and `update`. The relay migrates its
 own database at start and says `database migrated` with `from=` and `to=`;
 `update` prints that line through, and takes a backup of the database
-first.
+first. The release that signs allow lists, v0.5.0, takes the database
+from 6 to 7 and converts every user's list as it was; each is `legacy`
+in `auu-admin mailboxes ls` until its owner runs `auu allow push`, and
+their own `auu inbox` tells them to. Nobody is locked out by the upgrade.
+
+**A `broken` allow list** in `auu-admin mailboxes ls` is an incident on
+the host, not a user error: the list no longer verifies against the
+owner's key, which means the row was changed by something other than the
+owner's push, and the relay refuses every post to that mailbox until the
+owner pushes again. The journal has `allow list for FP does not verify;
+refusing every post to it until the owner pushes again`, once a minute
+while it goes on. Tell the user to treat the host as compromised and look
+at who could write `/var/lib/auu/relay.db`; asking the owner to push
+again clears the state but not the question.
 
 **Limits** are the README's defaults unless the settings say otherwise.
 Two worth knowing: mail now stays on the relay after its owner has read it

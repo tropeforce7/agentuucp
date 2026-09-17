@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/agent"
+	"github.com/tropeforce7/agentuucp/internal/allowlist"
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/keyfile"
@@ -29,7 +31,10 @@ type fixture struct {
 	t     *testing.T
 	url   string
 	store *relay.Store
-	boss  *persona
+	// dbPath is the relay's database, for a test that edits a row the
+	// way an intruder on the host would.
+	dbPath string
+	boss   *persona
 }
 
 // persona is one AUU_HOME with an identity in it.
@@ -119,7 +124,7 @@ func newFixture(t *testing.T, cfg relay.Config) *fixture {
 	t.Cleanup(srv.Close)
 
 	// The administrator's home carries the identity the file names.
-	f := &fixture{t: t, url: srv.URL, store: st}
+	f := &fixture{t: t, url: srv.URL, store: st, dbPath: filepath.Join(dir, "relay.db")}
 	f.boss = &persona{t: t, home: t.TempDir(), id: boss}
 	s, err := store.Open(f.boss.home)
 	if err != nil {
@@ -310,6 +315,47 @@ func TestMailboxesAndBlocks(t *testing.T) {
 	if out := f.boss.run("mailboxes", "show", alice.Fingerprint(), "--json"); !strings.Contains(out, `"channels": 3`) ||
 		strings.Contains(out, "xylophone") {
 		t.Fatalf("mailboxes show --json:\n%s", out)
+	}
+
+	// The allow list: none until one is pushed, then the count and the
+	// state word, which is what an operator looks for after an upgrade
+	// (legacy) or an incident (broken). Never the senders.
+	if out := f.boss.run("mailboxes", "show", alice.Fingerprint()); !strings.Contains(out, "allowlist:   none\n") {
+		t.Fatalf("mailboxes show with no allow list:\n%s", out)
+	}
+	if out := f.boss.run("mailboxes", "ls"); !strings.Contains(out, "  -  ") {
+		t.Fatalf("mailboxes ls with no allow list:\n%s", out)
+	}
+	bob, _ := identity.Generate("bob")
+	l := &allowlist.Document{Issued: time.Now(), Senders: []string{bob.Fingerprint()}}
+	ldoc, lsig, err := allowlist.Sign(alice, l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.store.SetAllowlist(alice.Fingerprint(), l, ldoc, lsig); err != nil {
+		t.Fatal(err)
+	}
+	if out := f.boss.run("mailboxes", "show", alice.Fingerprint()); !strings.Contains(out, "allowlist:   1 senders, signed\n") ||
+		strings.Contains(out, bob.Fingerprint()) {
+		t.Fatalf("mailboxes show with a signed list:\n%s", out)
+	}
+	if out := f.boss.run("mailboxes", "ls"); !strings.Contains(out, "  1 signed  ") {
+		t.Fatalf("mailboxes ls with a signed list:\n%s", out)
+	}
+	if out := f.boss.run("mailboxes", "show", alice.Fingerprint(), "--json"); !strings.Contains(out, `"allowlist_size": 1`) ||
+		!strings.Contains(out, `"allow": "signed"`) {
+		t.Fatalf("mailboxes show --json with a signed list:\n%s", out)
+	}
+	db, err := sql.Open("sqlite", f.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE allowlists SET sig = X'00' WHERE fp = ?`, alice.Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	if out := f.boss.run("mailboxes", "ls"); !strings.Contains(out, "  1 broken  ") {
+		t.Fatalf("mailboxes ls with a broken list:\n%s", out)
 	}
 
 	// Blocking, listing, and lifting it.

@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -11,7 +12,10 @@ import (
 // nothing, since nothing the client can do would help. This is where the
 // relay says why: one WARN line with the path and the error, so the operator
 // has a line to find. It is limited to one a minute per path, so a broken
-// disk under a busy relay does not fill the log with the same line.
+// disk under a busy relay does not fill the log with the same line. An
+// allow list that no longer verifies is said the same way, one line a
+// minute per mailbox, for the same reason: a sender retrying in a loop
+// against a broken list is the same shape as a broken disk.
 
 const (
 	// faultInterval is how long one path's fault line covers.
@@ -39,17 +43,34 @@ func newFaultLog(log *slog.Logger, now func() time.Time) *faultLog {
 }
 
 // note logs a fault at path unless one was logged for it inside the last
-// minute. On every line written, entries older than a minute are dropped,
-// and past the cap the oldest goes.
+// minute.
 func (f *faultLog) note(path string, err error) {
+	if f.due(path) {
+		f.log.Warn("storage fault", "path", path, "err", err)
+	}
+}
+
+// noteAllowlist logs that a mailbox's allow list does not verify, unless
+// that was logged for the mailbox inside the last minute. The key is
+// prefixed so that a mailbox's line and a path's line are limited apart.
+func (f *faultLog) noteAllowlist(fp string) {
+	if f.due("allowlist:" + fp) {
+		f.log.Warn(fmt.Sprintf("allow list for %s does not verify; refusing every post to it until the owner pushes again", fp))
+	}
+}
+
+// due reports whether a line for key is to be written now, and records it
+// when so. On every line written, entries older than a minute are dropped,
+// and past the cap the oldest goes.
+func (f *faultLog) due(key string) bool {
 	if f == nil || f.log == nil {
-		return
+		return false
 	}
 	now := f.now()
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if t, ok := f.last[path]; ok && now.Sub(t) < faultInterval {
-		return
+	if t, ok := f.last[key]; ok && now.Sub(t) < faultInterval {
+		return false
 	}
 	for p, t := range f.last {
 		if now.Sub(t) >= faultInterval {
@@ -65,8 +86,8 @@ func (f *faultLog) note(path string, err error) {
 		}
 		delete(f.last, oldest)
 	}
-	f.last[path] = now
-	f.log.Warn("storage fault", "path", path, "err", err)
+	f.last[key] = now
+	return true
 }
 
 // size reports how many paths are remembered, for the test of the cap.

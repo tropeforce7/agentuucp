@@ -102,7 +102,29 @@ confirms it is the right one.
 
 `auu allow push` is worth saying out loud: without it the mailbox takes
 mail from anyone, and with it the relay refuses everyone else before the
-message is stored. It is per relay, and `auu allow clear` undoes it.
+message is stored. It is per relay, and `auu allow clear` undoes it. The
+list is signed by the user's key, and the relay checks the signature on
+every post, so `auu inbox` may say something about it, once per run, on
+stderr. Each sentence names what to do:
+
+- `your allow list on RELAY predates signing; run auu allow push` — the
+  relay was upgraded and converted an old list. Run `auu allow push`; that
+  is the whole of it.
+- `your allow list on RELAY is missing or unsigned, though you pushed one
+  on DATE; run auu allow push and tell the relay's operator` — the relay
+  no longer holds what this machine pushed. Run `auu allow push`, then tell
+  the user to tell the operator: a list does not go missing by itself.
+- `your allow list on RELAY does not verify, so nobody can post to you
+  there; run auu allow push, and if you did not change it, tell the
+  relay's operator` — until the push, every post to the mailbox is refused,
+  peers included. Run `auu allow push` at once, then ask the user whether
+  they changed it from another machine; if not, the list was edited on the
+  relay's host, and the user tells the operator so. `auu allow show` prints
+  what each relay holds, verified with the user's own key.
+
+A relay that answers `this relay needs a signed allow list; update auu to
+v0.5.0 or later` is newer than this `auu`; nothing was stored, and the
+user updates.
 
 ## 4. Another relay
 

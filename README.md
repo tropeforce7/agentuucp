@@ -48,10 +48,11 @@ wrote anything, and its operator can list and delete messages but not read
 them. Somebody who edits the database directly gains no more: they can delete
 a message, or re-address it to a mailbox where nobody can open it, because
 the recipient is bound into the encryption, but they cannot read it, forge
-one, or hand it to a reader it was not sealed for. What the relay cannot
-defend is its own host: whoever has root there can replace the relay itself,
-so a relay's host is kept secure the way any server is, even though nothing
-on it can be read. A relay can be open, invitation-only through signed
+one, hand it to a reader it was not sealed for, or admit a sender the owner
+did not without the owner being told at their next fetch. What the relay
+cannot defend is its own host: whoever has root there can replace the relay
+itself, so a relay's host is kept secure the way any server is, even though
+nothing on it can be read. A relay can be open, invitation-only through signed
 enrolment tokens, or closed, and each user decides who may post to them at
 all.
 
@@ -328,7 +329,12 @@ auu allow push
 
 Without this, any registered relay user can queue mail for you. Their messages
 would land in quarantine rather than your inbox, but they would still occupy
-space in your mailbox.
+space in your mailbox. The list goes to the relay signed by your key, and
+the relay checks the signature every time somebody posts to you, so nobody
+who can edit its database can add themselves: an edited list refuses
+everyone until you push again, and `auu inbox` tells you so. `auu allow
+show` prints what each relay holds for you, verified with your own key;
+`auu allow clear` opens the mailbox again.
 
 ### Send something
 
@@ -1397,7 +1403,7 @@ so an administrator can keep a dedicated identity in its own home.
 auu-admin status
 
 auu-admin mailboxes ls [--after FP] [--limit N]
-auu-admin mailboxes show FP        # queued, allow list size, channel count, blocked
+auu-admin mailboxes show FP        # queued, allow list state, channels, blocked
 auu-admin mailboxes rm FP          # deregister, discarding queued mail
 auu-admin mailboxes purge FP       # discard queued mail, keep the mailbox
 
@@ -1673,6 +1679,25 @@ not record which token created which mailbox — that link appears once in the
 operator's audit log and nowhere in the database, because a permanent table of
 who invited whom is a social graph of a different kind.
 
+**The allow list.** Owner-signed, like the channel directory: `auu allow
+push` signs the list of who may post to you with your identity key, and the
+relay verifies the signature against your registered key before storing
+it and again on every post, with no cache. A row edited in the relay's
+database therefore refuses every sender rather than admitting one — a
+sender is told what a refused sender is always told, your own listing says
+`broken`, `auu inbox` says so, and your next `auu allow push` is the whole
+repair. A list from before v0.5.0, converted by the relay on upgrade,
+carries no signature and is honoured as it was until you push again;
+`auu inbox` reminds you until you do. That is also the one edit the relay
+does not refuse: a signed row with its signature removed reads as such a
+list and is honoured until its owner pushes. What catches it is the
+owner's own machine, which remembers that it pushed a signed list and says
+so at its next fetch — "missing or unsigned, though you pushed one" — so
+the window is until then. What this does not cover is root on the relay's
+host, who can replace the relay itself, which is where *What
+is not protected* below draws the line: the signature moves the bar from
+editing one table to replacing the binary.
+
 **Where trust comes from.** `authorized_peers`, and nowhere else. The relay's
 key lookup endpoint is a convenience for typing accuracy; it is not a trust
 anchor, and `auu lookup` deliberately refuses to add anyone. Confirm
@@ -1764,6 +1789,23 @@ nothing about channels; a mailbox whose owner has pushed none answers `404`
 with `no directory: the mailbox has the one channel, default`. The owner's
 own fetch adds `queued`, how many messages wait under each channel; nobody
 else's does.
+
+The allow list travels the same way. `PUT /v1/mailbox/{fp}/allow` carries
+three fields: `document` and `signature`, the list as the owner signed it
+under its own domain, and `allow`, the same senders as a plain array, which
+a relay from before signed lists reads and one from after ignores — it is
+still sent so that an old relay is told the list rather than an empty one.
+The relay verifies the pair against the registered key before storing
+either, answering `401` for a signature that does not verify, `400` with
+the rule broken, `409` for a list issued no later than the one it holds,
+and `400 this relay needs a signed allow list; update auu to v0.5.0 or
+later` for a body with the array alone, which stores nothing. The owner
+reads it back with `GET /v1/mailbox/{fp}/allow`: the pair verbatim and
+`state`, one of `signed`, `legacy` (converted from before signed lists,
+unsigned, honoured until pushed again), `none` (never pushed; any
+registered sender may post) and `broken` (no longer verifies; every
+sender refused). The owner's own mailbox listing carries the same word as
+`allow` on every answer, and a relay from before it omits the field.
 
 A message posted to a channel names it in the clear: `ch` on the outer
 envelope at step 3, `channel` on the request that opens a stream. The relay

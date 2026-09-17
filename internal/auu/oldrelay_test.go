@@ -26,6 +26,11 @@ type v5Relay struct {
 	// listings is the query of every mailbox listing, as it came: a v5
 	// relay reads after and limit from it and nothing else.
 	listings []string
+	// allow is what the allow route read from its last body: the array
+	// alone, since a relay from before signed lists knows no other field
+	// and json.Unmarshal ignores what it has not heard of. nil until one
+	// arrives, so a test can tell no push from an empty one.
+	allow []string
 }
 
 type v5Message struct {
@@ -76,6 +81,21 @@ func (f *v5Relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		json.NewEncoder(w).Encode(map[string]any{"messages": out, "queued": len(f.queue[parts[0]])})
+	case r.Method == http.MethodPut && mailbox && len(parts) == 2 && parts[1] == "allow":
+		// A v6 handleAllow: the array and nothing else.
+		var req struct {
+			Allow []string `json:"allow"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]any{"error": "malformed allow request"})
+			return
+		}
+		if req.Allow == nil {
+			req.Allow = []string{}
+		}
+		f.allow = req.Allow
+		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodDelete && mailbox && len(parts) == 2:
 		id, _ := strconv.ParseInt(parts[1], 10, 64)
 		kept := f.queue[parts[0]][:0:0]
@@ -199,5 +219,45 @@ func TestAnOldRelayTakesAPostForAChannelItCannotRead(t *testing.T) {
 	// the sentence, so it is a transport error, not "one channel".
 	if _, err := alice.tryRun("channel", "ls", "bob"); err == nil || !strings.Contains(err.Error(), "404") {
 		t.Fatalf("ls of a peer through an old relay: %v", err)
+	}
+}
+
+// Decision 2 of PLAN-ALLOW from the old relay's side: a client of this
+// version sends the senders as an array beside the signed document, so a
+// relay from before signed lists, which reads the array and nothing else,
+// is told the list rather than an empty one. Without the array it would
+// have read nothing and cleared the mailbox's list in silence.
+func TestANewClientStillSendsTheArrayForAnOldRelay(t *testing.T) {
+	old := &v5Relay{}
+	srv := httptest.NewServer(old)
+	defer srv.Close()
+	alice := newUser(t, "alice", srv.URL)
+	bob := newUser(t, "bob", srv.URL)
+	alice.run("peers", "add", bob.exportLine())
+
+	out := alice.run("allow", "push")
+	if !strings.Contains(out, "will now accept mail for you from 1 peer(s) only") {
+		t.Fatalf("allow push against an old relay:\n%s", out)
+	}
+	old.mu.Lock()
+	got := old.allow
+	old.mu.Unlock()
+	if len(got) != 1 || got[0] != bob.exportFingerprint() {
+		t.Fatalf("the old relay read %v from the push, want bob's fingerprint alone", got)
+	}
+	// And a clear is an empty array, as it always was.
+	alice.run("allow", "clear")
+	old.mu.Lock()
+	got = old.allow
+	old.mu.Unlock()
+	if got == nil || len(got) != 0 {
+		t.Fatalf("the old relay read %v from the clear, want an empty array", got)
+	}
+	// A fetch from the old relay, which says nothing about the list, draws
+	// no warning.
+	var fetched string
+	warning := captureStderr(t, func() { fetched = alice.run("inbox") })
+	if warning != "" {
+		t.Fatalf("a fetch from an old relay drew a warning:\n%s\n%s", warning, fetched)
 	}
 }

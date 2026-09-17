@@ -203,12 +203,15 @@ func (s *Store) Blocks() ([]Block, error) {
 	return out, rows.Err()
 }
 
+// The allow list's count, document, signature and the bundle come along so
+// that the record can say what state the list is in, which needs the
+// signature verified: a count is a number and decides nothing.
 const mailboxSelect = `
 	SELECT m.fp, m.name, m.created, m.queued_messages, m.queued_bytes,
-		(SELECT COUNT(*) FROM allowlist a WHERE a.fp = m.fp),
+		COALESCE(a.count, 0), a.doc, a.sig, a.fp IS NOT NULL, m.bundle,
 		(SELECT COUNT(*) FROM channels c WHERE c.fp = m.fp),
 		EXISTS (SELECT 1 FROM blocks b WHERE b.fp = m.fp)
-	FROM mailboxes m`
+	FROM mailboxes m LEFT JOIN allowlists a ON a.fp = m.fp`
 
 // Mailboxes returns a page of mailboxes ordered by fingerprint, starting after
 // the one given. Keyset paging, so a page is stable while mailboxes come and
@@ -244,20 +247,24 @@ func scanMailboxes(rows *sql.Rows) ([]relayapi.MailboxRecord, error) {
 	for rows.Next() {
 		var m relayapi.MailboxRecord
 		var created string
-		var blocked int
+		var blocked, hasList int
+		var doc, sig, bundle []byte
 		if err := rows.Scan(&m.FP, &m.Name, &created, &m.QueuedMessages, &m.QueuedBytes,
-			&m.AllowlistSize, &m.Channels, &blocked); err != nil {
+			&m.AllowlistSize, &doc, &sig, &hasList, &bundle, &m.Channels, &blocked); err != nil {
 			return nil, err
 		}
 		m.Created, _ = time.Parse(time.RFC3339, created)
 		m.Blocked = blocked != 0
+		if hasList != 0 {
+			m.Allow, _ = allowDecision(bundle, doc, sig)
+		}
 		out = append(out, m)
 	}
 	return out, rows.Err()
 }
 
 // Deregister removes a mailbox and everything queued for it. The foreign keys
-// cascade to the messages and the allowlist; the counters are the relay's own
+// cascade to the messages and the allow list; the counters are the relay's own
 // bookkeeping and come down in the same transaction.
 func (s *Store) Deregister(fp string) (bool, error) {
 	return s.dropMessages(fp, true)
@@ -309,7 +316,7 @@ func (s *Store) dropMessages(fp string, removeMailbox bool) (bool, error) {
 	}
 
 	if removeMailbox {
-		// ON DELETE CASCADE takes the messages and the allowlist with it.
+		// ON DELETE CASCADE takes the messages and the allow list with it.
 		if _, err := tx.Exec(`DELETE FROM mailboxes WHERE fp = ?`, fp); err != nil {
 			return false, err
 		}

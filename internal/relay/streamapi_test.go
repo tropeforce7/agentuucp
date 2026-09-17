@@ -651,7 +651,7 @@ func TestOwnerMayAlwaysPostToOwnMailbox(t *testing.T) {
 	}
 	fp := alice.Fingerprint()
 	if status, body, _ := h.send(alice, "PUT", "/v1/mailbox/"+fp+"/allow",
-		relayapi.AllowRequest{Allow: []string{bob.Fingerprint()}}, nil); status != http.StatusNoContent {
+		h.allowReq(alice, bob.Fingerprint()), nil); status != http.StatusNoContent {
 		t.Fatalf("setting the allow list: %d %s", status, body)
 	}
 	for _, c := range []struct {
@@ -669,7 +669,7 @@ func TestOwnerMayAlwaysPostToOwnMailbox(t *testing.T) {
 	}
 	// And with no list at all, everyone may, the owner included.
 	if status, _, _ := h.send(alice, "PUT", "/v1/mailbox/"+fp+"/allow",
-		relayapi.AllowRequest{Allow: []string{}}, nil); status != http.StatusNoContent {
+		h.allowReq(alice), nil); status != http.StatusNoContent {
 		t.Fatal("clearing the allow list failed")
 	}
 	if got, _ := h.store.MayPost(fp, fp); !got {

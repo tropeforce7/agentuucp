@@ -455,13 +455,40 @@ func (c *Client) Directory(ctx context.Context, fp string) (*DirectoryResult, er
 	return &DirectoryResult{Document: resp.Document, Signature: resp.Signature, Queued: resp.Queued}, nil
 }
 
-// SetAllowlist replaces this mailbox's allowlist on the relay.
-func (c *Client) SetAllowlist(ctx context.Context, senders []string) error {
+// SetAllowlist replaces this mailbox's allow list on the relay: the
+// document bytes as signed and the signature over them, which a relay of
+// this version verifies against this identity's registered key, and the
+// senders as a plain array beside them, which a relay from before signed
+// lists reads instead. The array is never left out: an old relay reading
+// none would clear the list in silence. A relay holding a list issued no
+// earlier answers 409, which comes back as an HTTPError.
+func (c *Client) SetAllowlist(ctx context.Context, senders []string, doc, sig []byte) error {
 	if senders == nil {
 		senders = []string{}
 	}
 	return c.do(ctx, "PUT", "/v1/mailbox/"+c.id.Fingerprint()+"/allow",
-		relayapi.AllowRequest{Allow: senders}, nil, nil)
+		relayapi.AllowRequest{Allow: senders, Document: doc, Signature: sig}, nil, nil)
+}
+
+// AllowlistResult is this mailbox's allow list as the relay serves it: the
+// bytes this identity signed, to be verified with its own key and never
+// trusted before, and the state the relay reads them as. None means the
+// relay holds no list, and any registered sender may post.
+type AllowlistResult struct {
+	Document  []byte
+	Signature []byte
+	State     string
+	None      bool
+}
+
+// Allowlist fetches this mailbox's allow list.
+func (c *Client) Allowlist(ctx context.Context) (*AllowlistResult, error) {
+	var resp relayapi.AllowResponse
+	if err := c.do(ctx, "GET", "/v1/mailbox/"+c.id.Fingerprint()+"/allow", nil, &resp, nil); err != nil {
+		return nil, err
+	}
+	return &AllowlistResult{Document: resp.Document, Signature: resp.Signature, State: resp.State,
+		None: resp.State == relayapi.AllowNone}, nil
 }
 
 // Post drops a sealed envelope into the recipient's mailbox, under a
@@ -532,6 +559,10 @@ type Listing struct {
 	// holds a newer issue of than the request said. Empty when none has,
 	// when nothing was watched, and from a relay that predates the field.
 	DirectoriesChanged []string
+	// Allow is the state of this mailbox's allow list as the relay holds
+	// it, one of the relayapi.Allow* words, and empty from a relay that
+	// predates signed lists, which is nothing to say.
+	Allow string
 }
 
 // ListRequest is what a listing asks for beyond the page.
@@ -624,7 +655,7 @@ func (c *Client) ListWait(ctx context.Context, req ListRequest) (Listing, error)
 		}
 		out = append(out, msg)
 	}
-	return Listing{Messages: out, Queued: resp.Queued, DirectoriesChanged: resp.DirectoriesChanged}, nil
+	return Listing{Messages: out, Queued: resp.Queued, DirectoriesChanged: resp.DirectoriesChanged, Allow: resp.Allow}, nil
 }
 
 // Ack deletes a message from the relay once it is safely on disk locally.

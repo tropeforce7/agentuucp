@@ -165,7 +165,8 @@ func NewServer(store *Store, cfg Config) *Server {
 	s.route("POST /v1/register", s.handleRegister)
 	s.route("GET /v1/keys/{fp}", s.handleKeys)
 	s.route("GET "+trustAnchorPath, s.handleTrustAnchor)
-	s.route("PUT /v1/mailbox/{fp}/allow", s.authed(s.handleAllow))
+	s.route("PUT /v1/mailbox/{fp}/allow", s.authed(s.handleSetAllow))
+	s.route("GET /v1/mailbox/{fp}/allow", s.authed(s.handleGetAllow))
 	s.route("PUT /v1/mailbox/{fp}/channels", s.authed(s.handleSetChannels))
 	s.route("GET /v1/mailbox/{fp}/channels", s.authed(s.handleGetChannels))
 	s.route("POST /v1/mailbox/{fp}", s.authed(s.handlePost))
@@ -855,38 +856,6 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	created := mb.Created
 	s.writeJSON(w, http.StatusOK, relayapi.KeysResponse{Bundle: mb.Bundle, Name: mb.Name, Created: &created})
-}
-
-func (s *Server) handleAllow(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {
-	fp := r.PathValue("fp")
-	if fp != callerFP {
-		s.fail(w, http.StatusForbidden, "not your mailbox")
-		return
-	}
-	var req relayapi.AllowRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		s.fail(w, http.StatusBadRequest, "malformed allow request")
-		return
-	}
-	// Before validating an entry and before the database: the body limit is
-	// not a bound on this by itself, and every entry past the cap is work an
-	// attacker chose for us.
-	if len(req.Allow) > relayapi.MaxAllowlist {
-		s.fail(w, http.StatusBadRequest, fmt.Sprintf(
-			"allow list has %d entries; the most is %d", len(req.Allow), relayapi.MaxAllowlist))
-		return
-	}
-	for _, sender := range req.Allow {
-		if !identity.ValidFingerprint(sender) {
-			s.fail(w, http.StatusBadRequest, "bad fingerprint in allow list")
-			return
-		}
-	}
-	if err := s.store.SetAllowlist(fp, req.Allow); err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {

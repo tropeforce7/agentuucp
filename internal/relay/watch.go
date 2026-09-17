@@ -199,9 +199,17 @@ func (s *Server) look(fp string, after int64, limit int, stubs bool, peers map[s
 	if err != nil {
 		return resp, false, err
 	}
+	// The owner is told, on every listing, what state their allow list
+	// is in: a list that no longer verifies refuses every sender, and
+	// the owner would otherwise learn that only from the silence.
+	allow, err := s.store.AllowState(fp)
+	if err != nil {
+		return resp, false, err
+	}
 	resp = relayapi.ListResponse{
 		Messages: make([]relayapi.StoredMessage, 0, len(listing.Rows)),
 		Queued:   listing.Queued,
+		Allow:    allow,
 	}
 	for _, row := range listing.Rows {
 		msg := relayapi.StoredMessage{

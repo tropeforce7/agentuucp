@@ -115,9 +115,9 @@ func mailboxesList(args []string) error {
 		if m.Blocked {
 			state = "blocked"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\n",
 			m.FP[:16], truncate(orNone(m.Name), 20), m.QueuedMessages,
-			humanBytes(m.QueuedBytes), m.AllowlistSize, state)
+			humanBytes(m.QueuedBytes), allowColumn(m), state)
 	}
 	if err := w.Flush(); err != nil {
 		return err
@@ -153,10 +153,29 @@ func mailboxShow(args []string) error {
 	fmt.Printf("name:        %s\n", orNone(m.Name))
 	fmt.Printf("created:     %s\n", m.Created.Local().Format(time.RFC3339))
 	fmt.Printf("queued:      %d messages, %s\n", m.QueuedMessages, humanBytes(m.QueuedBytes))
-	fmt.Printf("allowlist:   %d senders\n", m.AllowlistSize)
+	fmt.Printf("allowlist:   %s\n", allowField(*m))
 	fmt.Printf("channels:    %d\n", m.Channels)
 	fmt.Printf("blocked:     %t\n", m.Blocked)
 	return nil
+}
+
+// allowColumn is a mailbox's allow list in the listing: the count and the
+// state word, or "-" for a mailbox that has never pushed one. "legacy" is
+// the word to look for after an upgrade, "broken" after an incident: a
+// list that does not verify was edited on the host, and refuses everyone.
+func allowColumn(m relayapi.MailboxRecord) string {
+	if m.Allow == "" {
+		return "-"
+	}
+	return fmt.Sprintf("%d %s", m.AllowlistSize, m.Allow)
+}
+
+// allowField is the same for 'show', in words.
+func allowField(m relayapi.MailboxRecord) string {
+	if m.Allow == "" {
+		return "none"
+	}
+	return fmt.Sprintf("%d senders, %s", m.AllowlistSize, m.Allow)
 }
 
 // mailboxRemove backs both rm and purge, which differ only in whether the

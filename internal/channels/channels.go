@@ -36,10 +36,11 @@ const (
 	// name like any other in a directory, and a directory may leave it out.
 	Default = "default"
 
-	// signDomain separates a directory's signature from the other four things
+	// signDomain separates a directory's signature from the other five things
 	// an identity key signs: requests (ccx-http-v1), messages (ccx-sig-v1),
-	// enrolment tokens (ccx-token-v1) and stream manifests (ccx-stream-sig-v1).
-	// A signature made for one purpose must not verify for another.
+	// enrolment tokens (ccx-token-v1), stream manifests (ccx-stream-sig-v1)
+	// and allow lists (ccx-allow-v1). A signature made for one purpose must
+	// not verify for another.
 	signDomain = "ccx-channels-v1"
 )
 

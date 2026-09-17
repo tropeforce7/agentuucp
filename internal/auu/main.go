@@ -68,8 +68,9 @@ Usage:
   auu peers rm <name|fingerprint>
   auu peers fetch <fingerprint>
 
-  auu allow push
+  auu allow push                     # sign your peer list and push it to every relay
   auu allow clear
+  auu allow show [--json]            # what each relay holds for you, verified with your key
 
   auu channel ls [PEER] [--json]      # your channels and what each relay holds, or a peer's
   auu channel create NAME [--description TEXT] [--not-before T] [--not-after T]

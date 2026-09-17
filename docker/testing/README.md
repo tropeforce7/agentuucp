@@ -58,6 +58,8 @@ reports`, is snapshotted for the matrix.
 | C      | channels: the sender's listing, a closed and a not-yet-open channel, `default` removed, a channel deleted with mail queued, `close` |
 | W      | watching: mail already queued, a post during the hold, a channel filter, `--fetch`, a colleague's channel added, the relay restarted under a watch, your own channels changed from the other machine |
 | L      | mail left on the relay: a fetch that keeps it, a channel set to off, `auu rm` and its two flags, the same mail read on a second machine, and a mailbox filled by mail already read |
+| S      | a channel answered by a program: `auu serve` with a shell script for the handler, a follow-up, a side copy's patch, two threads, a stranger, a failing handler, mail from while it was down, the long run, the hooks |
+| A      | the signed allow list: a push, a stranger refused, the relay's database edited to admit the stranger and every post refused until the owner pushes again, a relay started on a database from before signed lists |
 
 Each family restores every machine from the snapshot before it starts, and
 each row undoes its own fault, so a row runs alone:

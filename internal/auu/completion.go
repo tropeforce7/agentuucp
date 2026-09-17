@@ -64,8 +64,9 @@ var subcommands = []subcommand{
 		{name: "fetch", describe: "look a fingerprint up on the relay"},
 	}},
 	{name: "allow", describe: "restrict your relay mailbox to your peers", subs: []subcommand{
-		{name: "push", describe: "send your peer list to the relay"},
+		{name: "push", describe: "send your peer list to the relay, signed"},
 		{name: "clear", describe: "accept mail from anyone again"},
+		{name: "show", describe: "what each relay holds for you, verified with your key"},
 	}},
 	{name: "channel", describe: "the named sub-mailboxes senders choose between", subs: []subcommand{
 		{name: "ls", describe: "list your channels, or a peer's"},

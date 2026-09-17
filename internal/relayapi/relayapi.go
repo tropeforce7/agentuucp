@@ -90,8 +90,27 @@ type (
 		// that predates the field.
 		Created *time.Time `json:"created,omitempty"`
 	}
+	// AllowRequest carries an owner's allow list: the signed document
+	// bytes exactly as the owner signed them and the signature over them
+	// under the allow list's own domain, which a relay verifies against
+	// the mailbox's registered bundle and stores verbatim. Allow is the
+	// same senders as a plain array, which a relay from before signed
+	// lists reads and a relay of this version ignores: it is still sent
+	// so that an old relay is told the list rather than an empty one,
+	// which would have cleared the mailbox's list in silence.
 	AllowRequest struct {
-		Allow []string `json:"allow"`
+		Allow     []string `json:"allow"`
+		Document  []byte   `json:"document,omitempty"`
+		Signature []byte   `json:"signature,omitempty"`
+	}
+	// AllowResponse is a mailbox's allow list as pushed, for its owner
+	// alone: the document and signature verbatim, to verify with the
+	// owner's own key, and State, one of the Allow* words, which is the
+	// relay's own reading and is not to be trusted over the pair.
+	AllowResponse struct {
+		Document  []byte `json:"document"`
+		Signature []byte `json:"signature"`
+		State     string `json:"state"`
 	}
 	// ChannelsRequest carries an owner's channel directory: the document
 	// bytes exactly as the owner signed them, and the signature over them
@@ -149,6 +168,11 @@ type (
 		// said. Absent when none has, or when nothing was watched, so a
 		// listing that watches nothing is byte for byte what it was.
 		DirectoriesChanged []string `json:"directories_changed,omitempty"`
+		// Allow is the state of the mailbox's allow list as the relay
+		// holds it, one of the Allow* words, so the owner is told when it
+		// is unsigned, missing or no longer verifies. Absent from a relay
+		// that predates signed lists, and the client says nothing then.
+		Allow string `json:"allow,omitempty"`
 	}
 	HealthResponse struct {
 		OK bool `json:"ok"`
@@ -233,6 +257,12 @@ type (
 		QueuedMessages int64     `json:"queued_messages"`
 		QueuedBytes    int64     `json:"queued_bytes"`
 		AllowlistSize  int64     `json:"allowlist_size"`
+		// Allow is the state of the allow list, one of the Allow* words,
+		// or empty for a mailbox that has never pushed one. "legacy" is
+		// the word to look for after an upgrade and "broken" after an
+		// incident: a list that does not verify is an edit on the host,
+		// never something a user did.
+		Allow string `json:"allow,omitempty"`
 		// Channels is how many channels the mailbox's directory lists, zero
 		// for a mailbox with none, which has default by that fact rather
 		// than by a row. A count and never the names: what an owner's
@@ -362,6 +392,29 @@ const (
 	MaxWait       = 60 * time.Second
 	MaxWatchPeers = 100
 )
+
+// The states of a mailbox's allow list, as the owner's listing and the
+// administrator's record report it. A relay from before signed lists
+// reports none.
+const (
+	// AllowSigned is a list the owner signed, which verifies.
+	AllowSigned = "signed"
+	// AllowLegacy is a list converted from the table kept before lists
+	// were signed: honoured as it was, until the owner pushes again.
+	AllowLegacy = "legacy"
+	// AllowNone is a mailbox that has never pushed a list; any registered
+	// sender may post.
+	AllowNone = "none"
+	// AllowBroken is a list that no longer verifies against the mailbox's
+	// key. The relay refuses every post to the mailbox until the owner
+	// pushes again.
+	AllowBroken = "broken"
+)
+
+// MsgNeedSignedAllowlist is the 400 for a client from before signed lists,
+// which sends the array and no document: it says in one sentence what to
+// do, and nothing is stored.
+const MsgNeedSignedAllowlist = "this relay needs a signed allow list; update auu to v0.5.0 or later"
 
 // MaxAllowlist caps the entries in one allow list.
 //

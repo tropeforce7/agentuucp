@@ -231,7 +231,7 @@ func TestTheAllowListDecidesBeforeTheChannel(t *testing.T) {
 	}
 	fp := bob.Fingerprint()
 	if status, body := h.do(bob, "PUT", "/v1/mailbox/"+fp+"/allow",
-		relayapi.AllowRequest{Allow: []string{alice.Fingerprint()}}, nil); status != http.StatusNoContent {
+		h.allowReq(bob, alice.Fingerprint()), nil); status != http.StatusNoContent {
 		t.Fatalf("allow push: %d %s", status, body)
 	}
 	const allow = "sender is not on the recipient's allow list"
