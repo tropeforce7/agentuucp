@@ -27,99 +27,73 @@ Where things end up:
 The two files under `docs/systemd/` are the unit and the settings as used
 below, ready to copy.
 
-## 0. Install Go 1.27 or later, on your own machine
+## 0. Install Go 1.27 or later, on the host
 
-The relay is built on your own machine in step 1 and copied to the host, so
-the host never needs Go. Your machine does, and it needs Go 1.27 or later,
-for `crypto/hpke` and `crypto/mldsa` in the standard library. See what you
-have:
+Everything in this guide happens on the host, logged in as yourself, except
+the certificate authority in step 3a, which lives on your own machine and
+never touches the server. The relay is a single static Go binary, so the
+host builds it from the public module and needs nothing else: Go 1.27 or
+later, for `crypto/hpke` and `crypto/mldsa` in the standard library. See
+what the host has:
 
 ```
 go version
 ```
 
-The Go a distribution packages is usually a year or more behind, so on Linux
-take the official archive from [go.dev/dl](https://go.dev/dl/) instead. Pick
-the file for the processor in *this* machine, the one you build on, which
-`uname -m` names as in step 1: `linux-amd64` for `x86_64`, `linux-arm64`
-for `aarch64`. With the version current at the time of writing:
+The Go a distribution packages is usually a year or more behind, so take the
+official archive from [go.dev/dl](https://go.dev/dl/) instead. Which archive
+depends on the host's processor, which `uname -m` names: `x86_64` is Intel
+or AMD and takes the `linux-amd64` file, `aarch64` is ARM, a Raspberry Pi or
+a Graviton instance, and takes `linux-arm64`. With the version current at
+the time of writing, on an Intel or AMD host:
 
 ```
+uname -m                                   # x86_64 here; aarch64 means linux-arm64 below
 curl -fsSLO https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
 sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.27.1.linux-amd64.tar.gz
-export PATH=/usr/local/go/bin:$PATH        # and the same line in ~/.bashrc or ~/.zshrc
+export PATH=/usr/local/go/bin:$PATH        # and the same line in ~/.bashrc
 go version                                 # go version go1.27.1 linux/amd64
 ```
 
 The `rm -rf` is Go's own instruction: unpacking a new archive over an old
-tree leaves stale files behind. On macOS, `brew install go` or the package
-from the same page; on Windows, the installer from the same page. Any newer
-Go is fine. A Go older than 1.27 but from 1.21 on will fetch 1.27 by itself
-the first time it builds this module, which is slower once and then the
-same, so an older Go is not fatal; one older than 1.21 is, and says so.
+tree leaves stale files behind. Any newer Go is fine. A Go older than 1.27
+but from 1.21 on will fetch 1.27 by itself the first time it builds this
+module, which is slower once and then the same, so an older Go is not fatal;
+one older than 1.21 is, and says so.
 
-On a Linux machine, `scripts/install.sh` does all of this for you, installing
-Go only when what is there is below 1.27, and `--relay` has it build
-`auu-relay` as well as the client tools; the README's install section has
-its curl line.
-
-## 1. Build the binary, on your own machine
-
-The relay is pure Go with no C dependencies, so it cross-compiles to a single
-static binary and the server needs no Go toolchain at all; section 0 puts Go
-on your own machine.
-
-A binary is built for one kind of processor and will not run on another:
-a relay built for an Intel or AMD server is a file the ARM processor in a
-Raspberry Pi or a Graviton instance cannot execute, and the other way round,
-and Linux says only `Exec format error` when you try. So find out which the
-host is first, from the host itself:
+## 1. Build the relay, on the host
 
 ```
-ssh you@relay.example.com uname -m
+go install github.com/tropeforce7/agentuucp/cmd/auu-relay@latest
+~/go/bin/auu-relay --version
 ```
 
-`x86_64` is Intel or AMD, and Go calls it `amd64`. `aarch64` is ARM, and Go
-calls it `arm64`. Then build on your own machine for that processor, whatever
-your own machine is, and copy the result across.
+That fetches the module, builds the relay for this processor, and leaves it
+in `~/go/bin`; step 3 moves it to `/usr/local/bin`, owned by root. It is
+pure Go with no C dependencies, so nothing else needs installing.
 
-For an Intel or AMD host, one that said `x86_64`:
+`scripts/install.sh` is steps 0 and 1 as one command: it installs Go only
+when the host has none new enough, and with `--relay` it builds `auu-relay`
+beside the client tools, into `/usr/local/bin` when run as root, so step 3
+is then already done. The README's install section has the curl line; add
+`--relay` to it (`| sudo sh -s -- --relay`). From a checkout on the host it
+is `sh scripts/install.sh --from . --relay`.
+
+If you would rather build on your own machine and copy the binary across,
+which the kit below needs since it packs the binary, remember that a binary
+is built for one kind of processor and will not run on another; Linux says
+only `Exec format error` when you try. Ask the host with `ssh HOST uname -m`
+and set `GOARCH` to match: `amd64` for `x86_64`, `arm64` for `aarch64`.
 
 ```
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o auu-relay ./cmd/auu-relay
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o auu-relay ./cmd/auu-relay   # an ARM host
 scp auu-relay you@relay.example.com:
 ```
 
-For an ARM host, one that said `aarch64`:
-
-```
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o auu-relay ./cmd/auu-relay
-scp auu-relay you@relay.example.com:
-```
-
-The only difference is `GOARCH`. From a clone, `make relay-linux` is the
-first of these and `make relay-linux ARCH=arm64` the second, each putting
-the binary under `bin/linux_amd64/` or `bin/linux_arm64/` so the two never
-overwrite each other. To check what you built before you copy it, `file
-auu-relay` names the processor, and on the host `./auu-relay --version`
-either prints the version or fails with the error above.
-
-Without a clone, `go install` can build it straight from the module; when
-cross-compiling, Go puts the result under a platform directory rather than
-in `GOBIN`:
-
-```
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go install github.com/tropeforce7/agentuucp/cmd/auu-relay@latest
-scp "$(go env GOPATH)/bin/linux_amd64/auu-relay" you@relay.example.com:
-```
-
-For ARM, `GOARCH=arm64` and the directory is `linux_arm64`.
-
-On the server itself, `scripts/install.sh --relay` builds the same binary
-there and installs Go first if the host has none new enough — one command
-where these are three, for an operator who would rather not cross-compile.
-The README's install section has its curl line.
+From a clone, `make relay-linux` builds the amd64 one into
+`bin/linux_amd64/` and `make relay-linux ARCH=arm64` the arm64 one into
+`bin/linux_arm64/`. `file auu-relay` names the processor a binary was built
+for, if you are unsure what you have.
 
 You do not need `auu-admin` on the server. Administration happens from an
 administrator's own machine, signed with their own key; the server only holds
@@ -228,12 +202,13 @@ message it never received.
 ## 3. Install the binary
 
 ```
-install -o root -g root -m 0755 auu-relay /usr/local/bin/auu-relay
-auu-relay --help | head -1
+sudo install -o root -g root -m 0755 ~/go/bin/auu-relay /usr/local/bin/auu-relay
+auu-relay --version
 ```
 
 Root-owned and not writable by `auu`, so a compromised relay cannot replace
-itself.
+itself. If the install script put it there as root in step 1, or you copied
+a binary from elsewhere, give `install` that path instead.
 
 ## 3a. Make the certificate authority, on your own machine
 
