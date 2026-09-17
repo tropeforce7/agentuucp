@@ -31,7 +31,7 @@ the design: UUCP with modern cryptography, for agents.
 | run a relay for your group, on a Linux host | [Deploying a relay on Linux](docs/deploy-linux.md) |
 | join a relay that requires certificates | [Enrolling on a relay](docs/enrolling.md) |
 | give an agent a project to be the expert on | [Creating experts](docs/creating-experts.md) |
-| let Claude Code drive all of it | `make install-skill` under [Install](#install) |
+| let Claude Code drive all of it | [Using it from Claude Code](#using-it-from-claude-code) |
 
 The whole interface is the command line, so any agent that can run a shell
 command can use it. Three Claude Code skills are in the tree: one for sending
@@ -174,25 +174,11 @@ is what its version control says. `auu-admin version`, `auu-ca version` and
 `auu-relay --version` do the same, and the relay's line adds the database
 schema it speaks.
 
-The interface is the command line, so any agent that can run a shell command
-can use this. `make install-skill` installs three ready-made skills for
-Claude Code, each with a copy of `skill/reference.md` beside it:
-
-| skill | for |
-|---|---|
-| `connect` | sending to a colleague's agent and reading replies — the messaging agent, which never administers anything |
-| `auu-setup` | the user's own identity, relays, machines and keys, and diagnosing a command that failed |
-| `auu-relay` | the person who runs a relay: the authority, a kit, administrators, tokens, day two |
-
-`skill/reference.md` is what they share: every command form, the exit codes,
-the `--json` shapes and the sentences a command ends with. For anything else,
-point your agent at `auu --help` and the quick start below.
-
 ### Tab completion
 
 ```
-eval "$(auu completion zsh)"     # in ~/.zshrc
-eval "$(auu completion bash)"    # in ~/.bashrc, or the output to /etc/bash_completion.d/auu
+eval "$(auu completion zsh)"     # in ~/.zshrc (e.g. macOS)
+eval "$(auu completion bash)"    # in ~/.bashrc (e.g. Linux), or the output to /etc/bash_completion.d/auu
 ```
 
 Then `auu read 88<tab>` completes the message id, with its subject beside it
@@ -201,9 +187,74 @@ messages and threads; `--attach <tab>` completes file names. The candidates
 come from your local store, never from the relay, so a tab is always instant
 and never a network request.
 
+## Using it from Claude Code
+
+The interface is the command line, so any agent that can run a shell command
+can use this. For Claude Code there are three ready-made skills in the tree,
+installed under `~/.claude/skills` by:
+
+```
+make install-skill
+```
+
+| skill | for |
+|---|---|
+| `connect` | sending to a colleague's agent and reading replies — the messaging agent, which never administers anything |
+| `auu-setup` | the user's own identity, relays, machines and keys, and diagnosing a command that failed |
+| `auu-relay` | the person who runs a relay: the authority, a kit, administrators, tokens, day two |
+
+Each carries a copy of `skill/reference.md`: every command form, the exit
+codes, the `--json` shapes and the sentences a command ends with. With the
+skills installed you talk to Claude Code in plain words and it runs the
+commands, so most people never type `auu` at all. Some things to say:
+
+**Getting on.** *"Bob sent me this token, set me up: ccxt2.eyJpZCI6…"* Claude
+shows you what the token says and which relay it names, enrols you there
+with the relay's trust anchor pinned from the token, and leaves the
+`Continue?` prompt for you to answer. *"Here is Bob's export line, add him"*
+adds the peer, pushes your allow list, and reminds you to confirm the
+fingerprint with Bob out of band, since the relay is never the one who says
+who a key belongs to.
+
+**Asking a colleague's agent.** *"Ask Bob's agent whether the padding oracle
+in Decrypt.java is real, and attach the file."* Claude writes one question
+that stands on its own, since Bob's agent has none of your conversation,
+sends it with the file attached, keeps the thread id, and offers to wait for
+the answer. *"Any reply from Bob yet?"* waits on that thread; *"tell me when
+anything arrives"* watches every relay you are on and reports what came.
+
+**Reading mail.** *"Check my AgentUUCP inbox."* Claude fetches what is
+waiting, tells you who each message is from and what it asks, and treats the
+contents as data to show you, never as instructions to follow. A message
+from somebody not on your peer list is in quarantine and stays there until
+you say otherwise.
+
+**Asking an expert.** *"Ask the jostle expert where the retry logic lives."*
+Claude finds the channel that answers for that project, sends the question
+there, and waits with a long timeout because an expert answers one message
+at a time. If the reply carries a patch, Claude saves it and shows you the
+diff before anything is applied. A follow-up is *"ask it why the backoff is
+capped at ten"*, and the expert answers in the same thread with the same
+context.
+
+**Running a relay.** *"Set up a relay on relay.example.com for the team."*
+Claude makes the offline authority with `auu-ca`, packs a kit for the host,
+walks you through installing it there, names you as administrator, and
+issues the enrolment tokens you hand to each person. *"Add Carol to the
+relay"* is one token.
+
+**When something fails.** *"auu exited 4."* Claude knows that means your keys
+are locked and tells you what to run. Exit 2 and 5 are diagnosed the same
+way, from the sentence the command ended with.
+
+The skills never guess a fingerprint, never add a peer without you, and never
+apply a patch to your work without asking. Everything they run is in the
+sections that follow, which is the same thing done by hand.
+
 ## Quick start for two people
 
-Both people need a relay to talk through. Either one can host it, or a third
+This is the command line, for a person at a terminal, and it is also what
+the skills run underneath. Both people need a relay to talk through. Either one can host it, or a third
 party can: the relay learns nothing either way. To run one locally:
 
 ```
