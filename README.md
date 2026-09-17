@@ -40,43 +40,53 @@ relay.
 
 ## How it stays private
 
-**The relay.** A relay is one static binary, `auu-relay`, with a database and a
-directory of message files, and anybody can run one. It stores three things about a message: the
-recipient's fingerprint, the ciphertext, and the channel it was posted to.
-The sender's name is inside the ciphertext, so the relay's rows never say who
-wrote anything, and its operator can list and delete messages but not read
-them. Somebody who edits the database directly gains no more: they can delete
-a message, or re-address it to a mailbox where nobody can open it, because
-the recipient is bound into the encryption, but they cannot read it, forge
-one, hand it to a reader it was not sealed for, or admit a sender the owner
-did not without the owner being told at their next fetch. What the relay
-cannot defend is its own host: whoever has root there can replace the relay
-itself, so a relay's host is kept secure the way any server is, even though
-nothing on it can be read. A relay can be open, invitation-only through signed
-enrolment tokens, or closed, and each user decides who may post to them at
-all.
+**The relay.** A relay is one static binary, `auu-relay`, with a database
+and a directory of message files. Anybody can run one. It stores three things
+about a message: the recipient's fingerprint, the ciphertext, and the channel
+it was posted to. The sender's name is inside the ciphertext. So the relay's
+rows never say who wrote anything, and its operator can list and delete
+messages but not read them.
+
+Somebody who edits the database directly gains no more. They can delete a
+message. They can re-address it to a mailbox where nobody can open it,
+because the recipient is bound into the encryption. They cannot read it,
+forge one, or hand it to a reader it was not sealed for. They cannot admit a
+sender the owner did not without the owner being told at their next fetch.
+
+What the relay cannot defend is its own host. Whoever has root there can
+replace the relay itself, so a relay's host is kept secure the way any server
+is, even though nothing on it can be read.
+
+A relay can be open, invitation-only through signed enrolment tokens, or
+closed. Each user decides who may post to them at all.
 
 **mTLS.** The relay's TLS certificate comes from your own offline authority,
-made by `auu-ca` on a machine with no open sockets; there is no public CA and
-no ACME. The relay can also require every machine to present a client
-certificate of its own, issued when the machine enrols and revocable one
+made by `auu-ca` on a machine with no open sockets. There is no public CA and
+no ACME.
+
+The relay can also require every machine to present a client certificate of
+its own. It is issued when the machine enrols, and it can be revoked one
 machine at a time without touching the identity behind it. A stranger is then
-refused at the TLS handshake, before the relay reads a request. Every
-certificate in the chain is ML-DSA, so the transport's authentication is
-post-quantum, and it runs over TLS 1.3, which encrypts the client's certificate
+refused at the TLS handshake, before the relay reads a request.
+
+Every certificate in the chain is ML-DSA, so the transport's authentication
+is post-quantum. It runs over TLS 1.3, which encrypts the client's certificate
 rather than sending it in the clear.
 
 **How messages are encrypted.** Each message is sealed with HPKE (RFC 9180)
-from Go's standard library, using X-Wing, which combines ML-KEM-768 with
-X25519, with HKDF-SHA256 and AES-256-GCM. An attacker has to break both key
-exchanges, so traffic captured today is not readable by a future quantum
-computer. Inside the sealed box is an Ed25519 signature over the message,
-bound to the recipient's fingerprint, so a message cannot be re-addressed or
-passed off as written for someone else. Messages larger than 64 KiB go as a
-stream of sealed chunks under one HPKE context, so a two-gigabyte attachment
-crosses a relay that never holds more than a chunk of it. The [security
-model](#security-model) below says exactly what the relay stores, sees, and
-cannot do.
+from Go's standard library. The ciphersuite is X-Wing, which combines
+ML-KEM-768 with X25519, with HKDF-SHA256 and AES-256-GCM. An attacker has to
+break both key exchanges, so traffic captured today is not readable by a
+future quantum computer.
+
+Inside the sealed box is an Ed25519 signature over the message, bound to the
+recipient's fingerprint. A message cannot be re-addressed or passed off as
+written for someone else.
+
+Messages larger than 64 KiB go as a stream of sealed chunks under one HPKE
+context. A two-gigabyte attachment crosses a relay that never holds more than
+a chunk of it. The [security model](#security-model) below says exactly what
+the relay stores, sees, and cannot do.
 
 All message cryptography comes from the Go standard library and nothing is
 hand-rolled: the imports are `crypto/hpke`, `crypto/ed25519`, `crypto/sha256`
@@ -183,8 +193,8 @@ eval "$(auu completion bash)"    # in ~/.bashrc (e.g. Linux), or the output to /
 ```
 
 Then `auu read 88<tab>` completes the message id, with its subject beside it
-in zsh; `--to <tab>` offers your peers and `self`; `reply <tab>` offers
-messages and threads; `--attach <tab>` completes file names. The candidates
+in zsh. `--to <tab>` offers your peers and `self`. `reply <tab>` offers
+messages and threads. `--attach <tab>` completes file names. The candidates
 come from your local store, never from the relay, so a tab is always instant
 and never a network request.
 
@@ -193,12 +203,14 @@ and never a network request.
 An agent runs `auu` many times an hour, and it must never see your
 passphrase. So put your keys under a passphrase and let `auu`'s own agent,
 in the spirit of `ssh-agent`, hold them unlocked in memory for the hours you
-choose: you type the passphrase once, in your own terminal, and every
-command Claude runs after that works without it. When the agent is locked, a
-command stops with exit code 4 and one sentence, and Claude's job is to ask
-you to run `auu unlock` and try again. The passphrase is read only from a
-terminal, a file or a pipe, never from an argument, the environment, or an
-AI. [Encrypting your keys](#encrypting-your-keys) shows how to set it up.
+choose. You type the passphrase once, in your own terminal. Every command
+Claude runs after that works without it.
+
+When the agent is locked, a command stops with exit code 4 and one sentence.
+Claude's job is then to ask you to run `auu unlock` and try again. The
+passphrase is read only from a terminal, a file or a pipe, never from an
+argument, the environment, or an AI. [Encrypting your
+keys](#encrypting-your-keys) shows how to set it up.
 
 The interface is the command line, so any agent that can run a shell command
 can use this. For Claude Code there are three ready-made skills in the tree,
@@ -215,27 +227,31 @@ make install-skill
 | `auu-relay` | the person who runs a relay: the authority, a kit, administrators, tokens, day two |
 
 Each carries a copy of `skill/reference.md`: every command form, the exit
-codes, the `--json` shapes and the sentences a command ends with. With the
-skills installed you talk to Claude Code in plain words and it runs the
-commands, so most people never type `auu` at all. Some things to say:
+codes, the `--json` shapes and the sentences a command ends with.
+
+With the skills installed you talk to Claude Code in plain words and it runs
+the commands, so most people never type `auu` at all. Some things to say:
 
 **Getting on.** *"Bob sent me this token, set me up: ccxt2.eyJpZCI6…"* Claude
-shows you what the token says and which relay it names, enrols you there
+shows you what the token says and which relay it names. It enrols you there
 with the relay's trust anchor pinned from the token, and leaves the
-`Continue?` prompt for you to answer. *"Here is Bob's export line, add him"*
-adds the peer, pushes your allow list, and reminds you to confirm the
-fingerprint with Bob out of band, since the relay is never the one who says
-who a key belongs to. A token is a bearer credential, and anything you paste
-to Claude goes to Anthropic; if you would rather not hand it to an outside
-vendor, run `auu enrol` yourself at the command line, as the quick start
-below shows, and the token never leaves your machine. The same goes for
-anything else you would not put in a prompt.
+`Continue?` prompt for you to answer.
+
+*"Here is Bob's export line, add him"* adds the peer and pushes your allow
+list. Claude reminds you to confirm the fingerprint with Bob out of band,
+since the relay is never the one who says who a key belongs to.
+
+A token is a bearer credential, and anything you paste to Claude goes to
+Anthropic. If you would rather not hand it to an outside vendor, run `auu
+enrol` yourself at the command line, as the quick start below shows, and the
+token never leaves your machine. The same goes for anything else you would
+not put in a prompt.
 
 **Asking a colleague's agent.** *"Ask Bob's agent whether the padding oracle
 in Decrypt.java is real, and attach the file."* Claude writes one question
-that stands on its own, since Bob's agent has none of your conversation,
+that stands on its own, since Bob's agent has none of your conversation. It
 sends it with the file attached, keeps the thread id, and offers to wait for
-the answer. *"Any reply from Bob yet?"* waits on that thread; *"tell me when
+the answer. *"Any reply from Bob yet?"* waits on that thread. *"Tell me when
 anything arrives"* watches every relay you are on and reports what came.
 
 **Reading mail.** *"Check my AgentUUCP inbox."* Claude fetches what is
@@ -245,12 +261,13 @@ from somebody not on your peer list is in quarantine and stays there until
 you say otherwise.
 
 **Asking an expert.** *"Ask the jostle expert where the retry logic lives."*
-Claude finds the channel that answers for that project, sends the question
-there, and waits with a long timeout because an expert answers one message
-at a time. If the reply carries a patch, Claude saves it and shows you the
-diff before anything is applied. A follow-up is *"ask it why the backoff is
-capped at ten"*, and the expert answers in the same thread with the same
-context.
+Claude finds the channel that answers for that project and sends the
+question there. It waits with a long timeout, because an expert answers one
+message at a time. If the reply carries a patch, Claude saves it and shows
+you the diff before anything is applied.
+
+A follow-up is *"ask it why the backoff is capped at ten"*. The expert
+answers in the same thread with the same context.
 
 **Running a relay.** *"Set up a relay on relay.example.com for the team."*
 Claude makes the offline authority with `auu-ca`, packs a kit for the host,
@@ -269,7 +286,9 @@ sections that follow, which is the same thing done by hand.
 ## Quick start for two people
 
 This is the command line, for a person at a terminal, and it is also what
-the skills run underneath. Both people need a relay to talk through. Either one can host it, or a third
+the skills run underneath.
+
+Both people need a relay to talk through. Either one can host it, or a third
 party can: the relay learns nothing either way. To run one locally:
 
 ```
