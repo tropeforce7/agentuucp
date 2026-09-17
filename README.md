@@ -2,342 +2,91 @@
 
 # AgentUUCP
 
-Store-and-forward messaging between agents run by different people.
+Secure store-and-forward messaging between agents, experts and people who
+work for different organisations. Each side has a key. A relay in the middle
+carries sealed messages it cannot open and never learns who wrote them.
 
-Two colleagues exchange public keys once, the way they would exchange SSH keys.
-After that either one can queue a question, a file, or a review request for the
-other. Messages are encrypted end to end and signed. The relay in the middle
-holds ciphertext it cannot read and never learns who sent anything.
+- **Agent to agent.** Your Claude Code asks a colleague's Claude Code to look
+  at a bug, with the file attached, and gets an answer back when their agent
+  next runs.
+- **Agent to expert.** A channel on a project's checkout is answered by a
+  program, not a person: an agent that knows one codebase and answers
+  questions about it, or sends back a patch, around the clock.
+- **Agent to person.** Your agent sends a review request; a person reads it
+  in their inbox from a terminal and replies when they are ready.
+- **Person to person.** Two people with `auu` on their machines send each
+  other signed, sealed mail and files, with nothing in between that can read
+  it.
 
-The name is the design: it is UUCP with modern cryptography, for agents. Spool
-locally, seal, push to a drop, and let the other side pick it up whenever they
-are next at the keyboard. If that sentence means nothing to you, the pictures
-below say the same thing.
+Nobody has to be online at the same time. A message waits on the relay until
+its owner collects it, the way UUCP mail waited for the next call. The name is
+the design: UUCP with modern cryptography, for agents.
 
-All message cryptography comes from the Go standard library. There is no
-hand-rolled construction anywhere in the tree: the crypto imports are
-`crypto/hpke`, `crypto/ed25519`, `crypto/sha256`, and `crypto/rand`, and
-nothing else. The relay's certificates come from its own authority, made by
-`auu-ca`, so there is no ACME client and no dependency for one.
+## Get started
 
-One package outside the standard library is used for cryptography, and only
-one: `golang.org/x/crypto/argon2`, which encrypts the offline authority's
-private keys under a passphrase, because the standard library has PBKDF2 and
-nothing memory-hard. It touches no message and no connection.
+| you want to | read |
+|---|---|
+| put `auu` on a machine | [Install](#install) |
+| talk to one colleague through any relay | [Quick start for two people](#quick-start-for-two-people) |
+| run a relay for your group, on a Linux host | [Deploying a relay on Linux](docs/deploy-linux.md) |
+| join a relay that requires certificates | [Enrolling on a relay](docs/enrolling.md) |
+| give an agent a project to be the expert on | [Creating experts](docs/creating-experts.md) |
+| let Claude Code drive all of it | `make install-skill` under [Install](#install) |
 
-## What it does
+The whole interface is the command line, so any agent that can run a shell
+command can use it. Three Claude Code skills are in the tree: one for sending
+and reading mail, one for your own identity and machines, one for running a
+relay.
 
-You ask your agent to get a second opinion from a colleague's agent. It goes
-there safely, and the answer comes back. That is the whole thing.
+## How it stays private
 
-```mermaid
-flowchart LR
-    S1("1️⃣<br/>🧑‍🦰 ➜ 🤖<br/><b>You ask</b><br/><br/>“get Bob's agent<br/>to look at this bug”")
-    S2("2️⃣<br/>✉️🔒<br/><b>It gets locked</b><br/><br/>only Bob's agent<br/>can open it")
-    S3("3️⃣<br/>📮<br/><b>It waits</b><br/><br/>Bob doesn't have to<br/>be at his desk")
-    S4("4️⃣<br/>🤖 ➜ 🧑<br/><b>Bob's agent<br/>opens it and answers</b>")
+**The relay.** A relay is one static binary, `auu-relay`, with a database and a
+directory of message files, and anybody can run one. It stores three things about a message: the
+recipient's fingerprint, the ciphertext, and the channel it was posted to.
+The sender's name is inside the ciphertext, so the relay's rows never say who
+wrote anything, and its operator can list and delete messages but not read
+them. Somebody who edits the database directly gains no more: they can delete
+a message, or re-address it to a mailbox where nobody can open it, because
+the recipient is bound into the encryption, but they cannot read it, forge
+one, or hand it to a reader it was not sealed for. What the relay cannot
+defend is its own host: whoever has root there can replace the relay itself,
+so a relay's host is kept secure the way any server is, even though nothing
+on it can be read. A relay can be open, invitation-only through signed
+enrolment tokens, or closed, and each user decides who may post to them at
+all.
 
-    S1 ==> S2 ==> S3 ==> S4
-    S4 -.->|"the reply comes back the same way 🔁"| S1
+**mTLS.** The relay's TLS certificate comes from your own offline authority,
+made by `auu-ca` on a machine with no open sockets; there is no public CA and
+no ACME. The relay can also require every machine to present a client
+certificate of its own, issued when the machine enrols and revocable one
+machine at a time without touching the identity behind it. A stranger is then
+refused at the TLS handshake, before the relay reads a request. Every
+certificate in the chain is ML-DSA, so the transport's authentication is
+post-quantum, and it runs over TLS 1.3, which encrypts the client's certificate
+rather than sending it in the clear.
 
-    classDef panel fill:#f3f7ff,stroke:#5b8def,color:#1a3a6b
-    class S1,S2,S3,S4 panel
-```
+**How messages are encrypted.** Each message is sealed with HPKE (RFC 9180)
+from Go's standard library, using X-Wing, which combines ML-KEM-768 with
+X25519, with HKDF-SHA256 and AES-256-GCM. An attacker has to break both key
+exchanges, so traffic captured today is not readable by a future quantum
+computer. Inside the sealed box is an Ed25519 signature over the message,
+bound to the recipient's fingerprint, so a message cannot be re-addressed or
+passed off as written for someone else. Messages larger than 64 KiB go as a
+stream of sealed chunks under one HPKE context, so a two-gigabyte attachment
+crosses a relay that never holds more than a chunk of it. The [security
+model](#security-model) below says exactly what the relay stores, sees, and
+cannot do.
 
-The post box in the middle is just a place to leave things. Like a real one,
-it can read the address on the outside and nothing else:
-
-```mermaid
-flowchart LR
-    L("✉️<br/><b>To: Bob</b><br/><br/>🔒 ▓▓▓▓▓▓▓▓▓<br/>🔒 ▓▓▓▓▓▓▓▓▓<br/>🔒 ▓▓▓▓▓▓▓▓▓")
-    P("📮<br/><b>post box</b><br/><i>reads: “for Bob”</i><br/><i>reads: nothing else</i>")
-    B("🤖<br/><b>Bob's agent</b><br/>🔓 opens it<br/>✅ checks it really<br/>came from you")
-
-    L ==> P ==> B
-
-    classDef letter fill:#fffdf0,stroke:#c9a227,color:#5c4a00
-    classDef box fill:#fff3e0,stroke:#ef6c00,color:#e65100
-    classDef good fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-    class L letter
-    class P box
-    class B good
-```
-
-Two things follow from that, and they are the only two you need:
-
-- **Nobody has to be online at once.** Send now, they read tomorrow.
-- **Only the two of you can read it.** Not the post box, not whoever runs it.
-
-A big file goes in pieces and comes out whole.
-
-You swap keys with your colleague once, the way you would swap phone numbers,
-and after that it just works. Everything below is how, and you can skip it.
-
-## How it works
-
-Your agent asks. Their agent answers. The thing in the middle carries a sealed
-box it cannot open.
-
-```mermaid
-flowchart LR
-    subgraph you["💻 your machine"]
-        direction TB
-        YA["🤖 your agent<br/>+ connect skill"]
-        YC["auu"]
-        YK[("authorized_peers<br/>🔑 who you trust")]
-        YA <--> YC
-        YK -.-> YC
-    end
-
-    subgraph relay["☁️ the relay · untrusted"]
-        direction TB
-        BOX[("bob's mailbox<br/>🔒 🔒 🔒")]
-        NOPE["sees: who it is for,<br/>how big, when<br/><br/>never sees: who sent it,<br/>subject, text, files"]
-    end
-
-    subgraph them["💻 their machine"]
-        direction TB
-        TC["auu"]
-        TA["🤖 their agent<br/>+ connect skill"]
-        TK[("authorized_peers")]
-        TC <--> TA
-        TK -.-> TC
-    end
-
-    YC ==>|"seal 🔒 then POST"| BOX
-    BOX ==>|"GET, open 🔓, DELETE"| TC
-
-    classDef safe fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-    classDef danger fill:#fff3e0,stroke:#ef6c00,color:#e65100
-    classDef note fill:none,stroke:none,color:#ef6c00
-    class you,them safe
-    class relay danger
-    class NOPE note
-```
-
-Nobody has to be online at the same time. Send now, they read tomorrow — that
-is the whole point, and it is why there is a relay at all rather than a direct
+All message cryptography comes from the Go standard library and nothing is
+hand-rolled: the imports are `crypto/hpke`, `crypto/ed25519`, `crypto/sha256`
+and `crypto/rand`, with `crypto/mldsa` for the certificates. One package
+outside it is used, `golang.org/x/crypto/argon2`, only to encrypt the offline
+authority's private keys under a passphrase; it touches no message and no
 connection.
 
-### What is actually in the box
-
-The relay stores three fields. Everything that matters is inside the third one.
-
-```mermaid
-flowchart TB
-    subgraph open["👁️ what the relay stores, and can read"]
-        direction LR
-        V["<b>v</b><br/>1"]
-        TO["<b>to</b><br/>recipient fingerprint"]
-        CT["<b>ct</b><br/>🔒 4.2 KiB of ciphertext"]
-    end
-
-    subgraph sealed["🔒 sealed inside ct · the relay cannot read one byte of this"]
-        direction TB
-        SIG["✍️ Ed25519 signature<br/><i>proves who wrote it</i>"]
-        FROM["<b>from</b> · sender fingerprint<br/><i>hidden from the relay on purpose</i>"]
-        KEYS["sender's public keys"]
-        META["subject · thread · message id · time"]
-        TEXT["the actual question"]
-        FILES["📎 attachments"]
-    end
-
-    CT ==>|"HPKE · RFC 9180<br/>X-Wing: ML-KEM-768 + X25519<br/>AES-256-GCM"| sealed
-
-    classDef vis fill:#fff3e0,stroke:#ef6c00,color:#e65100
-    classDef hid fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-    class open vis
-    class sealed hid
-```
-
-Sign-then-encrypt, so the signature is *inside* the box. The relay can see that
-somebody posted to Bob; it cannot see that it was you.
-
-### The round trip
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant YA as 🤖 your agent
-    participant Y as auu
-    participant R as ☁️ relay
-    participant T as auu
-    participant TA as 🤖 their agent
-
-    Note over Y,T: keys already swapped, in person or over something you trust
-
-    YA->>Y: auu send --to bob --attach Missing.java
-    Y->>Y: sign ✍️ then seal 🔒
-    Y->>R: POST /v1/mailbox/{bob}
-    R-->>Y: 200 · queued
-    Note over R: holds ciphertext.<br/>cannot open it.<br/>does not know it was you.
-
-    Note over R,T: minutes, or days
-
-    TA->>T: auu inbox
-    T->>R: GET /v1/mailbox/{bob}
-    R-->>T: sealed envelopes
-    T->>T: open 🔓 · verify ✍️ · check sender is a known peer
-    T->>R: DELETE · acknowledged
-    Note over R: gone from the relay
-    T-->>TA: question + files, marked as untrusted input
-```
-
-The `DELETE` at step 9 is the interesting one: the message leaves the relay
-only after it is safely on local disk. Crash anywhere in between and you fetch
-it twice, never zero times. It happens at the fetch only for a channel you
-have set to `off` with [`auu channel keep`](#channels); by default a channel
-keeps its mail, so the fetch leaves it queued and the `DELETE` is what
-[`auu rm`](#receive) sends when you remove it.
-
-The answer at step 8 lists what is after this machine's cursor and, beside
-it, how many messages the mailbox holds in all (`queued`). The two normally
-agree. When the list is empty and the count is not, the cursor is past mail
-— set by hand, or copied from a machine that had fetched further — and `auu
-inbox` says so, with the count, the cursor file to delete and the `auu inbox
---relay NAME` to run after, and exits 5 without acknowledging or writing
-anything. A relay from before the field omits it, and the client says
-nothing. Each message listed says which channel it is under (`channel`),
-always, `default` included; a listing without the field is from a relay
-from before channels, and the client files by the sealed record alone.
-
-Two routes carry a mailbox's channel directory, the signed list of named
-sub-mailboxes an owner defines: the owner pushes it with `PUT
-/v1/mailbox/{fp}/channels` as the document bytes and the signature over them
-(`document`, `signature`), and the relay verifies the signature against the
-registered key before storing either, answers `401` for one that does not
-verify, `400` with the rule broken, and `409` for a directory issued no later
-than the one it holds, naming when that was issued. Anyone the allow list
-admits fetches it with `GET /v1/mailbox/{fp}/channels` and gets the same two
-fields back verbatim, to verify against the key they hold for the owner; a
-sender the allow list refuses gets the refusal a post would, and learns
-nothing about channels; a mailbox whose owner has pushed none answers `404`
-with `no directory: the mailbox has the one channel, default`. The owner's
-own fetch adds `queued`, how many messages wait under each channel; nobody
-else's does.
-
-A message posted to a channel names it in the clear: `ch` on the outer
-envelope at step 3, `channel` on the request that opens a stream. The relay
-reads it after the allow list has admitted the sender and before anything
-is stored or charged — a sender the list refuses learns nothing about
-channels — and refuses `404 no such channel "x"` for a name the directory
-does not hold (`default`, for a mailbox with no directory) and `403 channel
-"x" is not open: opens T` or `closed T` for one outside its period, judged
-by the relay's clock with both edges inclusive. The sealed record and the
-signed manifest carry the same name, so a message the relay filed elsewhere
-is found out on opening. Absent means `default` everywhere, and a message
-sent with no channel is byte for byte what it was before channels.
-
-The listing at step 7 takes three more parameters, all optional. `wait=D`
-asks the relay to hold the answer until a message arrives after the id asked
-from, or `D` elapses, and then to answer the ordinary listing. A relay holds
-for at most 60 seconds, clamping a longer `D` rather than refusing it, and
-one already holding as many listings as `max_waiting` allows, or two for the
-same identity, answers at once instead: the hold degrades and never refuses.
-`peers=FP:ISSUED,...` names peers whose channel directories the caller is
-watching and the issue time it holds for each, in Unix nanoseconds; a push
-that replaces one of them wakes the hold, and the answer names in
-`directories_changed` every watched peer whose directory is issued later
-than the caller said. A peer the caller may not post to is dropped without a
-word — never named, never woken on — since the directory fetch the caller
-made first has already told it `403`. `stubs=1` answers every row without
-its `envelope`, for a caller that wants the ids and nothing else — which is
-what checking whether mail it left on the relay is still there needs, and
-what stops a mailbox of such mail being downloaded again on every check. A
-relay from before any of the three ignores it and answers as it always did,
-and a listing that asks for none of them is byte for byte what it was.
-
-A large message changes step 7 only. Instead of arriving with the rest of the
-mailbox, it is listed as a stream and its body is fetched separately, in
-pieces, straight to disk — which is what lets a two gigabyte attachment cross a
-relay that never holds more than a chunk of it.
-
-A message that does not open at step 8 — it did not decrypt, it names another
-recipient, its sender does not hold up, or it is not an envelope — is nobody's
-to read, and leaving it queued would block the mailbox, so it is acknowledged;
-but first its bytes are kept under `damaged/` in your home with the cause in a
-word, the warning names the file and says to ask the sender to send it again,
-and `auu inbox` says how many are there until you remove them.
-
-A message that opens is filed under the channel it was sealed for, after that
-name has been checked against the one on the outer envelope and the one the
-relay listed it under. A disagreement is a message the relay filed elsewhere:
-it is kept under `damaged/` with the cause word `misfiled`, the warning says
-`relay message N was filed under "a" by relay.example.com but is sealed for
-"b"; it was kept as PATH`, and it is acknowledged like the other kept
-messages, so the mailbox is not blocked. A relay from before channels lists
-no channel, and the sealed record alone decides.
-
-### A large message
-
-Above 64 KiB, `auu send` stops building one envelope and builds a stream. It is
-one HPKE context and a run of sealed chunks: the manifest first, saying what
-the message is and what each file must hash to, then the file bytes.
-
-```mermaid
-flowchart LR
-    E["<b>enc</b><br/>1120 B<br/><i>X-Wing<br/>encapsulation</i>"]
-    L["<b>len₀</b><br/>4 B<br/><i>how long<br/>the manifest is</i>"]
-    M["<b>chunk 0</b> 🔒<br/>✍️ signature<br/>+ manifest<br/><i>subject · text<br/>file names<br/>sizes · SHA-256</i>"]
-    C1["<b>chunk 1</b> 🔒<br/>63 KiB<br/><i>file bytes</i>"]
-    C2["<b>chunk 2</b> 🔒<br/>63 KiB"]
-    D["…"]
-    CN["<b>last chunk</b> 🔒<br/><i>sealed as</i> <b>final</b><br/>🛑 nothing may follow"]
-
-    E --> L --> M --> C1 --> C2 --> D --> CN
-
-    classDef head fill:#fff3e0,stroke:#ef6c00,color:#e65100
-    classDef man fill:#ede7f6,stroke:#5e35b1,color:#311b92
-    classDef body fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20
-    classDef last fill:#ffebee,stroke:#c62828,color:#b71c1c
-    class E,L head
-    class M man
-    class C1,C2,D body
-    class CN last
-```
-
-Three things fall out of that shape:
-
-- **The last chunk is sealed under a different label.** Cut a stream short and
-  the chunk the receiver expects to be the last one will not open. Truncation
-  is caught by the cipher, not by a length field somebody could lie about.
-- **Chunk 0 is enough to decide.** A receiver fetches 1124 bytes plus the
-  manifest, learns who sent it and how big it is, and only then agrees to
-  download the rest. A stranger cannot make anybody pull two gigabytes.
-- **Nothing is ever held whole.** The sender seals a chunk at a time, the relay
-  writes a request at a time, the receiver decrypts a chunk at a time and
-  writes it straight to a file. Sending a 2 GB file costs about 20 MiB of
-  memory at each end.
-
-An interrupted upload resumes: the sealed copy stays in `outbox/` and
-`auu send --resume` carries on from the byte the relay already has. That is
-also why sending seals to disk first — the nonce counter inside an HPKE context
-only goes forwards, so a chunk that was lost could never be sealed the same way
-twice. A relay whose disk fills part way through is the same case: it answers
-`507`, keeps what it has, and `auu send` says the upload is kept and to resume
-it when there is room.
-
-### Getting someone onto a private relay
-
-```mermaid
-flowchart LR
-    A["👩‍💼 administrator<br/><i>listed in the relay's<br/>authorized file</i>"]
-    T["🎟️ enrolment token<br/><small>signed · expires · says who it is for</small>"]
-    N["🧑 newcomer"]
-    R["☁️ relay"]
-
-    A -->|"auu-admin token issue<br/>--note 'Bob, protocol review'"| T
-    T -->|"send it however you like"| N
-    N -->|"auu enrol --name bob TOKEN"| R
-    A -.->|"registers it, so it can be<br/>revoked and counted"| R
-    R -.->|"one use, then dead"| T
-
-    classDef tok fill:#ede7f6,stroke:#5e35b1,color:#311b92
-    class T tok
-```
-
-A token gets you a mailbox. It says nothing about who is safe to talk to —
-that is still `auu peers add`, still out of band, still a human decision.
+Everything from here down is reference: how to install and use the client,
+then how to run and administer a relay, then the security model and the wire
+format, in that order.
 
 ## Install
 
@@ -1410,7 +1159,6 @@ neither can OpenSSL before 3.5. `auu` can, because it is Go 1.27. If you want
 use *Your own certificate* below with a publicly trusted one, and tokens will
 then carry no anchor.
 
-
 ### Your own certificate
 
 ```
@@ -1530,6 +1278,17 @@ mailboxes altogether while leaving the existing ones working.
 The relay stores nothing it can read and needs no backups beyond whatever is
 still in transit. The relay's bundle can be reissued from the offline
 `auu-ca` directory, which is the thing that does need backing up.
+
+None of that is a substitute for keeping the host itself secure. The relay
+defends the people using it from the relay: it cannot defend itself from
+whoever has root on the machine it runs on, who can stop it, delete or delay
+mail, read the access log, take the signing keys in its bundle, or replace
+the binary with one that does something else. Treat the host as you would
+any server that carries other people's mail: the operator alone has an
+account on it, nothing else runs there, it is patched, and the unit's
+hardening from the kit stays in place. What an attacker on the host still
+cannot do is read a message or write one as somebody else, because the keys
+for that were never on the machine.
 
 ## Administering a relay
 
@@ -1860,7 +1619,12 @@ and recipient are the same authenticated identity, which a `full` access log
 records as such.
 
 **What is not protected.** The relay knows who talks to whom, as above. It can
-drop messages or refuse service. It cannot read, forge, or redirect them.
+drop messages or refuse service. It cannot read, forge, or redirect them. An
+attacker with root on the relay's host is outside this model altogether:
+they can do anything the relay can, including replacing it, and the relay
+cannot defend itself from the machine it runs on. What such an attacker still
+cannot do is read or forge a message, and *Keeping a relay private* above
+says what keeping the host secure means.
 Compromise of your `identity.json` gives an attacker everything: your mail,
 and the ability to write as you. With a passphrase set (see *Encrypting your
 keys*) the file holds only your public half, the keys are ciphertext under a
@@ -1873,6 +1637,153 @@ about whether the contents are safe. Inbound text and attachments are treated
 as data by the skill, never as instructions, and unknown senders never reach
 the inbox at all. Nothing arrives in the background: mail moves only when a
 person runs `auu inbox` or `auu wait`.
+
+## The wire, in detail
+
+What the relay stores for one message is three fields: `v`, the format
+version; `to`, the recipient's fingerprint; and `ct`, about 4 KiB of
+ciphertext for a short message. Sealed inside `ct`, where the relay cannot
+read a byte of it, are the Ed25519 signature, the sender's fingerprint and
+public keys, the subject, thread, message id and time, the text, and any
+attachments. Sign-then-encrypt, so the signature is inside the box: the relay
+can see that somebody posted to Bob, and cannot see that it was you.
+
+### The round trip
+
+With keys already swapped, in person or over something you both trust:
+
+1. Your agent runs `auu send --to bob --attach Missing.java`.
+2. `auu` signs the record, then seals it.
+3. `auu` sends `POST /v1/mailbox/{bob}` to the relay.
+4. The relay answers `200`, queued. It holds ciphertext, cannot open it, and
+   does not know it was you.
+5. Minutes or days later, their agent runs `auu inbox`.
+6. Their `auu` sends `GET /v1/mailbox/{bob}`.
+7. The relay answers with a listing of sealed envelopes.
+8. Their `auu` opens each one, verifies the signature, and checks that the
+   sender is a known peer.
+9. Their `auu` sends `DELETE` to acknowledge it, and the message is gone from
+   the relay.
+10. The question and its files are handed to their agent, marked as untrusted
+    input.
+
+The `DELETE` at step 9 is the interesting one: the message leaves the relay
+only after it is safely on local disk. Crash anywhere in between and you fetch
+it twice, never zero times. It happens at the fetch only for a channel you
+have set to `off` with [`auu channel keep`](#channels); by default a channel
+keeps its mail, so the fetch leaves it queued and the `DELETE` is what
+[`auu rm`](#receive) sends when you remove it.
+
+The answer at step 7 lists what is after this machine's cursor and, beside
+it, how many messages the mailbox holds in all (`queued`). The two normally
+agree. When the list is empty and the count is not, the cursor is past mail
+— set by hand, or copied from a machine that had fetched further — and `auu
+inbox` says so, with the count, the cursor file to delete and the `auu inbox
+--relay NAME` to run after, and exits 5 without acknowledging or writing
+anything. A relay from before the field omits it, and the client says
+nothing. Each message listed says which channel it is under (`channel`),
+always, `default` included; a listing without the field is from a relay
+from before channels, and the client files by the sealed record alone.
+
+Two routes carry a mailbox's channel directory, the signed list of named
+sub-mailboxes an owner defines: the owner pushes it with `PUT
+/v1/mailbox/{fp}/channels` as the document bytes and the signature over them
+(`document`, `signature`), and the relay verifies the signature against the
+registered key before storing either, answers `401` for one that does not
+verify, `400` with the rule broken, and `409` for a directory issued no later
+than the one it holds, naming when that was issued. Anyone the allow list
+admits fetches it with `GET /v1/mailbox/{fp}/channels` and gets the same two
+fields back verbatim, to verify against the key they hold for the owner; a
+sender the allow list refuses gets the refusal a post would, and learns
+nothing about channels; a mailbox whose owner has pushed none answers `404`
+with `no directory: the mailbox has the one channel, default`. The owner's
+own fetch adds `queued`, how many messages wait under each channel; nobody
+else's does.
+
+A message posted to a channel names it in the clear: `ch` on the outer
+envelope at step 3, `channel` on the request that opens a stream. The relay
+reads it after the allow list has admitted the sender and before anything
+is stored or charged — a sender the list refuses learns nothing about
+channels — and refuses `404 no such channel "x"` for a name the directory
+does not hold (`default`, for a mailbox with no directory) and `403 channel
+"x" is not open: opens T` or `closed T` for one outside its period, judged
+by the relay's clock with both edges inclusive. The sealed record and the
+signed manifest carry the same name, so a message the relay filed elsewhere
+is found out on opening. Absent means `default` everywhere, and a message
+sent with no channel is byte for byte what it was before channels.
+
+The listing at step 7 takes three more parameters, all optional. `wait=D`
+asks the relay to hold the answer until a message arrives after the id asked
+from, or `D` elapses, and then to answer the ordinary listing. A relay holds
+for at most 60 seconds, clamping a longer `D` rather than refusing it, and
+one already holding as many listings as `max_waiting` allows, or two for the
+same identity, answers at once instead: the hold degrades and never refuses.
+`peers=FP:ISSUED,...` names peers whose channel directories the caller is
+watching and the issue time it holds for each, in Unix nanoseconds; a push
+that replaces one of them wakes the hold, and the answer names in
+`directories_changed` every watched peer whose directory is issued later
+than the caller said. A peer the caller may not post to is dropped without a
+word — never named, never woken on — since the directory fetch the caller
+made first has already told it `403`. `stubs=1` answers every row without
+its `envelope`, for a caller that wants the ids and nothing else — which is
+what checking whether mail it left on the relay is still there needs, and
+what stops a mailbox of such mail being downloaded again on every check. A
+relay from before any of the three ignores it and answers as it always did,
+and a listing that asks for none of them is byte for byte what it was.
+
+A large message changes step 7 only. Instead of arriving with the rest of the
+mailbox, it is listed as a stream and its body is fetched separately, in
+pieces, straight to disk — which is what lets a two gigabyte attachment cross a
+relay that never holds more than a chunk of it.
+
+A message that does not open at step 8 — it did not decrypt, it names another
+recipient, its sender does not hold up, or it is not an envelope — is nobody's
+to read, and leaving it queued would block the mailbox, so it is acknowledged;
+but first its bytes are kept under `damaged/` in your home with the cause in a
+word, the warning names the file and says to ask the sender to send it again,
+and `auu inbox` says how many are there until you remove them.
+
+A message that opens is filed under the channel it was sealed for, after that
+name has been checked against the one on the outer envelope and the one the
+relay listed it under. A disagreement is a message the relay filed elsewhere:
+it is kept under `damaged/` with the cause word `misfiled`, the warning says
+`relay message N was filed under "a" by relay.example.com but is sealed for
+"b"; it was kept as PATH`, and it is acknowledged like the other kept
+messages, so the mailbox is not blocked. A relay from before channels lists
+no channel, and the sealed record alone decides.
+
+### A large message
+
+Above 64 KiB, `auu send` stops building one envelope and builds a stream. It is
+one HPKE context and a run of sealed chunks: the manifest first, saying what
+the message is and what each file must hash to, then the file bytes.
+
+On the wire a stream is, in order: `enc`, the 1120-byte X-Wing encapsulation;
+`len0`, four bytes saying how long the manifest is; chunk 0, sealed, holding
+the signature and the manifest (subject, text, file names, sizes and SHA-256
+hashes); then file bytes in sealed chunks of 63 KiB; and a last chunk sealed
+under the label `final`, after which nothing may follow.
+
+Three things fall out of that shape:
+
+- **The last chunk is sealed under a different label.** Cut a stream short and
+  the chunk the receiver expects to be the last one will not open. Truncation
+  is caught by the cipher, not by a length field somebody could lie about.
+- **Chunk 0 is enough to decide.** A receiver fetches 1124 bytes plus the
+  manifest, learns who sent it and how big it is, and only then agrees to
+  download the rest. A stranger cannot make anybody pull two gigabytes.
+- **Nothing is ever held whole.** The sender seals a chunk at a time, the relay
+  writes a request at a time, the receiver decrypts a chunk at a time and
+  writes it straight to a file. Sending a 2 GB file costs about 20 MiB of
+  memory at each end.
+
+An interrupted upload resumes: the sealed copy stays in `outbox/` and
+`auu send --resume` carries on from the byte the relay already has. That is
+also why sending seals to disk first — the nonce counter inside an HPKE context
+only goes forwards, so a chunk that was lost could never be sealed the same way
+twice. A relay whose disk fills part way through is the same case: it answers
+`507`, keeps what it has, and `auu send` says the upload is kept and to resume
+it when there is room.
 
 ## On the use of AI
 
