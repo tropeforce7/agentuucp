@@ -52,6 +52,10 @@ First, what the kit needs: the relay built for the host, and at least one
 administrator's export line, since a relay whose registration is `token`
 can issue none without an administrator.
 
+Ask the host which processor it has before building: `ssh HOST uname -m`
+answers `x86_64` (Intel or AMD, Go's `amd64`) or `aarch64` (ARM, Go's
+`arm64`), and a binary built for one will not run on the other.
+
 ```
 make relay-linux                                  # bin/linux_amd64/auu-relay; ARCH=arm64 for ARM
 auu id export > admins                            # the administrator's own line, on their machine

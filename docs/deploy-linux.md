@@ -27,26 +27,94 @@ Where things end up:
 The two files under `docs/systemd/` are the unit and the settings as used
 below, ready to copy.
 
+## 0. Install Go 1.27 or later, on your own machine
+
+The relay is built on your own machine in step 1 and copied to the host, so
+the host never needs Go. Your machine does, and it needs Go 1.27 or later,
+for `crypto/hpke` and `crypto/mldsa` in the standard library. See what you
+have:
+
+```
+go version
+```
+
+The Go a distribution packages is usually a year or more behind, so on Linux
+take the official archive from [go.dev/dl](https://go.dev/dl/) instead. Pick
+the file for the processor in *this* machine, the one you build on, which
+`uname -m` names as in step 1: `linux-amd64` for `x86_64`, `linux-arm64`
+for `aarch64`. With the version current at the time of writing:
+
+```
+curl -fsSLO https://go.dev/dl/go1.27.1.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.27.1.linux-amd64.tar.gz
+export PATH=/usr/local/go/bin:$PATH        # and the same line in ~/.bashrc or ~/.zshrc
+go version                                 # go version go1.27.1 linux/amd64
+```
+
+The `rm -rf` is Go's own instruction: unpacking a new archive over an old
+tree leaves stale files behind. On macOS, `brew install go` or the package
+from the same page; on Windows, the installer from the same page. Any newer
+Go is fine. A Go older than 1.27 but from 1.21 on will fetch 1.27 by itself
+the first time it builds this module, which is slower once and then the
+same, so an older Go is not fatal; one older than 1.21 is, and says so.
+
+On a Linux machine, `scripts/install.sh` does all of this for you, installing
+Go only when what is there is below 1.27, and `--relay` has it build
+`auu-relay` as well as the client tools; the README's install section has
+its curl line.
+
 ## 1. Build the binary, on your own machine
 
 The relay is pure Go with no C dependencies, so it cross-compiles to a single
-static binary and the server needs no Go toolchain at all. A distribution's
-packaged Go is too old for `crypto/hpke` anyway; this needs Go 1.27.
+static binary and the server needs no Go toolchain at all; section 0 puts Go
+on your own machine.
+
+A binary is built for one kind of processor and will not run on another:
+a relay built for an Intel or AMD server is a file the ARM processor in a
+Raspberry Pi or a Graviton instance cannot execute, and the other way round,
+and Linux says only `Exec format error` when you try. So find out which the
+host is first, from the host itself:
+
+```
+ssh you@relay.example.com uname -m
+```
+
+`x86_64` is Intel or AMD, and Go calls it `amd64`. `aarch64` is ARM, and Go
+calls it `arm64`. Then build on your own machine for that processor, whatever
+your own machine is, and copy the result across.
+
+For an Intel or AMD host, one that said `x86_64`:
 
 ```
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o auu-relay ./cmd/auu-relay
 scp auu-relay you@relay.example.com:
 ```
 
-Use `GOARCH=arm64` for an ARM host. Without a clone, `go install` can build it
-straight from the module; when cross-compiling, Go puts the result under a
-platform directory rather than in `GOBIN`:
+For an ARM host, one that said `aarch64`:
+
+```
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o auu-relay ./cmd/auu-relay
+scp auu-relay you@relay.example.com:
+```
+
+The only difference is `GOARCH`. From a clone, `make relay-linux` is the
+first of these and `make relay-linux ARCH=arm64` the second, each putting
+the binary under `bin/linux_amd64/` or `bin/linux_arm64/` so the two never
+overwrite each other. To check what you built before you copy it, `file
+auu-relay` names the processor, and on the host `./auu-relay --version`
+either prints the version or fails with the error above.
+
+Without a clone, `go install` can build it straight from the module; when
+cross-compiling, Go puts the result under a platform directory rather than
+in `GOBIN`:
 
 ```
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
   go install github.com/tropeforce7/agentuucp/cmd/auu-relay@latest
 scp "$(go env GOPATH)/bin/linux_amd64/auu-relay" you@relay.example.com:
 ```
+
+For ARM, `GOARCH=arm64` and the directory is `linux_arm64`.
 
 On the server itself, `scripts/install.sh --relay` builds the same binary
 there and installs Go first if the host has none new enough — one command
