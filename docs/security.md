@@ -12,7 +12,11 @@ wrote and published to every sender they admit; it is there because the
 relay routes by it, refusing a post to a channel that does not exist or is
 not open before the message is stored, and the owner chooses what the labels
 say. The message itself is a file beside the database, which an operator can
-list, count and delete but not read.
+list, count and delete but not read. Every value the relay puts to that
+database — a fingerprint, a channel name, a token id, a reason — goes as a
+query parameter, never into the text of a query, and a test
+(`internal/sqlshape`) parses the tree and fails on any query whose text is
+not a constant.
 
 Since a channel keeps its mail by default, that ciphertext now stays until
 its owner removes it rather than until they read it. The relay learns
