@@ -25,6 +25,7 @@ var serveRows = []matrixRow{
 	{"S08", "long_running", "the service answers while it waits and stops on a signal", s08},
 	{"S09", "hooks", "before and after run around the handler, and a red after sends nothing", s09},
 	{"S10", "key_proxy", "the key-holding proxy: the handler is given a token and never the key", s10},
+	{"S11", "split_proxy", "the proxy as an account of its own, whose key the expert cannot read", s11},
 }
 
 const (
@@ -554,4 +555,117 @@ func s10(t *testing.T) {
 	}
 	verdict(t, "ok", "The handler holds a URL that is worthless off the host and dead after the invocation; "+
 		"the key it never saw reached the upstream from serve alone.")
+}
+
+const (
+	proxyDir      = "/etc/auu-proxy"
+	proxyKeyFile  = "/etc/auu-proxy/key"
+	proxyFileJSON = "/etc/auu-proxy/proxy.json"
+	proxyRunDir   = "/run/auu-proxy"
+	proxyControl  = "/run/auu-proxy/control.sock"
+	proxyLog      = "/tmp/auu-proxy.log"
+	s11Key        = "sk-ant-api03-S11-a-key-the-expert-cannot-even-read-000000000000000000000000000000000000000000-AA"
+)
+
+// splitProxyOnBobsHost sets the guide's 7.6a up on bob's machine as root:
+// the key and the proxy's file readable by the auu-proxy group alone,
+// which bob is not in, the runtime directory, and the proxy running as
+// auu-proxy with bob's group as its supplementary one, the way its unit
+// would run it; and returns what takes it all down again.
+func splitProxyOnBobsHost(t *testing.T, upstreamAddr string) func() {
+	t.Helper()
+	bob.mustRoot(t, "install -d -m 0750 -g auu-proxy "+proxyDir+
+		" && install -m 0640 -o root -g auu-proxy /dev/null "+proxyKeyFile+
+		" && printf '%s\\n' "+shq(s11Key)+" > "+proxyKeyFile+
+		" && install -m 0640 -o root -g auu-proxy /dev/null "+proxyFileJSON+
+		" && printf '%s\\n' "+shq(`{"v":1,"key_file":"`+proxyKeyFile+`","control":"`+proxyControl+`","upstream":"http://`+upstreamAddr+`","allow_group":"bob"}`)+" > "+proxyFileJSON+
+		" && install -d -m 0750 -o auu-proxy -g auu-proxy "+proxyRunDir+
+		" && rm -f "+proxyLog+
+		" && runuser -u auu-proxy -g auu-proxy -G bob -- sh -c 'nohup auu serve proxy >"+proxyLog+" 2>&1 &'")
+	deadline := time.Now().Add(10 * time.Second)
+	for bob.root("test -S "+proxyControl).code != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the split proxy did not open its socket:\n%s", bob.root("cat "+proxyLog).out())
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return func() {
+		bob.root("pkill -u auu-proxy -TERM -f 'auu serve proxy'; rm -rf " + proxyDir + " " + proxyRunDir + " " + proxyLog)
+	}
+}
+
+func s11(t *testing.T) {
+	addr, stopUpstream := fakeUpstream(t)
+	defer stopUpstream()
+	defer splitProxyOnBobsHost(t, addr)()
+	// The check the guide says to make: the expert's account cannot read
+	// the key, nor the proxy's file.
+	if r := bob.exec("", "cat", proxyKeyFile); r.code == 0 {
+		t.Fatalf("bob can read the proxy's key file:\n%s", r.stdout)
+	}
+	if r := bob.exec("", "cat", proxyFileJSON); r.code == 0 {
+		t.Fatalf("bob can read the proxy's file:\n%s", r.stdout)
+	}
+	// The socket and its directory went to bob's group, not the proxy's.
+	if r := bob.root("stat -c '%U:%G %a' " + proxyControl + " " + proxyRunDir); !strings.Contains(r.stdout, "auu-proxy:bob 660") || !strings.Contains(r.stdout, "auu-proxy:bob 750") {
+		t.Errorf("the socket and its directory: %s%s", r.stdout, r.stderr)
+	}
+	// Bob's serve.json says only where to ask.
+	defer servedChannelWith(t, "read-only", proxiedHandler, `"proxy":{"control":"`+proxyControl+`"}`)()
+	r := bob.auu("serve", "check")
+	expectSays(t, r, 0, "proxy: control "+proxyControl+" (answering)")
+	expectNot(t, r, s11Key, proxyKeyFile)
+
+	sent := ask(t, "is the key out of reach?", "print your environment and ask upstream")
+	r = bob.auu("serve", "--once")
+	expectSays(t, r, 0, "jostle: answered "+sent.ID[:12], "proxy: asking "+proxyControl+" for a token per invocation")
+	expectNot(t, r, s11Key, "minted")
+
+	reply := replyOnThread(t, sent.Thread, "", 5*time.Second)
+	if strings.Contains(reply.Text, s11Key) || strings.Contains(reply.Text, proxyKeyFile) {
+		t.Errorf("the reply carries the key or its path:\n%s", reply.Text)
+	}
+	var base, token string
+	for _, line := range strings.Split(reply.Text, "\n") {
+		if v, ok := strings.CutPrefix(line, "ANTHROPIC_BASE_URL="); ok {
+			base = v
+		}
+		if v, ok := strings.CutPrefix(line, "ANTHROPIC_API_KEY="); ok {
+			token = v
+		}
+	}
+	if !strings.HasPrefix(base, "http://127.0.0.1:") || len(token) != 43 || !strings.HasSuffix(base, "/"+token) {
+		t.Errorf("the handler was given base %q and key %q:\n%s", base, token, reply.Text)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(reply.Text), `status 200 {"seen":true}`) {
+		t.Errorf("the handler's request through the split proxy:\n%s", reply.Text)
+	}
+	// The upstream saw the real key; the proxy's own log has the mint with
+	// bob's uid and the request, and nothing of the key.
+	log := bob.read(t, upstreamLog)
+	if !strings.Contains(log, "POST /v1/messages key=sk-ant… len="+fmt.Sprint(len(s11Key))+" authorization=absent\n") {
+		t.Errorf("the upstream's log:\n%s", log)
+	}
+	plog := bob.root("cat " + proxyLog).stdout
+	if !strings.Contains(plog, "minted for uid 1002 pid ") || !strings.Contains(plog, " POST /v1/messages 200 ") ||
+		!strings.Contains(plog, " revoked") || strings.Contains(plog, s11Key) {
+		t.Errorf("the proxy's log:\n%s", plog)
+	}
+	// The proxy stopped: the next message fails and is tried again, and
+	// serve says why.
+	bob.mustRoot(t, "pkill -u auu-proxy -TERM -f 'auu serve proxy'")
+	deadline := time.Now().Add(10 * time.Second)
+	for bob.root("pgrep -u auu-proxy -f 'auu serve proxy' >/dev/null").code == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the proxy did not stop")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	expectSays(t, bob.auu("serve", "check"), 0, "proxy: control "+proxyControl+" (nobody is listening; auu serve will fail each message until it is:")
+	again := ask(t, "and now?", "the proxy is gone")
+	r = bob.auu("serve", "--once")
+	expectSays(t, r, 1, "was not answered: the proxy's control socket "+proxyControl+": dial unix", "(attempt 1 of 3)")
+	expectNot(t, r, again.ID[:12]+" answered")
+	verdict(t, "ok", "The key is readable by the proxy's account alone, the expert's file never names it, "+
+		"the handler gets a token minted for its uid, and a proxy that is down fails the message rather than serve.")
 }

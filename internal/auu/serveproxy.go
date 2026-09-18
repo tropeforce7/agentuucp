@@ -97,10 +97,13 @@ func (p *proxyConfig) fill() {
 	}
 }
 
-// check is every rule the section must satisfy, without listening or
-// reading the key: one of key_file and control and not both, a loopback
-// listen, an https upstream unless it is loopback too. The split proxy's
-// keys are refused until the release that has it.
+// check is every rule the expert's section must satisfy, without
+// listening or reading the key: one of key_file and control and not
+// both, since key_file is the proxy in this process and control is one
+// running apart as another account, whose own file holds the rest; a
+// loopback listen; an https upstream unless it is loopback too. In split
+// mode the expert's file names neither the key nor who may ask for
+// tokens: the handler can read this file, and learns nothing from it.
 func (p *proxyConfig) check(cfg *serveConfig) error {
 	perr := func(format string, a ...any) error {
 		return usageErrf("%s: proxy: %s", cfg.path, fmt.Sprintf(format, a...))
@@ -111,12 +114,25 @@ func (p *proxyConfig) check(cfg *serveConfig) error {
 		return perr("key_file and control are both set; key_file is the proxy in this process and control is one running apart, and it is one or the other")
 	case !hasKey && !hasControl:
 		return perr("one of key_file and control is required; a proxy section with neither holds no key and asks nobody for one")
-	case hasControl:
-		return perr("control names the split proxy, which is not in this release; use key_file")
 	}
 	if len(p.AllowUIDs) > 0 || p.AllowGroup != "" {
-		return perr("allow_uids and allow_group belong to the split proxy, which control names; they mean nothing with key_file")
+		return perr("allow_uids and allow_group belong to the split proxy's own file, %s; they mean nothing here", defaultProxyFile)
 	}
+	if hasControl {
+		// The addresses are the proxy process's business; this file says
+		// only where to ask.
+		if p.Listen != defaultProxyListen || p.Upstream != defaultProxyUpstream {
+			return perr("listen and upstream belong to the split proxy's own file, %s, when control is set", defaultProxyFile)
+		}
+		return nil
+	}
+	return p.checkAddresses(perr)
+}
+
+// checkAddresses is the rule for listen and upstream, in whichever file
+// they are: a loopback listen, and an https upstream unless it is on this
+// host too.
+func (p *proxyConfig) checkAddresses(perr func(string, ...any) error) error {
 	host, _, err := net.SplitHostPort(p.Listen)
 	if err != nil {
 		return perr("listen %q is not host:port (%v)", p.Listen, err)
@@ -241,9 +257,11 @@ func (p *keyProxy) Close() error {
 }
 
 // mint issues a token for one invocation and returns it with the base URL
-// the handler is given. The seventeenth live token is refused: serve is
-// serial, and sixteen live at once is a bug somewhere, not a load.
-func (p *keyProxy) mint() (token, baseURL string, err error) {
+// the handler is given. by is what the log line says after "minted": who
+// asked, on the control socket, and nothing in-process. The seventeenth
+// live token is refused: serve is serial, and sixteen live at once is a
+// bug somewhere, not a load.
+func (p *keyProxy) mint(by string) (token, baseURL string, err error) {
 	raw := make([]byte, tokenBytes)
 	if _, err := rand.Read(raw); err != nil {
 		return "", "", fmt.Errorf("proxy: drawing a token: %v", err)
@@ -255,7 +273,7 @@ func (p *keyProxy) mint() (token, baseURL string, err error) {
 		return "", "", fmt.Errorf("proxy: %d tokens are live, which is the cap; nothing was issued", len(p.live))
 	}
 	p.live[token] = true
-	p.logf("proxy: token %s minted", tokenTag(token))
+	p.logf("proxy: token %s minted%s", tokenTag(token), by)
 	return token, p.base + "/" + token, nil
 }
 

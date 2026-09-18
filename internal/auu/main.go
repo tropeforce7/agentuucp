@@ -96,6 +96,7 @@ Usage:
   auu serve [--once] [--backlog] [--config FILE] [--json]   # answer a channel for a project
   auu serve check [--config FILE]     # read serve.json and say what it would serve
   auu serve ls [--config FILE] [--json]   # what is served, and the threads it is holding
+  auu serve proxy [--config FILE]     # the key-holding proxy as its own process, for another account
 
   auu quarantine ls [--json]
   auu quarantine show MESSAGE-ID [--json]

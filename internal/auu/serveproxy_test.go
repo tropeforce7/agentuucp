@@ -118,7 +118,7 @@ func call(t *testing.T, method, rawURL, body string, headers map[string]string) 
 func TestProxyForwardsUnderALiveTokenAndRefusesTheRest(t *testing.T) {
 	up := newUpstream(t)
 	p, logs := proxyFor(t, up)
-	token, base, err := p.mint()
+	token, base, err := p.mint("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestProxyStreamsChunkByChunk(t *testing.T) {
 	}))
 	defer up.Close()
 	p, _ := proxyFor(t, up)
-	_, base, err := p.mint()
+	_, base, err := p.mint("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestProxyTokensAreDistinctAndCapped(t *testing.T) {
 	seen := map[string]bool{}
 	var tokens []string
 	for i := range maxLiveTokens {
-		token, _, err := p.mint()
+		token, _, err := p.mint("")
 		if err != nil {
 			t.Fatalf("mint %d: %v", i+1, err)
 		}
@@ -243,11 +243,11 @@ func TestProxyTokensAreDistinctAndCapped(t *testing.T) {
 		seen[token] = true
 		tokens = append(tokens, token)
 	}
-	if _, _, err := p.mint(); err == nil || !strings.Contains(err.Error(), "16 tokens are live, which is the cap") {
+	if _, _, err := p.mint(""); err == nil || !strings.Contains(err.Error(), "16 tokens are live, which is the cap") {
 		t.Fatalf("the seventeenth mint: %v", err)
 	}
 	p.revoke(tokens[0])
-	if _, _, err := p.mint(); err != nil {
+	if _, _, err := p.mint(""); err != nil {
 		t.Fatalf("a mint after a revoke: %v", err)
 	}
 	if p.state(tokens[0]) != "revoked token" || p.state(tokens[1]) != "live" || p.state("nothing") != "unknown token" {
@@ -446,10 +446,12 @@ func TestServeCheckSaysTheProxyLineAndRefusesBadSections(t *testing.T) {
 			"proxy: key_file and control are both set; key_file is the proxy in this process and control is one running apart, and it is one or the other"},
 		{"neither", proxyConfig{},
 			"proxy: one of key_file and control is required; a proxy section with neither holds no key and asks nobody for one"},
-		{"control alone", proxyConfig{Control: "/run/auu-proxy/control.sock"},
-			"proxy: control names the split proxy, which is not in this release; use key_file"},
 		{"allow_group with key_file", proxyConfig{KeyFile: keyFile, AllowGroup: "auu-expert"},
-			"proxy: allow_uids and allow_group belong to the split proxy, which control names; they mean nothing with key_file"},
+			"proxy: allow_uids and allow_group belong to the split proxy's own file, /etc/auu-proxy/proxy.json; they mean nothing here"},
+		{"allow_uids with control", proxyConfig{Control: "/run/auu-proxy/control.sock", AllowUIDs: []int{1000}},
+			"proxy: allow_uids and allow_group belong to the split proxy's own file, /etc/auu-proxy/proxy.json; they mean nothing here"},
+		{"listen with control", proxyConfig{Control: "/run/auu-proxy/control.sock", Listen: "127.0.0.1:9000"},
+			"proxy: listen and upstream belong to the split proxy's own file, /etc/auu-proxy/proxy.json, when control is set"},
 	} {
 		t.Run(c.label, func(t *testing.T) {
 			cfg := c.proxy

@@ -278,7 +278,7 @@ are two ways:
   `serve.json`, which the handler can also read, so the defence is not
   obscurity; and the model has a shell only in side-copy mode. For a host
   where that is not enough, the proxy runs as an account of its own, with
-  the key readable by it alone; that is the next release's 7.6a.
+  the key readable by it alone; that is 7.6a.
 
 - **An interactive sign-in**, once, as the account:
   `sudo -u auu-expert -H claude`. It prints a URL to open on any machine
@@ -467,6 +467,133 @@ The journal is serve's standard error: the round-by-round record, each
 handler's stderr with the thread's short id in front, and every warning.
 Send the expert an ask from a peer and watch the reply go out.
 
+### 7.6a The proxy as an account of its own
+
+7.2 said what the in-process proxy cannot do: the handler is the same
+account as serve, so a shell that is told where the key file is can read
+it. The split proxy closes that. The key is readable by one account,
+`auu-proxy`, whose only job is to hold it and to hand `auu serve` a token
+per invocation over a Unix socket; the expert's account never holds the
+key, cannot read the file, and does not even know its path.
+
+The account, the directory, the key and the proxy's file:
+
+```
+useradd --system --home-dir /nonexistent --no-create-home \
+  --shell /usr/sbin/nologin --user-group auu-proxy
+install -d -m 0750 -g auu-proxy /etc/auu-proxy
+install -m 0640 -o root -g auu-proxy /dev/null /etc/auu-proxy/key
+printf '%s\n' 'sk-ant-...' > /etc/auu-proxy/key
+install -m 0640 -o root -g auu-proxy /dev/null /etc/auu-proxy/proxy.json
+cat > /etc/auu-proxy/proxy.json <<'END'
+{
+  "v": 1,
+  "key_file": "/etc/auu-proxy/key",
+  "control": "/run/auu-proxy/control.sock",
+  "allow_group": "auu-expert"
+}
+END
+```
+
+Everything in `/etc/auu-proxy` is the proxy's group's to read and nobody
+else's, and the expert's account is **not** put in that group: a caller
+admitted to the proxy's group to reach the socket would be in the group
+that may read the key, which is the whole of what this section exists to
+prevent. Instead the socket is given to the callers' group: `allow_group`
+names it, the proxy makes the socket (and its directory) that group's,
+0660 in a directory 0750, and the unit below puts the proxy in that
+group so it may. Two lines then admit the expert — the file mode, and
+the kernel's account of who is asking — and neither touches the key.
+`sudo -u auu-expert cat /etc/auu-proxy/key` must say permission denied,
+and that is the check to make before going on. Remove the in-process key
+file of 7.2 if you made one; the expert's `serve.json` now says only
+where to ask:
+
+```json
+"proxy": { "control": "/run/auu-proxy/control.sock" }
+```
+
+The unit, `/etc/systemd/system/auu-proxy.service`:
+
+```ini
+# auu-proxy: the key-holding proxy for an AgentUUCP expert host, as its
+# own account. It holds the API key and hands 'auu serve' a token per
+# invocation over /run/auu-proxy/control.sock; the expert's account
+# never reads the key.
+
+[Unit]
+Description=AgentUUCP key-holding proxy
+Documentation=https://github.com/tropeforce7/agentuucp
+After=network-online.target
+Wants=network-online.target
+Before=auu-serve.service
+
+[Service]
+Type=simple
+User=auu-proxy
+Group=auu-proxy
+# The expert's group, so the proxy may give the control socket to it;
+# the proxy's own group stays the one that may read the key.
+SupplementaryGroups=auu-expert
+ExecStart=/usr/local/bin/auu serve proxy
+# The socket's directory, made 0750 for the proxy's account; the proxy
+# gives it to the expert's group at start.
+RuntimeDirectory=auu-proxy
+RuntimeDirectoryMode=0750
+KillSignal=SIGTERM
+TimeoutStopSec=10
+Restart=always
+RestartSec=5
+
+# Confinement, as the relay's unit has it: a static Go binary that reads
+# two files, listens on loopback and a socket, and talks to Anthropic.
+NoNewPrivileges=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```
+systemctl daemon-reload
+systemctl enable --now auu-proxy
+systemctl status auu-proxy
+sudo -u auu-expert -H auu serve check
+systemctl restart auu-serve
+```
+
+The proxy's journal says at start what it holds, where it listens, and
+who may ask: `proxy: holding the key from /etc/auu-proxy/key, listening
+on 127.0.0.1:PORT, upstream https://api.anthropic.com; tokens on
+/run/auu-proxy/control.sock for group auu-expert`. The expert's `check`
+must then say `proxy: control /run/auu-proxy/control.sock (answering)`.
+From here on every mint is one line in the proxy's journal with the
+expert's uid and pid, every request through it another, and a refused
+caller another; the serve journal says only that it asked. A stop of the
+proxy fails each message serve tries until it is back — `the proxy's
+control socket /run/auu-proxy/control.sock: ...` in serve's journal, the
+message tried again next round — and never stops serve. This unit, like
+the serve unit, has been checked against systemd's documentation and not
+yet started on a live host: watch the first `systemctl status`.
+
 ### 7.7 A second relay, and a second identity
 
 Two questions come up as soon as an expert is useful to more than one
@@ -569,9 +696,10 @@ not be able to see each other's files at all.
 - **A thread's side copy:** under `/var/lib/auu-expert/.auu/serve/worktrees`,
   by thread id, until nothing has touched it for the channel's
   `thread_ttl`. It is the account's; look, do not edit.
-- **Rotating the key:** a new key in `/etc/auu-expert/key` and a restart,
-  since serve reads the file once at start. Revoking the old one is what
-  stops an expert whose host you have lost.
+- **Rotating the key:** a new key in `/etc/auu-expert/key` and a restart
+  of `auu-serve`, or with the split proxy a new key in `/etc/auu-proxy/key`
+  and a restart of `auu-proxy`, since each reads its file once at start.
+  Revoking the old one is what stops an expert whose host you have lost.
 - **Removing the expert:** `systemctl disable --now auu-serve`, delete the
   unit, `auu channel delete NAME` for each served channel as the account
   (askers see the channel go), and then `userdel -r auu-expert`, which

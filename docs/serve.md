@@ -424,10 +424,75 @@ with what it was given; it does not stop a handler with a shell that knows
 the file's path and is told to `cat` it. Two things narrow that: the key
 file's path is in `serve.json`, which the handler can also read, so the
 defence is not obscurity; and the model's shell is only there in side-copy
-mode. For a host where that is not enough, the proxy can run apart, as
-another account, with the key out of the handler's reach altogether: `auu
-serve proxy`, the `control` key and its unit are the next release's, and
-`docs/creating-experts.md` will carry them.
+mode. For a host where that is not enough, the proxy runs apart, as
+another account, with the key out of the handler's reach altogether; that
+is the split proxy below.
+
+The outbound connection honours `HTTPS_PROXY` from serve's environment, as
+a host behind a corporate proxy needs; the key travels inside TLS to
+Anthropic whichever way the connection goes.
+
+### The split proxy
+
+`auu serve proxy [--config FILE]` is the same proxy as its own process,
+meant to run as a second system account (`auu-proxy`) under its own unit,
+with a file of its own — `/etc/auu-proxy/proxy.json` unless `--config`
+names another — that holds the section's keys at the top level:
+
+```json
+{
+  "v": 1,
+  "key_file": "/etc/auu-proxy/key",
+  "control": "/run/auu-proxy/control.sock",
+  "listen": "127.0.0.1:0",
+  "upstream": "https://api.anthropic.com",
+  "allow_uids": [],
+  "allow_group": ""
+}
+```
+
+`key_file` and `control` are both required there, the key file readable by
+the proxy's account alone; `listen` and `upstream` are as above. The
+expert's `serve.json` then carries `"proxy": {"control":
+"/run/auu-proxy/control.sock"}` and nothing else: not the key file's path,
+not who may ask, so the handler, which can read that file, learns nothing
+of the key from it. `key_file` beside `control` in the expert's file is
+refused, as are `listen`, `upstream` and the allow keys, which belong to
+the proxy's own file.
+
+`control` is a Unix socket, mode 0660 in a directory 0750, on which a
+caller asks for a token. Who may ask is decided by the kernel's own
+account of the caller: its uid is in `allow_uids`, or its primary group is
+`allow_group`, or that group is among the groups the account database
+lists for it; with neither key set, the proxy's own primary group. Any
+other caller is closed before a byte is read, and logged with its uid and
+pid. Being able to reach the socket at all is the file mode's business,
+and the proxy gives the socket, and the directory when it is the proxy's,
+to `allow_group` at start — the callers' group, never the proxy's, since
+a caller put in the proxy's group could read the key file; the proxy's
+unit puts it in the callers' group so that it may. The protocol is one line each way, and `nc -U` speaks it: `PING`
+answers `OK`; `MINT` answers `OK http://127.0.0.1:PORT/TOKEN`, and the
+token lives for as long as that connection does — a `REVOKE TOKEN` on it
+ends it early, and so does simply closing it, so a serve that dies
+mid-invocation takes its token with it; a second `MINT` on one connection,
+or anything else, is `ERR` and a close. Every mint is logged on the
+proxy's own standard error with the caller's uid and pid, and its requests
+and refusals are logged there too, in the lines above; serve's own log
+says only that it asked, and where. The handler, being the same uid as
+serve, can also ask the socket for a token; what that buys is more use of
+the same key, never the key.
+
+`auu serve` with `control` set in its file asks the socket for a token per
+invocation, on a connection it holds for the run and closes after, and
+runs no proxy of its own. `auu serve check` then says `proxy: control PATH
+(answering)`, or `(nobody is listening; auu serve will fail each message
+until it is: ...)` with the dial's reason. A socket nobody answers on, or
+one that refuses serve's uid, is the message's failure — `the proxy's
+control socket PATH: ...` in the round's report and the ledger — tried
+again next round like any other, and serve goes on.
+
+`docs/creating-experts.md` section 7.6a is the account, the unit and the
+file, end to end.
 
 What the proxy does not do: it does not read or alter request or response
 bodies, count tokens, or enforce a budget. A per-channel or per-day budget

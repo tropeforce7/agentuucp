@@ -47,9 +47,10 @@ type serveRun struct {
 	// unreachable says the last fetch reached no relay at all, so that the
 	// sentence about it is said once per run of failures.
 	unreachable bool
-	// proxy holds the API key for the handler, or is nil for a host whose
-	// serve.json has no proxy section.
-	proxy *keyProxy
+	// source is where a token for the handler comes from: the proxy in
+	// this process, or the split proxy over its control socket; nil for a
+	// host whose serve.json has no proxy section.
+	source tokenSource
 }
 
 // roundJSON is one round as --json gives it.
@@ -81,8 +82,10 @@ func cmdServe(args []string) error {
 		return serveCheck(*config)
 	case len(positional) == 1 && positional[0] == "ls":
 		return serveLs(*config, *asJSON)
+	case len(positional) == 1 && positional[0] == "proxy":
+		return serveProxy(*config)
 	case len(positional) > 0:
-		return usageErrf("usage: %s serve [--once] [--backlog] [--config FILE] [--json], or %s serve check|ls", prog, prog)
+		return usageErrf("usage: %s serve [--once] [--backlog] [--config FILE] [--json], or %s serve check|ls|proxy", prog, prog)
 	}
 
 	s, err := openStore()
@@ -131,21 +134,30 @@ func cmdServe(args []string) error {
 	defer stop()
 
 	run := &serveRun{s: s, id: id, cfg: cfg, led: led, root: root, asJSON: *asJSON}
-	if cfg.Proxy != nil {
+	switch {
+	case cfg.Proxy == nil:
+	case cfg.Proxy.Control != "":
+		// The split proxy, another account's process: a token is asked
+		// for per invocation, and nothing about the key is here.
+		run.source = &controlSource{path: cfg.Proxy.Control}
+		fmt.Fprintf(os.Stderr, "%s: proxy: asking %s for a token per invocation\n", prog, cfg.Proxy.Control)
+	default:
 		// The key is read once, here, under the lock, and lives in this
 		// process alone; the file is not read again.
 		key, err := readKeyFile(cfg.Proxy.KeyFile)
 		if err != nil {
 			return err
 		}
-		if run.proxy, err = startKeyProxy(cfg.Proxy, key, func(format string, a ...any) {
+		proxy, err := startKeyProxy(cfg.Proxy, key, func(format string, a ...any) {
 			fmt.Fprintf(os.Stderr, prog+": "+format+"\n", a...)
-		}); err != nil {
+		})
+		if err != nil {
 			return err
 		}
-		defer run.proxy.Close()
+		defer proxy.Close()
+		run.source = inProcess{proxy}
 		fmt.Fprintf(os.Stderr, "%s: proxy: holding the key from %s, listening on %s, upstream %s\n",
-			prog, cfg.Proxy.KeyFile, run.proxy.ln.Addr(), cfg.Proxy.Upstream)
+			prog, cfg.Proxy.KeyFile, proxy.ln.Addr(), cfg.Proxy.Upstream)
 	}
 	if *once {
 		return run.once(ctx, *backlog)
@@ -518,10 +530,9 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 	// after it exits and before the after hook runs, so the hooks never
 	// hold one. A token the proxy will not issue is the handler's failure.
 	env := facts.env(true, "")
-	var token string
-	if r.proxy != nil {
-		var baseURL string
-		token, baseURL, err = r.proxy.mint()
+	release := func() {}
+	if r.source != nil {
+		token, baseURL, rel, err := r.source.mint()
 		if err != nil {
 			stdin.Close()
 			stdout.Close()
@@ -529,12 +540,11 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 			r.failed(m, ch, err.Error())
 			return nil
 		}
+		release = rel
 		env = append(env, envBaseURL+"="+baseURL, envAPIKey+"="+token)
 	}
 	run, runErr := runProgram(ctx, ch.Exec, worktree, env, stdin, stdout, stderr, ch.timeout)
-	if r.proxy != nil {
-		r.proxy.revoke(token)
-	}
+	release()
 	stdin.Close()
 	stdout.Close()
 	stderr.Close()
@@ -802,7 +812,17 @@ func serveCheck(config string) error {
 		fmt.Printf("  limits:  timeout %s, max_turns %d, retries %d, thread_ttl %s\n",
 			ch.timeout, ch.MaxTurns, ch.Retries, ch.threadTTL)
 	}
-	if cfg.Proxy != nil {
+	switch {
+	case cfg.Proxy == nil:
+	case cfg.Proxy.Control != "":
+		// The split proxy is asked whether it is there, and nothing more.
+		if err := (&controlSource{path: cfg.Proxy.Control}).ping(); err != nil {
+			fmt.Printf("\nproxy: control %s (nobody is listening; %s serve will fail each message until it is: %v)\n",
+				cfg.Proxy.Control, prog, err)
+		} else {
+			fmt.Printf("\nproxy: control %s (answering)\n", cfg.Proxy.Control)
+		}
+	default:
 		// The key is read for its size and nothing else is said of it.
 		key, err := readKeyFile(cfg.Proxy.KeyFile)
 		if err != nil {

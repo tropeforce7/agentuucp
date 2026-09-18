@@ -6,14 +6,16 @@ import (
 	"syscall"
 )
 
-// peerUID is the uid of the process at the other end of a Unix socket, from
-// SO_PEERCRED: the kernel's answer, not the peer's claim.
-func peerUID(conn *net.UnixConn) (int, error) {
+// peerCred is the credentials of the process at the other end of a Unix
+// socket, from SO_PEERCRED: the kernel's answer, not the peer's claim. It
+// carries the uid, the primary gid and the pid; the supplementary groups
+// are not in it, and a caller that wants them reads them through os/user.
+func peerCred(conn *net.UnixConn) (Cred, error) {
 	raw, err := conn.SyscallConn()
 	if err != nil {
-		return -1, err
+		return Cred{UID: -1, GID: -1, PID: -1}, err
 	}
-	uid := -1
+	c := Cred{UID: -1, GID: -1, PID: -1}
 	var gerr error
 	if err := raw.Control(func(fd uintptr) {
 		cred, err := syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
@@ -21,9 +23,9 @@ func peerUID(conn *net.UnixConn) (int, error) {
 			gerr = fmt.Errorf("agent: SO_PEERCRED: %w", err)
 			return
 		}
-		uid = int(cred.Uid)
+		c = Cred{UID: int(cred.Uid), GID: int(cred.Gid), PID: int(cred.Pid)}
 	}); err != nil {
-		return -1, err
+		return Cred{UID: -1, GID: -1, PID: -1}, err
 	}
-	return uid, gerr
+	return c, gerr
 }

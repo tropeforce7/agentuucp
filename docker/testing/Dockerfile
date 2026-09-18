@@ -25,13 +25,16 @@ FROM debian:13-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends util-linux procps sqlite3 git \
  && rm -rf /var/lib/apt/lists/*
-# The relay's user, as the guide creates it, and three people: the operator
-# (called "you", as the guide addresses them) and two users.
+# The relay's user, as the guide creates it, three people — the operator
+# (called "you", as the guide addresses them) and two users — and the
+# key-holding proxy's account, as the expert guide's 7.6a creates it.
 RUN useradd --system --home-dir /var/lib/auu --no-create-home \
       --shell /usr/sbin/nologin --user-group auu \
  && useradd --create-home --uid 1000 --shell /bin/bash you \
  && useradd --create-home --uid 1001 --shell /bin/bash alice \
  && useradd --create-home --uid 1002 --shell /bin/bash bob \
+ && useradd --system --home-dir /nonexistent --no-create-home \
+      --shell /usr/sbin/nologin --user-group auu-proxy \
  && install -d -m 0755 /etc/auu /etc/auu/delivered
 COPY --from=build /out/auu /out/auu-admin /out/auu-ca /out/auu-relay /out/forge /out/upstream /usr/local/bin/
 COPY docker/testing/entrypoint-relay.sh docker/testing/entrypoint-user.sh /usr/local/bin/

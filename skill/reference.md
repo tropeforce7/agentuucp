@@ -104,6 +104,7 @@ auu serve [--backlog] [--config FILE] [--json]     # the service: rounds, holdin
 auu serve --once [--backlog] [--config FILE] [--json]   # one round: fetch, answer, stop
 auu serve check [--config FILE]                    # read serve.json and say what it would serve
 auu serve ls [--config FILE] [--json]              # what is served, and the threads it is holding
+auu serve proxy [--config FILE]                    # the key-holding proxy as its own process, run as another account
 ```
 
 `serve` answers the channels named in `serve.json` in the home by running
@@ -126,10 +127,21 @@ refuses by name a missing or empty key file (`proxy: key_file PATH does not
 exist; it holds the API key on its first line`), a listen off the host
 (`is not a loopback address`), a plain-http upstream off the host (`the key
 would cross the network in the clear`), a section naming neither `key_file`
-nor `control`, and `control`, which is the split proxy of a later release.
-On stderr, `ANTHROPIC_API_KEY is set in serve's environment and is not
-passed to the handler or the hooks; the proxy holds the key, and the line
-that sets it can go` means a unit still carries the key; the line can go.
+nor `control`, and `key_file` beside `control`. On stderr,
+`ANTHROPIC_API_KEY is set in serve's environment and is not passed to the
+handler or the hooks; the proxy holds the key, and the line that sets it
+can go` means a unit still carries the key; the line can go.
+
+`"proxy": {"control": "/run/auu-proxy/control.sock"}` alone is the split
+proxy: `auu serve proxy` running as its own account with its own file,
+`/etc/auu-proxy/proxy.json` (`v`, `key_file`, `control`, `listen`,
+`upstream`, `allow_uids`, `allow_group`), holding the key where the
+expert's account cannot read it and handing serve a token per invocation
+over that socket. `check` then says `proxy: control PATH (answering)` or
+`(nobody is listening; auu serve will fail each message until it is: ...)`;
+a message failing with `the proxy's control socket PATH: ...` is the proxy
+down or refusing serve's uid, retried next round, and the proxy's own
+journal is where its mints, requests and refusals are.
 
 What this binary is:
 

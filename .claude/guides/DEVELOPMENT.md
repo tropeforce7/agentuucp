@@ -354,8 +354,10 @@ serve inherited under the credential names is dropped from every
 program's environment, since a unit that still carries the key would hand
 it on through serve. What one account cannot protect is said in the
 guide rather than implied away: the handler is the same user as serve and
-can read the key file if told where it is; the split proxy, another
-account, is the answer to that.
+can read the key file if told where it is; the split proxy, `auu serve
+proxy` as another account with a file of its own, is the answer to that,
+and then the expert's file names only the control socket, so the handler
+learns nothing of the key from anything it can read.
 
 **A failed insert is only a duplicate if the row is actually there
 afterwards.** `UseNonce` and `AddToken` re-query after a failed insert. Reporting

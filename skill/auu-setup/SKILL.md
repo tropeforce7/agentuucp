@@ -234,8 +234,15 @@ The steps, in order:
    it, and you never paste it anywhere. Tell them plainly what the guide
    says: the proxy keeps the key out of the handler's environment and out
    of every reply, and does not stop a handler with a shell that is told
-   to read the file, since both run as the same account. An interactive
-   sign-in as the account is the other way, with no `proxy` section.
+   to read the file, since both run as the same account. For a host where
+   that is not enough, the guide's 7.6a runs the proxy as an account of
+   its own, `auu-proxy`, with the key readable by it alone and the
+   expert's file saying only `"proxy": {"control":
+   "/run/auu-proxy/control.sock"}`; the account, the unit and the proxy's
+   own file are root's work and the user's decision, and `sudo -u
+   auu-expert cat /etc/auu-proxy/key` failing is the check that it holds.
+   An interactive sign-in as the account is the other way, with no
+   `proxy` section.
 2. **The channel.** `auu channel create NAME --description "..."` and then
    `auu channel push`. The description is what an asker's agent reads
    before it writes, so say what the expert answers for.
@@ -256,6 +263,8 @@ The steps, in order:
    works with the key locked. Run it after every edit. A warning that
    `ANTHROPIC_API_KEY is set in serve's environment` means the unit or the
    shell still carries the key; the proxy holds it, and that line can go.
+   With the split proxy it says `proxy: control PATH (answering)`, or that
+   nobody is listening, in which case the proxy's unit is what to look at.
 7. **Try it once.** `auu serve --once` fetches and answers what is pending.
    Mail already in the inbox on a first run is left alone and said; `auu
    serve --once --backlog` answers it instead, and only on a first run.

@@ -18,19 +18,22 @@ type xucred struct {
 const (
 	solLocal       = 0
 	localPeerCred  = 1
+	localPeerPID   = 2
 	xucredVersion0 = 0
 )
 
-// peerUID is the uid of the process at the other end of a Unix socket, from
-// LOCAL_PEERCRED: the kernel's answer, not the peer's claim. The getsockopt
-// is made through syscall directly because the syscall package exports no
-// getsockopt that takes a struct on darwin.
-func peerUID(conn *net.UnixConn) (int, error) {
+// peerCred is the credentials of the process at the other end of a Unix
+// socket, from LOCAL_PEERCRED and LOCAL_PEERPID: the kernel's answer, not
+// the peer's claim. The xucred carries the peer's whole group list, the
+// first of which is its primary group. The getsockopts are made through
+// syscall directly because the syscall package exports no getsockopt that
+// takes a struct on darwin.
+func peerCred(conn *net.UnixConn) (Cred, error) {
 	raw, err := conn.SyscallConn()
 	if err != nil {
-		return -1, err
+		return Cred{UID: -1, GID: -1, PID: -1}, err
 	}
-	uid := -1
+	c := Cred{UID: -1, GID: -1, PID: -1}
 	var gerr error
 	if err := raw.Control(func(fd uintptr) {
 		var cred xucred
@@ -45,9 +48,25 @@ func peerUID(conn *net.UnixConn) (int, error) {
 			gerr = fmt.Errorf("agent: LOCAL_PEERCRED: xucred version %d, expected %d", cred.Version, xucredVersion0)
 			return
 		}
-		uid = int(cred.UID)
+		c.UID = int(cred.UID)
+		n := int(cred.Ngroups)
+		if n > len(cred.Groups) {
+			n = len(cred.Groups)
+		}
+		for i := range n {
+			c.Groups = append(c.Groups, int(cred.Groups[i]))
+		}
+		if n > 0 {
+			c.GID = c.Groups[0]
+		}
+		var pid uint32
+		psize := uint32(unsafe.Sizeof(pid))
+		if _, _, e := syscall.Syscall6(syscall.SYS_GETSOCKOPT, fd, solLocal, localPeerPID,
+			uintptr(unsafe.Pointer(&pid)), uintptr(unsafe.Pointer(&psize)), 0); e == 0 {
+			c.PID = int(pid)
+		}
 	}); err != nil {
-		return -1, err
+		return Cred{UID: -1, GID: -1, PID: -1}, err
 	}
-	return uid, gerr
+	return c, gerr
 }
