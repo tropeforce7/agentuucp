@@ -47,7 +47,7 @@ One machine can be an expert for several projects: one channel each.
 | `before` | A program run just before the handler. A failure means the handler does not run and the message is tried again. |
 | `after` | A program run just after it, however it ended. A failure means the answer does not go out, so this is where a side copy's tests belong. |
 | `timeout` | How long the handler, and each hook, may take. Default `30m`. |
-| `max_turns` | How many messages serve will answer on one thread. Default `50`, which is also what `0` means: the file cannot tell an absent number from a zero one. |
+| `max_turns` | How many messages serve will answer on one thread. Default `50`, which is also what `0` means: the file cannot tell an absent number from a zero one. A reply counts on the thread of the message it answers; one that names another thread is not serve's, and is left in the inbox with a line on standard error saying so. |
 | `retries` | How many times a message may fail before serve gives up on it. Default `3`, and `0` means the same. |
 | `thread_ttl` | How long a thread's state is kept after its last message. Default `168h`. |
 
@@ -196,7 +196,10 @@ with `taskkill /T` — so a session the handler started does not outlive it.
   is the peer list, and `auu allow push` is what keeps strangers off the
   relay.
 - And never more than `max_turns` messages on one thread, which is what
-  stops two experts pointed at each other from talking for ever.
+  stops two experts pointed at each other from talking for ever. The
+  thread is the one serve sent its reply on: a follow-up that names
+  another thread than the reply it answers was sent on is not serve's,
+  since a count on a thread the sender names would start over each time.
 
 A thread id is a message id, 32 lowercase hex characters, and serve makes
 the thread's directory and its worktree's path from it. A message whose

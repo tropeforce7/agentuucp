@@ -3,6 +3,7 @@ package auu
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -202,5 +203,100 @@ func TestServeRecordsABadThreadIDAgainstTheMessageAndGoesOn(t *testing.T) {
 	if _, _, err := worktreeFor(filepath.Join(bob.home, "serve"), bob.row, "../../outside",
 		t.TempDir(), true); err == nil || !strings.Contains(err.Error(), "not a message id") {
 		t.Errorf("worktreeFor took a thread id that is a path: %v", err)
+	}
+}
+
+// A follow-up is admitted because its in_reply_to names a reply serve sent,
+// and the turns are counted by thread. The trace answered each of serve's
+// replies under a fresh thread id and was on turn one every time, so
+// max_turns was not a limit. Now a reply that names a thread other than
+// the one its answer was sent on is nobody's here: it is not answered, the
+// original thread's count does not move, and the message stays in the
+// inbox like any other that is none of serve's business, said once. The
+// follow-up on the right thread past max_turns is still refused, which
+// TestServeAnswersAFollowUpUntilTheTurnsRunOut proves.
+func TestARenamedFollowUpIsNotAnswered(t *testing.T) {
+	alice, bob := newExpert(t, modeReadOnly)
+	bob.row.MaxTurns = 1
+	bob.write(t)
+
+	sent := alice.ask(t, "jostle", "first", "please look")
+	first := bob.round(t)
+	if len(first.Answered) != 1 {
+		t.Fatalf("the ask was not answered: %+v", first)
+	}
+	reply := alice.replyOn(t, sent.Thread)
+
+	// A follow-up to serve's reply under a thread id of the sender's own
+	// choosing: what a client other than auu's would send, since auu reply
+	// copies the thread of the message it answers.
+	t.Setenv("AUU_HOME", alice.home)
+	s, id, err := loadIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := selectRelay(s, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipient, err := s.Resolve("bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed := strings.Repeat("b", 32)
+	body := message.Body{
+		Type: message.TypeReply, Subject: "again", Thread: renamed,
+		InReplyTo: reply.ID, Text: "and again",
+	}
+	followUp, _, err := sendSealed(s, id, r, recipient, body, nil, sendMode{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var out string
+	stderr := captureStderr(t, func() { out, err = bob.tryRun("serve", "--once", "--json") })
+	if err != nil {
+		t.Fatalf("serve --once: %v\n%s", err, out)
+	}
+	var second roundJSON
+	if err := json.Unmarshal([]byte(out), &second); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(second.Answered); n != 0 {
+		t.Errorf("with max_turns 1 and one turn already answered, a follow-up to serve's reply under a new thread id was answered (%d answered this round); "+
+			"expected it to be left alone", n)
+	}
+	if len(second.Failed)+len(second.Skipped) != 0 {
+		t.Errorf("the follow-up was counted as work: %+v", second)
+	}
+	led := bob.ledgerOf(t)
+	if n := led.answered(sent.Thread); n != 1 {
+		t.Errorf("the original thread has %d turns answered, want 1", n)
+	}
+	if _, ok := led.Messages[followUp.ID]; ok {
+		t.Errorf("the renamed follow-up was written into the ledger: %+v", led.Messages[followUp.ID])
+	}
+	want := fmt.Sprintf("auu: %s from alice answers reply %s on thread %s but names thread %s; left alone",
+		shortID(followUp.ID), shortID(reply.ID), shortID(sent.Thread), shortID(renamed))
+	if strings.Count(stderr, want) != 1 {
+		t.Errorf("stderr:\n%s\nwant once:\n%s", stderr, want)
+	}
+	// Still in the inbox, unread, for the owner to see; and a second round
+	// leaves it alone again.
+	var in inboxJSON
+	if err := json.Unmarshal([]byte(bob.run("inbox", "--no-fetch", "--json")), &in); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range in.Messages {
+		if m.ID == followUp.ID {
+			found = !m.Read
+		}
+	}
+	if !found {
+		t.Errorf("the renamed follow-up is not in the inbox unread: %+v", in.Messages)
+	}
+	if again := bob.round(t); len(again.Answered)+len(again.Failed) != 0 {
+		t.Errorf("the second round did something with it: %+v", again)
 	}
 }

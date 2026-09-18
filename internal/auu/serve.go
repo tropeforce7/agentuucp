@@ -52,6 +52,9 @@ type serveRun struct {
 	// this process, or the split proxy over its control socket; nil for a
 	// host whose serve.json has no proxy section.
 	source tokenSource
+	// renamed is the follow-ups already said to name another thread than
+	// the reply they answer, so each is said once per run.
+	renamed map[string]bool
 }
 
 // roundJSON is one round as --json gives it.
@@ -402,21 +405,49 @@ func (r *serveRun) pending() ([]*store.Stored, error) {
 //
 // That lookup is also the rule that stops two experts talking to each other
 // for ever: a reply serve has no record of sending belongs to no channel
-// here, whoever it is from and whatever it is about.
+// here, whoever it is from and whatever it is about; and so does a reply
+// to something serve sent that names a thread other than the one it was
+// sent on, since the turns are counted by thread and a follow-up that
+// chose its own would be on turn one every time.
 func (r *serveRun) channelFor(m *store.Stored) *serveChannel {
 	if m.Inner.Body.Type == message.TypeReply {
-		if e := r.led.repliedWith(m.Inner.Body.InReplyTo); e != nil {
-			return r.cfg.Channels[e.Channel]
+		e := r.led.repliedWith(m.Inner.Body.InReplyTo)
+		if e == nil {
+			return nil
 		}
-		return nil
+		if e.Thread != m.Inner.Body.Thread {
+			r.sayRenamed(m, e)
+			return nil
+		}
+		return r.cfg.Channels[e.Channel]
 	}
 	return r.cfg.Channels[channelOf(m)]
+}
+
+// sayRenamed says, once per message per run, that a follow-up was left
+// alone for naming another thread than the reply it answers was sent on.
+// pending asks channelFor every round, and the message stays in the inbox
+// unread like any other that is none of serve's business, so without the
+// once it would be said at every round for as long as it is there.
+func (r *serveRun) sayRenamed(m *store.Stored, e *ledgerEntry) {
+	if r.renamed == nil {
+		r.renamed = map[string]bool{}
+	}
+	if r.renamed[m.Inner.ID] {
+		return
+	}
+	r.renamed[m.Inner.ID] = true
+	fmt.Fprintf(os.Stderr, "%s: %s from %s answers reply %s on thread %s but names thread %s; left alone\n",
+		prog, shortID(m.Inner.ID), orNone(m.SenderName), shortID(m.Inner.Body.InReplyTo),
+		shortID(e.Thread), shortID(m.Inner.Body.Thread))
 }
 
 // answerable is the rest of the rule: a question is answered and a
 // statement is not, and a thread that has had its turns is done, so that
 // two experts pointed at each other stop. Whether a reply is serve's to
-// answer at all is channelFor's: it is the same lookup as the channel.
+// answer at all is channelFor's: it is the same lookup as the channel, and
+// it has held the reply's thread to the one the ledger sent the answer
+// on, so the count below is on a thread the ledger has already seen.
 func (r *serveRun) answerable(m *store.Stored) bool {
 	ch := r.channelFor(m)
 	if ch == nil {
