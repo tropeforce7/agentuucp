@@ -76,8 +76,13 @@ func keepDamaged(s *store.Store, r *store.Relay, id int64, received time.Time, d
 		return nil
 	}
 	res.Kept++
+	// The path KeepDamaged just wrote under, checked the same way there.
+	path, err := s.DamagedPath(r.Name, id)
+	if err != nil {
+		return err
+	}
 	fmt.Fprintf(os.Stderr, "warning: relay message %d could not be opened (%s) and was kept as %s; "+
-		"ask the sender to send it again\n", id, cause, s.DamagedPath(r.Name, id))
+		"ask the sender to send it again\n", id, cause, path)
 	return nil
 }
 
@@ -135,7 +140,11 @@ func keepMisfiled(s *store.Store, r *store.Relay, id int64, received time.Time, 
 		return nil
 	}
 	res.Kept++
+	path, err := s.DamagedPath(r.Name, id)
+	if err != nil {
+		return err
+	}
 	fmt.Fprintf(os.Stderr, "warning: relay message %d was filed under %q by %s but is sealed for %q; it was kept as %s\n",
-		id, filedAs, r.Name, sealed, s.DamagedPath(r.Name, id))
+		id, filedAs, r.Name, sealed, path)
 	return nil
 }

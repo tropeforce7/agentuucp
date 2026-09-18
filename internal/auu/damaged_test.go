@@ -48,7 +48,7 @@ func editFile(t *testing.T, path, old, new string) {
 // damagedRecord reads the record kept beside one relay's message.
 func damagedRecord(t *testing.T, s *store.Store, relay string, id int64) store.DamagedRecord {
 	t.Helper()
-	path := strings.TrimSuffix(s.DamagedPath(relay, id), ".bin") + ".json"
+	path := strings.TrimSuffix(damagedPathOf(t, s, relay, id), ".bin") + ".json"
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("the record: %v", err)
@@ -179,9 +179,9 @@ func TestADamagedMessageIsKeptWithItsCause(t *testing.T) {
 		{fromTheFuture, "malformed"},
 	} {
 		fmt.Fprintf(&want, "warning: relay message %d could not be opened (%s) and was kept as %s; ask the sender to send it again\n",
-			tc.id, tc.cause, s.DamagedPath(relayName, tc.id))
+			tc.id, tc.cause, damagedPathOf(t, s, relayName, tc.id))
 		// The bytes as the relay served them, and the record beside them.
-		kept, err := os.ReadFile(s.DamagedPath(relayName, tc.id))
+		kept, err := os.ReadFile(damagedPathOf(t, s, relayName, tc.id))
 		if err != nil || !bytes.Equal(kept, served[tc.id]) {
 			t.Errorf("message %d: kept bytes %v, equal to what the relay served: %v", tc.id, err, bytes.Equal(kept, served[tc.id]))
 		}
@@ -199,7 +199,7 @@ func TestADamagedMessageIsKeptWithItsCause(t *testing.T) {
 	if warnings != want.String() {
 		t.Fatalf("stderr:\n%s\nwant:\n%s", warnings, want.String())
 	}
-	if _, err := os.Stat(s.DamagedPath(relayName, good)); !os.IsNotExist(err) {
+	if _, err := os.Stat(damagedPathOf(t, s, relayName, good)); !os.IsNotExist(err) {
 		t.Fatal("the good message was kept as damaged")
 	}
 	// Every damaged one acknowledged, whatever the channel's setting says:
@@ -352,15 +352,15 @@ func TestADamagedStreamKeepsItsManifestOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := fmt.Sprintf("warning: relay message %d could not be opened (did not decrypt) and was kept as %s; ask the sender to send it again\n",
-		manifestFlipped, s.DamagedPath(relayName, manifestFlipped)) +
+		manifestFlipped, damagedPathOf(t, s, relayName, manifestFlipped)) +
 		fmt.Sprintf("warning: relay message %d could not be opened (did not decrypt) and was kept as %s; ask the sender to send it again\n",
-			payloadFlipped, s.DamagedPath(relayName, payloadFlipped)) +
+			payloadFlipped, damagedPathOf(t, s, relayName, payloadFlipped)) +
 		fmt.Sprintf("warning: relay message %d was damaged on the relay and has been dropped there; ask the sender to send it again\n", truncated)
 	if warnings != want {
 		t.Fatalf("stderr:\n%s\nwant:\n%s", warnings, want)
 	}
 	for id, manifest := range wantManifest {
-		kept, err := os.ReadFile(s.DamagedPath(relayName, id))
+		kept, err := os.ReadFile(damagedPathOf(t, s, relayName, id))
 		if err != nil {
 			t.Fatalf("message %d: %v", id, err)
 		}
@@ -374,7 +374,7 @@ func TestADamagedStreamKeepsItsManifestOnly(t *testing.T) {
 			t.Errorf("message %d: record %+v", id, rec)
 		}
 	}
-	if _, err := os.Stat(s.DamagedPath(relayName, truncated)); !os.IsNotExist(err) {
+	if _, err := os.Stat(damagedPathOf(t, s, relayName, truncated)); !os.IsNotExist(err) {
 		t.Fatal("a stream the relay dropped was kept")
 	}
 	// Nothing of any payload anywhere in the home.
@@ -453,21 +453,21 @@ func TestDamagedMessagesBeyondTheBudgetAreSaidToBe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := fmt.Sprintf("warning: relay message %d could not be opened (malformed) and was kept as %s; ask the sender to send it again\n", first, s.DamagedPath(relayName, first)) +
-		fmt.Sprintf("warning: relay message %d could not be opened (malformed) and was kept as %s; ask the sender to send it again\n", second, s.DamagedPath(relayName, second)) +
+	want := fmt.Sprintf("warning: relay message %d could not be opened (malformed) and was kept as %s; ask the sender to send it again\n", first, damagedPathOf(t, s, relayName, first)) +
+		fmt.Sprintf("warning: relay message %d could not be opened (malformed) and was kept as %s; ask the sender to send it again\n", second, damagedPathOf(t, s, relayName, second)) +
 		fmt.Sprintf("warning: relay message %d could not be opened (malformed); it is %s and was not kept, since %s holds at most %s\n",
 			huge, store.MiB(size[huge]), s.DamagedDir(), store.MiB(10000))
 	if warnings != want {
 		t.Fatalf("stderr:\n%s\nwant:\n%s", warnings, want)
 	}
 	// The second evicted the first; the huge one is nowhere.
-	if _, err := os.Stat(s.DamagedPath(relayName, first)); !os.IsNotExist(err) {
+	if _, err := os.Stat(damagedPathOf(t, s, relayName, first)); !os.IsNotExist(err) {
 		t.Fatal("the first was not evicted to make room for the second")
 	}
-	if _, err := os.Stat(s.DamagedPath(relayName, second)); err != nil {
+	if _, err := os.Stat(damagedPathOf(t, s, relayName, second)); err != nil {
 		t.Fatal("the second was not kept")
 	}
-	if _, err := os.Stat(s.DamagedPath(relayName, huge)); !os.IsNotExist(err) {
+	if _, err := os.Stat(damagedPathOf(t, s, relayName, huge)); !os.IsNotExist(err) {
 		t.Fatal("a message over the budget was kept")
 	}
 	if n, _, err := s.DamagedKept(); err != nil || n != 1 {
@@ -539,10 +539,21 @@ func TestAMessageThatCannotBeKeptIsNotAcknowledged(t *testing.T) {
 	if inbox.Fetch.Kept != 1 {
 		t.Fatalf("fetch after the way was cleared: %+v", inbox.Fetch)
 	}
-	if _, err := os.Stat(s.DamagedPath(relayName, id)); err != nil {
+	if _, err := os.Stat(damagedPathOf(t, s, relayName, id)); err != nil {
 		t.Fatal(err)
 	}
 	if left, err := st.List(bobFP, 0, 10); err != nil || len(left) != 0 {
 		t.Fatalf("the relay holds %d (%v) after the keep, want 0", len(left), err)
 	}
+}
+
+// damagedPathOf is DamagedPath for a test that knows the relay name is
+// valid.
+func damagedPathOf(t *testing.T, s *store.Store, relay string, id int64) string {
+	t.Helper()
+	path, err := s.DamagedPath(relay, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

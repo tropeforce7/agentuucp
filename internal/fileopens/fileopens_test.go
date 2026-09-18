@@ -305,7 +305,7 @@ func parseLedger(ledger string) (rows []row, problems []string) {
 		}
 		key, prov := line[:at], line[at+3:]
 		switch {
-		case prov == "local", prov == "operator",
+		case prov == "local", prov == "operator", strings.HasPrefix(prov, "operator: "),
 			strings.HasPrefix(prov, "derived: "), strings.HasPrefix(prov, "network: "):
 		default:
 			problems = append(problems, fmt.Sprintf("ledger.txt:%d: provenance %q is none of local, operator, derived: ..., network: <component>, <rule> at <point>", n, prov))

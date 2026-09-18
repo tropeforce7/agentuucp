@@ -49,8 +49,15 @@ func (s *Store) DamagedDir() string { return s.path(damagedDir) }
 // damaged/<relay>/<id>.bin and the record as damaged/<relay>/<id>.json,
 // under the relay's name because ids are each relay's own counter and two
 // relays' seventh messages are different messages.
-func (s *Store) DamagedPath(relay string, id int64) string {
-	return filepath.Join(s.path(damagedDir, relay), strconv.FormatInt(id, 10)+".bin")
+//
+// The relay name is held to ValidRelayName here, at the call, as every
+// exported edge of the store holds what it joins onto a path; the id is
+// an int64 the relay numbered, written as digits.
+func (s *Store) DamagedPath(relay string, id int64) (string, error) {
+	if err := ValidRelayName(relay); err != nil {
+		return "", err
+	}
+	return filepath.Join(s.path(damagedDir, relay), strconv.FormatInt(id, 10)+".bin"), nil
 }
 
 func recordPath(binPath string) string { return binPath[:len(binPath)-len(".bin")] + ".json" }
@@ -140,7 +147,10 @@ func (s *Store) KeepDamaged(rec DamagedRecord, data []byte) (kept bool, evicted 
 		total -= k.size
 		evicted++
 	}
-	bin := s.DamagedPath(rec.Relay, rec.RelayID)
+	bin, err := s.DamagedPath(rec.Relay, rec.RelayID)
+	if err != nil {
+		return false, evicted, err
+	}
 	if err := os.MkdirAll(filepath.Dir(bin), dirMode); err != nil {
 		return false, evicted, err
 	}

@@ -426,7 +426,11 @@ auu relay rm work
 
 An enrolment token names its relay, so `auu enrol --name you TOKEN` adds it
 and registers you there; the first relay a home joins becomes its default and
-later ones do not.
+later ones do not. Without `--name` a relay is called after its host, made
+into a name the rules allow — letters, digits, `.`, `_` and `-`, beginning
+with a letter or digit — so `https://[::1]:8443` becomes `1` and a second
+relay on the same host gets its port, then a number; the command prints the
+name it chose, and `auu relay rename` changes it.
 
 Which relay a command uses is `--relay NAME`, then `AUU_RELAY` in the
 environment, then the default. A name may be shortened to a unique prefix, and

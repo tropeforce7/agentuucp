@@ -97,7 +97,7 @@ func TestDamagedMessagesAreKeptWithinTheBudget(t *testing.T) {
 	if err != nil || !kept || evicted != 0 {
 		t.Fatalf("keep: kept %v, evicted %d, %v", kept, evicted, err)
 	}
-	path := s.DamagedPath("work", 7)
+	path := damagedPathOf(t, s, "work", 7)
 	if path != filepath.Join(s.root, "damaged", "work", "7.bin") {
 		t.Fatalf("kept at %s", path)
 	}
@@ -154,13 +154,13 @@ func TestDamagedMessagesAreKeptWithinTheBudget(t *testing.T) {
 	if err != nil || !kept || evicted != 1 {
 		t.Fatalf("keep past the budget: kept %v, evicted %d, %v", kept, evicted, err)
 	}
-	if _, err := os.Stat(s.DamagedPath("work", 7)); !os.IsNotExist(err) {
+	if _, err := os.Stat(damagedPathOf(t, s, "work", 7)); !os.IsNotExist(err) {
 		t.Fatal("the oldest was not evicted")
 	}
-	if _, err := os.Stat(recordPath(s.DamagedPath("work", 7))); !os.IsNotExist(err) {
+	if _, err := os.Stat(recordPath(damagedPathOf(t, s, "work", 7))); !os.IsNotExist(err) {
 		t.Fatal("the oldest's record was not evicted with it")
 	}
-	for _, p := range []string{s.DamagedPath("personal", 7), s.DamagedPath("work", 8)} {
+	for _, p := range []string{damagedPathOf(t, s, "personal", 7), damagedPathOf(t, s, "work", 8)} {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("%s: %v", p, err)
 		}
@@ -173,7 +173,7 @@ func TestDamagedMessagesAreKeptWithinTheBudget(t *testing.T) {
 	if kept, evicted, err := s.KeepDamaged(rec("work", 10, 20*time.Minute), []byte{1}); err != nil || !kept || evicted != 1 {
 		t.Fatalf("keep one byte over: kept %v, evicted %d, %v", kept, evicted, err)
 	}
-	if _, err := os.Stat(s.DamagedPath("personal", 7)); !os.IsNotExist(err) {
+	if _, err := os.Stat(damagedPathOf(t, s, "personal", 7)); !os.IsNotExist(err) {
 		t.Fatal("one byte over did not evict the oldest")
 	}
 
@@ -187,7 +187,7 @@ func TestDamagedMessagesAreKeptWithinTheBudget(t *testing.T) {
 	if after, _, _ := s.DamagedKept(); after != before {
 		t.Fatalf("kept went from %d to %d for a message that was not kept", before, after)
 	}
-	if _, err := os.Stat(s.DamagedPath("work", 11)); !os.IsNotExist(err) {
+	if _, err := os.Stat(damagedPathOf(t, s, "work", 11)); !os.IsNotExist(err) {
 		t.Fatal("a message over the budget was written")
 	}
 	// Exactly the budget alone is kept.
@@ -200,7 +200,7 @@ func TestDamagedMessagesAreKeptWithinTheBudget(t *testing.T) {
 
 	// Bytes without a record, from an interrupted keep, count and are
 	// evicted by their own time.
-	orphan := s.DamagedPath("work", 13)
+	orphan := damagedPathOf(t, s, "work", 13)
 	if err := os.WriteFile(orphan, make([]byte, 500), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -235,4 +235,15 @@ func TestSizesAreSaidInWords(t *testing.T) {
 			t.Errorf("MiB(%d) = %q, want %q", n, got, want)
 		}
 	}
+}
+
+// damagedPathOf is DamagedPath for a test that knows the relay name is
+// valid.
+func damagedPathOf(t *testing.T, s *Store, relay string, id int64) string {
+	t.Helper()
+	path, err := s.DamagedPath(relay, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

@@ -745,3 +745,30 @@ func TestAPastedTokenWithAShortIssuerIsRefusedNotSliced(t *testing.T) {
 		t.Errorf("describeToken on a two-character issuer:\n%s", got)
 	}
 }
+
+// auu relay add with an IPv6 literal for a host once spun for ever, since
+// the relay's directory name was derived from the host and no suffix made
+// a colon a valid name. Now the name is derived from the characters the
+// rule allows and the command says what it chose.
+func TestRelayAddNamesAnIPv6RelayAndReturns(t *testing.T) {
+	relayURL := startRelay(t)
+	alice := newUser(t, "alice", relayURL)
+	var out string
+	var err error
+	done := make(chan struct{})
+	go func() {
+		out, err = alice.tryRun("relay", "add", "https://[::1]:8443")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("auu relay add https://[::1]:8443 did not return within 10s")
+	}
+	if err != nil {
+		t.Fatalf("relay add: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, `added https://[::1]:8443 as "1"`) {
+		t.Errorf("relay add printed:\n%s", out)
+	}
+}

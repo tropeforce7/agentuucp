@@ -257,7 +257,10 @@ func (s *Store) AddRelay(name, rawURL string) (*Relay, error) {
 		}
 	}
 	if name == "" {
-		name = defaultRelayName(normalised, relays)
+		name, err = defaultRelayName(normalised, relays)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := ValidRelayName(name); err != nil {
 		return nil, err
@@ -286,10 +289,23 @@ func (s *Store) AddRelay(name, rawURL string) (*Relay, error) {
 // host. Two relays on one host — which is what a test, and a person running
 // two on one machine, both have — get the port, and then a number, so adding
 // a relay never fails over a name nobody asked for.
-func defaultRelayName(normalised string, existing []*Relay) string {
-	u, err := url.Parse(normalised)
-	if err != nil || u.Hostname() == "" {
-		return "relay"
+//
+// The host is made a valid name first. It used to be tried as it was, and
+// a host the rule refuses — an IPv6 literal, which begins with a colon; a
+// hostname over the sixty-four bytes a name may be — was refused with
+// every suffix too, so the loop never returned: 'auu relay add
+// https://[::1]:8443', an enrolment token naming such a relay, and Open of
+// a legacy home that did spun for ever. Now the base keeps the characters
+// the rule allows, so every candidate is valid and the loop ends on the
+// first name not taken; and it has a ceiling all the same, after which it
+// returns an error rather than a name, so no later change to the rule can
+// bring the hang back.
+func defaultRelayName(normalised string, existing []*Relay) (string, error) {
+	base := "relay"
+	var port string
+	if u, err := url.Parse(normalised); err == nil && u.Hostname() != "" {
+		base = relayNameBase(u.Hostname())
+		port = u.Port()
 	}
 	taken := func(name string) bool {
 		for _, r := range existing {
@@ -299,19 +315,47 @@ func defaultRelayName(normalised string, existing []*Relay) string {
 		}
 		return ValidRelayName(name) != nil
 	}
-	host := u.Hostname()
-	if !taken(host) {
-		return host
+	if !taken(base) {
+		return base, nil
 	}
-	if port := u.Port(); port != "" && !taken(host+"-"+port) {
-		return host + "-" + port
+	if port != "" && !taken(base+"-"+port) {
+		return base + "-" + port, nil
 	}
-	for n := 2; ; n++ {
-		candidate := fmt.Sprintf("%s-%d", host, n)
+	const ceiling = 1000
+	for n := 2; n <= ceiling; n++ {
+		candidate := fmt.Sprintf("%s-%d", base, n)
 		if !taken(candidate) {
-			return candidate
+			return candidate, nil
 		}
 	}
+	return "", fmt.Errorf("no free name for a relay at %s under %s-%d; name it with --name", normalised, base, ceiling)
+}
+
+// relayNameBase is a host as a valid relay name: the characters the rule
+// allows, kept in order, beginning at the first letter or digit, cut to
+// leave room for a numbered suffix, and "relay" when nothing is left or
+// what is left is the reserved word. An IPv6 literal such as ::1 becomes
+// 1, and 2001:db8::1 becomes 2001db81.
+func relayNameBase(host string) string {
+	var b strings.Builder
+	for i := 0; i < len(host); i++ {
+		c := host[i]
+		switch {
+		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9':
+			b.WriteByte(c)
+		case b.Len() > 0 && (c == '.' || c == '_' || c == '-'):
+			b.WriteByte(c)
+		}
+	}
+	base := b.String()
+	// Room for "-" and up to four digits under MaxNameBytes.
+	if room := identity.MaxNameBytes - 5; len(base) > room {
+		base = base[:room]
+	}
+	if base == "" || ValidRelayName(base) != nil {
+		return "relay"
+	}
+	return base
 }
 
 // RenameRelay moves a relay's directory, which is its name.

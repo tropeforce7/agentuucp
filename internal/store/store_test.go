@@ -1,6 +1,9 @@
 package store
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -443,5 +446,198 @@ func TestAThreadIsOrderedByArrivalNotTheSendersClock(t *testing.T) {
 	b.RelayID = 5
 	if !LaterThan(a, b) {
 		t.Error("the stamp does not break a tie")
+	}
+}
+
+// The file-path review at af0d96e (reviews/trace/): the provenance rule
+// applied to every path the store joins, independently of the ledger.
+
+// reviewHome makes a home two levels below a scratch directory, with a
+// sibling directory outside it that no path built from the home should
+// ever reach. It returns the store, the outside directory, and a file in
+// it.
+func reviewHome(t *testing.T) (*Store, string, string) {
+	t.Helper()
+	scratch := t.TempDir()
+	home := filepath.Join(scratch, "home")
+	s, err := Open(home)
+	if err != nil {
+		t.Fatalf("opening the home: %v", err)
+	}
+	outside := filepath.Join(scratch, "outside")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	witness := filepath.Join(outside, "witness")
+	if err := os.WriteFile(witness, []byte("keep me\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return s, outside, witness
+}
+
+// TestRemoveRefusesAnIDThatIsNotAName: Remove joined the id onto the box
+// and removed the tree at <box>/<id>.d with no rule run on the id, though
+// Load refuses one that is not 32 lowercase hex characters. Its one
+// caller passes an id from Load, but the store's exported edge is a
+// boundary of its own: an id that walks out of the box is refused, and
+// nothing outside the home is touched.
+func TestRemoveRefusesAnIDThatIsNotAName(t *testing.T) {
+	s, outside, witness := reviewHome(t)
+	victim := filepath.Join(outside, "victim.d")
+	if err := os.MkdirAll(victim, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(victim, "file"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	id := "../../outside/victim"
+	err := s.Remove(Inbox, id)
+	if _, statErr := os.Stat(victim); statErr != nil {
+		t.Errorf("Remove(Inbox, %q) removed %s, a directory outside the home (Remove returned %v)", id, victim, err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "not a message id") {
+		t.Errorf("Remove(Inbox, %q) returned %v; expected an error saying the id is not a message id", id, err)
+	}
+	if _, statErr := os.Stat(witness); statErr != nil {
+		t.Errorf("the witness file outside the home is gone: %v", statErr)
+	}
+}
+
+// TestKeepDamagedRefusesARelayNameThatIsNotAName: KeepDamaged built
+// damaged/<relay>/<id>.bin from the record's relay name with no rule run
+// on the name. Every caller passes a name read back from a directory the
+// store made, but the store is what makes that so, and now it checks.
+func TestKeepDamagedRefusesARelayNameThatIsNotAName(t *testing.T) {
+	s, outside, _ := reviewHome(t)
+	relay := "../../outside"
+	kept, _, err := s.KeepDamaged(DamagedRecord{
+		RelayID: 7, Relay: relay, Received: time.Now(), Cause: "review",
+	}, []byte("bytes"))
+	if _, statErr := os.Stat(filepath.Join(outside, "7.bin")); statErr == nil {
+		t.Errorf("KeepDamaged with Relay=%q wrote outside the home (kept=%v, err=%v)", relay, kept, err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "relay name") {
+		t.Errorf("KeepDamaged with Relay=%q returned %v; expected an error naming the relay-name rule", relay, err)
+	}
+	if _, err := s.DamagedPath(relay, 7); err == nil {
+		t.Errorf("DamagedPath(%q) made a path", relay)
+	}
+}
+
+// TestSetLeftBehindRefusesARelayNameThatIsNotAName: SetLeftBehind joined
+// the relay name onto relays/ and wrote there with no rule run on the
+// name, as SaveRelay does run one; LeftBehind read the same way.
+func TestSetLeftBehindRefusesARelayNameThatIsNotAName(t *testing.T) {
+	s, outside, _ := reviewHome(t)
+	relay := "../../outside"
+	err := s.SetLeftBehind(relay, []int64{1})
+	if _, statErr := os.Stat(filepath.Join(outside, leftBehindFile)); statErr == nil {
+		t.Errorf("SetLeftBehind(%q) wrote outside the home (err=%v)", relay, err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "relay name") {
+		t.Errorf("SetLeftBehind(%q) returned %v; expected an error naming the relay-name rule", relay, err)
+	}
+	if _, err := s.LeftBehind(relay); err == nil {
+		t.Errorf("LeftBehind(%q) read a path", relay)
+	}
+}
+
+// withDeadline runs fn and reports whether it returned within d.
+func withDeadline(d time.Duration, fn func()) bool {
+	done := make(chan struct{})
+	go func() {
+		fn()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
+// TestADefaultRelayNameIsAlwaysFound: defaultRelayName tried the URL's
+// host as it was, then host-port, host-2, host-3, ... until one was
+// neither taken nor invalid, and a host the rule refuses — an IPv6
+// literal begins with a colon, a hostname can be longer than a name may
+// be, a host of dots has no letter to begin with — was refused with every
+// suffix, so the loop never returned: 'auu relay add', an enrolment
+// token naming such a relay and Open of a legacy home that did spun for
+// ever. Now the base is made valid first, and the loop has a ceiling.
+func TestADefaultRelayNameIsAlwaysFound(t *testing.T) {
+	for _, tc := range []struct{ url, want string }{
+		{"https://[2001:db8::1]:8443", "2001db81"},
+		{"https://[::1]:8443", "1"},
+		{"https://" + strings.Repeat("a", 70) + ".example", strings.Repeat("a", 59)},
+		{"https://relay.example.com", "relay.example.com"},
+		{"https://relay.example.com:8443", "relay.example.com"},
+	} {
+		s, _, _ := reviewHome(t)
+		var r *Relay
+		var err error
+		if !withDeadline(3*time.Second, func() { r, err = s.AddRelay("", tc.url) }) {
+			t.Fatalf("AddRelay(\"\", %q) did not return within 3s", tc.url)
+		}
+		if err != nil {
+			t.Fatalf("AddRelay(\"\", %q): %v", tc.url, err)
+		}
+		if r.Name != tc.want {
+			t.Errorf("AddRelay(\"\", %q) named the relay %q, want %q", tc.url, r.Name, tc.want)
+		}
+		if err := ValidRelayName(r.Name); err != nil {
+			t.Errorf("the derived name %q is not valid: %v", r.Name, err)
+		}
+	}
+	// Bases the rule refuses outright: dots alone, a control character,
+	// the reserved word.
+	for _, host := range []string{"...", "\x01", "self"} {
+		got, err := defaultRelayName("https://"+host, nil)
+		if err != nil || got != "relay" {
+			t.Errorf("defaultRelayName for host %q: %q, %v; want relay", host, got, err)
+		}
+	}
+	// The second relay on a host gets the port, the third a number, and
+	// past the ceiling an error rather than a name.
+	taken := []*Relay{{Name: "relay.example.com"}}
+	if got, _ := defaultRelayName("https://relay.example.com:8443", taken); got != "relay.example.com-8443" {
+		t.Errorf("second on the host: %q", got)
+	}
+	for n := 2; n <= 1000; n++ {
+		taken = append(taken, &Relay{Name: fmt.Sprintf("relay.example.com-%d", n)})
+	}
+	taken = append(taken, &Relay{Name: "relay.example.com-8443"})
+	if got, err := defaultRelayName("https://relay.example.com:8443", taken); err == nil || !strings.Contains(err.Error(), "--name") {
+		t.Errorf("past the ceiling: %q, %v; want an error naming --name", got, err)
+	}
+}
+
+// TestOpenReturnsForALegacyIPv6Relay: the migration of a legacy config
+// names the relay by its URL and used to spin the same way at every
+// command's start.
+func TestOpenReturnsForALegacyIPv6Relay(t *testing.T) {
+	scratch := t.TempDir()
+	home := filepath.Join(scratch, "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"relay":"https://[2001:db8::1]:8443"}` + "\n"
+	if err := os.WriteFile(filepath.Join(home, configFile), []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var s *Store
+	var err error
+	if !withDeadline(3*time.Second, func() { s, err = Open(home) }) {
+		t.Fatal("Open of a home whose legacy config.json names relay https://[2001:db8::1]:8443 did not return within 3s")
+	}
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	relays, err := s.Relays()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(relays) != 1 || relays[0].Name != "2001db81" {
+		t.Errorf("the migrated relay: %+v, want one named 2001db81", relays)
 	}
 }

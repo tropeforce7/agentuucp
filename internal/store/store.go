@@ -730,6 +730,11 @@ func (s *Store) Move(from, to Box, id string) error {
 // one. A message that is not there is not an error: the caller asked for
 // it to be gone, and it is.
 func (s *Store) Remove(box Box, id string) error {
+	// The rule at the call, as Load and Save have it: the store's exported
+	// edge is a boundary of its own, whatever its callers checked.
+	if err := message.ValidID(id); err != nil {
+		return fmt.Errorf("message id %q is %w", id, err)
+	}
 	if err := os.RemoveAll(s.AttachmentDir(box, id)); err != nil {
 		return err
 	}

@@ -228,7 +228,7 @@ func TestAMisfiledMessageIsKeptAndAcknowledged(t *testing.T) {
 			}
 			s, _, _ := bob.opened()
 			for id := int64(1); id <= int64(want); id++ {
-				raw, err := os.ReadFile(strings.TrimSuffix(s.DamagedPath(relayName, id), ".bin") + ".json")
+				raw, err := os.ReadFile(strings.TrimSuffix(damagedPathOf(t, s, relayName, id), ".bin") + ".json")
 				if err != nil {
 					t.Fatal(err)
 				}

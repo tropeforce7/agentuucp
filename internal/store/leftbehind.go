@@ -26,6 +26,9 @@ const leftBehindAdvice = "fix it, or delete it; it records only the messages you
 // LeftBehind is the relay ids this machine removed locally and left on that
 // relay, ascending. A relay with no file has none.
 func (s *Store) LeftBehind(relayName string) ([]int64, error) {
+	if err := ValidRelayName(relayName); err != nil {
+		return nil, err
+	}
 	path := filepath.Join(s.relayDir(relayName), leftBehindFile)
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -69,6 +72,11 @@ func (s *Store) AddLeftBehind(relayName string, id int64) error {
 // nothing left to remember. The relay's directory is made if it is not
 // there, as the cursor's writer makes it.
 func (s *Store) SetLeftBehind(relayName string, ids []int64) error {
+	// The rule at the call, as SaveRelay runs it: the store's exported
+	// edge is a boundary of its own.
+	if err := ValidRelayName(relayName); err != nil {
+		return err
+	}
 	path := filepath.Join(s.relayDir(relayName), leftBehindFile)
 	if len(ids) == 0 {
 		err := os.Remove(path)

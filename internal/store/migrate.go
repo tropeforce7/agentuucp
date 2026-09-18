@@ -35,7 +35,10 @@ func (s *Store) migrateRelays() error {
 		return nil
 	}
 	url := token.NormaliseRelay(old.Relay)
-	name := defaultRelayName(url, nil)
+	name, err := defaultRelayName(url, nil)
+	if err != nil {
+		return err
+	}
 	dir := s.relayDir(name)
 	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return err
