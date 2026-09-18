@@ -14,7 +14,9 @@
 // The agent is one per home, found by the home's path (see SocketPath),
 // and answers only processes of the same user. A locked agent answers every
 // operation that needs a key with one sentence, and the client turns that
-// into an exit code the skill knows.
+// into an exit code the skill knows. An unlock has a scope, receive or
+// send, and an agent unlocked to receive answers an operation that
+// originates with a second sentence, the same way; see scope.go.
 package agent
 
 import (
@@ -39,6 +41,12 @@ const (
 	// that is idle does not lock early.
 	DefaultTTL = 8 * time.Hour
 
+	// DefaultSendTTL is how long 'auu unlock --send' lasts when nobody says
+	// otherwise: long enough to write and send, short enough that a window
+	// left open is not a working day of an AI originating as the person.
+	// When it ends the agent is back in receive scope, not locked.
+	DefaultSendTTL = 10 * time.Minute
+
 	// MaxFrame bounds one request or reply. The largest thing a request
 	// carries is a stream's encapsulation or a certificate request, both
 	// kilobytes; a megabyte leaves room and refuses anything else before it
@@ -48,6 +56,11 @@ const (
 	// LockedMessage is the error a locked agent answers every operation that
 	// needs a key with, verbatim. The client prints it as it is.
 	LockedMessage = "the identity is locked: run 'auu unlock'"
+
+	// ReceiveOnlyMessage is the error an agent in receive scope answers an
+	// operation that originates with, verbatim; the client prints it as it
+	// is, with the same exit code as locked. It names DefaultSendTTL.
+	ReceiveOnlyMessage = "the agent is unlocked to receive; run 'auu unlock --send' at a terminal to send for the next 10 minutes"
 )
 
 // ErrNotRunning is a home with no agent answering. To a command it is the

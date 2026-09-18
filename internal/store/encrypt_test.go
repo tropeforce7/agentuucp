@@ -113,7 +113,9 @@ func sameFiles(t *testing.T, want, got map[string][]byte, what string) {
 }
 
 // agentFor runs an in-process agent for a store, on a real socket in the
-// runtime directory noAgent chose, unlocked with the test passphrase.
+// runtime directory noAgent chose, unlocked with the test passphrase to
+// send: what is signed below is not a request, and only send scope signs
+// that.
 func agentFor(t *testing.T, s *Store) *agent.Server {
 	t.Helper()
 	srv := agent.NewServer(s, agent.Options{})
@@ -124,7 +126,7 @@ func agentFor(t *testing.T, s *Store) *agent.Server {
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(l) }()
 	t.Cleanup(func() { srv.Stop(); <-done; l.Close() })
-	if err := srv.Unlock([]byte(testPassphrase), 0); err != nil {
+	if err := srv.Unlock([]byte(testPassphrase), 0, agent.ScopeSend); err != nil {
 		t.Fatalf("unlock: %v", err)
 	}
 	return srv

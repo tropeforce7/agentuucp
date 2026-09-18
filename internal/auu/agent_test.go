@@ -75,11 +75,19 @@ func passphraseFile(t *testing.T, secret string) string {
 }
 
 // encrypt runs passphrase set with the test passphrase, which starts and
-// unlocks the agent, and arranges for the agent to be stopped.
+// unlocks the agent to receive, and arranges for the agent to be stopped.
 func (u *user) encrypt() {
 	u.t.Helper()
 	u.run("passphrase", "set", "--passphrase-file", passphraseFile(u.t, agentPassphrase))
 	u.t.Cleanup(func() { u.tryRun("agent", "stop") })
+}
+
+// unlockSend is 'auu unlock --send' with the test passphrase: what a test
+// that originates anything from an encrypted home runs first, as a person
+// would.
+func (u *user) unlockSend() {
+	u.t.Helper()
+	u.run("unlock", "--send", "--passphrase-file", passphraseFile(u.t, agentPassphrase))
 }
 
 // agentStatus is what 'auu agent status --json' says.
@@ -169,7 +177,10 @@ func TestPassphraseSetEncryptsTheHomeAndUnlocksTheAgent(t *testing.T) {
 	if !strings.Contains(text, "secrets:     encrypted, unlocked until ") {
 		t.Errorf("id does not report the secrets:\n%s", text)
 	}
-	// The very next command works, through the agent.
+	// The very next command that reads works, through the agent; sending
+	// is unlock --send away, and then goes round.
+	alice.run("inbox")
+	alice.unlockSend()
 	alice.run("send", "--to", "self", "--subject", "s", "hello")
 	if !strings.Contains(alice.run("inbox"), "hello") && !strings.Contains(alice.run("inbox"), "s ") {
 		t.Error("mail did not go round through the agent")
@@ -237,9 +248,9 @@ func TestALockedCommandExits4WithOneSentence(t *testing.T) {
 	if strings.TrimSpace(stderr) != "auu: "+want {
 		t.Errorf("another process said %q, want %q", strings.TrimSpace(stderr), "auu: "+want)
 	}
-	// Unlocked again, the same command works and the message was not
-	// touched: nothing was sent, nothing was discarded.
-	alice.run("unlock", "--passphrase-file", passphraseFile(t, agentPassphrase))
+	// Unlocked again, to send, the same command works and the message was
+	// not touched: nothing was sent, nothing was discarded.
+	alice.unlockSend()
 	alice.run("send", "--to", "self", "hello")
 	if out := alice.run("inbox", "--json"); !strings.Contains(out, `"delivered": 1`) {
 		t.Errorf("after unlock, inbox says:\n%s", out)
@@ -312,8 +323,8 @@ func TestUnlockThenSendInAnotherProcess(t *testing.T) {
 	relayURL := startRelay(t)
 	alice := encryptedUser(t, "alice", relayURL)
 	alice.run("lock")
-	if _, stderr, code := alice.inAnotherProcess("unlock", "--passphrase-file", passphraseFile(t, agentPassphrase)); code != 0 {
-		t.Fatalf("unlock in another process exited %d:\n%s", code, stderr)
+	if _, stderr, code := alice.inAnotherProcess("unlock", "--send", "--passphrase-file", passphraseFile(t, agentPassphrase)); code != 0 {
+		t.Fatalf("unlock --send in another process exited %d:\n%s", code, stderr)
 	} else if !strings.Contains(stderr, "unlocked until ") {
 		t.Errorf("unlock did not say until when:\n%s", stderr)
 	}
@@ -365,6 +376,7 @@ func TestPublicCommandsNeedNoAgent(t *testing.T) {
 	if err := os.WriteFile(attachment, []byte("kept\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	alice.unlockSend()
 	alice.run("send", "--to", "self", "--subject", "kept", "--attach", attachment, "a note")
 	alice.run("inbox")
 	bob := newUser(t, "bob", relayURL)
@@ -426,7 +438,9 @@ func TestRegisterAndRenewThroughTheAgent(t *testing.T) {
 	}
 	before := alice.certRecord()
 
-	// register makes a new key through the agent.
+	// register makes a new key through the agent, which is send scope:
+	// enrolling a machine is a human act.
+	alice.unlockSend()
 	alice.run("register", "--token", issue(token.UseCert, alice.exportFingerprint()), "--label", "again")
 	after := alice.certRecord()
 	if !after.Encrypted() {
@@ -588,6 +602,7 @@ func TestAHalfConvertedHomeIsFinishedByRunningSetAgain(t *testing.T) {
 	if st := bob.idStatus(); !st.Encrypted || st.Locked {
 		t.Errorf("after finishing, id says %+v", st)
 	}
+	bob.unlockSend()
 	bob.run("send", "--to", "self", "x")
 }
 
@@ -641,6 +656,7 @@ func TestALockedAgentMidCommandDiscardsNothing(t *testing.T) {
 			}
 			envelope := func() { alice.run("send", "--to", "self", "--subject", "small", "an envelope") }
 			stream := func() { alice.run("send", "--to", "self", "--subject", "large", "--attach", big, "a stream") }
+			alice.unlockSend()
 			if first == "envelope" {
 				envelope()
 				stream()

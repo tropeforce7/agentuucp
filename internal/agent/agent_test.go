@@ -171,11 +171,27 @@ func startAgent(t *testing.T) *running {
 	return &running{home: home, server: s, client: c, clock: clock}
 }
 
+// unlock is 'auu unlock': receive scope, for ttl.
 func (r *running) unlock(t *testing.T, ttl time.Duration) {
 	t.Helper()
-	if err := r.client.Unlock([]byte(passphrase), ttl); err != nil {
+	if err := r.client.Unlock([]byte(passphrase), ttl, ScopeReceive); err != nil {
 		t.Fatalf("unlock: %v", err)
 	}
+}
+
+// unlockSend is 'auu unlock --send': send scope for ttl, and receive for
+// DefaultTTL when the agent was locked.
+func (r *running) unlockSend(t *testing.T, ttl time.Duration) {
+	t.Helper()
+	if err := r.client.Unlock([]byte(passphrase), ttl, ScopeSend); err != nil {
+		t.Fatalf("unlock --send: %v", err)
+	}
+}
+
+// receiveRequest is a signing string for a request in the receive set, the
+// shape relayapi.SigningString makes: the listing of a mailbox.
+func receiveRequest() []byte {
+	return []byte("ccx-http-v1\nGET\n/v1/mailbox/" + strings.Repeat("a", 64) + "\n1700000000\nAAAAAAAAAAAAAAAAAAAAAA\n" + strings.Repeat("0", 64))
 }
 
 func TestTheAgentSignsAndDecapsulatesWhatItHolds(t *testing.T) {
@@ -187,16 +203,19 @@ func TestTheAgentSignsAndDecapsulatesWhatItHolds(t *testing.T) {
 	if !st.Locked || len(st.Keys) != 0 {
 		t.Fatalf("a fresh agent is %+v, want locked and empty", st)
 	}
-	a.unlock(t, DefaultTTL)
+	a.unlockSend(t, DefaultSendTTL)
 	st, err = a.client.Status()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Locked || len(st.Keys) != 1 || st.Keys[0] != KeyIdentity {
-		t.Fatalf("after unlock the agent is %+v", st)
+	if st.Locked || len(st.Keys) != 1 || st.Keys[0] != KeyIdentity || st.Scope != ScopeSend {
+		t.Fatalf("after unlock --send the agent is %+v", st)
 	}
 	if want := a.clock.Now().Add(DefaultTTL); !st.Until.Equal(want.Truncate(time.Second)) {
 		t.Errorf("until is %s, want %s", st.Until, want)
+	}
+	if want := a.clock.Now().Add(DefaultSendTTL); !st.SendUntil.Equal(want.Truncate(time.Second)) {
+		t.Errorf("send_until is %s, want %s", st.SendUntil, want)
 	}
 
 	r, seed := testutil.Seed(t)
@@ -279,7 +298,7 @@ func TestTheAgentSignsAndDecapsulatesWhatItHolds(t *testing.T) {
 		t.Error("not locked after lock")
 	}
 	a.unlock(t, 0)
-	if st, _ := a.client.Status(); st.Locked || !st.Until.IsZero() {
+	if st, _ := a.client.Status(); st.Locked || !st.Until.IsZero() || st.Scope != ScopeReceive {
 		t.Errorf("after an unlock with no ttl the agent is %+v", st)
 	}
 }
@@ -340,7 +359,7 @@ func TestALockedAgentRefusesByName(t *testing.T) {
 func TestTheWrongPassphraseIsRefusedAtUnlock(t *testing.T) {
 	a := startAgent(t)
 	a.unlock(t, DefaultTTL)
-	err := a.client.Unlock([]byte(passphrase+"x"), DefaultTTL)
+	err := a.client.Unlock([]byte(passphrase+"x"), DefaultTTL, ScopeReceive)
 	if err == nil || err.Error() != keyfile.ErrPassphrase.Error() {
 		t.Fatalf("a wrong passphrase gave %v, want %q", err, keyfile.ErrPassphrase)
 	}
@@ -358,10 +377,10 @@ func TestTheWrongPassphraseIsRefusedAtUnlock(t *testing.T) {
 	if held {
 		t.Error("the server still holds key material after a refused unlock")
 	}
-	if err := a.client.Unlock(nil, DefaultTTL); !errors.Is(err, keyfile.ErrEmptyPassphrase) && (err == nil || err.Error() != keyfile.ErrEmptyPassphrase.Error()) {
+	if err := a.client.Unlock(nil, DefaultTTL, ScopeReceive); !errors.Is(err, keyfile.ErrEmptyPassphrase) && (err == nil || err.Error() != keyfile.ErrEmptyPassphrase.Error()) {
 		t.Errorf("an empty passphrase gave %v", err)
 	}
-	if err := a.client.Unlock([]byte(passphrase), -time.Second); err == nil {
+	if err := a.client.Unlock([]byte(passphrase), -time.Second, ScopeReceive); err == nil {
 		t.Error("a negative ttl was accepted")
 	}
 }
@@ -375,11 +394,11 @@ func TestTTLLocksOnTheClock(t *testing.T) {
 	const ttl = time.Hour
 	a.unlock(t, ttl)
 	a.clock.Set(start.Add(ttl - time.Second))
-	if _, err := a.client.Sign(KeyIdentity, []byte("m"), nil); err != nil {
+	if _, err := a.client.Sign(KeyIdentity, receiveRequest(), nil); err != nil {
 		t.Fatalf("one second before expiry: %v", err)
 	}
 	a.clock.Set(start.Add(ttl))
-	if _, err := a.client.Sign(KeyIdentity, []byte("m"), nil); !errors.Is(err, identity.ErrLocked) {
+	if _, err := a.client.Sign(KeyIdentity, receiveRequest(), nil); !errors.Is(err, identity.ErrLocked) {
 		t.Fatalf("at expiry: %v, want ErrLocked", err)
 	}
 	st, err := a.client.Status()
@@ -409,7 +428,7 @@ func TestTTLLocksOnTheClock(t *testing.T) {
 	a.clock.Set(start.Add(ttl / 2))
 	a.unlock(t, ttl)
 	a.clock.Set(start.Add(ttl + ttl/2 - time.Second))
-	if _, err := a.client.Sign(KeyIdentity, []byte("m"), nil); err != nil {
+	if _, err := a.client.Sign(KeyIdentity, receiveRequest(), nil); err != nil {
 		t.Errorf("the second unlock did not replace the first's expiry: %v", err)
 	}
 }
@@ -419,7 +438,7 @@ func TestTTLLocksOnTheClock(t *testing.T) {
 func TestLockZeroes(t *testing.T) {
 	home := newFakeHome(t)
 	s := NewServer(home, Options{})
-	if err := s.Unlock([]byte(passphrase), 0); err != nil {
+	if err := s.Unlock([]byte(passphrase), 0, ScopeReceive); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, err := s.generateLocked(CertPrefix+"work", 65); err != nil {
@@ -606,7 +625,7 @@ func TestFramesAreBoundedBeforeTheyAreRead(t *testing.T) {
 // public key.
 func TestGenerateSignsACSRAndReturnsAWrappedKey(t *testing.T) {
 	a := startAgent(t)
-	a.unlock(t, DefaultTTL)
+	a.unlockSend(t, DefaultSendTTL)
 	g, err := a.client.Generate(CertPrefix+"work", 65)
 	if err != nil {
 		t.Fatal(err)

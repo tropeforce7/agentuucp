@@ -116,29 +116,42 @@ func (c *Client) Status() (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	st := Status{Locked: resp.Locked, Keys: resp.Keys}
+	st := Status{Locked: resp.Locked, Keys: resp.Keys, Scope: Scope(resp.Scope)}
 	if resp.Until != "" {
 		if st.Until, err = time.Parse(time.RFC3339, resp.Until); err != nil {
 			return Status{}, fmt.Errorf("agent: bad until %q: %w", resp.Until, err)
 		}
 	}
+	if resp.SendUntil != "" {
+		if st.SendUntil, err = time.Parse(time.RFC3339, resp.SendUntil); err != nil {
+			return Status{}, fmt.Errorf("agent: bad send_until %q: %w", resp.SendUntil, err)
+		}
+	}
 	return st, nil
 }
 
-// Unlock hands the agent the passphrase and how long to stay unlocked. It
+// Unlock hands the agent the passphrase, the scope, and how long that scope
+// lasts: the receive TTL for ScopeReceive, the send TTL for ScopeSend. It
 // is the one operation that carries a passphrase, and only auu unlock and
 // auu passphrase call it.
-func (c *Client) Unlock(passphrase []byte, ttl time.Duration) error {
+func (c *Client) Unlock(passphrase []byte, ttl time.Duration, scope Scope) error {
 	if ttl < 0 {
 		return errors.New("agent: ttl must not be negative")
 	}
-	_, err := c.call(&request{Op: OpUnlock, Passphrase: passphrase, TTL: int64(ttl / time.Second)})
+	_, err := c.call(&request{Op: OpUnlock, Passphrase: passphrase, TTL: int64(ttl / time.Second), Send: scope == ScopeSend})
 	return err
 }
 
 // Lock tells the agent to drop what it holds.
 func (c *Client) Lock() error {
 	_, err := c.call(&request{Op: OpLock})
+	return err
+}
+
+// LockSend tells the agent to drop send scope and keep receive: what
+// 'auu lock --send' does. Nothing is zeroed, and a locked agent stays so.
+func (c *Client) LockSend() error {
+	_, err := c.call(&request{Op: OpLock, Send: true})
 	return err
 }
 

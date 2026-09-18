@@ -41,6 +41,10 @@ type request struct {
 	Passphrase []byte `json:"passphrase"`
 	// TTL is unlock's, in seconds; zero means until lock or exit.
 	TTL int64 `json:"ttl"`
+	// Send is read by two operations. On unlock it is the scope: false is
+	// receive, true is send, and TTL is then the send scope's. On lock it
+	// narrows rather than locks: true drops send scope and keeps receive.
+	Send bool `json:"send"`
 	// Message and Context are sign's: the message, and for an ML-DSA key
 	// the context string, empty for none.
 	Message []byte `json:"message"`
@@ -62,6 +66,10 @@ type response struct {
 	Locked bool     `json:"locked"`
 	Until  string   `json:"until"`
 	Keys   []string `json:"keys"`
+	// Scope is receive or send while unlocked, and SendUntil is when send
+	// scope ends; empty when it will not, or when the scope is receive.
+	Scope     string `json:"scope"`
+	SendUntil string `json:"send_until"`
 
 	// sign
 	Signature []byte `json:"signature"`

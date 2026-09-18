@@ -81,6 +81,9 @@ type Server struct {
 	log      *slog.Logger
 	mux      *http.ServeMux
 	requests atomic.Int64
+	// routes is every pattern registered on mux, in order, for the test
+	// that holds the key agent's receive set to the route table.
+	routes []string
 
 	lim      limiters
 	inflight chan struct{}
@@ -215,6 +218,9 @@ func (s *Server) Close() {
 // thing. The method is dropped from it because it is logged in its own field.
 func (s *Server) route(pattern string, h http.HandlerFunc) {
 	_, routePath, _ := strings.Cut(pattern, " ")
+	// Recorded for TestTheClassifierAgreesWithTheRelay, which holds the
+	// agent's receive set to what is registered here.
+	s.routes = append(s.routes, pattern)
 	s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 		if rec, ok := w.(*statusRecorder); ok {
 			rec.pattern = routePath

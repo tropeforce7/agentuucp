@@ -765,7 +765,8 @@ func TestAnAdministratorsEncryptedHomeGoesThroughTheAgent(t *testing.T) {
 	if e.Error() != "your identity is locked: run 'auu unlock' in your own terminal" {
 		t.Errorf("the advice is %q", e.Error())
 	}
-	// Unlocked: an in-process agent on the socket, and status works.
+	// Unlocked to send, which every administrative route needs: an
+	// in-process agent on the socket, and status works.
 	srv := agent.NewServer(s, agent.Options{})
 	l, err := agent.Listen(f.boss.home)
 	if err != nil {
@@ -774,7 +775,7 @@ func TestAnAdministratorsEncryptedHomeGoesThroughTheAgent(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(l) }()
 	t.Cleanup(func() { srv.Stop(); <-done; l.Close() })
-	if err := srv.Unlock([]byte("correct horse battery staple"), 0); err != nil {
+	if err := srv.Unlock([]byte("correct horse battery staple"), 0, agent.ScopeSend); err != nil {
 		t.Fatal(err)
 	}
 	out := f.boss.run("status", "--json")

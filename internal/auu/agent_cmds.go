@@ -2,6 +2,7 @@ package auu
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"strings"
@@ -74,12 +75,12 @@ func ensureUnlocked(s *store.Store) error {
 	if err != nil {
 		return err
 	}
-	return unlockWith(s, c, secret, agent.DefaultTTL)
+	return unlockWith(s, c, secret, agent.DefaultTTL, agent.ScopeReceive)
 }
 
-// unlockWith starts the agent if none is running, unlocks it, and says
-// until when.
-func unlockWith(s *store.Store, c *agent.Client, secret []byte, ttl time.Duration) error {
+// unlockWith starts the agent if none is running, unlocks it in the scope
+// asked for, and says until when.
+func unlockWith(s *store.Store, c *agent.Client, secret []byte, ttl time.Duration, scope agent.Scope) error {
 	if _, err := c.Status(); errors.Is(err, agent.ErrNotRunning) {
 		if err := startAgent(s.Root()); err != nil {
 			return err
@@ -87,7 +88,7 @@ func unlockWith(s *store.Store, c *agent.Client, secret []byte, ttl time.Duratio
 	} else if err != nil {
 		return err
 	}
-	if err := c.Unlock(secret, ttl); err != nil {
+	if err := c.Unlock(secret, ttl, scope); err != nil {
 		return err
 	}
 	st, err := c.Status()
@@ -173,7 +174,7 @@ func passphraseSet(args []string) error {
 		if err != nil {
 			return err
 		}
-		return unlockWith(s, c, secret, agent.DefaultTTL)
+		return unlockWith(s, c, secret, agent.DefaultTTL, agent.ScopeReceive)
 	}
 	if enc {
 		return usageErrf("%v; run '%s passphrase change' to change the passphrase", store.ErrEncrypted, prog)
@@ -195,7 +196,7 @@ func passphraseSet(args []string) error {
 	if err != nil {
 		return err
 	}
-	return unlockWith(s, c, secret, agent.DefaultTTL)
+	return unlockWith(s, c, secret, agent.DefaultTTL, agent.ScopeReceive)
 }
 
 func passphraseChange(args []string) error {
@@ -299,7 +300,10 @@ func stopAgent(c *agent.Client) (bool, error) {
 // secret manager, or from a pipe.
 func cmdUnlock(args []string) error {
 	fs := newFlagSet("unlock")
-	ttl := fs.Duration("ttl", agent.DefaultTTL, "lock again this long after unlocking; 0 means not until 'auu lock'")
+	// The default is the scope's, DefaultTTL to receive and DefaultSendTTL
+	// to send, so it is decided after parsing from whether --ttl was given.
+	ttl := fs.Duration("ttl", 0, "stay unlocked this long; 0 means not until 'auu lock'. 8h to receive, 10m to send")
+	send := fs.Bool("send", false, "unlock to send as well as receive, for --ttl; the passphrase is asked for again")
 	file := fs.String("passphrase-file", "", "read the passphrase from the first line of this file")
 	positional, err := parseArgs(fs, args)
 	if err != nil {
@@ -307,6 +311,18 @@ func cmdUnlock(args []string) error {
 	}
 	if len(positional) > 0 {
 		return usageErrf("unexpected argument %q", positional[0])
+	}
+	scope := agent.ScopeReceive
+	if *send {
+		scope = agent.ScopeSend
+	}
+	ttlGiven := false
+	fs.Visit(func(f *flag.Flag) { ttlGiven = ttlGiven || f.Name == "ttl" })
+	if !ttlGiven {
+		*ttl = agent.DefaultTTL
+		if *send {
+			*ttl = agent.DefaultSendTTL
+		}
 	}
 	if *ttl < 0 {
 		return usageErrf("--ttl must not be negative")
@@ -327,7 +343,7 @@ func cmdUnlock(args []string) error {
 	if err != nil {
 		return err
 	}
-	return unlockWith(s, c, secret, *ttl)
+	return unlockWith(s, c, secret, *ttl, scope)
 }
 
 // cmdLock drops the keys from the agent. The agent keeps running, so the

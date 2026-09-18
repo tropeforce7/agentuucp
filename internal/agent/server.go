@@ -65,6 +65,11 @@ type Server struct {
 	timer   *time.Timer
 	ident   *identityKeys
 	pending map[string]*certKey
+	// Send scope, which never outlives receive: sendUntil is when it ends,
+	// zero while it lasts until lock, and send says whether it is held at
+	// all. See unlockLocked for the rule.
+	send      bool
+	sendUntil time.Time
 
 	stopOnce sync.Once
 	stopped  chan struct{}
@@ -109,6 +114,11 @@ type Status struct {
 	Locked bool
 	// Until is when the agent will lock, and zero when it will not.
 	Until time.Time
+	// Scope is what the unlock permits, receive or send; empty when locked.
+	Scope Scope
+	// SendUntil is when send scope ends and the agent is back in receive
+	// scope: zero when send scope lasts until lock, and when it is not held.
+	SendUntil time.Time
 	// Keys names what is held: KeyIdentity when unlocked, and every
 	// PendingPrefix key generate has made.
 	Keys []string
@@ -213,20 +223,31 @@ func (s *Server) dispatch(req *request) *response {
 	switch req.Op {
 	case OpStatus:
 		st := s.statusLocked()
-		r := &response{Locked: st.Locked, Keys: st.Keys}
+		r := &response{Locked: st.Locked, Keys: st.Keys, Scope: string(st.Scope)}
 		if !st.Until.IsZero() {
 			r.Until = st.Until.Format(time.RFC3339)
+		}
+		if !st.SendUntil.IsZero() {
+			r.SendUntil = st.SendUntil.Format(time.RFC3339)
 		}
 		return r
 	case OpUnlock:
 		if req.TTL < 0 {
 			return &response{Error: "ttl must not be negative"}
 		}
-		if err := s.unlockLocked(req.Passphrase, time.Duration(req.TTL)*time.Second); err != nil {
+		scope := ScopeReceive
+		if req.Send {
+			scope = ScopeSend
+		}
+		if err := s.unlockLocked(req.Passphrase, time.Duration(req.TTL)*time.Second, scope); err != nil {
 			return &response{Error: err.Error()}
 		}
 		return &response{}
 	case OpLock:
+		if req.Send {
+			s.dropSendLocked("lock --send")
+			return &response{}
+		}
 		s.lockLocked("lock")
 		return &response{}
 	case OpStop:
@@ -234,6 +255,9 @@ func (s *Server) dispatch(req *request) *response {
 		s.lockLocked("stop")
 		return &response{}
 	case OpSign:
+		if err := s.inScopeLocked(req); err != nil {
+			return &response{Error: err.Error()}
+		}
 		sig, err := s.signLocked(req.Key, req.Message, req.Context)
 		if err != nil {
 			return &response{Error: err.Error()}
@@ -252,6 +276,9 @@ func (s *Server) dispatch(req *request) *response {
 		}
 		return &response{Shared: shared}
 	case OpGenerate:
+		if err := s.inScopeLocked(req); err != nil {
+			return &response{Error: err.Error()}
+		}
 		pub, wrapped, handle, err := s.generateLocked(req.Key, req.Params)
 		if err != nil {
 			return &response{Error: err.Error()}
@@ -263,18 +290,35 @@ func (s *Server) dispatch(req *request) *response {
 }
 
 // Unlock decrypts the home key with the passphrase, reads the identity, and
-// holds both for ttl, or until Lock when ttl is zero. A wrong passphrase is
-// refused now, and nothing is held after a failure.
-func (s *Server) Unlock(passphrase []byte, ttl time.Duration) error {
+// holds both in the scope asked for. A wrong passphrase is refused now, and
+// nothing is held after a failure.
+//
+// The rule for the two expiries, which the plan left to be settled: send
+// scope never outlives receive scope. A receive unlock holds the keys for
+// ttl, or until Lock when ttl is zero; while send scope is live it
+// re-verifies the passphrase, resets the receive expiry and leaves send
+// alone. A send unlock's ttl is the send scope's: on a locked agent it gives
+// receive DefaultTTL and send ttl, or both until lock when ttl is zero; on
+// an unlocked agent it leaves the receive expiry alone unless that would
+// fall before the send expiry, and then extends it to match. Receive
+// expiring locks everything; send expiring drops to receive.
+func (s *Server) Unlock(passphrase []byte, ttl time.Duration, scope Scope) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.unlockLocked(passphrase, ttl)
+	return s.unlockLocked(passphrase, ttl, scope)
 }
 
-func (s *Server) unlockLocked(passphrase []byte, ttl time.Duration) error {
+func (s *Server) unlockLocked(passphrase []byte, ttl time.Duration, scope Scope) error {
 	if ttl < 0 {
 		return errors.New("ttl must not be negative")
 	}
+	if scope != ScopeReceive && scope != ScopeSend {
+		return fmt.Errorf("unknown scope %q", scope)
+	}
+	// What was held before, for the rule below: an unlock that fails leaves
+	// nothing, and one that succeeds decides the expiries from these.
+	wasUnlocked := s.homeKey != nil
+	wasUntil, wasSend, wasSendUntil := s.until, s.send, s.sendUntil
 	// Whatever was held goes first, so that a failed unlock leaves nothing.
 	s.lockLocked("unlock")
 	encrypted, err := s.home.HomeKey()
@@ -327,22 +371,83 @@ func (s *Server) unlockLocked(passphrase []byte, ttl time.Duration) error {
 	}
 	s.homeKey = homeKey
 	s.ident = &identityKeys{suite: suite, signSeed: signSeed, mlkemSeed: mlkemSeed, x25519Key: x25519Key}
-	s.until = time.Time{}
-	if ttl > 0 {
-		s.until = s.now().Add(ttl)
+	now := s.now()
+	switch scope {
+	case ScopeReceive:
+		s.until = time.Time{}
+		if ttl > 0 {
+			s.until = now.Add(ttl)
+		}
+		s.send, s.sendUntil = wasUnlocked && wasSend, wasSendUntil
+	case ScopeSend:
+		s.send, s.sendUntil = true, time.Time{}
+		if ttl > 0 {
+			s.sendUntil = now.Add(ttl)
+		}
+		switch {
+		case !wasUnlocked && ttl == 0:
+			s.until = time.Time{}
+		case !wasUnlocked:
+			s.until = now.Add(DefaultTTL)
+		default:
+			s.until = wasUntil
+		}
+		// Send never outlives receive: a receive expiry that would fall
+		// before the send expiry is moved out to it, and one that is
+		// until-lock stays so.
+		if !s.until.IsZero() && (s.sendUntil.IsZero() || s.until.Before(s.sendUntil)) {
+			s.until = s.sendUntil
+		}
+	}
+	if !s.until.IsZero() {
 		// The timer runs on the real clock and the decision on the injected
 		// one, so a test with a moved clock is refused by the check every
 		// request makes, and a real agent zeroes on time even when idle.
-		s.timer = time.AfterFunc(ttl, func() {
+		s.timer = time.AfterFunc(s.until.Sub(now), func() {
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			s.expireLocked()
 		})
-		s.log.Printf("unlocked until %s", s.until.Format(time.RFC3339))
-	} else {
-		s.log.Printf("unlocked until lock or exit")
 	}
+	s.log.Printf("unlocked to %s, %s", s.scopeLocked(), s.expiriesLocked())
 	return nil
+}
+
+// dropSendLocked narrows a send-scope unlock to receive without locking:
+// 'auu lock --send', and what send scope expiring does.
+func (s *Server) dropSendLocked(why string) {
+	if !s.send {
+		return
+	}
+	s.send, s.sendUntil = false, time.Time{}
+	s.log.Printf("send scope dropped (%s)", why)
+}
+
+// scopeLocked is the scope the agent is in, and empty when locked.
+func (s *Server) scopeLocked() Scope {
+	switch {
+	case s.homeKey == nil:
+		return ""
+	case s.send:
+		return ScopeSend
+	default:
+		return ScopeReceive
+	}
+}
+
+// expiriesLocked is the two expiries for the log.
+func (s *Server) expiriesLocked() string {
+	receive := "until lock or exit"
+	if !s.until.IsZero() {
+		receive = "until " + s.until.Format(time.RFC3339)
+	}
+	if !s.send {
+		return receive
+	}
+	if s.sendUntil.IsZero() {
+		return "send until lock or exit, receive " + receive
+	}
+	return "send until " + s.sendUntil.Format(time.RFC3339) + ", receive " + receive
 }
 
 // Lock overwrites every byte of key material held and drops it.
@@ -365,6 +470,7 @@ func (s *Server) lockLocked(why string) {
 		delete(s.pending, name)
 	}
 	s.until = time.Time{}
+	s.send, s.sendUntil = false, time.Time{}
 	if s.timer != nil {
 		s.timer.Stop()
 		s.timer = nil
@@ -374,12 +480,21 @@ func (s *Server) lockLocked(why string) {
 	}
 }
 
-// expireLocked locks if the TTL has passed. It is called on every request,
-// so a request a millisecond after expiry is refused whether or not the
-// timer has fired.
+// expireLocked locks if the receive TTL has passed, and drops send scope if
+// the send TTL has. It is called on every request, so a request a
+// millisecond after expiry is refused whether or not the timer has fired;
+// send scope has no timer, because dropping it zeroes nothing.
 func (s *Server) expireLocked() {
-	if s.homeKey != nil && !s.until.IsZero() && !s.now().Before(s.until) {
+	if s.homeKey == nil {
+		return
+	}
+	now := s.now()
+	if !s.until.IsZero() && !now.Before(s.until) {
 		s.lockLocked("ttl")
+		return
+	}
+	if s.send && !s.sendUntil.IsZero() && !now.Before(s.sendUntil) {
+		s.dropSendLocked("ttl")
 	}
 }
 
@@ -392,7 +507,10 @@ func (s *Server) Status() Status {
 }
 
 func (s *Server) statusLocked() Status {
-	st := Status{Locked: s.homeKey == nil, Until: s.until}
+	st := Status{Locked: s.homeKey == nil, Until: s.until, Scope: s.scopeLocked()}
+	if s.send {
+		st.SendUntil = s.sendUntil
+	}
 	if s.ident != nil {
 		st.Keys = append(st.Keys, KeyIdentity)
 	}
@@ -404,6 +522,23 @@ func (s *Server) statusLocked() Status {
 
 // errLocked is the reply to every operation that needs a key.
 var errLocked = errors.New(LockedMessage)
+
+// errReceiveOnly is the reply to an operation that originates while the
+// agent is unlocked to receive.
+var errReceiveOnly = errors.New(ReceiveOnlyMessage)
+
+// inScopeLocked refuses an operation the unlock's scope does not permit.
+// Locked comes first, as it always has: a locked agent says so and nothing
+// about scope.
+func (s *Server) inScopeLocked(req *request) error {
+	if s.homeKey == nil {
+		return errLocked
+	}
+	if ScopeOf(req.Op, req.Key, req.Message) == ScopeSend && !s.send {
+		return errReceiveOnly
+	}
+	return nil
+}
 
 func (s *Server) signLocked(key string, message, context []byte) ([]byte, error) {
 	if s.homeKey == nil {
