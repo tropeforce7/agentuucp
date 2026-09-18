@@ -687,7 +687,10 @@ func printMessage(s *store.Store, box store.Box, m *store.Stored) {
 	}
 	fmt.Printf("thread:  %s\n", m.Inner.Body.Thread)
 	fmt.Printf("id:      %s\n", m.Inner.ID)
-	fmt.Printf("time:    %s\n", m.Inner.Time.Local().Format(time.RFC1123))
+	// The sender's stamp, labelled as theirs: it is their word, bounded at
+	// open to no later than now, and orders nothing here.
+	fmt.Printf("sent:    %s (the sender's clock)\n", m.Inner.Time.Local().Format(time.RFC1123))
+	fmt.Printf("received: %s\n", m.Received.Local().Format(time.RFC1123))
 	if len(m.Inner.Body.Attachments) > 0 {
 		fmt.Println("files:")
 		for _, a := range m.Inner.Body.Attachments {

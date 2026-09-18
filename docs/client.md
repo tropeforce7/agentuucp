@@ -253,8 +253,13 @@ auu reply MESSAGE-ID 'It is missing. Open an issue against home-java.'
 
 A thread id works there too. `auu reply THREAD-ID` answers whatever is latest
 on the thread — including your own last message, in which case it is a
-follow-up to the person you sent it to. Message and thread ids are the same
-shape and either may be shortened to a unique prefix.
+follow-up to the person you sent it to. Latest is by when the message
+arrived here and then by the relay's own numbering, never by the time
+stamped inside it, which is the sender's word: `auu read` shows that
+stamp as `sent:`, labelled the sender's clock, beside `received:`, and a
+message stamped in the future is refused when it is opened. Message and
+thread ids are the same shape and either may be shortened to a unique
+prefix.
 
 A reply carries the thread's subject unless you give it one of its own, with
 `--subject` or by editing the `# Subject:` line in the editor; the thread is

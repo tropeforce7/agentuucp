@@ -399,3 +399,49 @@ func TestMessageIDPrefixBoundary(t *testing.T) {
 		t.Fatalf("a %d character id prefix resolved", minIDPrefix-1)
 	}
 }
+
+// A thread's order is the receiver's, not the sender's clock. The stamp
+// inside a message is whatever its sender wrote, and FindThread once
+// ordered by it first, so a peer who stamped a message in the year 9999
+// was "latest" on the thread for as long as it was kept and every reply by
+// thread went to them. Now arrival here comes first, then the relay's id,
+// and the stamp only breaks a tie.
+func TestAThreadIsOrderedByArrivalNotTheSendersClock(t *testing.T) {
+	s := newStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	fromTheFuture := stored("00000000000000000000000000000001", now.Add(-time.Hour))
+	fromTheFuture.Inner.Time = now.AddDate(1, 0, 0)
+	fromTheFuture.RelayID = 1
+	honest := stored("00000000000000000000000000000002", now)
+	honest.Inner.Time = now
+	honest.RelayID = 2
+	for _, m := range []*Stored{honest, fromTheFuture} {
+		if err := s.Save(Inbox, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, latest, err := s.FindThread("0123456789abcdef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.Inner.ID != honest.Inner.ID {
+		t.Errorf("FindThread chose %s, stamped %s; want the one that arrived last, %s",
+			latest.Inner.ID, latest.Inner.Time.Format(time.RFC3339), honest.Inner.ID)
+	}
+	if !LaterThan(honest, fromTheFuture) || LaterThan(fromTheFuture, honest) {
+		t.Error("LaterThan does not order by arrival")
+	}
+	// Two that arrived in the same second are ordered by the relay's id,
+	// and only two the relay numbered alike by the stamp.
+	a := stored("00000000000000000000000000000003", now)
+	b := stored("00000000000000000000000000000004", now)
+	a.RelayID, b.RelayID = 5, 6
+	a.Inner.Time, b.Inner.Time = now.Add(time.Hour), now
+	if !LaterThan(b, a) {
+		t.Error("the relay's id does not order two that arrived in the same second")
+	}
+	b.RelayID = 5
+	if !LaterThan(a, b) {
+		t.Error("the stamp does not break a tie")
+	}
+}

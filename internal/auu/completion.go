@@ -364,7 +364,7 @@ func threads() []candidate {
 		}
 		for _, m := range msgs {
 			t := m.Inner.Body.Thread
-			if cur, ok := latest[t]; !ok || m.Inner.Time.After(cur.Inner.Time) {
+			if cur, ok := latest[t]; !ok || store.LaterThan(m, cur) {
 				latest[t] = m
 			}
 		}

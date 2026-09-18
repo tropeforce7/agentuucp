@@ -608,3 +608,52 @@ func TestABodyFileWithWindowsLineEndingsSends(t *testing.T) {
 		t.Errorf("a lone carriage return: %v, want the usage refusal naming U+000D", err)
 	}
 }
+
+// auu reply THREAD answers the latest message on the thread, and latest
+// is by arrival here, not by the stamp a sender chose: a record stamped a
+// year ahead that arrived first is not the one answered. The records are
+// saved by hand, since open now refuses a stamp from the future; a record
+// from before that rule, or written by hand, is what this is for. And
+// read shows the stamp as the sender's, beside when it arrived.
+func TestReplyByThreadAnswersTheLatestArrivalNotTheLatestStamp(t *testing.T) {
+	alice, bob := twoPeers(t)
+	s, err := store.Open(bob.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	const thread = "0123456789abcdef0123456789abcdef"
+	record := func(id string, received, stamped time.Time, relayID int64, text string) *store.Stored {
+		return &store.Stored{
+			Relay: bob.defaultRelayName(), RelayID: relayID, Received: received,
+			Inner: &envelope.Inner{
+				From: alice.exportFingerprint(), To: bob.exportFingerprint(), ID: id, Time: stamped,
+				Body: message.Body{Type: message.TypeAsk, Thread: thread, Subject: "the thread", Text: text},
+			},
+			SenderName: "alice",
+		}
+	}
+	fromTheFuture := record("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", now.Add(-time.Hour), now.AddDate(1, 0, 0), 1, "stamped next year")
+	honest := record("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", now, now, 2, "stamped today")
+	for _, m := range []*store.Stored{fromTheFuture, honest} {
+		if err := s.Save(store.Inbox, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var sent sentJSON
+	if err := json.Unmarshal([]byte(bob.run("reply", thread[:12], "--json", "answering the thread")), &sent); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := s.Load(store.Sent, sent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Inner.Body.InReplyTo != honest.Inner.ID {
+		t.Errorf("reply THREAD answered %s; want the one that arrived last, %s", reply.Inner.Body.InReplyTo, honest.Inner.ID)
+	}
+	out := bob.run("read", fromTheFuture.Inner.ID)
+	if !strings.Contains(out, "sent:    "+fromTheFuture.Inner.Time.Local().Format(time.RFC1123)+" (the sender's clock)") ||
+		!strings.Contains(out, "received: "+fromTheFuture.Received.Local().Format(time.RFC1123)) {
+		t.Errorf("read does not show the stamp as the sender's beside the arrival:\n%s", out)
+	}
+}

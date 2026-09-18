@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 )
@@ -354,5 +355,39 @@ func TestValidateHoldsTheManifestBodyToWhatATerminalShows(t *testing.T) {
 		} else if err != nil && !errors.Is(err, ErrForm) {
 			t.Errorf("attachment name with %s: %v is not ErrForm", tc.name, err)
 		}
+	}
+}
+
+// A manifest stamped in the future is malformed at open, as an envelope's
+// inner is; one stamped a year ago opens. The stamp is set after
+// BuildManifest and before Seal, which Validate does not read.
+func TestAManifestStampedInTheFutureIsMalformed(t *testing.T) {
+	from, to := pair(t)
+	open := func(when time.Time) error {
+		t.Helper()
+		sources := sourcesOf(memSource{"a", []byte("x")})
+		m, err := BuildManifest(from, to.Public(), "0123456789abcdef0123456789abcdef",
+			Body{Type: "ask", Thread: "0123456789abcdef0123456789abcdef", Text: "x"}, sources, MinChunkSize)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.Time = when
+		var buf bytes.Buffer
+		if err := Seal(&buf, from, to.Public(), m, sources); err != nil {
+			t.Fatal(err)
+		}
+		blob := buf.Bytes()
+		n, err := ManifestLength(blob[:HeaderSize])
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = OpenManifest(to, blob[:HeaderSize], blob[HeaderSize:HeaderSize+n])
+		return err
+	}
+	if err := open(time.Now().Add(24 * time.Hour)); !errors.Is(err, ErrForm) {
+		t.Errorf("a day ahead: %v, want ErrForm", err)
+	}
+	if err := open(time.Now().Add(-365 * 24 * time.Hour)); err != nil {
+		t.Errorf("a year ago: %v, want opened", err)
 	}
 }

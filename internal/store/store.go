@@ -813,11 +813,11 @@ func (s *Store) Find(idOrPrefix string) (Box, *Stored, error) {
 // by thread id or a unique prefix of one. Quarantine is not searched: a
 // stranger's thread is not one to reply on.
 //
-// "Latest" is by the message's own timestamp, and then — since timestamps are
-// whole seconds and two messages in one second are ordinary — by the id the
-// relay gave the message. The relay numbers every message it accepts from one
-// counter across all mailboxes, and both the copy in sent/ and the copy in
-// inbox/ carry that number, so the order is the same on both ends of a
+// "Latest" is LaterThan's: by when the message was stored here, then by
+// the id the relay gave it, and by the sender's own timestamp only to
+// break a tie. The relay numbers every message it accepts from one counter
+// across all mailboxes, and both the copy in sent/ and the copy in inbox/
+// carry that number, so the order is the same on both ends of a
 // conversation and never depends on which file was listed first.
 func (s *Store) FindThread(idOrPrefix string) (Box, *Stored, error) {
 	if len(idOrPrefix) < 4 {
@@ -849,7 +849,7 @@ func (s *Store) FindThread(idOrPrefix string) (Box, *Stored, error) {
 			if !known {
 				threads = append(threads, tid)
 			}
-			if latest == nil || laterThan(m, latest) {
+			if latest == nil || LaterThan(m, latest) {
 				latest, latestBox = m, box
 			}
 		}
@@ -912,24 +912,31 @@ func (s *Store) FirstOnThread(thread string) (Box, *Stored, error) {
 // opensBefore orders two messages on a thread by how likely each is to be
 // the one it was opened with: a message that answers nothing comes before
 // one that answers something, whatever the clocks say, and otherwise the
-// earlier of the two by laterThan's ordering.
+// earlier of the two by LaterThan's ordering.
 func opensBefore(a, b *Stored) bool {
 	if opensA, opensB := a.Inner.Body.InReplyTo == "", b.Inner.Body.InReplyTo == ""; opensA != opensB {
 		return opensA
 	}
-	return laterThan(b, a)
+	return LaterThan(b, a)
 }
 
-// laterThan orders two messages on a thread: by the sender's timestamp, then
-// by the relay's id, then by when they were stored here.
-func laterThan(a, b *Stored) bool {
+// LaterThan orders two messages on a thread: by when each was stored here,
+// then by the relay's id, and by the sender's own timestamp only between
+// two that arrived in the same second. A thread's order is the receiver's,
+// not the sender's clock: the timestamp inside a message is whatever its
+// sender wrote, and when it came first a peer who stamped a message in the
+// year 9999 was "latest" on that thread for as long as the message was
+// kept, so every reply by thread went to them. Arrival here and the relay's
+// counter are this side's own, and a sent copy carries both as its inbox
+// twin does.
+func LaterThan(a, b *Stored) bool {
 	switch {
-	case !a.Inner.Time.Equal(b.Inner.Time):
-		return a.Inner.Time.After(b.Inner.Time)
+	case !a.Received.Equal(b.Received):
+		return a.Received.After(b.Received)
 	case a.RelayID != b.RelayID:
 		return a.RelayID > b.RelayID
 	default:
-		return a.Received.After(b.Received)
+		return a.Inner.Time.After(b.Inner.Time)
 	}
 }
 

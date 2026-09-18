@@ -521,3 +521,32 @@ func TestAnInnerWhoseIDIsNotAnIDIsMalformed(t *testing.T) {
 		}
 	}
 }
+
+// A message can be old, since it was stored and forwarded, but not from
+// the future: an inner stamped past the receiver's clock by more than the
+// skew a relay allows a request is malformed, so that the stamp shown as
+// the sender's is at least possible; one stamped a year ago opens.
+func TestAnInnerStampedInTheFutureIsMalformed(t *testing.T) {
+	alice, bob := pair(t)
+	stamped := func(when time.Time) *Envelope {
+		t.Helper()
+		innerBytes, err := json.Marshal(&Inner{
+			From: alice.Fingerprint(), FromBundle: alice.Public().Bundle(), To: bob.Fingerprint(),
+			ID: "0123456789abcdef0123456789abcdef", Time: when, Body: body(t),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		plaintext := append(append([]byte{}, mustSign(t, alice, sigInput(bob.Fingerprint(), innerBytes))...), innerBytes...)
+		return sealPlaintext(t, bob.Public(), plaintext)
+	}
+	if _, _, err := Open(bob, stamped(time.Now().Add(24*time.Hour))); Cause(err) != ErrMalformed {
+		t.Errorf("a day ahead: %v, want malformed", err)
+	}
+	if _, _, err := Open(bob, stamped(time.Now().Add(-365*24*time.Hour))); err != nil {
+		t.Errorf("a year ago: %v, want opened", err)
+	}
+	if _, _, err := Open(bob, stamped(time.Now().Add(time.Minute))); err != nil {
+		t.Errorf("a minute ahead, within the skew: %v, want opened", err)
+	}
+}

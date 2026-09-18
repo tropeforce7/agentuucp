@@ -407,6 +407,16 @@ signed manifest carry the same name, so a message the relay filed elsewhere
 is found out on opening. Absent means `default` everywhere, and a message
 sent with no channel is byte for byte what it was before channels.
 
+The sealed record carries a time, and it is the sender's word alone: it is
+shown, labelled as theirs, and it orders nothing. A thread's order is the
+receiver's — when each message arrived here, then the relay's counter —
+so a peer cannot stamp a message into being the latest on a thread and
+draw every reply by thread to it. The one bound on the stamp is the
+future: a message may be old, since it was stored and forwarded, but one
+stamped more than the request skew (five minutes) past the receiver's
+clock is refused at open as malformed, on the envelope and on the
+manifest alike.
+
 The listing at step 7 takes three more parameters, all optional. `wait=D`
 asks the relay to hold the answer until a message arrives after the id asked
 from, or `D` elapses, and then to answer the ordinary listing. A relay holds

@@ -13,8 +13,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 // HeaderSize is what a receiver must read before it knows anything: the
@@ -103,6 +105,10 @@ func OpenManifest(self *identity.Identity, header, sealed []byte) (*Opened, erro
 	}
 	if m.To != self.Fingerprint() {
 		return nil, fmt.Errorf("%w: %w: manifest is addressed to %s", ErrForm, ErrNotForUs, m.To)
+	}
+	// Old is fine, the future is not: the same bound the envelope keeps.
+	if m.Time.After(time.Now().Add(relayapi.MaxSkew)) {
+		return nil, fmt.Errorf("%w: manifest is stamped %s, in the future", ErrForm, m.Time.UTC().Format(time.RFC3339))
 	}
 
 	// The claimed sender must be the one its own key material produces,
