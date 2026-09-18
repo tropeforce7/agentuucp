@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
@@ -73,6 +74,13 @@ type Store struct {
 	reconciled   int
 	swept        SweepResult
 	migratedFrom int
+
+	// uploads serialises the operations on one upload in progress: an
+	// append, a completion and an abort each hold the upload's own lock
+	// for their whole length, so that no two of them read the row and act
+	// on the file between one another. See uploadLock.
+	uploadsMu sync.Mutex
+	uploads   map[string]*sync.Mutex
 }
 
 // SetFaultLog names where storage faults are reported and the clock they

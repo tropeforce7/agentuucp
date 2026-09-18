@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -162,7 +163,19 @@ func (s *Store) Upload(id string) (*Upload, error) {
 // The copy streams: nothing larger than the buffer is held, whatever the
 // sender sends. offset must match what the relay already has, so a client that
 // lost a connection asks with HEAD and resumes from the truth.
+//
+// One append at a time per upload, and none while a completion or an abort
+// is under way: the upload's lock is held from the offset check through the
+// file write and the row's update. Without it two appends at one offset
+// both passed the check, both landed on the file, and the upload held twice
+// what it declared and twice what was reserved — an admitted sender's way
+// past the quotas, bounded only by the in-flight cap. The lock is held
+// across the body copy on purpose; a SQLite transaction is not, because a
+// transaction open for the length of a network read would hold the one
+// connection every other request needs.
 func (s *Store) AppendUpload(id string, offset int64, r func(w *os.File, limit int64) (int64, error)) (int64, error) {
+	unlock := s.uploadLock(id)
+	defer unlock()
 	u, err := s.Upload(id)
 	if err != nil {
 		return 0, err
@@ -212,7 +225,12 @@ func (s *Store) AppendUpload(id string, offset int64, r func(w *os.File, limit i
 //
 // The file is renamed into place before the transaction commits, so the
 // invariant Put keeps holds here too: after a commit there is always a file.
+// Under the upload's lock, so that an append still copying cannot land on
+// a file that has just been renamed into place: a completion waits for it,
+// and then finds the row past its size or exactly at it.
 func (s *Store) CompleteUpload(id string) (int64, error) {
+	unlock := s.uploadLock(id)
+	defer s.forgetUploadLock(id, unlock)
 	u, err := s.Upload(id)
 	if err != nil {
 		return 0, err
@@ -253,8 +271,12 @@ func (s *Store) CompleteUpload(id string) (int64, error) {
 	return messageID, nil
 }
 
-// AbortUpload drops an upload and releases its reservation.
+// AbortUpload drops an upload and releases its reservation. Under the
+// upload's lock, as CompleteUpload is, and the lock's entry goes with the
+// upload.
 func (s *Store) AbortUpload(id string) (bool, error) {
+	unlock := s.uploadLock(id)
+	defer s.forgetUploadLock(id, unlock)
 	res, err := s.db.Exec(`DELETE FROM uploads WHERE id = ?`, id)
 	if err != nil {
 		return false, err
@@ -270,6 +292,36 @@ func (s *Store) AbortUpload(id string) (bool, error) {
 		return true, s.fault(s.uploadPath(id), err)
 	}
 	return true, nil
+}
+
+// uploadLock takes the lock for one upload, making it if this is the first
+// operation on the id since the store opened, and returns what releases it.
+func (s *Store) uploadLock(id string) func() {
+	s.uploadsMu.Lock()
+	if s.uploads == nil {
+		s.uploads = map[string]*sync.Mutex{}
+	}
+	mu, ok := s.uploads[id]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.uploads[id] = mu
+	}
+	s.uploadsMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
+}
+
+// forgetUploadLock releases an upload's lock and drops its entry, for the
+// operations after which the upload no longer exists. The entry is removed
+// under the map's lock before the upload's lock is released, so a caller
+// that comes in next makes a fresh entry rather than taking a lock for an
+// upload that is gone; one already waiting on the old lock takes it, finds
+// no row, and answers as it would for any unknown upload.
+func (s *Store) forgetUploadLock(id string, unlock func()) {
+	s.uploadsMu.Lock()
+	delete(s.uploads, id)
+	s.uploadsMu.Unlock()
+	unlock()
 }
 
 // PurgeUploads abandons uploads nobody finished. Their reservations go with
