@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -284,8 +285,19 @@ func (o *Opened) ToDirectory(r io.Reader, dir string) (err error) {
 	if err := o.OpenPayload(r, func(a Attachment) (io.WriteCloser, error) {
 		// The name has already been through ValidAttachmentName in Validate,
 		// so it is a base name; Base is belt and braces.
-		return os.OpenFile(filepath.Join(tmp, filepath.Base(a.Name)),
+		f, err := os.OpenFile(filepath.Join(tmp, filepath.Base(a.Name)),
 			os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, fs.ErrExist) {
+			// Two names Validate told apart are one file on this disk:
+			// case folding it foresaw and refused, but a filesystem may
+			// fold more, such as Unicode normalisation on APFS. That is
+			// the manifest's fault, not the transport's, so it is refused
+			// as malformed, and the receiver keeps the stream under
+			// damaged and acknowledges it rather than meeting it again at
+			// every fetch.
+			return nil, fmt.Errorf("%w: attachment %q is one file with another on this disk", ErrForm, a.Name)
+		}
+		return f, err
 	}); err != nil {
 		return err
 	}

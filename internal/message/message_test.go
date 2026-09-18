@@ -146,3 +146,26 @@ func TestValidateHoldsThreadAndInReplyToToTheIDShape(t *testing.T) {
 		t.Errorf("an empty in_reply_to was refused: %v", err)
 	}
 }
+
+// Two attachment names that differ only in case are one file on a disk
+// that folds case, so a message may not carry both, on this path as on the
+// stream's: the rule is one, in DistinctAttachmentNames.
+func TestValidateRejectsNamesThatAreOneFileWhereCaseDoesNotCount(t *testing.T) {
+	for _, names := range [][2]string{{"Report.txt", "report.txt"}, {"Makefile", "makefile"}} {
+		a, _ := NewAttachment(names[0], []byte("a"))
+		b, _ := NewAttachment(names[1], []byte("b"))
+		body := Body{Type: TypeNote, Thread: "0123456789abcdef0123456789abcdef", Attachments: []Attachment{a, b}}
+		err := body.Validate()
+		if err == nil {
+			t.Fatalf("accepted %q beside %q", names[0], names[1])
+		}
+		if !strings.Contains(err.Error(), "are one file where case does not count") {
+			t.Fatalf("%q beside %q: %v, want the sentence naming the rule", names[0], names[1], err)
+		}
+	}
+	a, _ := NewAttachment("Report.txt", []byte("a"))
+	b, _ := NewAttachment("report.md", []byte("b"))
+	if err := (&Body{Type: TypeNote, Thread: "0123456789abcdef0123456789abcdef", Attachments: []Attachment{a, b}}).Validate(); err != nil {
+		t.Fatalf("two names that are two files were refused: %v", err)
+	}
+}

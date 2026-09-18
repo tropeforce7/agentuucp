@@ -103,6 +103,15 @@ starting point. The editor is `$AUU_EDITOR`, then `editor` in `config.json`,
 then `$VISUAL`, then `$EDITOR`, then `vi`. The draft is kept at
 `~/.auu/COMPOSE_MSG`, so a send that fails at the relay has not lost it.
 
+`--attach` repeats, and each file travels under its base name: no
+directory, and no two names that are one file where case does not count.
+`Report.txt` beside `report.txt`, or `Makefile` beside `makefile`, is
+refused before anything leaves, because the receiver may be on a disk that
+spells them as one — macOS by default, Windows always — and a message that
+cannot be written there is no use to anyone. Above 64 KiB in all, the
+message goes as a stream, in pieces, resumed with `auu send --resume` if
+it is interrupted; nothing about the command changes.
+
 A note to yourself needs no peer at all:
 
 *Listing 1.3b*

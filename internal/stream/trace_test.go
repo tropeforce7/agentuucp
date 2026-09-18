@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -231,5 +233,81 @@ func TestValidateHoldsTheManifestBodyToTheMessageRules(t *testing.T) {
 		if err := build(tc.body); !errors.Is(err, ErrForm) {
 			t.Errorf("%s: %v, want ErrForm", tc.name, err)
 		}
+	}
+}
+
+// Two attachment names that differ only in case are one file on a disk
+// that folds case, which macOS does by default and Windows always: the
+// second O_EXCL open failed with an error the receiver did not know, so the
+// stream was neither delivered nor refused, and every fetch of that mailbox
+// stopped at it. Now Validate refuses the pair, on the sender's side before
+// anything leaves and on the receiver's when the manifest is opened; a
+// Linux sender with Makefile and makefile is told at send.
+func TestNamesThatAreOneFileWhereCaseDoesNotCountAreRefused(t *testing.T) {
+	from, to := pair(t)
+	for _, pairOfNames := range [][2]string{{"Report.txt", "report.txt"}, {"Makefile", "makefile"}, {"K.txt", "k.txt"}} {
+		_, err := BuildManifest(from, to.Public(), "0123456789abcdef0123456789abcdef",
+			Body{Type: "ask", Thread: "0123456789abcdef0123456789abcdef", Text: "x"},
+			sourcesOf(memSource{pairOfNames[0], []byte("upper")}, memSource{pairOfNames[1], []byte("lower")}), MinChunkSize)
+		if !errors.Is(err, ErrForm) {
+			t.Errorf("%q beside %q: %v, want ErrForm", pairOfNames[0], pairOfNames[1], err)
+		} else if !strings.Contains(err.Error(), "are one file where case does not count") {
+			t.Errorf("%q beside %q: %v, want the sentence naming the rule", pairOfNames[0], pairOfNames[1], err)
+		}
+	}
+	// Names that differ in more than case are still two files.
+	if _, err := BuildManifest(from, to.Public(), "0123456789abcdef0123456789abcdef",
+		Body{Type: "ask", Thread: "0123456789abcdef0123456789abcdef", Text: "x"},
+		sourcesOf(memSource{"Report.txt", []byte("a")}, memSource{"report.md", []byte("b")}), MinChunkSize); err != nil {
+		t.Errorf("two names that are two files were refused: %v", err)
+	}
+}
+
+// What a filesystem folds beyond case, Validate cannot foresee, so the
+// open is where it is caught: an O_EXCL open that finds the file already
+// there is the manifest's fault, refused as ErrForm, which the receiver
+// keeps under damaged and acknowledges rather than meeting again at every
+// fetch. The manifest here passed Validate with two names and is changed
+// under the opened stream to two the disk spells as one, which is what a
+// pair Validate cannot tell apart looks like at this point; the test skips
+// itself where the disk keeps Probe and probe apart, so that a pass on
+// Linux is a skip and not a false proof.
+func TestNamesTheDiskSpellsAsOneAreRefusedAtTheOpen(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Probe"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "probe")); err != nil {
+		t.Skip("this filesystem tells Probe from probe; the collision this test is about cannot happen here")
+	}
+
+	from, to := pair(t)
+	blob, _ := build(t, from, to, DefaultChunkSize, map[string][]byte{
+		"Report.txt": []byte("upper"),
+		"z.txt":      []byte("lower"),
+	})
+	n, err := ManifestLength(blob[:HeaderSize])
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := OpenManifest(to, blob[:HeaderSize], blob[HeaderSize:HeaderSize+n])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Past Validate: the second name is now the first with its case
+	// changed, which the digests, being over the bytes, do not notice.
+	o.Manifest.Attachments[1].Name = "report.txt"
+	err = o.ToDirectory(bytes.NewReader(blob[HeaderSize+n:]), filepath.Join(dir, "out"))
+	if !errors.Is(err, ErrForm) {
+		t.Fatalf("ToDirectory: %v; expected the stream refused as malformed (ErrForm) so that the receiver drops it and moves on", err)
+	}
+	if !strings.Contains(err.Error(), `attachment "report.txt" is one file with another on this disk`) {
+		t.Errorf("the refusal does not name the attachment: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "out")); statErr == nil {
+		t.Error("the output directory was made for a refused stream")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "out.part")); statErr == nil {
+		t.Error("the temporary directory was left behind")
 	}
 }

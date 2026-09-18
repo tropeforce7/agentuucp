@@ -161,6 +161,30 @@ func ValidAttachmentName(name string) error {
 	return nil
 }
 
+// DistinctAttachmentNames checks that no two attachment names in a message
+// are one file on the receiver's disk: none equal byte for byte, and none
+// equal under case folding, since macOS by default and Windows spell
+// Report.txt and report.txt as one file. Without the second rule an honest
+// Linux sender with Makefile and makefile stopped a Mac receiving from that
+// relay at all: the second file failed to open and the fetch met the same
+// message at every try. Both ends run it on both paths, so the sender is
+// told before anything leaves. What a filesystem folds beyond case, such
+// as Unicode normalisation on APFS, is not foreseen here and is refused
+// where the file is opened instead.
+func DistinctAttachmentNames(names []string) error {
+	for i, name := range names {
+		for _, earlier := range names[:i] {
+			if earlier == name {
+				return fmt.Errorf("duplicate attachment name %q", name)
+			}
+			if strings.EqualFold(earlier, name) {
+				return fmt.Errorf("attachment names %q and %q are one file where case does not count", earlier, name)
+			}
+		}
+	}
+	return nil
+}
+
 // Validate checks an attachment's name is a safe base name and that the digest
 // and size describe the data actually carried.
 func (a *Attachment) Validate() error {
@@ -186,16 +210,15 @@ func (b *Body) Validate() error {
 	if err := ValidHeader(b.Type, b.Thread, b.InReplyTo, b.Subject); err != nil {
 		return err
 	}
-	seen := make(map[string]bool, len(b.Attachments))
+	names := make([]string, 0, len(b.Attachments))
 	for i := range b.Attachments {
 		if err := b.Attachments[i].Validate(); err != nil {
 			return err
 		}
-		name := b.Attachments[i].Name
-		if seen[name] {
-			return fmt.Errorf("message: duplicate attachment name %q", name)
-		}
-		seen[name] = true
+		names = append(names, b.Attachments[i].Name)
+	}
+	if err := DistinctAttachmentNames(names); err != nil {
+		return fmt.Errorf("message: %w", err)
 	}
 	return nil
 }

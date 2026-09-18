@@ -275,9 +275,10 @@ directory on the relay, and the relay checks it is 64 lowercase hex before
 it reads the signature; an *upload id* names an upload's file, checked as
 32 lowercase hex before the row is read; a *token id* is checked the same
 way before the store is asked; an *attachment name* becomes a file on the
-receiver, and is a base name with no separator and no `.` or `..`, checked
-when a message is opened and, for a stream, when its manifest is, and
-passed through `filepath.Base` again at the write; a *channel name*
+receiver, and is a base name with no separator and no `.` or `..`, distinct
+from the message's other names where case does not count, checked when a
+message is opened and, for a stream, when its manifest is, and passed
+through `filepath.Base` again at the write; a *channel name*
 becomes a directory under an expert host's serve directory, and is held to
 the directory format's rule at the relay for every post, at every push of
 a directory, and at the client's `--channel`; a *relay host* names the
@@ -429,7 +430,14 @@ On the wire a stream is, in order: `enc`, the 1120-byte X-Wing encapsulation;
 `len0`, four bytes saying how long the manifest is; chunk 0, sealed, holding
 the signature and the manifest (subject, text, file names, sizes and SHA-256
 hashes); then file bytes in sealed chunks of 63 KiB; and a last chunk sealed
-under the label `final`, after which nothing may follow.
+under the label `final`, after which nothing may follow. What a manifest may
+name is what a message may: each file name a base name, and no two of them
+one file where case does not count, since the receiver's disk may fold
+case; both ends apply the rule, the sender's before anything leaves. A pair
+the rule cannot foresee that the receiver's disk still spells as one — two
+Unicode normalisations of one name, on APFS — is refused where the file is
+opened, as the manifest's fault, so the stream is kept under `damaged/` and
+acknowledged rather than met again at every fetch.
 
 Three things fall out of that shape:
 
