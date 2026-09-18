@@ -350,15 +350,20 @@ func (c *controlSource) mint() (token, baseURL string, release func(), err error
 		return "", "", nil, fmt.Errorf("the proxy's control socket %s: %v", c.path, err)
 	}
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	// A refused caller is closed before a byte is read, and on Linux that
+	// close can land before this write, which then fails with a broken
+	// pipe rather than the read meeting EOF. Either way the peer closed
+	// without answering, and that is what is said; a pipe error is not a
+	// sentence for a person.
 	if _, err := fmt.Fprintln(conn, "MINT"); err != nil {
 		conn.Close()
-		return "", "", nil, fmt.Errorf("the proxy's control socket %s: %v", c.path, err)
+		return "", "", nil, fmt.Errorf("%s", closedWithoutAnswering(c.path))
 	}
 	r := bufio.NewReaderSize(conn, controlLineMax)
 	line, err := readControlLine(r)
 	if err != nil {
 		conn.Close()
-		return "", "", nil, fmt.Errorf("the proxy's control socket %s closed without answering; the proxy refuses this uid, or is not the proxy", c.path)
+		return "", "", nil, fmt.Errorf("%s", closedWithoutAnswering(c.path))
 	}
 	verb, rest, _ := strings.Cut(line, " ")
 	if verb != "OK" || rest == "" {
@@ -384,15 +389,28 @@ func (c *controlSource) ping() error {
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
-	fmt.Fprintln(conn, "PING")
+	if _, err := fmt.Fprintln(conn, "PING"); err != nil {
+		return errors.New(closedWithoutAnswering(""))
+	}
 	line, err := readControlLine(bufio.NewReaderSize(conn, controlLineMax))
 	if err != nil {
-		return errors.New("closed without answering; the proxy refuses this uid, or is not the proxy")
+		return errors.New(closedWithoutAnswering(""))
 	}
 	if line != "OK" {
 		return errors.New(line)
 	}
 	return nil
+}
+
+// closedWithoutAnswering is the sentence for a control socket that took
+// the connection and closed it with no reply: the proxy refusing this
+// uid, or something else listening there. With a path it names the
+// socket; ping's caller names it.
+func closedWithoutAnswering(path string) string {
+	if path == "" {
+		return "closed without answering; the proxy refuses this uid, or is not the proxy"
+	}
+	return fmt.Sprintf("the proxy's control socket %s closed without answering; the proxy refuses this uid, or is not the proxy", path)
 }
 
 // tokenSource is what serve asks for a token per invocation: the proxy in
