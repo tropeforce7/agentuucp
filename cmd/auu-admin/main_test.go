@@ -819,3 +819,36 @@ func TestADamagedFileInAnAdministratorsHomeExitsFive(t *testing.T) {
 		t.Errorf("the sentence does not name the file: %q", e.Error())
 	}
 }
+
+// TestMailboxesPrintAHostileNameEscaped: a relay from before names had a
+// rule can still hold a name with a terminal escape in it, and it reaches
+// the operator's terminal through the mailbox listing and the one-mailbox
+// view. Both print it with every byte outside the printable set escaped.
+func TestMailboxesPrintAHostileNameEscaped(t *testing.T) {
+	f := newFixture(t, relay.Config{})
+	alice, err := identity.Generate("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.enroll(alice)
+	db, err := sql.Open("sqlite", f.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	hostile := "alice\x1b[2K\x1b[1;31mowned\nccx2.evil"
+	if _, err := db.Exec(`UPDATE mailboxes SET name = ? WHERE fp = ?`, hostile, alice.Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"mailboxes", "ls"}, {"mailboxes", "show", alice.Fingerprint()}} {
+		out := f.boss.run(args...)
+		for i := 0; i < len(out); i++ {
+			if c := out[i]; c == 0x1b || (c < 0x20 && c != '\n' && c != '\t') {
+				t.Fatalf("%v printed byte %#x from the relay's name:\n%q", args, c, out)
+			}
+		}
+		if !strings.Contains(out, `alice\x1b[2K`) {
+			t.Fatalf("%v does not show the name escaped:\n%s", args, out)
+		}
+	}
+}

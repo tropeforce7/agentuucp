@@ -116,7 +116,7 @@ func mailboxesList(args []string) error {
 			state = "blocked"
 		}
 		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\n",
-			m.FP[:16], truncate(orNone(m.Name), 20), m.QueuedMessages,
+			m.FP[:16], truncate(orNone(identity.Printable(m.Name)), 20), m.QueuedMessages,
 			humanBytes(m.QueuedBytes), allowColumn(m), state)
 	}
 	if err := w.Flush(); err != nil {
@@ -150,7 +150,7 @@ func mailboxShow(args []string) error {
 		return printJSON(m)
 	}
 	fmt.Printf("fingerprint: %s\n", m.FP)
-	fmt.Printf("name:        %s\n", orNone(m.Name))
+	fmt.Printf("name:        %s\n", orNone(identity.Printable(m.Name)))
 	fmt.Printf("created:     %s\n", m.Created.Local().Format(time.RFC3339))
 	fmt.Printf("queued:      %d messages, %s\n", m.QueuedMessages, humanBytes(m.QueuedBytes))
 	fmt.Printf("allowlist:   %s\n", allowField(*m))

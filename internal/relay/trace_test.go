@@ -2,14 +2,17 @@ package relay
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
@@ -294,5 +297,50 @@ func TestTheUploadLockIsHeldNoLongerThanTheAppend(t *testing.T) {
 	h.store.uploadsMu.Unlock()
 	if n != 0 {
 		t.Fatalf("%d lock entries after complete and abort, want none", n)
+	}
+}
+
+// TestRegisterHoldsTheNameToTheExportLinesRule: the relay stored and
+// served a registration name with no rule at all, so a terminal escape
+// reached every enrolled user's terminal through 'auu lookup' and the
+// operator's through 'auu-admin mailboxes', and a megabyte was stored per
+// mailbox. Now identity.ValidName, the export line's rule, is applied at
+// registration and refused 400 with the rule's own sentence; a valid name
+// is taken as before, and no name at all — nothing to print — is allowed.
+func TestRegisterHoldsTheNameToTheExportLinesRule(t *testing.T) {
+	h := newHarness(t, Config{})
+	for _, tc := range []struct{ what, name string }{
+		{"a terminal escape and a newline", "bob\x1b[2K\x1b[1;31mowned\nccx2.evil"},
+		{"a megabyte", strings.Repeat("n", 1<<20)},
+	} {
+		id := ids(t, "x")[0]
+		if identity.ValidName(tc.name) == nil {
+			t.Fatalf("%s: the test's name is valid", tc.what)
+		}
+		status, body := h.do(id, "POST", "/v1/register", h.registerBody(id, tc.name, ""), nil)
+		if status != http.StatusBadRequest {
+			t.Errorf("%s: register answered %d, want 400: %.80s", tc.what, status, body)
+		}
+		if want := strings.TrimPrefix(identity.ValidName(tc.name).Error(), "identity: "); errorText(t, body) != want {
+			t.Errorf("%s: the refusal says %q, want the rule's own %q", tc.what, errorText(t, body), want)
+		}
+		status, body = h.do(nil, "GET", "/v1/keys/"+id.Fingerprint(), nil, nil)
+		if status != http.StatusOK {
+			continue
+		}
+		var keys relayapi.KeysResponse
+		if err := json.Unmarshal(body, &keys); err != nil {
+			t.Fatal(err)
+		}
+		if keys.Name == tc.name {
+			t.Errorf("%s: the relay serves the name back verbatim from /v1/keys (%d bytes)", tc.what, len(keys.Name))
+		}
+	}
+	// A valid name, and none: taken.
+	for _, name := range []string{"bob", "bob.laptop_2-x", ""} {
+		id := ids(t, "y")[0]
+		if status, body := h.do(id, "POST", "/v1/register", h.registerBody(id, name, ""), nil); status != http.StatusOK {
+			t.Errorf("name %q: register answered %d, want 200: %s", name, status, body)
+		}
 	}
 }

@@ -588,6 +588,17 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusBadRequest, "malformed key bundle")
 		return
 	}
+	// The display name is served to every enrolled machine and printed on
+	// their terminals and the administrator's, so it is held to the
+	// export line's rule, the one the client's own name is under: a
+	// terminal escape or a megabyte is refused here, not stored. Empty is
+	// no name, and nothing to print.
+	if req.Name != "" {
+		if err := identity.ValidName(req.Name); err != nil {
+			s.fail(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), "identity: "))
+			return
+		}
+	}
 	// The address is derived from the submitted key material, never taken from
 	// the header, so nobody can claim someone else's fingerprint.
 	fp := pub.Fingerprint()

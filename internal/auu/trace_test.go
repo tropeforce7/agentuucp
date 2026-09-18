@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/tropeforce7/agentuucp/internal/envelope"
+	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relay"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
@@ -150,5 +151,44 @@ func TestAStreamWhoseManifestOverstatesItsPayloadIsKeptAndAcknowledged(t *testin
 	}
 	if !spoolHas(t, bob, store.Inbox, "the good one") {
 		t.Error("the good message behind the bad stream is not in the inbox")
+	}
+}
+
+// TestLookupPrintsAHostileNameEscaped: a relay from before names had a
+// rule can still hold a name with a terminal escape in it. What 'auu
+// lookup' prints — the name, and the export line built from it — carries
+// no byte a terminal would obey, and the export line it prints is not one
+// that parses, since that was never a name.
+func TestLookupPrintsAHostileNameEscaped(t *testing.T) {
+	url, _, db, _ := startEditableRelay(t)
+	alice := newUser(t, "alice", url)
+	bob := newUser(t, "bob", url)
+	fp := alice.exportFingerprint()
+	// Planted in the row the way a relay from before the rule would hold it.
+	hostile := "alice\x1b[2K\x1b[1;31mowned\nccx2.evil"
+	if _, err := db.Exec(`UPDATE mailboxes SET name = ? WHERE fp = ?`, hostile, fp); err != nil {
+		t.Fatal(err)
+	}
+	const escaped = `alice\x1b[2K\x1b[1;31mowned\nccx2.evil`
+	for _, args := range [][]string{{"lookup", fp}, {"lookup", fp, "--json"}} {
+		out := bob.run(args...)
+		for i := 0; i < len(out); i++ {
+			if c := out[i]; c == 0x1b || (c < 0x20 && c != '\n' && c != '\t') {
+				t.Fatalf("%v printed byte %#x from the relay's name:\n%q", args, c, out)
+			}
+		}
+	}
+	if out := bob.run("lookup", fp); !strings.Contains(out, "name on relay: "+escaped+"\n") {
+		t.Fatalf("lookup does not show the name escaped:\n%s", out)
+	}
+	var out lookupJSON
+	if err := json.Unmarshal([]byte(bob.run("lookup", fp, "--json")), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Name != escaped {
+		t.Fatalf("lookup --json carries the name as %q, want %q", out.Name, escaped)
+	}
+	if _, err := identity.ParseExportLine(out.ExportLine); err == nil {
+		t.Fatal("the export line built from a hostile name parses")
 	}
 }

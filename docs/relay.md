@@ -567,7 +567,12 @@ start rather than refuse every request afterwards.
 Set `registration` to `token` and nobody creates a mailbox without an
 invitation an administrator signed. Combined with each user running
 `auu allow push`, that keeps a relay to a known group. `closed` stops new
-mailboxes altogether while leaving the existing ones working.
+mailboxes altogether while leaving the existing ones working. In every
+mode the display name a registration carries is held to the export line's
+rule — letters, digits, `.`, `_` and `-`, at most 64 bytes — and refused
+`400` otherwise, since the relay serves it to every enrolled machine and
+the administrator's terminal; `auu lookup` and `auu-admin` print a name
+from a relay older than that rule with anything unprintable escaped.
 
 The relay stores nothing it can read and needs no backups beyond whatever is
 still in transit. The relay's bundle can be reissued from the offline

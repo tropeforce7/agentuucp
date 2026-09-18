@@ -358,3 +358,28 @@ func TestParseExportLinesNumbersTheBadLine(t *testing.T) {
 		t.Fatalf("an empty file: %v, %v; want no keys and no error", keys, err)
 	}
 }
+
+// TestPrintableEscapesWhatANameMayNotCarry: a name under the rule is
+// printed as it is; anything else reaches a terminal with every byte
+// outside the printable set escaped, so a relay from before names had a
+// rule cannot hand a terminal a command.
+func TestPrintableEscapesWhatANameMayNotCarry(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"bob", "bob"},
+		{"bob.laptop_2-x", "bob.laptop_2-x"},
+		{"bob\x1b[2K\x1b[1;31mowned\nccx2.evil", `bob\x1b[2K\x1b[1;31mowned\nccx2.evil`},
+		{"tab\there", `tab\there`},
+		{"quote\"back\\slash", `quote\"back\\slash`},
+		{"\xff\xfe", `\xff\xfe`},
+		{"", ""},
+	} {
+		if got := Printable(tc.in); got != tc.want {
+			t.Errorf("Printable(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		for i := 0; i < len(Printable(tc.in)); i++ {
+			if c := Printable(tc.in)[i]; c < 0x20 || c == 0x7f || c >= 0x80 {
+				t.Errorf("Printable(%q) carries byte %#x to the terminal", tc.in, c)
+			}
+		}
+	}
+}

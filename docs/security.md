@@ -301,7 +301,10 @@ sub-mailboxes an owner defines: the owner pushes it with `PUT
 (`document`, `signature`), and the relay verifies the signature against the
 registered key before storing either, answers `401` for one that does not
 verify, `400` with the rule broken, and `409` for a directory issued no later
-than the one it holds, naming when that was issued. Anyone the allow list
+than the one it holds, naming when that was issued. The relay never bounds
+`issued` against its own clock, so an owner who signs one far in the future
+locks their own other machines out of pushing until they push a later one,
+or deregister; only the identity key can do that, to itself. Anyone the allow list
 admits fetches it with `GET /v1/mailbox/{fp}/channels` and gets the same two
 fields back verbatim, to verify against the key they hold for the owner; a
 sender the allow list refuses gets the refusal a post would, and learns

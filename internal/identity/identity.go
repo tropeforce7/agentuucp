@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -347,6 +348,21 @@ func ValidName(name string) error {
 		}
 	}
 	return nil
+}
+
+// Printable is a name as it may be written to a terminal: one that passes
+// ValidName unchanged, and anything else with every byte outside the
+// printable set escaped the way strconv.Quote escapes it, without the
+// quotes. A relay applies ValidName at registration now, but one from
+// before that may still hold a name with an escape sequence or a newline
+// in it, and every place a name from the network reaches a terminal goes
+// through here so that it cannot reach the terminal as a command.
+func Printable(name string) string {
+	if ValidName(name) == nil {
+		return name
+	}
+	q := strconv.Quote(name)
+	return q[1 : len(q)-1]
 }
 
 // ErrLineLength is an export line whose encoded part is not the length of

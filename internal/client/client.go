@@ -457,7 +457,12 @@ func (c *Client) Lookup(ctx context.Context, query string) (*Lookup, error) {
 	if !strings.HasPrefix(pub.Fingerprint(), query) {
 		return nil, errors.New("relay returned a bundle for a different fingerprint")
 	}
-	pub.Name = resp.Name
+	// The relay's word for the name, made printable before it reaches
+	// anything that prints: a relay from before names had a rule could hold
+	// an escape sequence, and the export line built from this is what the
+	// person is shown to paste. A name that had to be escaped will not
+	// parse as an export line, which is right: it was never a name.
+	pub.Name = identity.Printable(resp.Name)
 	out := &Lookup{Public: pub}
 	if resp.Created != nil {
 		out.Registered = *resp.Created
