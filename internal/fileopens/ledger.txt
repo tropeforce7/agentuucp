@@ -1,0 +1,300 @@
+# The file-open ledger: one row per call in the non-test tree that opens,
+# makes, removes, renames, walks, lists or runs something by a path, and
+# where that path came from. The test beside this file finds every such
+# call and holds this file to it: a call with no row, a row with no call,
+# a key twice, rows out of order, and a network row naming a rule that is
+# not a function in the tree each fail it. A row is
+#
+#   <file> <enclosing function> <callee>(<path argument as written>) = <provenance>
+#
+# and the provenance is one of:
+#
+#   local      a path this program made from its own constants, its home
+#              and names it generated (a random temporary name, an id
+#              from envelope.NewID);
+#   operator   a path the person running the program typed or configured:
+#              a flag, a config file's setting, a relay name they chose
+#              (held to the export-line rule by ValidRelayName at
+#              AddRelay), a file they named;
+#   derived:   a path made from something this program read back from its
+#              own files or environment, said what; an entry of a
+#              directory it owns, a record it wrote, os.Executable;
+#   network:   a path with a component that arrived over the wire, naming
+#              the component, the rule that checks it and the point it
+#              runs at; the rule is a function in the tree, or, for a
+#              component whose rule is its type (a number the JSON
+#              decoder holds to a number), the standard-library function
+#              that writes the value, such as strconv.FormatInt. Where a
+#              path has components of several kinds the row names the
+#              least trusted, and a helper's row names the least trusted
+#              of its callers' paths.
+#
+# The rule is the development guide's: what a peer names is never a path
+# until its rule has run. A new call that opens something by a path fails
+# the test until its row is here, which is the point.
+
+cmd/auu-ca/kit.go adminLines os.ReadFile(path) = operator
+cmd/auu-ca/kit.go cmdKit os.ReadFile(*relayBinary) = operator
+cmd/auu-ca/kit.go writeSecret os.OpenFile(tmp) = operator
+cmd/auu-ca/kit.go writeSecret os.Remove(tmp) = operator
+cmd/auu-ca/kit.go writeSecret os.Rename(path) = operator
+cmd/auu-ca/kit.go writeSecret os.Rename(tmp) = operator
+cmd/auu-ca/main.go cmdShow os.Stat(rec.BundlePath) = derived: the bundle path the authority's own record holds, written from --out
+cmd/auu-relay/config.go (Config).Validate os.MkdirAll(c.MessagesDir) = operator
+cmd/auu-relay/config.go (Config).Validate os.Stat(c.MessagesDir) = operator
+cmd/auu-relay/config.go Load os.ReadFile(path) = operator
+cmd/auu-relay/config.go Load os.Stat(path) = operator
+internal/agent/client.go (*Client).call net.DialTimeout(c.socket) = derived: the runtime directory from the environment and a hash of the home
+internal/agent/listen.go Listen net.Listen(paths.Socket) = derived: the runtime directory from the environment and a hash of the home
+internal/agent/listen.go Listen os.Chmod(paths.Socket) = derived: the runtime directory from the environment and a hash of the home
+internal/agent/listen.go Listen os.Remove(paths.Socket) = derived: the runtime directory from the environment and a hash of the home
+internal/agent/listen.go Listen os.Stat(paths.Socket) = derived: the runtime directory from the environment and a hash of the home
+internal/agent/listen.go Run os.Stat(l.paths.Socket) = derived: the runtime directory from the environment and a hash of the home
+internal/agent/socket.go runtimeDir os.Chmod(dir) = derived: the runtime directory from the environment
+internal/agent/socket.go runtimeDir os.MkdirAll(dir) = derived: the runtime directory from the environment
+internal/agent/socket.go runtimeDir os.Stat(dir) = derived: the runtime directory from the environment
+internal/auu/agent_cmds.go startAgent os.OpenFile(paths.Log) = derived: the runtime directory from the environment and a hash of the home
+internal/auu/agent_cmds.go startAgent os.ReadFile(paths.Log) = derived: the runtime directory from the environment and a hash of the home
+internal/auu/compose.go composeIn exec.Command("/bin/sh") = local
+internal/auu/compose.go composeIn os.ReadFile(path) = local
+internal/auu/compose.go composeIn os.WriteFile(path) = local
+internal/auu/compose.go composeTemplate os.Stat(p) = operator
+internal/auu/compose.go keepDraft os.WriteFile(composePath(s)) = local
+internal/auu/handler_unix.go shellCommand exec.Command("/bin/sh") = local
+internal/auu/handler_windows.go killGroup exec.Command("taskkill") = local
+internal/auu/handler_windows.go shellCommand exec.Command("cmd") = local
+internal/auu/identity_cmds.go peersAdd os.ReadFile(strings.TrimPrefix(source, "@")) = operator
+internal/auu/inbox.go cmdExtract os.MkdirAll(dir) = network: message id under a directory the person named, message.ValidID at envelope.Open and Store.Save
+internal/auu/inbox.go copyStreamed os.CreateTemp(filepath.Dir(target)) = network: message id under a directory the person named, message.ValidID at envelope.Open and Store.Save
+internal/auu/inbox.go copyStreamed os.Open(src) = network: attachment name, message.ValidAttachmentName at Body.Validate and copyStreamed and filepath.Base at the write
+internal/auu/inbox.go copyStreamed os.Remove(tmp.Name()) = network: message id under a directory the person named, message.ValidID at envelope.Open and Store.Save
+internal/auu/inbox.go copyStreamed os.Rename(target) = network: attachment name, message.ValidAttachmentName at Body.Validate and copyStreamed and filepath.Base at the write
+internal/auu/inbox.go copyStreamed os.Rename(tmp.Name()) = network: message id under a directory the person named, message.ValidID at envelope.Open and Store.Save
+internal/auu/inbox.go extractInto os.Stat(target) = network: attachment name, message.ValidAttachmentName at Body.Validate and copyStreamed and filepath.Base at the write
+internal/auu/inbox.go extractInto os.WriteFile(target) = network: attachment name, message.ValidAttachmentName at Body.Validate and copyStreamed and filepath.Base at the write
+internal/auu/main.go rawText os.ReadFile(bodyFile) = operator
+internal/auu/outbox.go (*pending).remove os.Remove(pendingPath(s, p.MessageID)) = derived: this machine's own message id, read back from its outbox record
+internal/auu/outbox.go (*pending).remove os.Remove(streamPath(s, p.MessageID)) = derived: this machine's own message id, read back from its outbox record
+internal/auu/outbox.go (*pending).save os.CreateTemp(dir) = derived: this machine's own message id, read back from its outbox record
+internal/auu/outbox.go (*pending).save os.MkdirAll(dir) = derived: this machine's own message id, read back from its outbox record
+internal/auu/outbox.go (*pending).save os.Remove(tmp.Name()) = derived: this machine's own message id, read back from its outbox record
+internal/auu/outbox.go (*pending).save os.Rename(pendingPath(s, p.MessageID)) = derived: this machine's own message id, read back from its outbox record
+internal/auu/outbox.go (*pending).save os.Rename(tmp.Name()) = derived: this machine's own message id, read back from its outbox record
+internal/auu/outbox.go listPending os.ReadDir(outboxDir(s)) = local
+internal/auu/outbox.go listPending os.ReadFile(filepath.Join(outboxDir(s), name)) = derived: an entry of this home's own outbox
+internal/auu/outbox.go listPending os.Stat(streamPath(s, p.MessageID)) = derived: this machine's own message id, read back from its outbox record
+internal/auu/send.go estimateSize os.Stat(p) = operator
+internal/auu/send.go largestAttachmentHint os.Stat(p) = operator
+internal/auu/send.go loadAttachments os.ReadFile(p) = operator
+internal/auu/send.go loadAttachments os.Stat(p) = operator
+internal/auu/serve.go (*serveRun).handle os.MkdirAll(dir) = network: thread id, message.ValidID at Body.Validate and handle before the join
+internal/auu/serve.go (*serveRun).handle os.MkdirAll(tmp) = network: thread id and message id, message.ValidID at Body.Validate and handle before the join
+internal/auu/serve.go (*serveRun).handle os.Open(stdinPath) = network: thread id and message id, message.ValidID at Body.Validate and handle before the join
+internal/auu/serve.go (*serveRun).handle os.RemoveAll(tmp) = network: thread id and message id, message.ValidID at Body.Validate and handle before the join
+internal/auu/serve.go (*serveRun).handle os.Rename(in) = network: thread id and message id, message.ValidID at Body.Validate and handle before the join
+internal/auu/serve.go (*serveRun).handle os.Rename(outPath) = network: thread id and message id, message.ValidID at Body.Validate and handle before the join
+internal/auu/serve.go (*serveRun).handle os.Rename(replyPath) = network: thread id and message id, message.ValidID at Body.Validate and handle before the join
+internal/auu/serve.go (*serveRun).handle os.Rename(tmp) = network: thread id and message id, message.ValidID at Body.Validate and handle before the join
+internal/auu/serve.go (*serveRun).handle os.Stat(in) = network: thread id and message id, message.ValidID at Body.Validate and handle before the join
+internal/auu/serve.go (*serveRun).handle os.WriteFile(stdinPath) = network: thread id and message id, message.ValidID at Body.Validate and handle before the join
+internal/auu/serve.go cmdServe os.MkdirAll(root) = local
+internal/auu/serve.go holder os.ReadFile(path) = local
+internal/auu/serve.go output os.ReadFile(path) = network: thread id through the thread directory (the least trusted of the callers' paths), message.ValidID at Body.Validate and handle before the join
+internal/auu/serve.go takeServeLock os.WriteFile(path) = local
+internal/auu/serveconfig.go gitRepository os.Stat(dir) = operator
+internal/auu/serveconfig.go gitRepository os.Stat(filepath.Join(dir, ".git")) = operator
+internal/auu/serveconfig.go loadServeConfig os.ReadFile(path) = operator
+internal/auu/servehandler.go createTrunc os.OpenFile(path) = network: thread id through the thread directory (the least trusted of the callers' paths), message.ValidID at Body.Validate and handle before the join
+internal/auu/servehandler.go firstLine os.Open(path) = network: thread id through the thread directory (the least trusted of the callers' paths), message.ValidID at Body.Validate and handle before the join
+internal/auu/servehandler.go prefixedTo os.Open(path) = network: thread id through the thread directory (the least trusted of the callers' paths), message.ValidID at Body.Validate and handle before the join
+internal/auu/serveledger.go (*ledger).save os.CreateTemp(filepath.Dir(l.path)) = local
+internal/auu/serveledger.go (*ledger).save os.Remove(name) = local
+internal/auu/serveledger.go (*ledger).save os.Rename(l.path) = local
+internal/auu/serveledger.go (*ledger).save os.Rename(name) = local
+internal/auu/serveledger.go loadLedger os.ReadFile(path) = local
+internal/auu/servels.go (*serveRun).letGo os.RemoveAll(stateDir) = derived: an entry of this home's own threads directory
+internal/auu/servels.go (*serveRun).letGo os.RemoveAll(worktree) = derived: an entry of this home's own threads directory
+internal/auu/servels.go (*serveRun).letGo os.Stat(worktree) = derived: an entry of this home's own threads directory
+internal/auu/servels.go (*serveRun).sweep os.ReadDir(dir) = local
+internal/auu/servels.go (*serveRun).threadIdle os.Stat(path) = derived: an entry of this home's own threads directory
+internal/auu/servels.go existingDir os.Stat(path) = network: thread id from the ledger, message.ValidID at serveLs before the join
+internal/auu/serveproxy.go readKeyFile os.Open(path) = operator
+internal/auu/serveproxy.go startKeyProxy net.Listen(cfg.Listen) = operator
+internal/auu/serveproxycontrol.go (*controlSource).mint net.DialTimeout(c.path) = operator
+internal/auu/serveproxycontrol.go (*controlSource).ping net.DialTimeout(c.path) = operator
+internal/auu/serveproxycontrol.go loadProxyFile os.ReadFile(path) = operator
+internal/auu/serveproxycontrol.go startControl net.DialTimeout(path) = operator
+internal/auu/serveproxycontrol.go startControl net.Listen(path) = operator
+internal/auu/serveproxycontrol.go startControl os.Chmod(path) = operator
+internal/auu/serveproxycontrol.go startControl os.Chown(dir) = operator
+internal/auu/serveproxycontrol.go startControl os.Chown(path) = operator
+internal/auu/serveproxycontrol.go startControl os.Remove(path) = operator
+internal/auu/serveproxycontrol.go startControl os.Stat(dir) = operator
+internal/auu/serveproxycontrol.go startControl os.Stat(path) = operator
+internal/auu/serveworktree.go ensureWorktree os.MkdirAll(filepath.Dir(path)) = network: thread id, message.ValidID at Body.Validate and worktreeFor
+internal/auu/serveworktree.go ensureWorktree os.Stat(path) = network: thread id, message.ValidID at Body.Validate and worktreeFor
+internal/auu/serveworktree.go gitOutput exec.Command("git") = local
+internal/auu/serveworktree.go gitRaw exec.Command("git") = local
+internal/auu/serveworktree.go gitRun exec.Command("git") = local
+internal/auu/serveworktree.go keptPatch os.Stat(path) = network: thread id, message.ValidID at Body.Validate and worktreeFor
+internal/auu/serveworktree.go patchFor os.Remove(path) = network: thread id, message.ValidID at Body.Validate and worktreeFor
+internal/auu/serveworktree.go patchFor os.WriteFile(path) = network: thread id, message.ValidID at Body.Validate and worktreeFor
+internal/auu/serveworktree.go worktreeFor os.ReadFile(basePath) = network: thread id, message.ValidID at Body.Validate and worktreeFor
+internal/auu/serveworktree.go worktreeFor os.WriteFile(basePath) = network: thread id, message.ValidID at Body.Validate and worktreeFor
+internal/auu/skill.go placeSkillFile os.ReadFile(path) = operator
+internal/auu/skill.go skillState os.ReadFile(f.path) = operator
+internal/auu/skill.go writeSkillFile os.Chmod(name) = operator
+internal/auu/skill.go writeSkillFile os.CreateTemp(filepath.Dir(path)) = operator
+internal/auu/skill.go writeSkillFile os.MkdirAll(filepath.Dir(path)) = operator
+internal/auu/skill.go writeSkillFile os.Remove(name) = operator
+internal/auu/skill.go writeSkillFile os.Rename(name) = operator
+internal/auu/skill.go writeSkillFile os.Rename(path) = operator
+internal/auu/spawn_unix.go spawnDetached exec.Command(exe) = derived: this program's own path from os.Executable
+internal/auu/spawn_windows.go spawnDetached exec.Command(exe) = derived: this program's own path from os.Executable
+internal/auu/stream.go sendStream os.MkdirAll(outboxDir(s)) = local
+internal/auu/stream.go sendStream os.OpenFile(path) = local
+internal/auu/stream.go sendStream os.Remove(path) = local
+internal/auu/stream.go sourcesFor os.Open(path) = operator
+internal/auu/stream.go sourcesFor os.Stat(p) = operator
+internal/auu/stream.go uploadStream os.Open(path) = operator
+internal/auu/stream.go uploadStream os.Stat(path) = operator
+internal/auu/streamrecv.go deliverStream os.MkdirAll(filepath.Dir(dir)) = network: message id from a manifest, message.ValidID at Manifest.Validate
+internal/auu/streamrecv.go deliverStream os.RemoveAll(dir) = network: message id from a manifest, message.ValidID at Manifest.Validate
+internal/clientca/ca.go Create os.MkdirAll(dir) = operator
+internal/clientca/ca.go Create os.Stat(filepath.Join(dir, keyFile)) = operator
+internal/clientca/ca.go Load os.Stat(keyPath) = operator
+internal/clientca/ca.go readPEM os.ReadFile(path) = operator
+internal/clientca/ca.go writeFile os.CreateTemp(dir) = operator
+internal/clientca/ca.go writeFile os.Open(dir) = operator
+internal/clientca/ca.go writeFile os.Remove(tmp) = operator
+internal/clientca/ca.go writeFile os.Rename(path) = operator
+internal/clientca/ca.go writeFile os.Rename(tmp) = operator
+internal/lockfile/lock_unix.go Try os.OpenFile(path) = operator
+internal/pki/bundle.go LoadBundle os.ReadFile(path) = operator
+internal/pki/bundle.go syncDir os.Open(dir) = network: relay host through saveRelayRecord's directory (the least trusted of the callers' paths), validDNSName at IssueRelay and safeHost at the join
+internal/pki/bundle.go writeFile os.CreateTemp(dir) = network: relay host through saveRelayRecord's directory (the least trusted of the callers' paths), validDNSName at IssueRelay and safeHost at the join
+internal/pki/bundle.go writeFile os.Remove(tmp) = network: relay host through saveRelayRecord's directory (the least trusted of the callers' paths), validDNSName at IssueRelay and safeHost at the join
+internal/pki/bundle.go writeFile os.Rename(path) = network: relay host through saveRelayRecord's directory (the least trusted of the callers' paths), validDNSName at IssueRelay and safeHost at the join
+internal/pki/bundle.go writeFile os.Rename(tmp) = network: relay host through saveRelayRecord's directory (the least trusted of the callers' paths), validDNSName at IssueRelay and safeHost at the join
+internal/pki/store.go (*Store).Relays os.ReadDir(filepath.Join(s.dir, relaysDir)) = operator
+internal/pki/store.go (*Store).relayRecord os.ReadFile(path) = network: relay host, validDNSName at IssueRelay and safeHost at the join
+internal/pki/store.go (*Store).saveRelayRecord os.MkdirAll(dir) = network: relay host, validDNSName at IssueRelay and safeHost at the join
+internal/pki/store.go Create os.Chmod(dir) = operator
+internal/pki/store.go Create os.MkdirAll(dir) = operator
+internal/pki/store.go Create os.MkdirAll(filepath.Join(dir, relaysDir)) = operator
+internal/pki/store.go Create os.ReadDir(dir) = operator
+internal/pki/store.go Create os.Stat(filepath.Join(dir, anchorKeyFile)) = operator
+internal/pki/store.go SetPassphrase os.Remove(tmp) = operator
+internal/pki/store.go SetPassphrase os.Rename(filepath.Join(dir, l.keyFile)) = operator
+internal/pki/store.go SetPassphrase os.Rename(staged[i]) = operator
+internal/pki/store.go open os.Stat(dir) = operator
+internal/pki/store.go readPEM os.ReadFile(path) = operator
+internal/pki/store.go readPrivateKey os.ReadFile(path) = operator
+internal/relay/admin.go (*adminSet).refreshLocked os.Stat(a.path) = operator
+internal/relay/admin.go LoadAdmins os.ReadFile(path) = operator
+internal/relay/admin.go LoadAdmins os.Stat(path) = operator
+internal/relay/filestore.go (*Store).mailboxesHoldingFiles os.ReadDir(filepath.Join(s.dir, shard.Name())) = derived: an entry of the relay's own message directory
+internal/relay/filestore.go (*Store).mailboxesHoldingFiles os.ReadDir(filepath.Join(s.dir, shard.Name(), box.Name())) = derived: an entry of the relay's own message directory
+internal/relay/filestore.go (*Store).mailboxesHoldingFiles os.ReadDir(s.dir) = operator
+internal/relay/filestore.go (*Store).place os.MkdirAll(dir) = network: fingerprint in the URL, identity.ValidFingerprint at the authed wrapper and the admin handlers
+internal/relay/filestore.go (*Store).place os.Rename(s.messagePath(fp, id)) = network: fingerprint in the URL, identity.ValidFingerprint at the authed wrapper and the admin handlers
+internal/relay/filestore.go (*Store).place os.Rename(tmp) = local
+internal/relay/filestore.go (*Store).prepareDirs os.MkdirAll(d) = operator
+internal/relay/filestore.go (*Store).readMessage os.ReadFile(s.messagePath(fp, id)) = network: fingerprint in the URL, identity.ValidFingerprint at the authed wrapper and the admin handlers
+internal/relay/filestore.go (*Store).removeMailboxFiles os.Remove(filepath.Join(s.dir, fp[:2])) = network: fingerprint in the URL, identity.ValidFingerprint at the authed wrapper and the admin handlers
+internal/relay/filestore.go (*Store).removeMailboxFiles os.RemoveAll(s.mailboxDir(fp)) = network: fingerprint in the URL, identity.ValidFingerprint at the authed wrapper and the admin handlers
+internal/relay/filestore.go (*Store).removeMessage os.Remove(s.messagePath(fp, id)) = network: fingerprint in the URL, identity.ValidFingerprint at the authed wrapper and the admin handlers
+internal/relay/filestore.go (*Store).sweep os.ReadDir(dir) = derived: an entry of the relay's own message directory
+internal/relay/filestore.go (*Store).sweep os.ReadDir(filepath.Join(s.dir, shard.Name())) = derived: an entry of the relay's own message directory
+internal/relay/filestore.go (*Store).sweep os.ReadDir(s.dir) = operator
+internal/relay/filestore.go (*Store).sweep os.ReadDir(s.tmpDir()) = operator
+internal/relay/filestore.go (*Store).sweep os.Remove(filepath.Join(dir, f.Name())) = derived: an entry of the relay's own message directory
+internal/relay/filestore.go (*Store).sweep os.Remove(filepath.Join(s.tmpDir(), e.Name())) = derived: an entry of the relay's own message directory
+internal/relay/filestore.go (*Store).writeTemp os.OpenFile(path) = local
+internal/relay/filestore.go (*Store).writeTemp os.Remove(path) = local
+internal/relay/filestore.go fsyncDir os.Open(path) = network: fingerprint through place's mailbox directory (the least trusted of the callers' paths), identity.ValidFingerprint at the authed wrapper
+internal/relay/store.go (*Store).Put os.Remove(tmp) = local
+internal/relay/store.go OpenStore sql.Open(dbPath) = operator
+internal/relay/store.go writeBlobsToFiles os.Remove(tmp) = local
+internal/relay/store.go writeBlobsToFiles os.Stat(s.messagePath(it.fp, it.id)) = network: fingerprint from the relay's own rows, identity.ValidFingerprint at handleRegister and the authed wrapper before it was stored
+internal/relay/streamstore.go (*Store).AppendUpload os.OpenFile(s.uploadPath(id)) = network: upload id in the URL, ValidUploadID at upload
+internal/relay/streamstore.go (*Store).OpenMessage os.Open(s.messagePath(toFP, id)) = network: fingerprint in the URL, identity.ValidFingerprint at the authed wrapper and the admin handlers
+internal/relay/streamstore.go (*Store).OpenUpload os.OpenFile(s.uploadPath(id)) = local
+internal/relay/streamstore.go (*Store).OpenUpload os.Remove(s.uploadPath(id)) = local
+internal/relay/streamstore.go (*Store).OpenUploadFile os.Open(s.uploadPath(id)) = network: upload id in the URL, ValidUploadID at upload
+internal/relay/streamstore.go (*Store).abortLocked os.Remove(s.uploadPath(id)) = network: upload id in the URL, ValidUploadID at upload
+internal/store/allowpushed.go (*Store).AllowPushed os.ReadFile(path) = operator
+internal/store/allowpushed.go (*Store).ClearAllowPushed os.Remove(s.relayPath(r, allowPushedFile)) = operator
+internal/store/allowpushed.go (*Store).SetAllowPushed os.MkdirAll(s.relayDir(r.Name)) = operator
+internal/store/anchor.go (*Store).AnchorFor os.ReadFile(path) = operator
+internal/store/anchor.go (*Store).AnchorFor os.Stat(path) = operator
+internal/store/anchor.go (*Store).RemoveAnchorFor os.Remove(s.relayPath(r, anchorFile)) = operator
+internal/store/anchor.go (*Store).SaveAnchorFor os.MkdirAll(s.relayDir(r.Name)) = operator
+internal/store/cert.go (*Store).HasCertFor os.Stat(s.relayPath(r, certFile)) = operator
+internal/store/cert.go (*Store).RemoveCertFor os.Remove(s.relayPath(r, certFile)) = operator
+internal/store/cert.go (*Store).SaveCertFor os.MkdirAll(s.relayDir(r.Name)) = operator
+internal/store/channels.go (*Store).Directory os.ReadFile(s.path(channelsFile)) = local
+internal/store/channelsettings.go (*Store).ChannelSettings os.ReadFile(s.path(channelSettingsFile)) = local
+internal/store/damagedbox.go (*Store).KeepDamaged os.MkdirAll(filepath.Dir(bin)) = network: the relay's message number, an int64 the JSON decoder holds to a number, strconv.FormatInt at the join
+internal/store/damagedbox.go (*Store).KeepDamaged os.Remove(k.bin) = network: the relay's message number, an int64 the JSON decoder holds to a number, strconv.FormatInt at the join
+internal/store/damagedbox.go (*Store).KeepDamaged os.Remove(recordPath(k.bin)) = network: the relay's message number, an int64 the JSON decoder holds to a number, strconv.FormatInt at the join
+internal/store/damagedbox.go (*Store).keptMessages os.ReadDir(s.path(damagedDir)) = local
+internal/store/damagedbox.go (*Store).keptMessages os.ReadDir(s.path(damagedDir, relay.Name())) = derived: an entry of this home's own damaged directory
+internal/store/damagedbox.go (*Store).keptMessages os.ReadFile(recordPath(k.bin)) = derived: an entry of this home's own damaged directory
+internal/store/encrypt.go (*Store).DecryptHome os.Remove(s.path(f)) = local
+internal/store/encrypt.go (*Store).locked os.ReadFile(s.path(identityFile)) = local
+internal/store/encrypt.go (*Store).state os.ReadFile(s.path(identityFile)) = local
+internal/store/encrypt.go (*staged).commit os.Rename(st.dests[i]) = local
+internal/store/encrypt.go (*staged).commit os.Rename(tmp) = local
+internal/store/encrypt.go (*staged).discard os.Remove(tmp) = local
+internal/store/encrypt.go exists os.Stat(path) = local
+internal/store/encrypt.go syncDir os.Open(dir) = local
+internal/store/leftbehind.go (*Store).LeftBehind os.ReadFile(path) = operator
+internal/store/leftbehind.go (*Store).SetLeftBehind os.MkdirAll(s.relayDir(relayName)) = operator
+internal/store/leftbehind.go (*Store).SetLeftBehind os.Remove(path) = operator
+internal/store/migrate.go (*Store).legacyConfig os.ReadFile(s.path(configFile)) = local
+internal/store/migrate.go (*Store).migrateRelays os.MkdirAll(dir) = derived: a relay name this store makes from the legacy config's URL
+internal/store/migrate.go addedFrom os.Stat(path) = derived: a relay name this store makes from the legacy config's URL, and the files it moves under it
+internal/store/migrate.go moveIfPresent os.Rename(from) = derived: a relay name this store makes from the legacy config's URL, and the files it moves under it
+internal/store/migrate.go moveIfPresent os.Rename(to) = derived: a relay name this store makes from the legacy config's URL, and the files it moves under it
+internal/store/migrate.go moveIfPresent os.Stat(to) = derived: a relay name this store makes from the legacy config's URL, and the files it moves under it
+internal/store/modes.go privateFile os.Stat(path) = local
+internal/store/modes.go privateHome os.Stat(root) = local
+internal/store/modes.go readPrivate os.ReadFile(path) = local
+internal/store/modes.go warnWritable os.Stat(path) = local
+internal/store/relay.go (*Store).ForgetIdentityAt os.Remove(s.relayPath(r, cursorFile)) = operator
+internal/store/relay.go (*Store).Registered os.Stat(s.relayPath(r, cursorFile)) = operator
+internal/store/relay.go (*Store).Relays os.ReadDir(s.path(relaysDir)) = operator
+internal/store/relay.go (*Store).RemoveRelay os.RemoveAll(s.relayDir(r.Name)) = operator
+internal/store/relay.go (*Store).RenameRelay os.Rename(s.relayDir(newName)) = operator
+internal/store/relay.go (*Store).RenameRelay os.Rename(s.relayDir(r.Name)) = operator
+internal/store/relay.go (*Store).SaveRelay os.MkdirAll(s.relayDir(r.Name)) = operator
+internal/store/relay.go (*Store).SetCursorFor os.MkdirAll(s.relayDir(r.Name)) = operator
+internal/store/relay.go (*Store).readRelay os.ReadFile(path) = operator
+internal/store/store.go (*Store).AddPeer os.ReadFile(s.path(peersFile)) = local
+internal/store/store.go (*Store).Config os.ReadFile(s.path(configFile)) = local
+internal/store/store.go (*Store).HasIdentity os.Stat(s.path(identityFile)) = local
+internal/store/store.go (*Store).List os.ReadDir(s.path(string(box))) = local
+internal/store/store.go (*Store).Load os.ReadFile(s.msgPath(box, id)) = network: message id, message.ValidID at Store.Load and before it at envelope.Open and Store.Save
+internal/store/store.go (*Store).Move os.Remove(s.msgPath(from, id)) = network: message id, message.ValidID at envelope.Open and Store.Save
+internal/store/store.go (*Store).Move os.RemoveAll(dst) = network: message id, message.ValidID at envelope.Open and Store.Save
+internal/store/store.go (*Store).Move os.Rename(dst) = network: message id, message.ValidID at envelope.Open and Store.Save
+internal/store/store.go (*Store).Move os.Rename(src) = network: message id, message.ValidID at envelope.Open and Store.Save
+internal/store/store.go (*Store).Move os.Stat(src) = network: message id, message.ValidID at envelope.Open and Store.Save
+internal/store/store.go (*Store).Peers os.ReadFile(s.path(peersFile)) = local
+internal/store/store.go (*Store).Remove os.Remove(s.msgPath(box, id)) = network: message id, message.ValidID at envelope.Open and Store.Save
+internal/store/store.go (*Store).Remove os.RemoveAll(s.AttachmentDir(box, id)) = network: message id, message.ValidID at envelope.Open and Store.Save
+internal/store/store.go (*Store).Self os.ReadFile(s.path(identityFile)) = local
+internal/store/store.go Open os.MkdirAll(dir) = local
+internal/store/store.go readCursor os.ReadFile(path) = operator
+internal/store/store.go writeFileAtomic os.CreateTemp(dir) = network: message id through Save's msgPath (the least trusted of the callers' paths), message.ValidID at envelope.Open and Store.Save
+internal/store/store.go writeFileAtomic os.Remove(tmpName) = network: message id through Save's msgPath (the least trusted of the callers' paths), message.ValidID at envelope.Open and Store.Save
+internal/store/store.go writeFileAtomic os.Rename(path) = network: message id through Save's msgPath (the least trusted of the callers' paths), message.ValidID at envelope.Open and Store.Save
+internal/store/store.go writeFileAtomic os.Rename(tmpName) = network: message id through Save's msgPath (the least trusted of the callers' paths), message.ValidID at envelope.Open and Store.Save
+internal/stream/open.go (*Opened).ToDirectory os.MkdirAll(tmp) = network: message id from a manifest, message.ValidID at Manifest.Validate
+internal/stream/open.go (*Opened).ToDirectory os.OpenFile(filepath.Join(tmp, filepath.Base(a.Name))) = network: attachment name from a manifest, message.ValidAttachmentName at Manifest.Validate and filepath.Base at the open
+internal/stream/open.go (*Opened).ToDirectory os.RemoveAll(tmp) = network: message id from a manifest, message.ValidID at Manifest.Validate
+internal/stream/open.go (*Opened).ToDirectory os.Rename(dir) = network: message id from a manifest, message.ValidID at Manifest.Validate
+internal/stream/open.go (*Opened).ToDirectory os.Rename(tmp) = network: message id from a manifest, message.ValidID at Manifest.Validate
+internal/stream/open.go (*Opened).ToDirectory os.Stat(dir) = network: message id from a manifest, message.ValidID at Manifest.Validate
+internal/term/passphrase.go FromFile os.Open(path) = operator

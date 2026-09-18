@@ -320,7 +320,13 @@ host's serve directory, and is a message id at open, in a manifest, and
 checked again by `auu serve` before it is joined onto anything. One test
 walks every one of them with `..`, `../x`, `a/b`, `.`, the empty string
 and a NUL, and a new place that turns something from the network into a
-path gets its row there first.
+path gets its row there first. Behind that table is a ledger,
+`internal/fileopens/ledger.txt`, with one row for every call in the tree
+that opens, makes, removes, renames, lists or runs something by a path,
+saying whether the path is the program's own, the operator's, derived
+from something the program read back, or from the network with the rule
+and the point that check it; its test parses the tree and fails on a call
+with no row, so a ninth component would be found before it was a finding.
 
 ### 2.1 The round trip
 
