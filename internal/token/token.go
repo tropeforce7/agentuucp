@@ -419,8 +419,11 @@ func Describe(c Claims, issuerName string, verified bool, now time.Time) string 
 	fmt.Fprintf(&b, "token:   %s\n", c.ID)
 	fmt.Fprintf(&b, "use:     %s\n", DescribeUse(c.Use))
 	fmt.Fprintf(&b, "issuer:  %s\n", issuer)
-	fmt.Fprintf(&b, "relay:   %s\n", c.Relay)
-	fmt.Fprintf(&b, "for:     %s\n", c.Note)
+	// The token's own words for its relay and its note, escaped: a token
+	// is a string somebody else made, and an unverified one is described
+	// before any key has said anything about it.
+	fmt.Fprintf(&b, "relay:   %s\n", identity.PrintableText(c.Relay))
+	fmt.Fprintf(&b, "for:     %s\n", identity.PrintableText(c.Note))
 	if c.Subject != "" {
 		fmt.Fprintf(&b, "bound to: %s\n", short(c.Subject))
 	}

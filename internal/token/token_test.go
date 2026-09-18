@@ -829,3 +829,25 @@ func TestDescribeOfAnExpiryFromTheFarPastSaysExpired(t *testing.T) {
 		t.Fatalf("Describe of a token with not_after MinInt64:\n%s", got)
 	}
 }
+
+// A token is a string somebody else made, and an unverified one is
+// described before any key has said anything about it: its relay and note
+// were printed as written; now they are escaped, so a format character a
+// note's rule lets through cannot reverse the line.
+func TestDescribeEscapesAnUnverifiedTokensRelayAndNote(t *testing.T) {
+	raw := unverifiedToken(t, Claims{
+		Issuer: strings.Repeat("a", 64), Relay: "https://relay.example\u202e", Use: UseRegister,
+		Note: "for you\u202e", NotBefore: 1, NotAfter: 2, Uses: 1,
+	})
+	u, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := Describe(u.Claims, "", false, time.Now())
+	if strings.Contains(got, "\u202e") {
+		t.Errorf("Describe printed the bidi override:\n%q", got)
+	}
+	if !strings.Contains(got, `relay:   https://relay.example\u202e`) || !strings.Contains(got, `for:     for you\u202e`) {
+		t.Errorf("Describe does not show the relay and the note escaped:\n%s", got)
+	}
+}

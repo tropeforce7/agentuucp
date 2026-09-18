@@ -15,6 +15,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
+
+	"github.com/tropeforce7/agentuucp/internal/identity"
 )
 
 // The key-holding proxy.
@@ -314,9 +317,12 @@ func (p *keyProxy) state(token string) string {
 func (p *keyProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	token, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	// The path is the caller's, decoded by net/http before it is seen, so
+	// what the log carries of it is escaped, and the tag is cut by
+	// characters rather than bytes.
 	refuse := func(reason string) {
 		http.Error(w, "no live invocation token in the path; this proxy answers the handler serve is running and nobody else", http.StatusNotFound)
-		p.logf("proxy: %s %s %s refused: %s", tokenTag(token), r.Method, "/"+rest, reason)
+		p.logf("proxy: %s %s %s refused: %s", tokenTag(token), r.Method, identity.PrintableText("/"+rest), reason)
 	}
 	if !looksLikeToken(token) {
 		// Claude Code's own paths begin /v1 and /api; a request that
@@ -333,7 +339,7 @@ func (p *keyProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	out.URL.RawPath = ""
 	cw := &countingWriter{ResponseWriter: w}
 	p.rp.ServeHTTP(cw, out)
-	p.logf("proxy: %s %s /%s %d in %d out %d %s", tokenTag(token), r.Method, rest, cw.status,
+	p.logf("proxy: %s %s %s %d in %d out %d %s", tokenTag(token), r.Method, identity.PrintableText("/"+rest), cw.status,
 		max(r.ContentLength, 0), cw.written, time.Since(start).Round(time.Millisecond))
 }
 
@@ -350,10 +356,18 @@ func looksLikeToken(s string) bool {
 
 // tokenTag is the part of a token a log line carries.
 func tokenTag(token string) string {
-	if len(token) > tokenShown {
-		return token[:tokenShown]
+	tag := token
+	if utf8.RuneCountInString(tag) > tokenShown {
+		kept := 0
+		for i := range tag {
+			if kept == tokenShown {
+				tag = tag[:i]
+				break
+			}
+			kept++
+		}
 	}
-	return token
+	return identity.PrintableText(tag)
 }
 
 // countingWriter is the response as the log describes it: the status and

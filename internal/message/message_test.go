@@ -3,8 +3,10 @@ package message
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func goodBody(t *testing.T) Body {
@@ -286,5 +288,29 @@ func windowsNameRows() []windowsNameRow {
 		{"PRN.dat", false},
 		{"report.txt", true},
 		{"comet.md", true},
+	}
+}
+
+// A note from the string review, kept as a test a reader can run: on the
+// wire a Body arrives as JSON, and encoding/json replaces every invalid
+// byte in a string with U+FFFD as it decodes, so the UTF-8 branch of the
+// three rules never fires on the envelope path or the stream path; the
+// replacement is a printable character and the signature covered the raw
+// bytes, so nothing is wrong downstream, but the rule is vacuous there.
+func TestInvalidUTF8OnTheWireIsReplacedNotRefused(t *testing.T) {
+	raw := []byte("{\"type\":\"note\",\"thread\":\"00000000000000000000000000000000\",\"subject\":\"a\xffb\",\"text\":\"c\xfed\"," +
+		"\"attachments\":[{\"name\":\"n\xffm\",\"media\":\"text/plain\",\"size\":0,\"sha256\":\"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\"data\":\"\"}]}")
+	var b Body
+	if err := json.Unmarshal(raw, &b); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !utf8.ValidString(b.Subject) || !utf8.ValidString(b.Text) || !utf8.ValidString(b.Attachments[0].Name) {
+		t.Fatalf("the decoder kept an invalid byte: subject %q text %q name %q", b.Subject, b.Text, b.Attachments[0].Name)
+	}
+	if err := b.Validate(); err != nil {
+		t.Fatalf("a wire body with 0xff in three fields was refused after decoding: %v", err)
+	}
+	if b.Subject != "a\ufffdb" || b.Attachments[0].Name != "n\ufffdm" {
+		t.Fatalf("subject %q name %q: expected U+FFFD where 0xff was", b.Subject, b.Attachments[0].Name)
 	}
 }

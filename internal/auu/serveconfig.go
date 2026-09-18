@@ -168,10 +168,20 @@ func (cfg *serveConfig) errf(channel, format string, a ...any) error {
 // before it takes its lock, so that a file with a typo in it stops the
 // service rather than one channel of it.
 func (cfg *serveConfig) check() error {
-	for _, name := range cfg.names() {
+	names := cfg.names()
+	for i, name := range names {
 		ch := cfg.Channels[name]
 		if err := channels.ValidName(name); err != nil {
 			return cfg.errf(name, "%v", err)
+		}
+		// Each channel is a directory under serve/channels/, and in
+		// read-only mode that directory holds the worktree's base; two
+		// names that fold to one are one directory on macOS and Windows,
+		// and would share it.
+		for _, earlier := range names[:i] {
+			if strings.EqualFold(earlier, name) {
+				return cfg.errf(name, "channels %q and %q are one directory where case does not count; rename one", earlier, name)
+			}
 		}
 		switch ch.Mode {
 		case modeReadOnly, modeSideCopy:

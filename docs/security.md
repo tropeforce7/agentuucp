@@ -75,7 +75,13 @@ format character, a private-use character or a line or paragraph
 separator, and every print of one — the inbox listing, `read`,
 quarantine, watch, serve's console lines, completion — escapes it all the
 same, for a record from before the rule; sender names, which come from
-this machine's own peer list, go through the same escaper. The
+this machine's own peer list, go through the same escaper. `auu-admin`'s
+listings hold the relay's enumerated words — a registration mode, a
+certificate mode, an allow state, a token's use and state — to the set
+the protocol defines, refusing the answer whole otherwise, and escape its
+free text (a public URL, an uptime, an access-log mode, a block's reason,
+a note); a pasted token's relay and note are escaped when it is described;
+and the key proxy's log line escapes the path a caller sent. The
 same treatment covers a name from a relay older than the rule, and
 `auu-admin`'s confirmation before it removes a mailbox, which prints the
 name at the one moment an administrator is reading carefully. And what

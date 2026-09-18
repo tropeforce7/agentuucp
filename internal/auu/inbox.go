@@ -786,7 +786,7 @@ func extractInto(s *store.Store, box store.Box, m *store.Stored, dir string) ([]
 			// Re-check the digest at the moment of writing, not only at open time.
 			check := message.Attachment{Name: a.Name, Media: a.Media, Size: a.Size, SHA256: a.SHA256, Data: a.Data}
 			if err := check.Validate(); err != nil {
-				return written, fmt.Errorf("refusing to write %s: %w", a.Name, err)
+				return written, fmt.Errorf("refusing to write %q: %w", a.Name, err)
 			}
 			if err := os.WriteFile(target, a.Data, 0o600); err != nil {
 				return written, err
@@ -804,14 +804,14 @@ func extractInto(s *store.Store, box store.Box, m *store.Stored, dir string) ([]
 // the real thing.
 func copyStreamed(src, target string, a message.Attachment) error {
 	if err := message.ValidAttachmentName(a.Name); err != nil {
-		return fmt.Errorf("refusing to write %s: %w", a.Name, err)
+		return fmt.Errorf("refusing to write %q: %w", a.Name, err)
 	}
 	if a.Media == "" {
-		return fmt.Errorf("refusing to write %s: empty media type", a.Name)
+		return fmt.Errorf("refusing to write %q: empty media type", a.Name)
 	}
 	in, err := os.Open(src)
 	if err != nil {
-		return fmt.Errorf("reading %s: %w", a.Name, err)
+		return fmt.Errorf("reading %q: %w", a.Name, err)
 	}
 	defer in.Close()
 
@@ -827,13 +827,13 @@ func copyStreamed(src, target string, a message.Attachment) error {
 	h := sha256.New()
 	n, err := io.Copy(io.MultiWriter(tmp, h), in)
 	if err != nil {
-		return fmt.Errorf("reading %s: %w", a.Name, err)
+		return fmt.Errorf("reading %q: %w", a.Name, err)
 	}
 	if n != a.Size {
-		return fmt.Errorf("refusing to write %s: size %d does not match %d bytes of data", a.Name, a.Size, n)
+		return fmt.Errorf("refusing to write %q: size %d does not match %d bytes of data", a.Name, a.Size, n)
 	}
 	if !strings.EqualFold(a.SHA256, hex.EncodeToString(h.Sum(nil))) {
-		return fmt.Errorf("refusing to write %s: sha256 does not match data", a.Name)
+		return fmt.Errorf("refusing to write %q: sha256 does not match data", a.Name)
 	}
 	if err := tmp.Close(); err != nil {
 		return err

@@ -2,10 +2,12 @@ package client
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"strconv"
 
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/token"
 )
 
 // The administration half of the relay API.
@@ -125,8 +127,13 @@ func (c *Client) AdminTokens(ctx context.Context, all bool) ([]relayapi.TokenRec
 	return out.Tokens, nil
 }
 
-// AdminRevokeToken withdraws a token.
+// AdminRevokeToken withdraws a token. The id is held to its shape before
+// it is joined onto the path, as a fingerprint is: a value with a slash
+// or a question mark in it would be two segments or a query.
 func (c *Client) AdminRevokeToken(ctx context.Context, id string) error {
+	if !token.ValidID(id) {
+		return errors.New("token id must be 32 lowercase hex characters")
+	}
 	return c.do(ctx, "DELETE", "/v1/admin/tokens/"+id, nil, nil, nil)
 }
 

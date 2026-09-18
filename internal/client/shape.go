@@ -3,6 +3,7 @@ package client
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/tropeforce7/agentuucp/internal/clientca"
 	"github.com/tropeforce7/agentuucp/internal/identity"
@@ -44,6 +45,39 @@ const (
 	wantSeconds     = "a number of seconds within a hundred years"
 )
 
+// The enumerated fields of an answer, each held to the set the protocol
+// defines, so that a command prints a word it knows rather than whatever
+// the relay sent. The empty string is allowed where a relay from before
+// the field sends nothing.
+var (
+	registrations = []string{"", relayapi.RegistrationOpen, relayapi.RegistrationToken, relayapi.RegistrationClosed}
+	certModes     = []string{"", relayapi.ClientCertsOff, relayapi.ClientCertsRequired}
+	allowWords    = []string{"", relayapi.AllowSigned, relayapi.AllowNone, relayapi.AllowBroken}
+	tokenUses     = []string{token.UseRegister, token.UseCert}
+	tokenStates   = []string{relayapi.TokenLive, relayapi.TokenSpent, relayapi.TokenRevoked, relayapi.TokenExpired}
+)
+
+// oneOf reports whether v is in the set.
+func oneOf(v string, set []string) bool {
+	for _, s := range set {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// wantOneOf is the sentence for an enumerated field.
+func wantOneOf(set []string) string {
+	var words []string
+	for _, s := range set {
+		if s != "" {
+			words = append(words, s)
+		}
+	}
+	return "one of " + strings.Join(words, ", ")
+}
+
 // checkStatus is the shape of a relay's status: the authority's fingerprint
 // when it has one, and the two lifetimes, which auu-admin prints as
 // durations after multiplying by time.Second.
@@ -51,6 +85,12 @@ func (c *Client) checkStatus(st *relayapi.AdminStatusResponse) error {
 	const answer = "the status"
 	if st.CAFingerprint != "" && !identity.ValidFingerprint(st.CAFingerprint) {
 		return c.malformed(answer, "ca_fingerprint", wantFingerprint)
+	}
+	if !oneOf(st.Registration, registrations) {
+		return c.malformed(answer, "registration", wantOneOf(registrations))
+	}
+	if !oneOf(st.ClientCerts, certModes) {
+		return c.malformed(answer, "client_certs", wantOneOf(certModes))
 	}
 	if !validSeconds(st.TokenMaxAgeSecs) {
 		return c.malformed(answer, "token_max_age_seconds", wantSeconds)
@@ -67,6 +107,9 @@ func validSeconds(n int64) bool { return n >= 0 && n <= relayapi.MaxDurationSeco
 func (c *Client) checkMailbox(answer string, m *relayapi.MailboxRecord) error {
 	if !identity.ValidFingerprint(m.FP) {
 		return c.malformed(answer, "fp", wantFingerprint)
+	}
+	if !oneOf(m.Allow, allowWords) {
+		return c.malformed(answer, "allow", wantOneOf(allowWords))
 	}
 	return nil
 }
@@ -111,6 +154,12 @@ func (c *Client) checkToken(answer string, t *relayapi.TokenRecord) error {
 	}
 	if t.Subject != "" && !identity.ValidFingerprint(t.Subject) {
 		return c.malformed(answer, "subject", wantFingerprint)
+	}
+	if !oneOf(t.Use, tokenUses) {
+		return c.malformed(answer, "use", wantOneOf(tokenUses))
+	}
+	if !oneOf(t.State, tokenStates) {
+		return c.malformed(answer, "state", wantOneOf(tokenStates))
 	}
 	return nil
 }

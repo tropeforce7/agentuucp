@@ -379,6 +379,13 @@ A refused send names what to change, and nothing was queued:
   cannot know; rename the file (`con`, `prn`, `aux`, `nul`, `com0`–`com9`
   and `lpt0`–`lpt9`, their superscript forms too, with any extension are
   devices there). Nothing was sent.
+- `PATH/serve.json: channel "bugs": channels "Bugs" and "bugs" are one
+  directory where case does not count; rename one` — from `auu serve check` or at
+  start: each channel is a directory under the serve directory, and two
+  names that fold to one would share it on macOS or Windows.
+- `"X" is not a token id (32 lowercase hex characters); list them with:
+  auu-admin token ls --all` — `auu-admin token revoke` takes the id as
+  `token ls` prints it, whole; nothing was sent to the relay.
 
 Anywhere:
 

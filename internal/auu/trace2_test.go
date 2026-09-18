@@ -772,3 +772,125 @@ func TestRelayAddNamesAnIPv6RelayAndReturns(t *testing.T) {
 		t.Errorf("relay add printed:\n%s", out)
 	}
 }
+
+// The string review at af0d96e: serve's reply text, the proxy's log, an
+// extract refusal and the serve file's channel names.
+
+// A handler on Windows prints CRLF, and serve built the reply's text from
+// its output with no fold, so the text rule refused the reply for U+000D
+// and the message was failed and retried with the answer on disk the
+// whole time. output folds CRLF as the sender's own command does; a lone
+// carriage return is left for the rule.
+func TestServeFoldsAHandlersCRLFBeforeTheRule(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "out.txt")
+	if err := os.WriteFile(path, []byte("The answer is yes.\r\nSee the attached patch.\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	text, has := output(path)
+	if !has {
+		t.Fatal("output() said the handler had nothing to say")
+	}
+	if text != "The answer is yes.\nSee the attached patch." {
+		t.Errorf("output() made %q of a CRLF reply", text)
+	}
+	if err := message.ValidText(text); err != nil {
+		t.Errorf("the folded reply fails the text rule: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("one\rtwo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	text, _ = output(path)
+	if err := message.ValidText(text); err == nil || !strings.Contains(err.Error(), "U+000D") {
+		t.Errorf("a lone carriage return in a reply: %v, want the rule's refusal naming U+000D", err)
+	}
+}
+
+// The key proxy's log line carried the request path as the socket sent it,
+// decoded by net/http, so %1b on the wire was an ESC on serve's standard
+// error; and the token tag was cut by bytes. Now the path is escaped and
+// the tag cut by characters.
+func TestKeyProxyLogEscapesTheRequestPath(t *testing.T) {
+	var log strings.Builder
+	p := &keyProxy{
+		logf: func(format string, a ...any) { log.WriteString(fmt.Sprintf(format, a...) + "\n") },
+		live: map[string]bool{},
+	}
+	req := httptest.NewRequest("GET", "/notatoken/%1b%5d0%3bowned%07", nil)
+	p.ServeHTTP(httptest.NewRecorder(), req)
+	for i := 0; i < len(log.String()); i++ {
+		if c := log.String()[i]; c < 0x20 && c != '\n' {
+			t.Errorf("the proxy's log line carries byte %#x from the request path: %q", c, log.String())
+			break
+		}
+	}
+	if !strings.Contains(log.String(), `\x1b]0;owned\a`) {
+		t.Errorf("the log does not show the path escaped: %q", log.String())
+	}
+	log.Reset()
+	req = httptest.NewRequest("GET", "/%E6%97%A5%E6%9C%AC%E8%AA%9E%E6%97%A5%E6%9C%AC%E8%AA%9E/v1/messages", nil)
+	p.ServeHTTP(httptest.NewRecorder(), req)
+	if !utf8.ValidString(log.String()) {
+		t.Errorf("the proxy's log line is not valid UTF-8: %q; the first path element was cut by bytes", log.String())
+	}
+	if !strings.Contains(log.String(), "proxy: \u65e5\u672c\u8a9e\u65e5\u672c\u8a9e GET") {
+		t.Errorf("a six-character element is not the tag whole: %q", log.String())
+	}
+	log.Reset()
+	req = httptest.NewRequest("GET", "/"+strings.Repeat("%E6%97%A5", 12)+"/v1/messages", nil)
+	p.ServeHTTP(httptest.NewRecorder(), req)
+	if !strings.Contains(log.String(), "proxy: "+strings.Repeat("\u65e5", tokenShown)+" GET") || !utf8.ValidString(log.String()) {
+		t.Errorf("a twelve-character element is not cut to %d characters: %q", tokenShown, log.String())
+	}
+}
+
+// A refusal from extractInto or copyStreamed named the attachment with
+// %s, and main prints the error as it came; the name is the very thing
+// the refusal is about. Now the sentences use %q.
+func TestAnExtractRefusalEscapesTheAttachmentName(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "notes\x1b]0;owned\a.txt"
+	m := &store.Stored{
+		Inner: &envelope.Inner{
+			ID:   strings.Repeat("a", 32),
+			Time: time.Now(),
+			Body: message.Body{
+				Type: message.TypeNote, Thread: strings.Repeat("a", 32), Text: "hi",
+				Attachments: []message.Attachment{{Name: name, Media: "text/plain", Size: 2, SHA256: strings.Repeat("0", 64), Data: []byte("hi")}},
+			},
+		},
+	}
+	_, err = extractInto(s, store.Inbox, m, t.TempDir())
+	if err == nil {
+		t.Fatal("extractInto wrote an attachment whose name carries an escape sequence")
+	}
+	if strings.ContainsRune(err.Error(), 0x1b) || !strings.Contains(err.Error(), `refusing to write "notes\x1b]0;owned\a.txt"`) {
+		t.Errorf("the refusal from extractInto: %q", err.Error())
+	}
+}
+
+// Each served channel is a directory under serve/channels/, so two names
+// equal under case folding are one directory on macOS and Windows and
+// would share one read-only base; serve check refuses the pair, naming
+// both, as DistinctAttachmentNames refuses two attachment names.
+func TestServeCheckRefusesChannelsThatFoldToOneDirectory(t *testing.T) {
+	dir := repo(t)
+	one := func() *serveChannel {
+		return &serveChannel{Dir: dir, Exec: "cat", Mode: modeReadOnly, MaxTurns: 1}
+	}
+	cfg := &serveConfig{
+		V:        1,
+		path:     filepath.Join(t.TempDir(), "serve.json"),
+		Channels: map[string]*serveChannel{"Bugs": one(), "bugs": one()},
+	}
+	err := cfg.check()
+	if err == nil || !strings.Contains(err.Error(), `"Bugs" and "bugs" are one directory where case does not count`) {
+		t.Errorf("a serve file naming channels Bugs and bugs: %v, want the refusal naming both", err)
+	}
+	cfg.Channels = map[string]*serveChannel{"bugs": one(), "builds": one()}
+	if err := cfg.check(); err != nil {
+		t.Errorf("two channels that are two directories were refused: %v", err)
+	}
+}

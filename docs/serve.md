@@ -168,6 +168,11 @@ What the handler prints on standard output is the reply. Exit 0 having
 printed nothing means "nothing to say": the message is settled and no reply
 goes out. Any other exit is a failure — the message stays unread, the
 attempt is counted, and the next round tries again until `retries` runs out.
+A reply is held to the same rule as a typed message — prose, with line
+breaks and tabs — and a Windows line ending is folded to a line break
+first, so a handler on Windows or any tool in text mode there is an honest
+answer; a lone carriage return, or any other control character, fails the
+round with the rule's sentence, recorded as that message's failure.
 
 The two hooks get the same environment less `AUU_SUBJECT`,
 `AUU_ATTACHMENTS` and the proxy's two variables, and nothing on standard

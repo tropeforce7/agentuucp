@@ -44,15 +44,18 @@ func cmdStatus(args []string) error {
 		return printJSON(st)
 	}
 	fmt.Printf("relay:          %s\n", relayURL(c))
-	fmt.Printf("public url:     %s\n", orNone(st.PublicURL))
+	// The relay's free text through the escaper; its words for the
+	// registration mode and the certificate mode were checked against
+	// the protocol's set when the answer was read.
+	fmt.Printf("public url:     %s\n", orNone(identity.PrintableText(st.PublicURL)))
 	fmt.Printf("registration:   %s\n", st.Registration)
-	fmt.Printf("uptime:         %s\n", st.Uptime)
+	fmt.Printf("uptime:         %s\n", identity.PrintableText(st.Uptime))
 	fmt.Printf("administrators: %d\n", st.Administrators)
 	fmt.Printf("mailboxes:      %d\n", st.Mailboxes)
 	fmt.Printf("queued:         %d messages, %s\n", st.QueuedMessages, term.HumanBytes(st.QueuedBytes))
 	fmt.Printf("live tokens:    %d\n", st.LiveTokens)
 	fmt.Printf("blocks:         %d\n", st.Blocks)
-	fmt.Printf("access log:     %s\n", st.AccessLog)
+	fmt.Printf("access log:     %s\n", identity.PrintableText(st.AccessLog))
 	fmt.Printf("token max age:  %s\n", (time.Duration(st.TokenMaxAgeSecs) * time.Second).String())
 	fmt.Printf("client certs:   %s\n", st.ClientCerts)
 	if st.CAFingerprint != "" {
@@ -277,7 +280,7 @@ func blocksList(args []string) error {
 	fmt.Fprintln(w, "FINGERPRINT\tSINCE\tBY\tREASON")
 	for _, b := range blocks {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-			b.FP[:16], b.Created.Local().Format("2006-01-02"), b.ByFP[:16], b.Reason)
+			b.FP[:16], b.Created.Local().Format("2006-01-02"), b.ByFP[:16], identity.PrintableText(b.Reason))
 	}
 	return w.Flush()
 }
@@ -553,6 +556,11 @@ func tokenRevoke(args []string) error {
 	}
 	if len(positional) != 1 {
 		return usageErrf("usage: auu-admin token revoke ID")
+	}
+	// The shape before the id is joined onto a URL, as a fingerprint's is
+	// checked before a mailbox command's.
+	if !token.ValidID(positional[0]) {
+		return usageErrf("%q is not a token id (32 lowercase hex characters); list them with: auu-admin token ls --all", positional[0])
 	}
 	_, _, cl, err := dial(c)
 	if err != nil {

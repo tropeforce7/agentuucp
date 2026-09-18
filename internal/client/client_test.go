@@ -21,6 +21,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/token"
 )
 
 // recorder is a stand-in relay that answers from a script and remembers what
@@ -648,12 +649,13 @@ func TestAnAnswerIsCheckedForShapeBeforeItIsReturned(t *testing.T) {
 	const serial = "0123456789abcdef0123456789abcdef"
 	tokenID := strings.Repeat("7", 32)
 	good := map[string]any{
-		"/v1/admin/status": relayapi.AdminStatusResponse{CAFingerprint: fp, TokenMaxAgeSecs: 3600, CertLifetimeSecs: 86400},
+		"/v1/admin/status": relayapi.AdminStatusResponse{CAFingerprint: fp, TokenMaxAgeSecs: 3600, CertLifetimeSecs: 86400,
+			Registration: relayapi.RegistrationToken, ClientCerts: relayapi.ClientCertsRequired},
 		"/v1/admin/mailboxes": relayapi.MailboxListResponse{
-			Mailboxes: []relayapi.MailboxRecord{{FP: fp, Name: "alice"}}, Next: fp},
+			Mailboxes: []relayapi.MailboxRecord{{FP: fp, Name: "alice", Allow: relayapi.AllowSigned}}, Next: fp},
 		"/v1/admin/mailboxes/" + fp:    relayapi.MailboxRecord{FP: fp, Name: "alice"},
 		"/v1/admin/blocks":             relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{{FP: fp, ByFP: fp}}},
-		"/v1/admin/tokens":             relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: tokenID, Issuer: fp, Subject: fp}}},
+		"/v1/admin/tokens":             relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: tokenID, Issuer: fp, Subject: fp, Use: token.UseRegister, State: relayapi.TokenLive}}},
 		"/v1/admin/certs":              relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: serial, FP: fp}}},
 		"/v1/mailbox/" + fp + "/certs": relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: serial}}},
 	}
@@ -692,9 +694,15 @@ func TestAnAnswerIsCheckedForShapeBeforeItIsReturned(t *testing.T) {
 		{"/v1/admin/mailboxes/" + fp, "fp", relayapi.MailboxRecord{FP: "ab"}},
 		{"/v1/admin/blocks", "fp", relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{{FP: "ab", ByFP: fp}}}},
 		{"/v1/admin/blocks", "by_fp", relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{{FP: fp, ByFP: "ab"}}}},
-		{"/v1/admin/tokens", "id", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: "ab", Issuer: fp}}}},
-		{"/v1/admin/tokens", "issuer", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: tokenID, Issuer: "ab"}}}},
-		{"/v1/admin/tokens", "subject", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: tokenID, Issuer: fp, Subject: "ab"}}}},
+		{"/v1/admin/tokens", "id", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: "ab", Issuer: fp, Use: token.UseRegister, State: relayapi.TokenLive}}}},
+		{"/v1/admin/tokens", "issuer", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: tokenID, Issuer: "ab", Use: token.UseRegister, State: relayapi.TokenLive}}}},
+		{"/v1/admin/tokens", "subject", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: tokenID, Issuer: fp, Subject: "ab", Use: token.UseRegister, State: relayapi.TokenLive}}}},
+		{"/v1/admin/tokens", "use", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: tokenID, Issuer: fp, Use: "register\x1b", State: relayapi.TokenLive}}}},
+		{"/v1/admin/tokens", "state", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: tokenID, Issuer: fp, Use: token.UseRegister, State: "live\x1b"}}}},
+		{"/v1/admin/status", "registration", relayapi.AdminStatusResponse{Registration: "open\x1b"}},
+		{"/v1/admin/status", "client_certs", relayapi.AdminStatusResponse{ClientCerts: "off\x1b"}},
+		{"/v1/admin/mailboxes", "allow", relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{{FP: fp, Allow: "signed\x1b"}}}},
+		{"/v1/admin/mailboxes/" + fp, "allow", relayapi.MailboxRecord{FP: fp, Allow: "broken\x1b"}},
 		{"/v1/admin/certs", "serial", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: "ab", FP: fp}}}},
 		{"/v1/admin/certs", "fp", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: serial, FP: "ab"}}}},
 		{"/v1/admin/certs", "fp", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: serial}}}},

@@ -823,12 +823,19 @@ func said(run programRun, path string) string {
 
 // output is what the handler printed, as the reply's text. Trailing blank
 // space is not an answer; a handler with nothing to say prints nothing.
+//
+// A Windows line ending is folded to a line break first, as the sender's
+// own command folds it for a typed message: a handler on Windows, or any
+// tool in text mode there, prints CRLF, and the text rule would refuse
+// the reply for U+000D at every retry with the answer on disk the whole
+// time. A carriage return on its own is left for the rule, which fails
+// the round with its sentence, recorded as that message's failure.
 func output(path string) (string, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", false
 	}
-	text := strings.TrimRight(string(data), " \t\r\n")
+	text := strings.TrimRight(foldCRLF(string(data)), " \t\r\n")
 	return text, strings.TrimSpace(text) != ""
 }
 

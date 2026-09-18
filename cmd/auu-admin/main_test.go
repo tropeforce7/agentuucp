@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math"
@@ -991,5 +992,208 @@ func TestStatusRendersAPebibyteAndAShortIssuerIsRefused(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "malformed token: issuer is not a fingerprint; nothing was described") {
 		t.Errorf("token show: %q does not say the token is malformed and name the field", err)
+	}
+}
+
+// The string review at af0d96e (reviews/trace/): auu-admin printed nine
+// strings of the relay's raw. Now the enumerated fields — registration,
+// client_certs, the allow word, a token's use and state — are held to the
+// protocol's set when the answer is read, so a word outside it is a
+// malformed answer, and the free text — public_url, uptime, access_log,
+// a block's reason — goes through the escaper at the print.
+
+// escapeSeq is a terminal command as a relay would send it: OSC 0 sets
+// the window title; the BEL ends it.
+const escapeSeq = "\x1b]0;owned\a"
+
+// controlBytes says which byte, if any, in out would drive a terminal.
+func controlBytes(out string) (byte, bool) {
+	for i := 0; i < len(out); i++ {
+		c := out[i]
+		if (c < 0x20 && c != '\n' && c != '\t') || c == 0x7f {
+			return c, true
+		}
+	}
+	return 0, false
+}
+
+func TestStatusEscapesTheRelaysWordsAndHoldsItsEnums(t *testing.T) {
+	boss, err := identity.Generate("boss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		field  string
+		enum   bool
+		answer relayapi.AdminStatusResponse
+	}{
+		{"public_url", false, relayapi.AdminStatusResponse{PublicURL: "https://r" + escapeSeq}},
+		{"uptime", false, relayapi.AdminStatusResponse{Uptime: "1h" + escapeSeq}},
+		{"access_log", false, relayapi.AdminStatusResponse{AccessLog: "full" + escapeSeq}},
+		{"registration", true, relayapi.AdminStatusResponse{Registration: "open" + escapeSeq}},
+		{"client_certs", true, relayapi.AdminStatusResponse{ClientCerts: "off" + escapeSeq}},
+	} {
+		tc.answer.CAFingerprint = boss.Fingerprint()
+		srv := fakeRelay(t, map[string]any{"/v1/admin/status": tc.answer})
+		p := newPersona(t, "boss", srv.URL)
+		out, err := p.tryRun("status")
+		if c, found := controlBytes(out); found {
+			t.Errorf("status printed byte %#x from the relay's %s:\n%q", c, tc.field, out)
+		}
+		switch {
+		case tc.enum && (err == nil || !strings.Contains(err.Error(), tc.field+" is not one of")):
+			t.Errorf("status with a %s outside the protocol's set: %v, want the malformed-answer sentence naming it\n%s", tc.field, err, out)
+		case !tc.enum && err != nil:
+			t.Errorf("status with an escape in %s: %v\n%s", tc.field, err, out)
+		case !tc.enum && !strings.Contains(out, `\x1b]0;owned\a`):
+			t.Errorf("status does not show the relay's %s escaped:\n%s", tc.field, out)
+		}
+	}
+}
+
+func TestMailboxListingHoldsTheAllowWordToItsSet(t *testing.T) {
+	boss, err := identity.Generate("boss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := boss.Fingerprint()
+	rec := relayapi.MailboxRecord{FP: fp, Name: "alice", Allow: "signed" + escapeSeq, AllowlistSize: 2}
+	srv := fakeRelay(t, map[string]any{
+		"/v1/admin/mailboxes":       relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{rec}},
+		"/v1/admin/mailboxes/" + fp: rec,
+	})
+	p := newPersona(t, "boss", srv.URL)
+	for _, args := range [][]string{{"mailboxes", "ls"}, {"mailboxes", "show", fp}} {
+		out, err := p.tryRun(args...)
+		if c, found := controlBytes(out); found {
+			t.Errorf("auu-admin %s printed byte %#x from the relay's allow field:\n%q", strings.Join(args, " "), c, out)
+		}
+		if err == nil || !strings.Contains(err.Error(), "allow is not one of signed, none, broken") {
+			t.Errorf("auu-admin %s with an allow word outside the set: %v, want the malformed-answer sentence", strings.Join(args, " "), err)
+		}
+	}
+}
+
+func TestBlockListingEscapesTheReason(t *testing.T) {
+	boss, err := identity.Generate("boss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := boss.Fingerprint()
+	srv := fakeRelay(t, map[string]any{
+		"/v1/admin/blocks": relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{
+			{FP: fp, ByFP: fp, Created: time.Now(), Reason: "spam" + escapeSeq},
+		}},
+	})
+	p := newPersona(t, "boss", srv.URL)
+	out, err := p.tryRun("blocks", "ls")
+	if err != nil {
+		t.Fatalf("blocks ls: %v\n%s", err, out)
+	}
+	if c, found := controlBytes(out); found {
+		t.Errorf("blocks ls printed byte %#x from the relay's reason:\n%q", c, out)
+	}
+	if !strings.Contains(out, `spam\x1b]0;owned\a`) {
+		t.Errorf("blocks ls does not show the reason escaped:\n%s", out)
+	}
+}
+
+func TestTokenListingHoldsUseAndStateToTheirSets(t *testing.T) {
+	boss, err := identity.Generate("boss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := boss.Fingerprint()
+	id := strings.Repeat("7", 32)
+	for _, tc := range []struct {
+		field string
+		rec   relayapi.TokenRecord
+	}{
+		{"use", relayapi.TokenRecord{ID: id, Issuer: fp, Use: "register" + escapeSeq, State: "live", Note: "x"}},
+		{"state", relayapi.TokenRecord{ID: id, Issuer: fp, Use: "register", State: "live" + escapeSeq, Note: "x"}},
+	} {
+		srv := fakeRelay(t, map[string]any{
+			"/v1/admin/tokens": relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{tc.rec}},
+		})
+		p := newPersona(t, "boss", srv.URL)
+		out, err := p.tryRun("token", "ls")
+		if c, found := controlBytes(out); found {
+			t.Errorf("token ls printed byte %#x from the relay's %s:\n%q", c, tc.field, out)
+		}
+		if err == nil || !strings.Contains(err.Error(), tc.field+" is not one of") {
+			t.Errorf("token ls with a %s outside the set: %v, want the malformed-answer sentence", tc.field, err)
+		}
+	}
+}
+
+// TestTokenRevokeHoldsTheIDToItsShape: the id given to token revoke was
+// joined onto a URL with no rule, while every other id a command takes is
+// checked first; a value with a '?' in it became a path and a query. Now
+// it is refused as not a token id before any request, and the client
+// refuses the same on its own.
+func TestTokenRevokeHoldsTheIDToItsShape(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, "{}")
+	}))
+	t.Cleanup(srv.Close)
+	p := newPersona(t, "boss", srv.URL)
+	for _, id := range []string{"x?all=true", "a/b", "..", strings.Repeat("7", 31)} {
+		out, err := p.tryRun("token", "revoke", id)
+		var exit *exitError
+		if !asExit(err, &exit) || exit.code != exitUsage || !strings.Contains(err.Error(), "is not a token id (32 lowercase hex characters)") {
+			t.Errorf("token revoke %q: %v, want a usage error naming the shape\n%s", id, err, out)
+		}
+	}
+	if requests != 0 {
+		t.Errorf("%d requests reached the relay for ids that are not token ids; want none", requests)
+	}
+}
+
+// TestTokenShowEscapesAnUnverifiedTokensWords: a pasted token's relay and
+// note are the token's author's words, and Describe printed them as
+// written; now they are escaped. A relay claim that is not a URL and a
+// note with a control character in it are refused at Validate first, so
+// the escape here is for what the rules let through: a format character.
+func TestTokenShowEscapesAnUnverifiedTokensWords(t *testing.T) {
+	boss, err := identity.Generate("boss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := fakeRelay(t, map[string]any{})
+	p := newPersona(t, "boss", srv.URL)
+	now := time.Now().Unix()
+	payload, err := json.Marshal(map[string]any{
+		"id": strings.Repeat("7", 32), "issuer": boss.Fingerprint(), "relay": srv.URL, "use": "register",
+		"note": "for you\u202e", "not_before": now, "not_after": now + 3600, "uses": 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := token.Prefix + "." + base64.RawURLEncoding.EncodeToString(payload) + "." +
+		base64.RawURLEncoding.EncodeToString(make([]byte, 64))
+	out, err := p.tryRun("token", "show", raw)
+	if err != nil {
+		t.Fatalf("token show: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "\u202e") || !strings.Contains(out, `for:     for you\u202e`) {
+		t.Errorf("token show printed the note's bidi override, or not its escape:\n%q", out)
+	}
+	// And a note with a terminal command is refused at Validate, not
+	// described.
+	payload, _ = json.Marshal(map[string]any{
+		"id": strings.Repeat("7", 32), "issuer": boss.Fingerprint(), "relay": srv.URL, "use": "register",
+		"note": "for you" + escapeSeq, "not_before": now, "not_after": now + 3600, "uses": 1,
+	})
+	raw = token.Prefix + "." + base64.RawURLEncoding.EncodeToString(payload) + "." +
+		base64.RawURLEncoding.EncodeToString(make([]byte, 64))
+	out, err = p.tryRun("token", "show", raw)
+	if err == nil || !strings.Contains(err.Error(), "malformed token: note") {
+		t.Errorf("token show with a control character in the note: %v\n%s", err, out)
+	}
+	if c, found := controlBytes(out); found {
+		t.Errorf("token show printed byte %#x:\n%q", c, out)
 	}
 }
