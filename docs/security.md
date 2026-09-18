@@ -263,17 +263,30 @@ is refused when it is opened, kept under `damaged/` as malformed and
 acknowledged, and `auu send --thread` refuses one before anything is
 sealed; a stream's manifest is held to the same rule.
 
-**What a peer names is never a path.** Three things in a message become
-names on the receiver's disk, and each has a rule and a place it is
-checked: the thread id, which becomes a directory under an expert host's
-serve directory, is a message id and is checked when the message is
-opened and again by `auu serve` before it is joined onto anything; a
-channel name, which becomes a directory under the same, is held to the
-directory format's rule and is checked before a message is filed under it;
-an attachment name, which becomes a file, is a base name with no separator
-and no `.` or `..`, checked when a message is opened and, for a stream, when
-its manifest is. A signature proves who wrote a value, not that the value is
-safe.
+**Nothing the network names is a path until its rule has run.** Eight
+things that arrive over the wire become part of a path somewhere, and each
+has one rule and a named place it runs, before the value goes near a
+filesystem or a database; a signature proves who wrote a value, not that
+the value is safe. In order: a *fingerprint* in a URL names a mailbox's
+directory on the relay, and the relay checks it is 64 lowercase hex before
+it reads the signature; an *upload id* names an upload's file, checked as
+32 lowercase hex before the row is read; a *token id* is checked the same
+way before the store is asked; an *attachment name* becomes a file on the
+receiver, and is a base name with no separator and no `.` or `..`, checked
+when a message is opened and, for a stream, when its manifest is, and
+passed through `filepath.Base` again at the write; a *channel name*
+becomes a directory under an expert host's serve directory, and is held to
+the directory format's rule at the relay for every post, at every push of
+a directory, and at the client's `--channel`; a *relay host* names the
+authority's record of the relay, and `auu-ca` holds it to the shape of a
+DNS name or an address before any record is filed; a *message id* names
+the record's file, and is a message id at open, in a manifest and at the
+store; a *thread id* names a directory and a worktree under an expert
+host's serve directory, and is a message id at open, in a manifest, and
+checked again by `auu serve` before it is joined onto anything. One test
+walks every one of them with `..`, `../x`, `a/b`, `.`, the empty string
+and a NUL, and a new place that turns something from the network into a
+path gets its row there first.
 
 ### 2.1 The round trip
 

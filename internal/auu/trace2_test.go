@@ -1,7 +1,6 @@
 package auu
 
 import (
-	"crypto/hpke"
 	"encoding/json"
 	"errors"
 	"os"
@@ -34,22 +33,7 @@ func sealByHand(t *testing.T, from, to *user, inner *envelope.Inner) *envelope.E
 	if err != nil {
 		t.Fatal(err)
 	}
-	toFP := to.exportFingerprint()
-	inner.From, inner.FromBundle, inner.To = id.Fingerprint(), id.Public().Bundle(), toFP
-	innerBytes, err := json.Marshal(inner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sig, err := id.Sign(append([]byte("ccx-sig-v1"+toFP), innerBytes...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pub := mustParseBundle(t, mustBundle(t, to))
-	ct, err := hpke.Seal(pub.KEM, hpke.HKDFSHA256(), hpke.AES256GCM(), []byte("ccx-envelope-v1"+toFP), append(sig, innerBytes...))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return &envelope.Envelope{V: envelope.Version, To: toFP, CT: ct}
+	return sealInnerByHand(t, id, mustParseBundle(t, mustBundle(t, to)), inner)
 }
 
 // A thread id is a message id, and serve builds the thread's directory and
