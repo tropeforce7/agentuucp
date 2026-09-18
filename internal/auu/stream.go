@@ -15,6 +15,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
+	"github.com/tropeforce7/agentuucp/internal/term"
 )
 
 // Sending a stream.
@@ -235,7 +236,7 @@ func resumeStreams(s *store.Store, id *identity.Identity, asJSON bool, relay str
 		}
 		if !asJSON {
 			fmt.Printf("resuming %s to %s on %s (%s)\n",
-				p.MessageID[:12], orNone(p.ToName), r.Name, humanBytes(p.Bytes))
+				p.MessageID[:12], orNone(p.ToName), r.Name, term.HumanBytes(p.Bytes))
 		}
 		out, err := finishStream(s, id, r, p, false)
 		if err != nil {

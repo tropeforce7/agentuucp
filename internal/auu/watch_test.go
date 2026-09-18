@@ -16,6 +16,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relay"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/term"
 )
 
 // watchOut is auu watch --json as a test reads it, the events decoded by
@@ -225,8 +226,8 @@ func TestAWatchReportsMailAlreadyQueuedAtOnce(t *testing.T) {
 	// them, in the listing's order.
 	out := bob.run("watch", "--timeout", "1m")
 	relayName := events[0].Relay
-	want := relayName + ": 1 message in \"bugs\" (" + humanBytes(events[0].Size) + ")\n" +
-		relayName + ": 1 message in \"default\" (" + humanBytes(events[1].Size) + ")\n"
+	want := relayName + ": 1 message in \"bugs\" (" + term.HumanBytes(events[0].Size) + ")\n" +
+		relayName + ": 1 message in \"default\" (" + term.HumanBytes(events[1].Size) + ")\n"
 	if out != want {
 		t.Fatalf("plain:\n%s\nwant\n%s", out, want)
 	}

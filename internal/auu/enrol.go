@@ -50,6 +50,12 @@ func cmdEnrol(args []string) error {
 	if err != nil {
 		return usageErrf("%v", err)
 	}
+	// The shape before anything reads a field: Parse decodes the claims
+	// and checks nothing, and what is described below is sliced for a
+	// person to read.
+	if err := u.Claims.Validate(); err != nil {
+		return malformedToken(err)
+	}
 	claims := u.Claims
 
 	s, err := openStore()
@@ -259,12 +265,22 @@ func cmdToken(args []string) error {
 	if err != nil {
 		return usageErrf("%v", err)
 	}
+	if err := u.Claims.Validate(); err != nil {
+		return malformedToken(err)
+	}
 	s, err := openStore()
 	if err != nil {
 		return err
 	}
 	fmt.Print(describeToken(s, u))
 	return nil
+}
+
+// malformedToken is the usage error for a pasted token whose claims are
+// not the shape of a token's, naming the field, with nothing described.
+func malformedToken(err error) error {
+	return usageErrf("malformed token: %s; nothing was described",
+		strings.TrimPrefix(err.Error(), token.ErrForm.Error()+": "))
 }
 
 // describeToken renders a token, checking the signature when the issuer turns

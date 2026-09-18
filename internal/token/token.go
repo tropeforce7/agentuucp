@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"strings"
 	"time"
@@ -406,9 +407,13 @@ func isLowerHex(s string) bool {
 // one. An unverified description says so plainly rather than looking the same
 // as a checked one.
 func Describe(c Claims, issuerName string, verified bool, now time.Time) string {
-	issuer := c.Issuer[:16]
+	// Never sliced: Parse decodes claims without Validate, and a pasted
+	// token with a two-character issuer once panicked here. A caller that
+	// wants the shape checked runs Validate first and says so; this
+	// renders whatever it is given.
+	issuer := short(c.Issuer)
 	if issuerName != "" {
-		issuer = fmt.Sprintf("%s <%s>", issuerName, c.Issuer[:16])
+		issuer = fmt.Sprintf("%s <%s>", issuerName, short(c.Issuer))
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "token:   %s\n", c.ID)
@@ -417,7 +422,7 @@ func Describe(c Claims, issuerName string, verified bool, now time.Time) string 
 	fmt.Fprintf(&b, "relay:   %s\n", c.Relay)
 	fmt.Fprintf(&b, "for:     %s\n", c.Note)
 	if c.Subject != "" {
-		fmt.Fprintf(&b, "bound to: %s\n", c.Subject[:16])
+		fmt.Fprintf(&b, "bound to: %s\n", short(c.Subject))
 	}
 	fmt.Fprintf(&b, "expires: %s (%s)\n",
 		c.NotAfterTime().Local().Format("2006-01-02 15:04 MST"), Until(c.NotAfterTime(), now))
@@ -438,16 +443,34 @@ func Describe(c Claims, issuerName string, verified bool, now time.Time) string 
 // person deciding whether to hurry is told so, to the second; past the skew
 // it is expired and that is all. The container suite's X01 found a token
 // described as expired and then accepted.
+//
+// Times are compared as times, and no difference is negated: time.Sub
+// saturates at the Duration limits for a gap over about 292 years, and
+// the negation of the minimum is the minimum, so an expiry that far in
+// the past once read as inside the skew with a negative age.
 func Until(t, now time.Time) string {
-	d := t.Sub(now)
-	if d < 0 {
-		if -d <= relayapi.MaxSkew {
-			return fmt.Sprintf("expired %s ago; a relay accepts it for %s past that",
-				(-d).Truncate(time.Second), roughly(relayapi.MaxSkew))
+	switch {
+	case t.Before(now.Add(-relayapi.MaxSkew)):
+		ago := now.Sub(t)
+		if ago == math.MaxInt64 {
+			return "expired long ago"
 		}
-		return "expired " + roughly(-d) + " ago"
+		return "expired " + roughly(ago) + " ago"
+	case t.Before(now):
+		return fmt.Sprintf("expired %s ago; a relay accepts it for %s past that",
+			now.Sub(t).Truncate(time.Second), roughly(relayapi.MaxSkew))
+	default:
+		return "in " + roughly(t.Sub(now))
 	}
-	return "in " + roughly(d)
+}
+
+// short is the first sixteen characters of an id, or the whole of one
+// shorter than that, which a token nobody validated may carry.
+func short(s string) string {
+	if len(s) > 16 {
+		return s[:16]
+	}
+	return s
 }
 
 func roughly(d time.Duration) string {

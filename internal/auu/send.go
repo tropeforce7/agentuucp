@@ -15,6 +15,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
+	"github.com/tropeforce7/agentuucp/internal/term"
 )
 
 type sentJSON struct {
@@ -359,7 +360,7 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 	if estimate > relayapi.DefaultMaxBytes {
 		return sentJSON{}, newThread, usageErrf("message is about %s once encoded, over the %s relay limit%s; "+
 			"drop --inline to send it as a stream instead",
-			humanBytes(estimate), humanBytes(relayapi.DefaultMaxBytes),
+			term.HumanBytes(estimate), term.HumanBytes(relayapi.DefaultMaxBytes),
 			largestAttachmentHint(attachments))
 	}
 
@@ -381,7 +382,7 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 	}
 	if int64(size) > relayapi.DefaultMaxBytes {
 		return sentJSON{}, newThread, usageErrf("message is %s, over the %s relay limit%s",
-			humanBytes(int64(size)), humanBytes(relayapi.DefaultMaxBytes), largestAttachmentHint(attachments))
+			term.HumanBytes(int64(size)), term.HumanBytes(relayapi.DefaultMaxBytes), largestAttachmentHint(attachments))
 	}
 
 	c, err := dial(s, id, r)
@@ -435,13 +436,13 @@ func printSent(out sentJSON, r *store.Relay, newThread, asJSON bool) error {
 		fmt.Printf("message: %s\n", out.ID)
 		fmt.Printf("thread:  %s\n", out.Thread)
 		fmt.Printf("size:    %s in %d chunks of %s\n",
-			humanBytes(int64(out.Bytes)), out.Chunks-1, humanBytes(int64(out.ChunkSize)))
+			term.HumanBytes(int64(out.Bytes)), out.Chunks-1, term.HumanBytes(int64(out.ChunkSize)))
 		return nil
 	}
 	fmt.Printf("sent to %s via %s%s\n", orNone(out.ToName), r.Name, channelSuffix(out.Channel))
 	fmt.Printf("message: %s\n", out.ID)
 	fmt.Printf("thread:  %s\n", out.Thread)
-	fmt.Printf("size:    %s\n", humanBytes(int64(out.Bytes)))
+	fmt.Printf("size:    %s\n", term.HumanBytes(int64(out.Bytes)))
 	if newThread {
 		fmt.Printf("\nWait for an answer with: %s wait --thread %s\n", prog, out.Thread)
 	}
@@ -569,18 +570,5 @@ func largestAttachmentHint(paths []string) string {
 	}
 	sort.Slice(sizes, func(i, j int) bool { return sizes[i].size > sizes[j].size })
 	return fmt.Sprintf("; the largest attachment is %s at %s",
-		sizes[0].name, humanBytes(sizes[0].size))
-}
-
-func humanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGT"[exp])
+		sizes[0].name, term.HumanBytes(sizes[0].size))
 }

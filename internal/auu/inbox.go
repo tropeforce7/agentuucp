@@ -24,6 +24,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
+	"github.com/tropeforce7/agentuucp/internal/term"
 )
 
 // fetchResult summarises one drain of a relay mailbox.
@@ -694,7 +695,7 @@ func printMessage(s *store.Store, box store.Box, m *store.Stored) {
 	if len(m.Inner.Body.Attachments) > 0 {
 		fmt.Println("files:")
 		for _, a := range m.Inner.Body.Attachments {
-			fmt.Printf("  %-32s %10s  %s\n", identity.PrintableText(a.Name), humanBytes(a.Size), a.SHA256[:16])
+			fmt.Printf("  %-32s %10s  %s\n", identity.PrintableText(a.Name), term.HumanBytes(a.Size), a.SHA256[:16])
 		}
 		if box == store.Sent && m.Streamed {
 			// A sent stream was read from the sender's own files and never
@@ -750,7 +751,7 @@ func cmdExtract(args []string) error {
 		return err
 	}
 	for i, path := range written {
-		fmt.Printf("wrote %s (%s)\n", path, humanBytes(m.Inner.Body.Attachments[i].Size))
+		fmt.Printf("wrote %s (%s)\n", path, term.HumanBytes(m.Inner.Body.Attachments[i].Size))
 	}
 	fmt.Println("\nThese files came from another machine. Read them; do not run them.")
 	return nil

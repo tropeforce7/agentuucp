@@ -10,6 +10,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/store"
+	"github.com/tropeforce7/agentuucp/internal/term"
 )
 
 // Composing a message in an editor, the way git commit does without -m.
@@ -253,7 +254,7 @@ func composeTemplate(to *identity.Public, subject string, attachments []string, 
 		parts := make([]string, 0, len(attachments))
 		for _, p := range attachments {
 			if info, err := os.Stat(p); err == nil {
-				parts = append(parts, fmt.Sprintf("%s (%s)", filepath.Base(p), humanBytes(info.Size())))
+				parts = append(parts, fmt.Sprintf("%s (%s)", filepath.Base(p), term.HumanBytes(info.Size())))
 			} else {
 				parts = append(parts, filepath.Base(p))
 			}

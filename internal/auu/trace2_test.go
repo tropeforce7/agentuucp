@@ -2,6 +2,7 @@ package auu
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/relay"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
+	"github.com/tropeforce7/agentuucp/internal/token"
 )
 
 // The second adversarial trace, at v0.9.0: what a received message
@@ -655,5 +657,91 @@ func TestReplyByThreadAnswersTheLatestArrivalNotTheLatestStamp(t *testing.T) {
 	if !strings.Contains(out, "sent:    "+fromTheFuture.Inner.Time.Local().Format(time.RFC1123)+" (the sender's clock)") ||
 		!strings.Contains(out, "received: "+fromTheFuture.Received.Local().Format(time.RFC1123)) {
 		t.Errorf("read does not show the stamp as the sender's beside the arrival:\n%s", out)
+	}
+}
+
+// The integer review at af0d96e: a peer's or a relay's number rendered
+// for a person. A quarantined stream is saved from its manifest alone,
+// before any payload is fetched or its size checked against the relay's
+// listing, so an attachment declared at a pebibyte costs the sender a
+// kilobyte and once panicked inbox show and extract at "KMGT"[4]. The
+// listing a relay sends for watch carries a size the same way.
+func TestAPebibyteDeclaredByAPeerPrints(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &store.Stored{
+		Relay: "relay", RelayID: 7, Received: time.Now(), Streamed: true, PayloadOnRelay: true,
+		Inner: &envelope.Inner{
+			From: strings.Repeat("a", 64), To: strings.Repeat("b", 64),
+			ID: strings.Repeat("c", 32), Time: time.Now(),
+			Body: message.Body{
+				Type: "note", Thread: strings.Repeat("d", 32),
+				Attachments: []message.Attachment{{
+					Name: "big.bin", Media: "application/octet-stream",
+					Size: 1 << 50, SHA256: strings.Repeat("e", 64),
+				}},
+			},
+		},
+	}
+	out, _ := captureStdout(t, func() error { printMessage(s, store.Quarantine, m); return nil })
+	if !strings.Contains(out, "1.0 PiB") {
+		t.Errorf("a quarantined stream whose manifest declares a 2^50 byte attachment printed:\n%s", out)
+	}
+	// And the relay's listing through watch's summary.
+	out, _ = captureStdout(t, func() error {
+		printEvents([]any{&messageEvent{Type: eventMessage, Relay: "relay", Channel: "default", Kind: "stream", Size: 1 << 50, ID: 7}}, nil)
+		return nil
+	})
+	if !strings.Contains(out, "1.0 PiB") {
+		t.Errorf("a relay listing a 2^50 byte message printed:\n%s", out)
+	}
+}
+
+// A token pasted to auu enrol or auu token show is parsed and was
+// described before anything checked its claims, and the description
+// sliced the issuer: a two-character issuer panicked. Now the claims are
+// validated first and the command says the token is malformed, naming the
+// field, and describes nothing; describeToken itself never slices.
+func TestAPastedTokenWithAShortIssuerIsRefusedNotSliced(t *testing.T) {
+	relayURL := startRelay(t)
+	alice := newUser(t, "alice", relayURL)
+	payload, err := json.Marshal(token.Claims{
+		ID: strings.Repeat("7", 32), Issuer: "ab", Relay: "https://relay.example.com", Use: token.UseRegister,
+		NotBefore: 1, NotAfter: 2, Uses: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := strings.Join([]string{
+		token.Prefix,
+		base64.RawURLEncoding.EncodeToString(payload),
+		base64.RawURLEncoding.EncodeToString(make([]byte, 64)),
+	}, ".")
+	for _, args := range [][]string{{"token", "show", raw}, {"enrol", raw}} {
+		out, err := alice.tryRun(args...)
+		var exit *exitError
+		if !errors.As(err, &exit) || exit.code != exitUsage {
+			t.Fatalf("auu %s with a two-character issuer: %v, want a usage error\n%s", args[0], err, out)
+		}
+		if !strings.Contains(err.Error(), "malformed token: issuer is not a fingerprint; nothing was described") {
+			t.Errorf("auu %s: %q does not say the token is malformed and name the field", args[0], err)
+		}
+		if strings.Contains(out, "issuer:") {
+			t.Errorf("auu %s described the token anyway:\n%s", args[0], out)
+		}
+	}
+	// describeToken on its own renders the short issuer whole.
+	u, err := token.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(alice.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := describeToken(s, u); !strings.Contains(got, "issuer:  ab\n") {
+		t.Errorf("describeToken on a two-character issuer:\n%s", got)
 	}
 }

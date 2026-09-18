@@ -358,6 +358,11 @@ A refused send names what to change, and nothing was queued:
   you; ask them to add you and run `auu allow push`.
 - `X's mailbox on the relay is full; they need to run 'auu rm' to make
   room` — theirs to clear, not something to retry.
+- `malformed token: issuer is not a fingerprint; nothing was described` (or
+  another field) — a pasted token whose claims are not the shape of a
+  token's; `auu enrol`, `auu token show` and `auu-admin token show` check
+  the shape before they describe anything. Ask the issuer for the token
+  again.
 - `--thread "T" is not a message id (32 lowercase hex characters); a thread
   id is the id of the message that opened it` — a thread is named by the
   `thread` a `send` or `inbox` reported, never by a name of your own;

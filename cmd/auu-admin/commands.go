@@ -17,6 +17,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
+	"github.com/tropeforce7/agentuucp/internal/term"
 	"github.com/tropeforce7/agentuucp/internal/token"
 )
 
@@ -48,7 +49,7 @@ func cmdStatus(args []string) error {
 	fmt.Printf("uptime:         %s\n", st.Uptime)
 	fmt.Printf("administrators: %d\n", st.Administrators)
 	fmt.Printf("mailboxes:      %d\n", st.Mailboxes)
-	fmt.Printf("queued:         %d messages, %s\n", st.QueuedMessages, humanBytes(st.QueuedBytes))
+	fmt.Printf("queued:         %d messages, %s\n", st.QueuedMessages, term.HumanBytes(st.QueuedBytes))
 	fmt.Printf("live tokens:    %d\n", st.LiveTokens)
 	fmt.Printf("blocks:         %d\n", st.Blocks)
 	fmt.Printf("access log:     %s\n", st.AccessLog)
@@ -118,7 +119,7 @@ func mailboxesList(args []string) error {
 		}
 		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\n",
 			m.FP[:16], truncate(orNone(identity.Printable(m.Name)), 20), m.QueuedMessages,
-			humanBytes(m.QueuedBytes), allowColumn(m), state)
+			term.HumanBytes(m.QueuedBytes), allowColumn(m), state)
 	}
 	if err := w.Flush(); err != nil {
 		return err
@@ -153,7 +154,7 @@ func mailboxShow(args []string) error {
 	fmt.Printf("fingerprint: %s\n", m.FP)
 	fmt.Printf("name:        %s\n", orNone(identity.Printable(m.Name)))
 	fmt.Printf("created:     %s\n", m.Created.Local().Format(time.RFC3339))
-	fmt.Printf("queued:      %d messages, %s\n", m.QueuedMessages, humanBytes(m.QueuedBytes))
+	fmt.Printf("queued:      %d messages, %s\n", m.QueuedMessages, term.HumanBytes(m.QueuedBytes))
 	fmt.Printf("allowlist:   %s\n", allowField(*m))
 	fmt.Printf("channels:    %d\n", m.Channels)
 	fmt.Printf("blocked:     %t\n", m.Blocked)
@@ -207,7 +208,7 @@ func mailboxRemove(args []string, purgeOnly bool) error {
 	if err != nil {
 		return adminErr(c, err)
 	}
-	what := fmt.Sprintf("%d queued message(s), %s", m.QueuedMessages, humanBytes(m.QueuedBytes))
+	what := fmt.Sprintf("%d queued message(s), %s", m.QueuedMessages, term.HumanBytes(m.QueuedBytes))
 	if purgeOnly {
 		fmt.Printf("Purging %s (%s) will discard %s. The mailbox itself stays.\n",
 			m.FP[:16], orNone(identity.Printable(m.Name)), what)
@@ -583,6 +584,12 @@ func tokenShow(args []string) error {
 	if err != nil {
 		return usageErrf("%v", err)
 	}
+	// The shape before anything reads a field: Parse checks no claim, and
+	// the description slices ids for a person to read.
+	if err := u.Claims.Validate(); err != nil {
+		return usageErrf("malformed token: %s; nothing was described",
+			strings.TrimPrefix(err.Error(), token.ErrForm.Error()+": "))
+	}
 	if *c.asJSON {
 		return printJSON(u.Claims)
 	}
@@ -660,19 +667,6 @@ func truncate(s string, n int) string {
 		kept++
 	}
 	return s
-}
-
-func humanBytes(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGT"[exp])
 }
 
 // cmdCerts is the administrator's view of the client certificates this relay

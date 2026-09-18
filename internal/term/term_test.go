@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -128,5 +129,32 @@ func TestDisableEchoOnSomethingThatIsNotATerminal(t *testing.T) {
 	defer w.Close()
 	if _, err := DisableEcho(int(r.Fd())); err == nil {
 		t.Error("turning the echo off on a pipe reported success")
+	}
+}
+
+// HumanBytes renders every int64: the two copies it replaced indexed a
+// unit string of four past its end at a pebibyte, and a size a peer or a
+// relay declared at that scale panicked the tool that printed it.
+func TestHumanBytesRendersEverySize(t *testing.T) {
+	for _, tc := range []struct {
+		n    int64
+		want string
+	}{
+		{0, "0 B"},
+		{1023, "1023 B"},
+		{1024, "1.0 KiB"},
+		{1536, "1.5 KiB"},
+		{1 << 20, "1.0 MiB"},
+		{1 << 30, "1.0 GiB"},
+		{1 << 40, "1.0 TiB"},
+		{1<<50 - 1, "1024.0 TiB"},
+		{1 << 50, "1.0 PiB"},
+		{1<<50 + 1, "1.0 PiB"},
+		{1 << 60, "1.0 EiB"},
+		{math.MaxInt64, "8.0 EiB"},
+	} {
+		if got := HumanBytes(tc.n); got != tc.want {
+			t.Errorf("HumanBytes(%d) = %q, want %q", tc.n, got, tc.want)
+		}
 	}
 }

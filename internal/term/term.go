@@ -47,3 +47,24 @@ func ReadLine(r io.Reader) ([]byte, error) {
 		}
 	}
 }
+
+// HumanBytes renders a size for a person: bytes under a kibibyte, and
+// otherwise one decimal of the largest binary unit that fits, up to
+// exbibytes, which is where an int64 ends (MaxInt64 is 8.0 EiB). The one
+// copy for both binaries: each had its own with units to tebibytes, and a
+// size a peer or a relay declared at a pebibyte indexed past the end of
+// the unit string and panicked inbox show, extract, watch and auu-admin
+// status. The loop is bounded by the units, not by the number.
+func HumanBytes(n int64) string {
+	const unit = 1024
+	const units = "KMGTPE"
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit && exp < len(units)-1; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), units[exp])
+}

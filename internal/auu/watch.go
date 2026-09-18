@@ -14,6 +14,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
+	"github.com/tropeforce7/agentuucp/internal/term"
 )
 
 // The machinery of auu watch: what one relay is watched for, the poll that
@@ -505,7 +506,7 @@ func printEvents(events []any, delivered []*store.Stored) {
 		if _, seen := sizes[k]; !seen {
 			order = append(order, k)
 		}
-		sizes[k] = append(sizes[k], humanBytes(me.Size))
+		sizes[k] = append(sizes[k], term.HumanBytes(me.Size))
 	}
 	for _, k := range order {
 		fmt.Printf("%s: %s in %q (%s)\n", k.relay, plural(len(sizes[k]), "message"), k.channel, strings.Join(sizes[k], ", "))

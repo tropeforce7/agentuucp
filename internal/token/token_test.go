@@ -703,3 +703,129 @@ func TestDescribeSaysHowLongAnExpiredTokenStillWorks(t *testing.T) {
 		})
 	}
 }
+
+// The integer review at af0d96e (reviews/trace/): three renderings of a
+// peer's number, kept as regressions.
+
+// unverifiedToken builds a token string that Parse accepts without any
+// signature or claim check: a real prefix, the given claims as the payload,
+// and 64 bytes of zero where an Ed25519 signature would be.
+func unverifiedToken(t *testing.T, c Claims) string {
+	t.Helper()
+	payload, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := make([]byte, 64)
+	return strings.Join([]string{
+		Prefix,
+		base64.RawURLEncoding.EncodeToString(payload),
+		base64.RawURLEncoding.EncodeToString(sig),
+	}, ".")
+}
+
+// TestDescribeNeverSlicesAShortIssuer: Parse decodes claims and checks
+// nothing, and Describe sliced Issuer[:16], so a pasted token with a
+// short issuer panicked enrol and token show. Now Describe renders
+// whatever it is given, the whole of a short id, and the callers that
+// want the shape checked run Validate first.
+func TestDescribeNeverSlicesAShortIssuer(t *testing.T) {
+	for _, issuer := range []string{"", "a", "ab", strings.Repeat("a", 15), strings.Repeat("a", 16), strings.Repeat("a", 64)} {
+		raw := unverifiedToken(t, Claims{
+			Issuer: issuer, Relay: "https://relay.example.com", Use: UseRegister,
+			NotBefore: 1, NotAfter: 2, Uses: 1,
+		})
+		u, err := Parse(raw)
+		if err != nil {
+			t.Fatalf("Parse refused the token: %v; expected it to parse, since Parse checks no claim", err)
+		}
+		got := Describe(u.Claims, "", false, time.Now())
+		want := issuer
+		if len(want) > 16 {
+			want = want[:16]
+		}
+		if !strings.Contains(got, "issuer:  "+want+"\n") {
+			t.Errorf("issuer of %d characters described as:\n%s", len(issuer), got)
+		}
+		if named := Describe(u.Claims, "boss", false, time.Now()); !strings.Contains(named, "issuer:  boss <"+want+">\n") {
+			t.Errorf("issuer of %d characters with a name described as:\n%s", len(issuer), named)
+		}
+	}
+}
+
+func TestDescribeNeverSlicesAShortSubject(t *testing.T) {
+	raw := unverifiedToken(t, Claims{
+		Issuer: strings.Repeat("a", 64), Subject: "ab",
+		Relay: "https://relay.example.com", Use: UseRegister,
+		NotBefore: 1, NotAfter: 2, Uses: 1,
+	})
+	u, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := Describe(u.Claims, "", false, time.Now()); !strings.Contains(got, "bound to: ab\n") {
+		t.Fatalf("a two-character subject described as:\n%s", got)
+	}
+}
+
+// TestUntilNeverNegatesASaturatedDifference: Until negated the difference
+// between the expiry and now, and time.Sub saturates at the Duration
+// minimum for a gap over about 292 years, whose negation is itself, so a
+// token expired that long ago read as inside the relay's skew with a
+// negative age. Now Until compares times and negates nothing.
+func TestUntilNeverNegatesASaturatedDifference(t *testing.T) {
+	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	saturates := now.Add(-time.Duration(math.MaxInt64)).Add(-time.Second)
+	justFits := now.Add(-time.Duration(math.MaxInt64)).Add(time.Second)
+	if got := Until(justFits, now); !strings.HasPrefix(got, "expired ") || strings.Contains(got, "-") || strings.Contains(got, "a relay accepts") {
+		t.Fatalf("Until for an expiry a second inside the Duration range said %q; expected an expired-long-ago sentence", got)
+	}
+	for _, c := range []struct {
+		name string
+		t    time.Time
+	}{
+		{"one second past where Sub saturates", saturates},
+		{"not_after -10000000000 (the year 1653)", time.Unix(-10_000_000_000, 0)},
+		{"not_after 1734", time.Date(1734, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{"not_after MinInt64", time.Unix(math.MinInt64, 0)},
+	} {
+		got := Until(c.t, now)
+		if strings.Contains(got, "-") || strings.Contains(got, "a relay accepts") || !strings.HasPrefix(got, "expired ") {
+			t.Errorf("%s: Until said %q; expected it to say the token expired, not a negative age, and not that a relay still accepts it", c.name, got)
+		}
+	}
+	if got := Until(time.Unix(math.MinInt64, 0), now); got != "expired long ago" {
+		t.Errorf("a saturated gap: %q, want \"expired long ago\"", got)
+	}
+	// The edges of the skew, and the future, are as they were.
+	if got := Until(now.Add(-time.Minute), now); got != "expired 1m0s ago; a relay accepts it for 5 minutes past that" {
+		t.Errorf("a minute ago: %q", got)
+	}
+	if got := Until(now.Add(-relayapi.MaxSkew-time.Second), now); got != "expired 5 minutes ago" {
+		t.Errorf("a second past the skew: %q", got)
+	}
+	if got := Until(now.Add(3*time.Hour), now); got != "in 3 hours" {
+		t.Errorf("three hours ahead: %q", got)
+	}
+	if got := Until(time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), now); !strings.HasPrefix(got, "in ") || strings.Contains(got, "-") {
+		t.Errorf("the far future: %q", got)
+	}
+}
+
+// TestDescribeOfAnExpiryFromTheFarPastSaysExpired is the same value
+// through the door a person uses: a pasted token whose not_after is far in
+// the past reaches Describe without Validate.
+func TestDescribeOfAnExpiryFromTheFarPastSaysExpired(t *testing.T) {
+	raw := unverifiedToken(t, Claims{
+		Issuer: strings.Repeat("a", 64), Relay: "https://relay.example.com", Use: UseRegister,
+		NotBefore: 1, NotAfter: math.MinInt64, Uses: 1,
+	})
+	u, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := Describe(u.Claims, "", false, time.Now())
+	if strings.Contains(got, "a relay accepts") || !strings.Contains(got, "expired long ago") {
+		t.Fatalf("Describe of a token with not_after MinInt64:\n%s", got)
+	}
+}

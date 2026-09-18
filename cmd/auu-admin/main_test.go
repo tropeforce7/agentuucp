@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -954,5 +955,41 @@ func TestAShortFieldInAnAnswerIsRefusedNotSliced(t *testing.T) {
 		if !strings.Contains(err.Error(), "malformed answer") || !strings.Contains(err.Error(), tc.field+" is not") || !strings.Contains(err.Error(), srv.URL) {
 			t.Errorf("auu-admin %v with a bad %s: %q does not say the answer is malformed, naming the field and the relay", tc.args, tc.field, err)
 		}
+	}
+}
+
+// TestStatusRendersAPebibyte: auu-admin's own humanBytes indexed "KMGT"
+// past its end at a pebibyte, and a relay reporting queued_bytes at that
+// scale panicked status; the one HumanBytes in term renders it. And a
+// pasted token with a short issuer is refused by token show as malformed,
+// naming the field, rather than sliced.
+func TestStatusRendersAPebibyteAndAShortIssuerIsRefused(t *testing.T) {
+	srv := fakeRelay(t, map[string]any{
+		"/v1/admin/status": relayapi.AdminStatusResponse{QueuedBytes: 1 << 50, TokenMaxAgeSecs: 3600},
+	})
+	p := newPersona(t, "boss", srv.URL)
+	out := p.run("status")
+	if !strings.Contains(out, "1.0 PiB") {
+		t.Errorf("status with queued_bytes 2^50 printed:\n%s", out)
+	}
+	payload, err := json.Marshal(token.Claims{
+		ID: strings.Repeat("7", 32), Issuer: "ab", Relay: "https://relay.example.com", Use: token.UseRegister,
+		NotBefore: 1, NotAfter: 2, Uses: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := strings.Join([]string{
+		token.Prefix,
+		base64.RawURLEncoding.EncodeToString(payload),
+		base64.RawURLEncoding.EncodeToString(make([]byte, 64)),
+	}, ".")
+	out, err = p.tryRun("token", "show", raw)
+	var exit *exitError
+	if !asExit(err, &exit) || exit.code != exitUsage {
+		t.Fatalf("token show with a two-character issuer: %v, want a usage error\n%s", err, out)
+	}
+	if !strings.Contains(err.Error(), "malformed token: issuer is not a fingerprint; nothing was described") {
+		t.Errorf("token show: %q does not say the token is malformed and name the field", err)
 	}
 }
