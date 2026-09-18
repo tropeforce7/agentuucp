@@ -1,58 +1,68 @@
 # AgentUUCP
 
-Read `reviews/PLAN.md` before doing anything. It is the full specification;
-implement it exactly and record any gaps you had to fill in
-`reviews/IMPLEMENTATION_NOTES.md`.
+Encrypted store-and-forward messaging between agents run by different
+people, through a relay that learns nothing. `README.md` says what it is and
+how to use it; `docs/` holds the guides; `.claude/guides/DEVELOPMENT.md` and
+`.claude/guides/TESTING.md` hold the rules for changing the code, each with
+the failure that taught it. Read those two before contributing.
 
-Everything about how this project was designed lives in `reviews/`: the plans,
-the record of every decision they left open, and the reviewer's checklist. That
-directory is git-ignored, so **none of it is in a fresh clone**. If it is empty,
-say so and ask for it rather than guessing at what it said or writing a new
-plan from the code. The repository itself carries only the code, `README.md`,
-and this file.
+## The `reviews/` directory is not part of the repository
 
-Before contributing, read `.claude/guides/DEVELOPMENT.md` and
-`.claude/guides/TESTING.md`. They hold the rules learned the hard way during
-implementation, each with the failure that taught it.
+The maintainers keep their design plans, the record of every decision those
+plans left open, and a reviewer's checklist in a directory called
+`reviews/`. It is git-ignored on purpose and is not distributed: **a clone
+never has it, and that is the expected state, not a problem.** If you are
+working from a clone, do not report its absence, do not ask for it, and do
+not create it or write a plan of your own to stand in for it. Everything a
+contributor needs is in the tree: the guides above, the README's security
+model, and the documents under `docs/`.
 
-Follow-on work has its own plan files, each of which extends `reviews/PLAN.md`
-and does not replace it:
+## For the maintainers, when `reviews/` is present
 
-- `reviews/PLAN-ACME.md`, **superseded** by `reviews/PLAN-SELFCA.md`. ACME is
-  removed and with it the project's only dependency exception.
-- `reviews/PLAN-RATELIMIT.md`, implemented. The token bucket it describes lives in
-  `internal/ratelimit` and adds no dependency.
-- `reviews/PLAN-ADMIN.md`, implemented. Administrators, `cmd/auu-admin`, and signed
-  enrolment tokens, which replaced the static invite secret. Its section 0
-  records the design decisions; do not re-open them.
-- `reviews/PLAN-TESTING.md`, implemented. The corrective plan from reviewing
-  the project against `.claude/guides/TESTING.md`; its defects are fixed and
-  its tests exist.
-- `reviews/PLAN-FILESTORE.md`, implemented. Message bodies are one file each
-  under `messages/`, and SQLite keeps only metadata and counters. The schema
-  reached version 4: the plan's version 3 dropped the envelope column, and
-  version 4 added the columns streams need.
-- `reviews/PLAN-STREAM.md`, implemented. Large messages are chunked, resumable
-  streams sealed under one `crypto/hpke` multi-shot context, with a signed
-  manifest in a length-prefixed chunk 0 capped at 1 MiB. Automatic above a
-  64 KiB threshold; body chunks are 63 KiB so a sealed chunk fits in 64 KiB;
-  both are the sender's settings. `internal/stream` is the format,
-  `auu send --resume` finishes an interrupted upload. Do not change any
-  limit's default.
-- `reviews/PLAN-MTLS.md`, implemented. Per-machine ML-DSA client certificates.
-  Its section 0 is amended where the parameter set became configurable.
-- `reviews/PLAN-SELFCA.md`, implemented. `cmd/auu-ca` makes an offline trust
-  anchor and two authorities; a relay is issued disposable signing
-  intermediates and mints its own short-lived certificate. Replaces ACME.
-  `reviews/CA-PROCESSES.md` describes every process a step at a time.
-- `reviews/PLAN-ATTEST.md`, **not implemented**. Relays witnessing one another,
-  which is the only thing that would detect a stolen but not-yet-rotated
-  server intermediate.
-- `reviews/PLAN-MULTIRELAY.md`, implemented. Several relays in one home, each
-  with its own anchor, certificate and cursor under `relays/`, selected with
-  `--relay`, `AUU_RELAY` or a default. One identity across all of them; a home
-  from before the change is moved under `relays/` on first open, one way. The
-  relay and the wire are untouched.
+Read `reviews/PLAN.md` first. It is the full specification; implement it
+exactly and record any gap you had to fill in
+`reviews/IMPLEMENTATION_NOTES.md`, which is the one file in that directory
+that is yours to write. Follow-on work has its own plan files, each of
+which extends `reviews/PLAN.md` and does not replace it; each records its
+design decisions in a section 0, and those are not to be re-opened:
+
+- `PLAN-ACME.md`, **superseded** by `PLAN-SELFCA.md`. ACME is removed and
+  with it the project's only dependency exception.
+- `PLAN-RATELIMIT.md`, implemented: the token bucket in `internal/ratelimit`.
+- `PLAN-ADMIN.md`, implemented: administrators, `cmd/auu-admin`, and signed
+  enrolment tokens in place of the static invite secret.
+- `PLAN-TESTING.md`, implemented: the corrective plan from reviewing the
+  project against the testing guide.
+- `PLAN-FILESTORE.md`, implemented: one file per message body under
+  `messages/`, SQLite for metadata and counters alone.
+- `PLAN-STREAM.md`, implemented: chunked, resumable streams above 64 KiB
+  under one `crypto/hpke` multi-shot context, with a signed manifest in
+  chunk 0. Do not change any limit's default.
+- `PLAN-MTLS.md`, implemented: per-machine ML-DSA client certificates.
+- `PLAN-SELFCA.md`, implemented: `cmd/auu-ca`, the offline trust anchor and
+  two authorities; `CA-PROCESSES.md` describes every process step by step.
+- `PLAN-ATTEST.md`, **not implemented**: relays witnessing one another.
+- `PLAN-MULTIRELAY.md`, implemented: several relays in one home under
+  `relays/`, one identity across them.
+- `PLAN-CHANNELS.md`, implemented: owner-signed channel directories, named
+  sub-mailboxes the relay routes by.
+- `PLAN-WATCH.md`, implemented: `auu watch`, the held listing and directory
+  events.
+- `PLAN-KIT.md`, implemented: `auu-ca kit`, the relay packed with its
+  settings, unit and installer.
+- `PLAN-KEEP.md`, implemented: mail kept on the relay per channel, inbox
+  marks, `auu rm`.
+- `PLAN-SKILLS.md`, implemented: the three Claude Code skills and
+  `skill/reference.md`.
+- `PLAN-SERVE.md`, implemented: `auu serve`, the expert host, per-thread
+  worktrees, the ledger.
+- `PLAN-INSTALL.md`, implemented: `scripts/install.sh`.
+- `PLAN-ALLOW.md`, implemented: the owner-signed allow list, verified on
+  every post.
+- `PLAN-PROXY.md`, implemented: the key-holding proxy in `auu serve`, in
+  process and as an account of its own.
+
+## Rules for every change
 
 - Go 1.27 or later, standard library only plus `modernc.org/sqlite` and
   `golang.org/x/crypto/argon2`. The second is scoped to `internal/keyfile`,
@@ -66,9 +76,9 @@ and does not replace it:
   dependency. Argon2id above is not an exception to this: no message and no
   connection touches it, and it is a key derivation function taken whole
   rather than a construction.
-- `reviews/` is git-ignored and belongs to the reviewer. Read the plans and the
-  notes there. Write only to `reviews/IMPLEMENTATION_NOTES.md`, which is yours
-  to keep; leave everything else in that directory alone.
+- When `reviews/` is present it belongs to the reviewer: write only to
+  `reviews/IMPLEMENTATION_NOTES.md` and leave everything else in it alone.
+  When it is absent, see above: that is normal.
 - Commit messages carry no author or attribution trailers. No
   `Co-Authored-By:`, no `Claude-Session:`, no "generated with" footer. A
   message ends with its last paragraph of prose. If a harness supplies
