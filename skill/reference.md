@@ -114,6 +114,23 @@ the relay between rounds. `--backlog` belongs to a first start alone:
 without it, mail already in the inbox when serve first runs is left for the
 owner.
 
+A `proxy` section in `serve.json` — `key_file`, and optionally `listen`
+(loopback only, default `127.0.0.1:0`) and `upstream` (default
+`https://api.anthropic.com`) — is the key-holding proxy: serve reads the
+API key once from the file and hands the handler `ANTHROPIC_BASE_URL`
+(`http://127.0.0.1:PORT/TOKEN`) and `ANTHROPIC_API_KEY` (the same token),
+live for that one run of the handler, and never the key. `auu serve check`
+then prints `proxy: key from PATH (N bytes), listen 127.0.0.1:0, upstream
+https://api.anthropic.com`, the key's size and nothing else of it, and
+refuses by name a missing or empty key file (`proxy: key_file PATH does not
+exist; it holds the API key on its first line`), a listen off the host
+(`is not a loopback address`), a plain-http upstream off the host (`the key
+would cross the network in the clear`), a section naming neither `key_file`
+nor `control`, and `control`, which is the split proxy of a later release.
+On stderr, `ANTHROPIC_API_KEY is set in serve's environment and is not
+passed to the handler or the hooks; the proxy holds the key, and the line
+that sets it can go` means a unit still carries the key; the line can go.
+
 What this binary is:
 
 ```

@@ -5,8 +5,9 @@
 # root of the build context; the entrypoint decides which machine a
 # container is. Nothing here is a deployment artifact: the four binaries are
 # built exactly as docs/deploy-linux.md builds them, static, and put where
-# the guide puts them, and the forge (see forge/main.go) exists only so a
-# test can issue certificates dated in the past.
+# the guide puts them; the forge (see forge/main.go) exists only so a test
+# can issue certificates dated in the past, and upstream (upstream/main.go)
+# stands in for api.anthropic.com behind the key-holding proxy.
 FROM golang:1.27 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -14,7 +15,7 @@ RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -o /out/ ./cmd/... ./docker/testing/forge
+    CGO_ENABLED=0 go build -o /out/ ./cmd/... ./docker/testing/forge ./docker/testing/upstream
 
 FROM debian:13-slim
 # runuser and flock come with util-linux, pkill with procps; sqlite3 is what the guide's backup
@@ -32,6 +33,6 @@ RUN useradd --system --home-dir /var/lib/auu --no-create-home \
  && useradd --create-home --uid 1001 --shell /bin/bash alice \
  && useradd --create-home --uid 1002 --shell /bin/bash bob \
  && install -d -m 0755 /etc/auu /etc/auu/delivered
-COPY --from=build /out/auu /out/auu-admin /out/auu-ca /out/auu-relay /out/forge /usr/local/bin/
+COPY --from=build /out/auu /out/auu-admin /out/auu-ca /out/auu-relay /out/forge /out/upstream /usr/local/bin/
 COPY docker/testing/entrypoint-relay.sh docker/testing/entrypoint-user.sh /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/entrypoint-relay.sh /usr/local/bin/entrypoint-user.sh

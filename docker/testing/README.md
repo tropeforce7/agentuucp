@@ -26,8 +26,8 @@ push, for a suite that changes only when a guide or a fault row does.
 | `bob`      | another user                          | `~/.auu`, and a second home for his other machine    |
 
 They share one image, built by `Dockerfile` from the repository root: the
-four binaries as `docs/deploy-linux.md` builds them, plus `forge`, which
-exists only here (see below). `entrypoint-relay.sh` is the container form of
+four binaries as `docs/deploy-linux.md` builds them, plus `forge` and
+`upstream`, which exist only here (see below). `entrypoint-relay.sh` is the container form of
 the systemd unit: it waits for a bundle to be delivered to
 `/etc/auu/delivered/`, installs it as the credential the shipped settings
 name, and runs the relay as `auu` on those settings, unchanged. The users'
@@ -58,7 +58,7 @@ reports`, is snapshotted for the matrix.
 | C      | channels: the sender's listing, a closed and a not-yet-open channel, `default` removed, a channel deleted with mail queued, `close` |
 | W      | watching: mail already queued, a post during the hold, a channel filter, `--fetch`, a colleague's channel added, the relay restarted under a watch, your own channels changed from the other machine |
 | L      | mail left on the relay: a fetch that keeps it, a channel set to off, `auu rm` and its two flags, the same mail read on a second machine, and a mailbox filled by mail already read |
-| S      | a channel answered by a program: `auu serve` with a shell script for the handler, a follow-up, a side copy's patch, two threads, a stranger, a failing handler, mail from while it was down, the long run, the hooks |
+| S      | a channel answered by a program: `auu serve` with a shell script for the handler, a follow-up, a side copy's patch, two threads, a stranger, a failing handler, mail from while it was down, the long run, the hooks, the key-holding proxy with the handler given a token and never the key |
 | A      | the signed allow list: a push, a stranger refused, the relay's database edited to admit the stranger and every post refused until the owner pushes again, a relay started on a database from before signed lists |
 
 Each family restores every machine from the snapshot before it starts, and
@@ -95,6 +95,13 @@ eleven years ago, or a bundle whose signing intermediates run out a hundred
 seconds from now, then meets the real clock in the relay and the clients
 exactly as one that had aged would. It is built into the image and never by
 `make build`, and it adds no construction and no dependency.
+
+`upstream/main.go` is the other program the image carries for the tests
+alone: a stand-in for api.anthropic.com on loopback that records the method,
+the path, the first six characters and the length of the key it was sent —
+never the whole key — and the handler's client for it, since the containers
+have neither Claude Code nor curl. The rows about the key-holding proxy use
+both.
 
 ## What is not here
 

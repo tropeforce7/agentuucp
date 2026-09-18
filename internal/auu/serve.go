@@ -47,6 +47,9 @@ type serveRun struct {
 	// unreachable says the last fetch reached no relay at all, so that the
 	// sentence about it is said once per run of failures.
 	unreachable bool
+	// proxy holds the API key for the handler, or is nil for a host whose
+	// serve.json has no proxy section.
+	proxy *keyProxy
 }
 
 // roundJSON is one round as --json gives it.
@@ -118,6 +121,7 @@ func cmdServe(args []string) error {
 			"and this home has a ledger already; there is no backlog to answer")
 	}
 	warnKept(s, cfg)
+	warnCredentials(cfg)
 
 	// A signal is how a service is stopped, and the only way the long run
 	// ends of its own accord. It ends the handler that is running as well:
@@ -127,6 +131,22 @@ func cmdServe(args []string) error {
 	defer stop()
 
 	run := &serveRun{s: s, id: id, cfg: cfg, led: led, root: root, asJSON: *asJSON}
+	if cfg.Proxy != nil {
+		// The key is read once, here, under the lock, and lives in this
+		// process alone; the file is not read again.
+		key, err := readKeyFile(cfg.Proxy.KeyFile)
+		if err != nil {
+			return err
+		}
+		if run.proxy, err = startKeyProxy(cfg.Proxy, key, func(format string, a ...any) {
+			fmt.Fprintf(os.Stderr, prog+": "+format+"\n", a...)
+		}); err != nil {
+			return err
+		}
+		defer run.proxy.Close()
+		fmt.Fprintf(os.Stderr, "%s: proxy: holding the key from %s, listening on %s, upstream %s\n",
+			prog, cfg.Proxy.KeyFile, run.proxy.ln.Addr(), cfg.Proxy.Upstream)
+	}
 	if *once {
 		return run.once(ctx, *backlog)
 	}
@@ -410,6 +430,7 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 		worktree:  worktree,
 		base:      base,
 		threadDir: threadDir, channelDir: channelDir,
+		proxied: r.cfg.Proxy != nil,
 	}
 	// The files the asker sent, where the handler can read them. A retry
 	// finds them already there and leaves them alone: they were checked
@@ -492,7 +513,28 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 		stdout.Close()
 		return err
 	}
-	run, runErr := runProgram(ctx, ch.Exec, worktree, facts.env(true, ""), stdin, stdout, stderr, ch.timeout)
+	// The handler's environment, and with a proxy the token of this
+	// invocation: minted just before the handler starts, revoked just
+	// after it exits and before the after hook runs, so the hooks never
+	// hold one. A token the proxy will not issue is the handler's failure.
+	env := facts.env(true, "")
+	var token string
+	if r.proxy != nil {
+		var baseURL string
+		token, baseURL, err = r.proxy.mint()
+		if err != nil {
+			stdin.Close()
+			stdout.Close()
+			stderr.Close()
+			r.failed(m, ch, err.Error())
+			return nil
+		}
+		env = append(env, envBaseURL+"="+baseURL, envAPIKey+"="+token)
+	}
+	run, runErr := runProgram(ctx, ch.Exec, worktree, env, stdin, stdout, stderr, ch.timeout)
+	if r.proxy != nil {
+		r.proxy.revoke(token)
+	}
 	stdin.Close()
 	stdout.Close()
 	stderr.Close()
@@ -760,7 +802,45 @@ func serveCheck(config string) error {
 		fmt.Printf("  limits:  timeout %s, max_turns %d, retries %d, thread_ttl %s\n",
 			ch.timeout, ch.MaxTurns, ch.Retries, ch.threadTTL)
 	}
+	if cfg.Proxy != nil {
+		// The key is read for its size and nothing else is said of it.
+		key, err := readKeyFile(cfg.Proxy.KeyFile)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("\nproxy: key from %s (%d bytes), listen %s, upstream %s\n",
+			cfg.Proxy.KeyFile, len(key), cfg.Proxy.Listen, cfg.Proxy.Upstream)
+	}
 	fmt.Printf("\n%s is good for %s\n", path, plural(len(cfg.Channels), "channel"))
 	warnKept(s, cfg)
+	warnCredentials(cfg)
 	return nil
+}
+
+// warnCredentials says, with a proxy configured, which credential
+// variables serve's own environment carries and that none is passed on: a
+// unit still handing serve the real key is a mistake the proxy covers,
+// and one its operator should hear about.
+func warnCredentials(cfg *serveConfig) {
+	if cfg.Proxy == nil {
+		return
+	}
+	if found := credentialsInEnvironment(); len(found) > 0 {
+		fmt.Fprintf(os.Stderr, "%s: %s %s set in serve's environment and %s not passed to the handler or the hooks; the proxy holds the key, and the line that sets %s can go\n",
+			prog, plainList(found), isAre(len(found)), isAre(len(found)), itThem(len(found)))
+	}
+}
+
+func isAre(n int) string {
+	if n == 1 {
+		return "is"
+	}
+	return "are"
+}
+
+func itThem(n int) string {
+	if n == 1 {
+		return "it"
+	}
+	return "them"
 }

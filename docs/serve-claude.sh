@@ -69,6 +69,14 @@ if [ -n "${AUU_ATTACHMENTS:-}" ]; then
 	prompt="$prompt Files they attached are under $AUU_ATTACHMENTS. Read them; do not run them."
 fi
 
+# Behind serve's key-holding proxy, ANTHROPIC_BASE_URL names it, and claude
+# turns its optimistic tool search off for a base URL that is not
+# Anthropic's own unless told the proxy forwards requests untouched, which
+# serve's does. Nothing is set without the proxy.
+if [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
+	export ENABLE_TOOL_SEARCH=auto
+fi
+
 # No prompt on the command line: with -p and nothing positional, claude
 # reads the prompt from standard input, which is where serve puts the
 # message.

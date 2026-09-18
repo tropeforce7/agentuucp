@@ -45,6 +45,9 @@ const (
 type serveConfig struct {
 	V        int                      `json:"v"`
 	Channels map[string]*serveChannel `json:"channels"`
+	// Proxy is the key-holding proxy, absent for a host whose handler is
+	// given no key by serve at all; see serveproxy.go.
+	Proxy *proxyConfig `json:"proxy,omitempty"`
 	// path is where it was read from, for the sentences.
 	path string
 }
@@ -121,6 +124,9 @@ func loadServeConfig(path string) (*serveConfig, error) {
 			return nil, err
 		}
 	}
+	if cfg.Proxy != nil {
+		cfg.Proxy.fill()
+	}
 	return cfg, nil
 }
 
@@ -191,6 +197,11 @@ func (cfg *serveConfig) check() error {
 	if _, err := exec.LookPath("git"); err != nil {
 		return usageErrf("git is not on the PATH, and every channel is served from a git worktree: %v", err)
 	}
+	if cfg.Proxy != nil {
+		if err := cfg.Proxy.check(cfg); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -249,12 +260,20 @@ func quotedList(names []string) string {
 	for i, n := range names {
 		quoted[i] = fmt.Sprintf("%q", n)
 	}
-	switch len(quoted) {
+	return plainList(quoted)
+}
+
+// plainList is a list of words as a sentence reads them: "a", "a and b",
+// "a, b and c".
+func plainList(words []string) string {
+	switch len(words) {
+	case 0:
+		return ""
 	case 1:
-		return quoted[0]
+		return words[0]
 	case 2:
-		return quoted[0] + " and " + quoted[1]
+		return words[0] + " and " + words[1]
 	default:
-		return strings.Join(quoted[:len(quoted)-1], ", ") + " and " + quoted[len(quoted)-1]
+		return strings.Join(words[:len(words)-1], ", ") + " and " + words[len(words)-1]
 	}
 }

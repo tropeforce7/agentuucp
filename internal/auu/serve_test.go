@@ -5,6 +5,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +45,13 @@ const (
 //	echo:TEXT      print TEXT and a newline
 //	cat            copy standard input to standard output
 //	env            print every AUU_ variable, one per line
+//	environ:PATH   write the whole environment to a file, one per line
+//	ask            POST to $ANTHROPIC_BASE_URL/v1/messages with the key it
+//	               was given, and print the status and the answer
+//	save:PATH      write $ANTHROPIC_BASE_URL to a file
+//	askold:PATH    POST to the base URL saved in a file by an earlier
+//	               invocation, and print the status; nothing when there
+//	               is no file yet
 //	append:PATH    append this program's role and the message id to a file
 //	write:NAME     write a file of that name in the working directory
 //	write:NAME=TEXT  the same, with the text to put in it
@@ -77,6 +86,44 @@ func TestServeHelperProcess(t *testing.T) {
 					fmt.Println(kv)
 				}
 			}
+		case "environ":
+			os.WriteFile(arg, []byte(strings.Join(os.Environ(), "\n")+"\n"), 0o600)
+		case "ask":
+			req, err := http.NewRequest("POST", os.Getenv("ANTHROPIC_BASE_URL")+"/v1/messages", strings.NewReader(`{"hello":"there"}`))
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(9)
+			}
+			// The placebo, as Claude Code sends it, and a bearer header a
+			// handler might be talked into adding: both must go.
+			req.Header.Set("x-api-key", os.Getenv("ANTHROPIC_API_KEY"))
+			req.Header.Set("authorization", "Bearer placebo")
+			req.Header.Set("anthropic-version", "2023-06-01")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(9)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			fmt.Printf("status %d %s\n", resp.StatusCode, strings.TrimSpace(string(body)))
+		case "save":
+			os.WriteFile(arg, []byte(os.Getenv("ANTHROPIC_BASE_URL")+"\n"), 0o600)
+		case "askold":
+			saved, err := os.ReadFile(arg)
+			if err != nil {
+				fmt.Println("no saved url")
+				continue
+			}
+			req, _ := http.NewRequest("POST", strings.TrimSpace(string(saved))+"/v1/messages", strings.NewReader(`{}`))
+			req.Header.Set("x-api-key", filepath.Base(strings.TrimSpace(string(saved))))
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(9)
+			}
+			resp.Body.Close()
+			fmt.Printf("old status %d\n", resp.StatusCode)
 		case "append":
 			f, err := os.OpenFile(arg, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 			if err != nil {

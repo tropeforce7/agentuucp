@@ -148,7 +148,10 @@ container.
 ```
 
 `dir` is the clone, `exec` the wrapper, `mode` one of the two. The rest
-are optional and default as shown. Then:
+are optional and default as shown. A `proxy` section beside `channels`,
+naming the key file of 7.2, is what gives the handler a way to reach
+Anthropic without holding the key; a file without one hands it nothing.
+Then:
 
 ```
 auu serve check
@@ -240,32 +243,56 @@ they must be on the PATH the unit sets below, so note where they land.
 `claude` is installed for the expert's account, not for yours: its
 installer puts the binary under that account's home and its state beside
 it. Run the installer as the account, with `-H`, the way Claude Code's own
-instructions say to run it. Then sign it in. There are two ways:
+instructions say to run it. Then give it a way to reach Anthropic. There
+are two ways:
 
-- **An API key in an environment file**, which is the service way: nothing
-  interactive, and the key is a file root owns and the unit reads.
+- **An API key in a file that serve holds**, which is the service way:
+  nothing interactive, the key is a file root owns, and the handler never
+  sees it. Serve reads the file once at start and runs a proxy on loopback;
+  each time the handler runs it is given a URL with a token of its own,
+  live for that run alone, and the proxy puts the real key on the request
+  on the way out. `serve.md` says the whole of it under *The proxy*.
 
   ```
   install -d -m 0750 -g auu-expert /etc/auu-expert
-  install -m 0640 -o root -g auu-expert /dev/null /etc/auu-expert/env
-  printf 'ANTHROPIC_API_KEY=%s\n' 'sk-ant-...' > /etc/auu-expert/env
+  install -m 0640 -o root -g auu-expert /dev/null /etc/auu-expert/key
+  printf '%s\n' 'sk-ant-...' > /etc/auu-expert/key
   ```
 
   The empty file is made with its mode before the key goes into it: written
   first and locked down after, it would be readable by anyone on the
-  machine for as long as the two commands take.
+  machine for as long as the two commands take. Make it a key of its own,
+  so that revoking it stops the expert and nothing else. Then name it in
+  `serve.json`, beside the channels (section 4):
 
-  Claude Code reads `ANTHROPIC_API_KEY` from its environment, and the unit
-  hands it that file. Make it a key of its own, so that revoking it stops
-  the expert and nothing else.
+  ```json
+  "proxy": { "key_file": "/etc/auu-expert/key" }
+  ```
+
+  Be clear about what this protects. Serve and the handler run as the same
+  account, so a file serve can read, the handler can read: the proxy keeps
+  the key out of the handler's environment, out of every reply, and out of
+  anything the model does with what it was given — which is where a crafted
+  ask would otherwise have it go — but it does not stop a handler with a
+  shell that knows the file's path and is told to `cat` it. The path is in
+  `serve.json`, which the handler can also read, so the defence is not
+  obscurity; and the model has a shell only in side-copy mode. For a host
+  where that is not enough, the proxy runs as an account of its own, with
+  the key readable by it alone; that is the next release's 7.6a.
 
 - **An interactive sign-in**, once, as the account:
   `sudo -u auu-expert -H claude`. It prints a URL to open on any machine
   and a code to paste back. The credential it stores is under the
-  account's home, and the unit needs no environment file.
+  account's home, and the file needs no `proxy` section. Claude Code lets
+  the two proxy variables take precedence over a sign-in, so an expert
+  signed in this way is simply not given them.
 
-Check it as the account before going further: `sudo -u auu-expert -H
-claude -p 'say ok'` should say ok. If it does not, nothing after this will.
+Check it as the account before going further. With a sign-in, `sudo -u
+auu-expert -H claude -p 'say ok'` should say ok. With the key file, the
+check is section 6's first run through serve itself, since the account is
+not meant to hold the key; `auu serve check` will already say
+`proxy: key from /etc/auu-expert/key (N bytes)`. If neither does, nothing
+after this will.
 
 ### 7.3 The identity and the peers
 
@@ -336,8 +363,8 @@ who would rather answer from a checkout a day old ends the line with
 Sections 2 to 5, run as the account: the channels created and `keep`
 turned off, the wrapper copied to `/var/lib/auu-expert/bin/serve-claude.sh`
 and made executable, its tool list narrowed, and `serve.json` in
-`/var/lib/auu-expert/.auu` naming the checkout, the wrapper and the mode.
-Then:
+`/var/lib/auu-expert/.auu` naming the checkout, the wrapper, the mode and,
+with the key file of 7.2, the proxy. Then:
 
 ```
 sudo -u auu-expert -H auu serve check
@@ -379,12 +406,10 @@ ExecStart=/usr/local/bin/auu serve
 
 # What the handler finds: its home, and a PATH with auu, git, the project's
 # toolchain and claude on it. The last two are wherever you put them;
-# these are the usual places.
+# these are the usual places. No API key here: serve reads it from the
+# file serve.json names and hands the handler a token, never the key.
 Environment=HOME=/var/lib/auu-expert
 Environment=PATH=/var/lib/auu-expert/.local/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
-# The API key, if that is how claude is signed in. Drop the line for an
-# interactive sign-in; its credential is under the home.
-EnvironmentFile=-/etc/auu-expert/env
 
 # A stop ends the handler that is running with the service, and its message
 # is left for the next start; nothing is lost by stopping.
@@ -544,8 +569,9 @@ not be able to see each other's files at all.
 - **A thread's side copy:** under `/var/lib/auu-expert/.auu/serve/worktrees`,
   by thread id, until nothing has touched it for the channel's
   `thread_ttl`. It is the account's; look, do not edit.
-- **Rotating the key:** a new key in `/etc/auu-expert/env` and a restart.
-  Revoking the old one is what stops an expert whose host you have lost.
+- **Rotating the key:** a new key in `/etc/auu-expert/key` and a restart,
+  since serve reads the file once at start. Revoking the old one is what
+  stops an expert whose host you have lost.
 - **Removing the expert:** `systemctl disable --now auu-serve`, delete the
   unit, `auu channel delete NAME` for each served channel as the account
   (askers see the channel go), and then `userdel -r auu-expert`, which

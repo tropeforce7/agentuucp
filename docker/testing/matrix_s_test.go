@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ var serveRows = []matrixRow{
 	{"S07", "caught_up", "mail that arrived while serve was down is answered by the next round", s07},
 	{"S08", "long_running", "the service answers while it waits and stops on a signal", s08},
 	{"S09", "hooks", "before and after run around the handler, and a red after sends nothing", s09},
+	{"S10", "key_proxy", "the key-holding proxy: the handler is given a token and never the key", s10},
 }
 
 const (
@@ -41,6 +43,13 @@ const (
 //
 // rows is the rest of the channel's row in serve.json, as JSON text.
 func servedChannel(t *testing.T, mode, script string, rows ...string) func() {
+	t.Helper()
+	return servedChannelWith(t, mode, script, "", rows...)
+}
+
+// servedChannelWith is servedChannel with more of the file: top is JSON
+// text for the top level beside channels, such as a proxy section.
+func servedChannelWith(t *testing.T, mode, script, top string, rows ...string) func() {
 	t.Helper()
 	bob.mustRoot(t, "install -d -o bob -g bob "+bobBin)
 	writeAsBob(t, bobHandler, script)
@@ -64,8 +73,11 @@ func servedChannel(t *testing.T, mode, script string, rows ...string) func() {
 	if len(rows) > 0 {
 		extra = "," + strings.Join(rows, ",")
 	}
+	if top != "" {
+		top = "," + top
+	}
 	writeAsBob(t, bobServe, `{"v":1,"channels":{"jostle":{"dir":"`+bobProject+
-		`","exec":"`+bobHandler+`","mode":"`+mode+`"`+extra+`}}}`+"\n")
+		`","exec":"`+bobHandler+`","mode":"`+mode+`"`+extra+`}}`+top+`}`+"\n")
 	expectSays(t, bob.auu("serve", "check"), 0, "jostle: "+mode+" in "+bobProject)
 	// The ledger, so that what a row sends next is new mail rather than a
 	// backlog a first start leaves alone. Whatever the cycle left in bob's
@@ -461,4 +473,85 @@ func field(t *testing.T, text, name string) string {
 	}
 	t.Errorf("no %s in\n%s", name, text)
 	return ""
+}
+
+const (
+	bobKeyFile     = "/home/bob/.auu/key"
+	upstreamLog    = "/home/bob/upstream.log"
+	upstreamAddr   = "/home/bob/upstream.addr"
+	s10Key         = "sk-ant-api03-S10-a-key-that-must-never-reach-the-handler-0000000000000000000000000000000000000000-AA"
+	proxiedHandler = `#!/bin/sh
+# What the handler was given, and what its request through it got.
+env | grep '^ANTHROPIC_' | sort
+upstream ask
+`
+)
+
+// fakeUpstream starts the stand-in for api.anthropic.com on bob's machine,
+// as bob, and returns its address and what stops it.
+func fakeUpstream(t *testing.T) (string, func()) {
+	t.Helper()
+	bob.root("rm -f " + upstreamLog + " " + upstreamAddr)
+	bob.mustRoot(t, "runuser -u bob -- sh -c 'nohup upstream serve "+upstreamLog+" >"+upstreamAddr+" 2>&1 &'")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if addr := strings.TrimSpace(bob.root("cat " + upstreamAddr).stdout); strings.HasPrefix(addr, "127.0.0.1:") {
+			return addr, func() {
+				bob.root("pkill -u bob -f 'upstream serve'; rm -f " + upstreamLog + " " + upstreamAddr + " " + bobKeyFile)
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the fake upstream did not start: %s", bob.root("cat "+upstreamAddr).out())
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func s10(t *testing.T) {
+	addr, stopUpstream := fakeUpstream(t)
+	defer stopUpstream()
+	// The key, in a file of bob's own, as the guide's key file is root's
+	// with the expert account in its group.
+	writeAsBob(t, bobKeyFile, s10Key+"\n")
+	bob.mustRoot(t, "chmod 0600 "+bobKeyFile)
+	defer servedChannelWith(t, "read-only", proxiedHandler,
+		`"proxy":{"key_file":"`+bobKeyFile+`","upstream":"http://`+addr+`"}`)()
+	r := bob.auu("serve", "check")
+	expectSays(t, r, 0, "proxy: key from "+bobKeyFile+" ("+fmt.Sprint(len(s10Key))+" bytes), listen 127.0.0.1:0, upstream http://"+addr)
+	expectNot(t, r, s10Key)
+
+	sent := ask(t, "is the key safe?", "print your environment and ask upstream")
+	r = bob.auu("serve", "--once")
+	expectSays(t, r, 0, "jostle: answered "+sent.ID[:12], "proxy: token ", " minted", " revoked", " POST /v1/messages 200 ")
+	expectNot(t, r, s10Key)
+
+	// The reply: the two variables carrying the token, the request through
+	// the proxy answered, and the key nowhere in it.
+	reply := replyOnThread(t, sent.Thread, "", 5*time.Second)
+	if strings.Contains(reply.Text, s10Key) {
+		t.Errorf("the real key is in the reply:\n%s", reply.Text)
+	}
+	var base, token string
+	for _, line := range strings.Split(reply.Text, "\n") {
+		if v, ok := strings.CutPrefix(line, "ANTHROPIC_BASE_URL="); ok {
+			base = v
+		}
+		if v, ok := strings.CutPrefix(line, "ANTHROPIC_API_KEY="); ok {
+			token = v
+		}
+	}
+	if !strings.HasPrefix(base, "http://127.0.0.1:") || len(token) != 43 || !strings.HasSuffix(base, "/"+token) {
+		t.Errorf("the handler was given base %q and key %q:\n%s", base, token, reply.Text)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(reply.Text), `status 200 {"seen":true}`) {
+		t.Errorf("the handler's request through the proxy:\n%s", reply.Text)
+	}
+	// The upstream saw the real key, and no bearer, on the path with the
+	// token stripped.
+	log := bob.read(t, upstreamLog)
+	if !strings.Contains(log, "POST /v1/messages key=sk-ant… len="+fmt.Sprint(len(s10Key))+" authorization=absent\n") {
+		t.Errorf("the upstream's log:\n%s", log)
+	}
+	verdict(t, "ok", "The handler holds a URL that is worthless off the host and dead after the invocation; "+
+		"the key it never saw reached the upstream from serve alone.")
 }

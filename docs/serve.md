@@ -30,6 +30,11 @@ One machine can be an expert for several projects: one channel each.
       "retries": 3,
       "thread_ttl": "168h"
     }
+  },
+  "proxy": {
+    "key_file": "/etc/auu-expert/key",
+    "listen": "127.0.0.1:0",
+    "upstream": "https://api.anthropic.com"
   }
 }
 ```
@@ -46,6 +51,9 @@ One machine can be an expert for several projects: one channel each.
 | `retries` | How many times a message may fail before serve gives up on it. Default `3`, and `0` means the same. |
 | `thread_ttl` | How long a thread's state is kept after its last message. Default `168h`. |
 
+`proxy` is the key-holding proxy, one section for the whole file, and is
+its own section below; a file without it hands the handler no key at all.
+
 Unknown fields are refused by name: a misspelled one that silently did
 nothing would be a channel nobody was serving. `auu serve check` reads the
 file, checks every directory and program it names, and prints what it would
@@ -56,6 +64,8 @@ $ auu serve check
 jostle: read-only in /home/expert/src/jostle
   exec:    /home/expert/bin/serve-claude.sh
   limits:  timeout 30m0s, max_turns 50, retries 3, thread_ttl 168h0m0s
+
+proxy: key from /etc/auu-expert/key (108 bytes), listen 127.0.0.1:0, upstream https://api.anthropic.com
 
 /home/expert/.auu/serve.json is good for 1 channel
 ```
@@ -145,6 +155,8 @@ environment:
 | `AUU_THREAD_DIR` | a directory of the thread's own, for state the handler keeps |
 | `AUU_CHANNEL_DIR` | the same for the channel |
 | `AUU_ATTACHMENTS` | where the sender's files were put, or empty |
+| `ANTHROPIC_BASE_URL` | with a proxy configured: `http://127.0.0.1:PORT/TOKEN`, where to send Anthropic API requests for this invocation |
+| `ANTHROPIC_API_KEY` | with a proxy configured: the same token, a placebo, since Claude Code refuses to run with no key at all |
 
 The files an asker attached are unpacked into a directory of the message's
 own under the thread's, each checked against the digest the message carries
@@ -157,9 +169,9 @@ printed nothing means "nothing to say": the message is settled and no reply
 goes out. Any other exit is a failure — the message stays unread, the
 attempt is counted, and the next round tries again until `retries` runs out.
 
-The two hooks get the same environment less `AUU_SUBJECT` and
-`AUU_ATTACHMENTS`, and nothing on standard input: they are not shown the
-message. `after` also gets `AUU_STATUS`, which is the handler's exit status
+The two hooks get the same environment less `AUU_SUBJECT`,
+`AUU_ATTACHMENTS` and the proxy's two variables, and nothing on standard
+input: they are not shown the message. `after` also gets `AUU_STATUS`, which is the handler's exit status
 as a number, or `timeout`, or `before` when the handler never ran because
 the before hook failed. A hook's output is never a reply.
 
@@ -350,6 +362,83 @@ tests need, stopping it again, refusing a change that does not build: all of
 that belongs in `before` and `after`, where it is written once in the
 project's own language, rather than in a prompt that asks an agent to
 remember it every time.
+
+## The proxy
+
+A handler that answers with Claude Code needs an Anthropic API key, and
+what it reads is untrusted mail: a crafted ask can have the key printed
+into a reply and carried back over the relay, and in side-copy mode the
+model has a shell besides. So with a `proxy` section in the file the
+handler never holds the key. Serve reads it once at start, from the first
+line of `key_file`, keeps it in memory, and never puts it in the
+environment of anything it runs or in a log. It runs a reverse proxy on
+loopback, at `listen` (a port of the kernel's choosing by default; anything
+but a loopback address is refused at `check`, since a proxy reachable off
+the host is the key on the network), and forwards to `upstream` over TLS
+with the system roots (`https://` unless the upstream is on this host too,
+which the tests use).
+
+For each invocation of the handler, serve draws a token — 32 bytes from the
+kernel's randomness, 43 characters of base64url — and hands the handler two
+variables and nothing else about the key:
+
+```
+ANTHROPIC_BASE_URL=http://127.0.0.1:PORT/TOKEN
+ANTHROPIC_API_KEY=TOKEN
+```
+
+Claude Code appends `/v1/messages` and the rest to the base URL and sends
+the key it was given in `x-api-key`, which is the placebo. The proxy takes
+a request whose first path element is a live token, strips it, drops every
+`x-api-key` and `authorization` header the request carried, sets
+`x-api-key` to the real key, and forwards it, streaming the answer back as
+it arrives, so a server-sent event passes chunk by chunk. A request with no
+token, an unknown one or a dead one is `404` with one sentence and nothing
+is forwarded. The token is live from just before the handler starts until
+just after it exits, and dies before the `after` hook runs, so the hooks
+never hold one; the URL is worthless off the host, since the proxy is
+loopback, and worthless after the invocation, since the token is dead.
+Serve is serial, so one token is live at a time in the ordinary case; the
+proxy refuses to issue a seventeenth. Whatever serve inherited under
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL` — a unit
+still handing it the real key — is dropped from every program's environment,
+and `check` says so by name.
+
+The proxy logs requests, never contents: one line per request on serve's own
+standard error with the token's first eight characters, the method, the path
+after the token, the upstream's status, the bytes each way and the time
+taken; a refusal logs the same with the reason (`no token`, `unknown
+token`, `revoked token`); a mint and a revocation log the token's first
+eight characters. No header, no body, no key. `auu serve check` prints
+`proxy: key from PATH (N bytes), listen 127.0.0.1:0, upstream
+https://api.anthropic.com` — the key's size and nothing else of it — and
+refuses a missing or empty key file, a listen off the host, a plain-http
+upstream off the host, and a section that names neither `key_file` nor
+`control`, each by name.
+
+What one user id cannot protect, said plainly: with the proxy in-process,
+serve and the handler run as the same account, so a file serve can read,
+the handler can read. The proxy therefore keeps the key out of the
+handler's environment, out of every reply, and out of anything a model does
+with what it was given; it does not stop a handler with a shell that knows
+the file's path and is told to `cat` it. Two things narrow that: the key
+file's path is in `serve.json`, which the handler can also read, so the
+defence is not obscurity; and the model's shell is only there in side-copy
+mode. For a host where that is not enough, the proxy can run apart, as
+another account, with the key out of the handler's reach altogether: `auu
+serve proxy`, the `control` key and its unit are the next release's, and
+`docs/creating-experts.md` will carry them.
+
+What the proxy does not do: it does not read or alter request or response
+bodies, count tokens, or enforce a budget. A per-channel or per-day budget
+from the `usage` fields of responses is a natural next plan and is named
+here as one, not built. It does not serve anything but the token-prefixed
+paths, and it does not do OAuth sign-in, Bedrock or Vertex: an expert behind
+the proxy uses an API key. The two variables take precedence over an
+interactive sign-in in Claude Code, so an expert signed in that way is
+simply not given them, which is what a file without a `proxy` section does.
+The wrapper reads nothing new; a channel whose handler is not Claude Code
+sees the two variables and may ignore them.
 
 ## Serve cannot sandbox the handler
 

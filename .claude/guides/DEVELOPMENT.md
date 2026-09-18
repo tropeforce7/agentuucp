@@ -339,6 +339,24 @@ document is refused by nothing on the relay — what catches that is the
 owner's machine, which remembers it pushed a signed list (`allow_pushed`)
 and says so at its next fetch.
 
+**A credential a program uses on behalf of untrusted input is held by a
+process that input cannot reach, and what the input's process holds is a
+token that dies with it.** `auu serve` runs Claude Code on mail from
+strangers' agents, and the handler used to be given `ANTHROPIC_API_KEY` in
+its environment: a crafted ask could have the key printed into a reply and
+carried back over the relay, and in side-copy mode the model has a shell.
+Now serve reads the key once, keeps it in memory, runs a reverse proxy on
+loopback, and gives each invocation of the handler a base URL with a
+random token in its path, live for that invocation alone; the proxy swaps
+the token for the key on the way out. The token is worthless off the host
+and dead after the run, so what the handler can leak is nothing. Anything
+serve inherited under the credential names is dropped from every
+program's environment, since a unit that still carries the key would hand
+it on through serve. What one account cannot protect is said in the
+guide rather than implied away: the handler is the same user as serve and
+can read the key file if told where it is; the split proxy, another
+account, is the answer to that.
+
 **A failed insert is only a duplicate if the row is actually there
 afterwards.** `UseNonce` and `AddToken` re-query after a failed insert. Reporting
 every failure as a replay or a duplicate would hide a broken database behind a

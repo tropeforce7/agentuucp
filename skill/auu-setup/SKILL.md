@@ -219,10 +219,23 @@ judgement is theirs.
 The steps, in order:
 
 1. **The checkout and the machine.** A clone of the project, `git` and the
-   project's toolchain, and the handler program installed and signed in. A
-   home whose key is usable unattended: unencrypted on a machine that is
-   nobody's desktop, or unlocked by the user with `auu unlock` and `auu
-   agent start` after each boot. That unlock is the user's, never yours.
+   project's toolchain, and the handler program installed. A home whose
+   key is usable unattended: unencrypted on a machine that is nobody's
+   desktop, or unlocked by the user with `auu unlock` and `auu agent
+   start` after each boot. That unlock is the user's, never yours.
+1a. **The API key, in a file serve holds.** For Claude Code the service
+   way is a key file — the guide's `/etc/auu-expert/key`, root-owned,
+   readable by the expert's group, written empty and locked down before
+   the key goes in — named in `serve.json` as
+   `"proxy": {"key_file": "/etc/auu-expert/key"}`. Serve then runs a proxy
+   on loopback and gives the handler a URL with a token live for one run,
+   never the key, and `auu serve check` says `proxy: key from PATH (N
+   bytes)`. The key itself is the user's to put in the file: you never see
+   it, and you never paste it anywhere. Tell them plainly what the guide
+   says: the proxy keeps the key out of the handler's environment and out
+   of every reply, and does not stop a handler with a shell that is told
+   to read the file, since both run as the same account. An interactive
+   sign-in as the account is the other way, with no `proxy` section.
 2. **The channel.** `auu channel create NAME --description "..."` and then
    `auu channel push`. The description is what an asker's agent reads
    before it writes, so say what the expert answers for.
@@ -234,12 +247,15 @@ The steps, in order:
    the user narrow its tool list: `Edit` and `Write` belong to a
    `side-copy` channel, and `auu` and `auu-admin` must never be in it.
 5. **The file.** `serve.json` in the home, naming each channel's `dir`,
-   `exec` and `mode`. **The user writes it**, or confirms what you wrote
-   line by line: it says which directories a program will be run in.
+   `exec` and `mode`, and the `proxy` section of 1a. **The user writes
+   it**, or confirms what you wrote line by line: it says which
+   directories a program will be run in.
 6. **Check it.** `auu serve check` reads the file, looks at every directory
-   and program it names, and says what is wrong by channel and field
-   without connecting to anything. It works with the key locked. Run it
-   after every edit.
+   and program it names, reads the key file for its size alone, and says
+   what is wrong by channel and field without connecting to anything. It
+   works with the key locked. Run it after every edit. A warning that
+   `ANTHROPIC_API_KEY is set in serve's environment` means the unit or the
+   shell still carries the key; the proxy holds it, and that line can go.
 7. **Try it once.** `auu serve --once` fetches and answers what is pending.
    Mail already in the inbox on a first run is left alone and said; `auu
    serve --once --backlog` answers it instead, and only on a first run.

@@ -40,6 +40,10 @@ type runFacts struct {
 	// attachments is where the asker's files were put, empty when there
 	// were none.
 	attachments string
+	// proxied says a key-holding proxy is configured: the credential
+	// variables serve inherited are dropped from every program's
+	// environment, and the handler alone is given the proxy's two.
+	proxied bool
 }
 
 // programRun is how one program ended: its exit status, and the word the
@@ -97,8 +101,14 @@ func (f runFacts) env(withMessage bool, status string) []string {
 	}
 	// Anything the parent already had under one of these names is dropped
 	// rather than left to a rule about which duplicate wins.
-	out := make([]string, 0, len(os.Environ())+len(set))
-	for _, kv := range os.Environ() {
+	inherited := os.Environ()
+	if f.proxied {
+		// A unit that still hands serve the real key must not hand it on
+		// through serve: the proxy holds it, and the handler gets a token.
+		inherited = withoutCredentials(inherited)
+	}
+	out := make([]string, 0, len(inherited)+len(set))
+	for _, kv := range inherited {
 		name, _, _ := strings.Cut(kv, "=")
 		if _, ours := set[name]; ours {
 			continue
