@@ -20,7 +20,6 @@ Where things end up:
 /var/lib/auu/                          state, owned by auu, mode 0700:
     relay.db                             mailboxes and counters
     messages/                            one file per stored message
-    clientca/                            nothing; the authority is in the bundle
 /etc/systemd/system/auu-relay.service
 ```
 

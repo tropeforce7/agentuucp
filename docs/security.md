@@ -62,8 +62,10 @@ is what makes truncation a decryption failure rather than a short file.
 A stream from somebody who is not in `authorized_peers` is never downloaded.
 The receiver fetches the 1124-byte header and the signed manifest, sees who it
 is from, and stops — the body stays on the relay until a person runs
-`auu quarantine trust`. A stranger cannot make anybody pull two gigabytes, and
-cannot make them spend the disk either.
+`auu quarantine trust`. A stranger cannot make anybody pull two gigabytes.
+What they can make a receiver keep is the manifest record in quarantine,
+and the first chunk it came in is capped at 1 MiB, so the disk they can
+spend is bounded by that.
 
 **What protects a message.** Every message is sealed with HPKE (RFC 9180) in
 single-shot mode, straight from the standard library's `crypto/hpke`. The
@@ -95,7 +97,9 @@ authority is the file on the relay's host and not a certificate.
 
 They add nothing to the confidentiality or the integrity of a message: HPKE and
 the Ed25519 signature do that end to end, and would still do it if the whole
-transport were plaintext. They are ML-DSA-65, so the client's authentication to
+transport were plaintext. They are ML-DSA, at the parameter set the
+authority was created with (`auu-ca init --mldsa`, 44, 65 or 87; 65 by
+default), so the client's authentication to
 the relay is post-quantum, as the key exchange already is; the relay's own
 certificate now comes from the same private authority, so it is
 post-quantum too — every certificate in the chain is ML-DSA.
@@ -117,14 +121,17 @@ MLKEM768-X25519 for receiving. `auu id` names it and `auu peers ls` marks any
 peer who is not on it.
 
 There is no negotiation, and that is the point. **A fingerprint is a hash over
-the bundle, and the bundle contains the suite**, so there is no such thing as
-"the same sender on a weaker suite": a different suite is a different bundle,
-a different fingerprint, and therefore a different person — one your
-`authorized_peers` does not know. Both places where a bundle arrives from the
-network check it. `auu lookup` refuses a bundle whose fingerprint is not the
+the bundle, and the bundle says which suite it is**: the original suite by
+its length alone, since its bundle predates there being a suite byte, and
+any other by a leading byte that makes it a different length again. So
+there is no such thing as "the same sender on a weaker suite": a different
+suite is a different bundle, a different fingerprint, and therefore a
+different person — one your `authorized_peers` does not know. Every place
+a bundle arrives from the network checks it. `auu lookup` refuses a bundle whose fingerprint is not the
 one asked for, or does not begin with the short id asked for, so the relay
 does not get to decide who a fingerprint belongs to; opening a message refuses
-a `from` that is not the hash of the bundle beside it. An attacker who wants you to accept a signature they can
+a `from` that is not the hash of the bundle beside it, and opening a
+stream's manifest does the same. An attacker who wants you to accept a signature they can
 forge has to persuade you to add a new peer, out of band, by hand.
 
 Nothing negotiates at the transport either. Every connection this project
@@ -203,14 +210,16 @@ the mail in `inbox/` and `sent/`, which is stored open.
 **The receiving agent.** A signature says who wrote a message. It says nothing
 about whether the contents are safe. Inbound text and attachments are treated
 as data by the skill, never as instructions, and unknown senders never reach
-the inbox at all. Nothing arrives in the background: mail moves only when a
-person runs `auu inbox` or `auu wait`.
+the inbox at all. Nothing arrives unasked: mail moves only when a command
+fetches it — `auu inbox`, `auu wait`, `auu watch --fetch`, or each round of
+`auu serve`.
 
 ## 2. The wire, in detail
 
-What the relay stores for one message is three fields: `v`, the format
-version; `to`, the recipient's fingerprint; and `ct`, about 4 KiB of
-ciphertext for a short message. Sealed inside `ct`, where the relay cannot
+What the relay stores for one message is three fields, and a fourth on a
+named channel: `v`, the format version; `to`, the recipient's fingerprint;
+`ct`, about 4 KiB of ciphertext for a short message; and `ch`, the channel,
+omitted for the default one. Sealed inside `ct`, where the relay cannot
 read a byte of it, are the Ed25519 signature, the sender's fingerprint and
 public keys, the subject, thread, message id and time, the text, and any
 attachments. Sign-then-encrypt, so the signature is inside the box: the relay
@@ -243,8 +252,11 @@ keeps its mail, so the fetch leaves it queued and the `DELETE` is what
 [`auu rm`](client.md#15-receive) sends when you remove it.
 
 The answer at step 7 lists what is after this machine's cursor and, beside
-it, how many messages the mailbox holds in all (`queued`). The two normally
-agree. When the list is empty and the count is not, the cursor is past mail
+it, how many messages the mailbox holds in all (`queued`). The count is
+routinely the larger, since by default a channel keeps its mail, which is
+counted but not listed after the cursor; the client subtracts what this
+machine deliberately left on the relay before it judges the rest. When the
+list is empty and the count still exceeds that, the cursor is past mail
 — set by hand, or copied from a machine that had fetched further — and `auu
 inbox` says so, with the count, the cursor file to delete and the `auu inbox
 --relay NAME` to run after, and exits 5 without acknowledging or writing
@@ -287,8 +299,10 @@ every sender refused). The owner's own mailbox listing carries the same word as
 A message posted to a channel names it in the clear: `ch` on the outer
 envelope at step 3, `channel` on the request that opens a stream. The relay
 reads it after the allow list has admitted the sender and before anything
-is stored or charged — a sender the list refuses learns nothing about
-channels — and refuses `404 no such channel "x"` for a name the directory
+is stored or charged to the recipient's mailbox — the sender's own budgets,
+posts a minute and bytes an hour, are spent before either check, so a
+refused post costs the relay little, and a sender the list refuses learns
+nothing about channels — and refuses `404 no such channel "x"` for a name the directory
 does not hold (`default`, for a mailbox with no directory) and `403 channel
 "x" is not open: opens T` or `closed T` for one outside its period, judged
 by the relay's clock with both edges inclusive. The sealed record and the
