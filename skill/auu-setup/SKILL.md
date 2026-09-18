@@ -33,6 +33,12 @@ and fingerprint, which relays they are on, which machine they are sitting
 at. If `auu id` fails, there is no identity here yet and section 2 is where
 to start. Everything these print is local; none of them sends mail.
 
+The skills themselves are in the binary. If this skill or its two siblings
+are missing on a machine that has `auu`, or `auu skill ls` says `differs`
+after an upgrade, run `auu skill install`; it refuses to overwrite a file
+the user edited, naming it, and `--force` is the user's call. A new
+session is what makes Claude Code read what it wrote.
+
 ## 2. A first identity
 
 Two ways in, and which one depends on what the user has.

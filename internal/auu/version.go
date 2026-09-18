@@ -4,13 +4,16 @@ import (
 	"fmt"
 
 	"github.com/tropeforce7/agentuucp/internal/buildinfo"
+	"github.com/tropeforce7/agentuucp/skill"
 )
 
-// versionJSON is what --json prints: one field, because one is what this
-// binary knows about itself. The relay says its schema beside its version;
-// auu has none.
+// versionJSON is what --json prints: the version, and the Claude Code
+// skills the binary carries, since they travel with it and a person
+// checking an upgrade wants to see both. The relay says its schema beside
+// its version; auu has none.
 type versionJSON struct {
-	Version string `json:"version"`
+	Version string   `json:"version"`
+	Skills  []string `json:"skills"`
 }
 
 // cmdVersion says what this binary was built from. A build with no version
@@ -26,7 +29,7 @@ func cmdVersion(args []string) error {
 		return usageErrf("unexpected argument %q", positional[0])
 	}
 	if *asJSON {
-		return printJSON(versionJSON{Version: buildinfo.Version()})
+		return printJSON(versionJSON{Version: buildinfo.Version(), Skills: skill.Names()})
 	}
 	fmt.Printf("%s %s\n", prog, buildinfo.Version())
 	return nil

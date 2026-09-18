@@ -266,8 +266,9 @@ they must be on the PATH the unit sets below, so note where they land.
 `claude` is installed for the expert's account, not for yours: its
 installer puts the binary under that account's home and its state beside
 it. Run the installer as the account, with `-H`, the way Claude Code's own
-instructions say to run it. Then give it a way to reach Anthropic. There
-are two ways:
+instructions say to run it. The account needs no `auu skill install`: the
+wrapper drives `claude` directly, and the skills are for a person's own
+agent. Then give it a way to reach Anthropic. There are two ways:
 
 - **An API key in a file that serve holds**, which is the service way:
   nothing interactive, the key is a file root owns, and the handler never

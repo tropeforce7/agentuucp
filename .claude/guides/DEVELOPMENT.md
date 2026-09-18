@@ -639,6 +639,20 @@ document, count the prompts; if there could be two, sequence them.
 4 a human must unlock the keys.
 A final 429, 503 or 507 is a transport failure.
 
+**What a program needs beside it to be used is carried in the program.**
+The three Claude Code skills reached a machine only through `make
+install-skill`, which copies files out of a checkout; a person who
+installed with `scripts/install.sh` or `go install` — nearly everyone — had
+the binaries and no skills, and a checkout for three files is a source of
+trouble. They are embedded now (`skill/embed.go`, a package with nothing in
+it but bytes, since an embed directive reaches only at or below its
+package), `auu skill install` writes them out, the install script runs
+that for an ordinary user, and the copy on a machine is the one that
+matches the `auu` beside it. Two tests close the loop: the embed test
+proves the binary's bytes are the tree's, the dispatch test proves the
+tree's forms dispatch. A person's edited file is kept and named, never
+overwritten in silence, since the file is theirs once written.
+
 **The skills name only commands that exist, and every command is named.**
 `internal/auu/skills_test.go` reads each `skill/*/SKILL.md` and
 `skill/reference.md`, takes every backticked `auu`, `auu-admin` and `auu-ca`

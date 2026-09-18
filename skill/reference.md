@@ -143,11 +143,28 @@ a message failing with `the proxy's control socket PATH: ...` is the proxy
 down or refusing serve's uid, retried next round, and the proxy's own
 journal is where its mints, requests and refusals are.
 
-What this binary is:
+What this binary is, and the skills it carries:
 
 ```
 auu version [--json]                               # the version it was built from
+auu skill install [--dir DIR] [--force] [--json]   # write these three skills out of the binary
+auu skill ls [--dir DIR] [--json]                  # which of them the directory holds, and whether they match
+auu skill show NAME|reference                      # print one, without installing it
 ```
+
+The three skills are in the binary, so a machine with `auu` alone can have
+them: `auu skill install` writes `connect`, `auu-setup` and `auu-relay`,
+each with its copy of this reference, under `DIR/skills` — `--dir`, else
+`$CLAUDE_CONFIG_DIR`, else `~/.claude` — and ends with `installed connect,
+auu-setup and auu-relay in DIR/skills` and `restart Claude Code, or start a
+new session, for it to see them`, or `already installed: ...` when every
+file was this binary's already. A file that differs from the binary's copy
+— the user's own edit, or an older auu's — is left alone and named, exit 1:
+`PATH differs from this binary's copy; kept. --force replaces it`; the other
+files are still written, and `--force` replaces the differing ones and
+says `(updated NAME)`. `auu skill ls` says per skill `installed`, `differs`
+or `absent`, which is what to run after an upgrade; `differs` means run
+`auu skill install` (and `--force` if the user did not edit it).
 
 Keys under a passphrase:
 
@@ -309,8 +326,14 @@ when set) and `present`.
 `auu agent status --json`: `running`, `locked`, `until` (when set), `keys`,
 `socket`.
 
-`auu version --json`: `version`, and nothing else. It is the version the
-binary was built from — a tag for a `go install …@vX` build, what version
+`auu skill install --json`: `dir`, and `skills`, a list of every file
+written or looked at: `name` (the skill), `path`, and `state` (`new`,
+`updated`, `unchanged` or `kept`). `auu skill ls --json`: `dir`, and
+`skills` of `name`, `path` (the skill's directory) and `state`
+(`installed`, `differs` or `absent`).
+
+`auu version --json`: `version`, and `skills`, the names of the skills the
+binary carries. The version is the one the binary was built from — a tag for a `go install …@vX` build, what version
 control says for a build from a clone, and the word `unknown` for a binary
 built from a copied tree with no repository behind it. `auu-admin version`,
 `auu-ca version` and `auu-relay --version` say the same in plain text, the

@@ -103,6 +103,11 @@ var subcommands = []subcommand{
 		{name: "stop", describe: "stop it"},
 		{name: "status", describe: "whether it is running and unlocked"},
 	}},
+	{name: "skill", describe: "the Claude Code skills the binary carries", subs: []subcommand{
+		{name: "install", describe: "write them under ~/.claude/skills"},
+		{name: "ls", describe: "which of them are installed, and whether they match"},
+		{name: "show", describe: "print one without installing it"},
+	}},
 	{name: "completion", describe: "print a completion script for your shell", subs: []subcommand{
 		{name: "zsh", describe: ""},
 		{name: "bash", describe: ""},

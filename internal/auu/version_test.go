@@ -26,15 +26,15 @@ func TestVersionSaysWhatThisBinaryIs(t *testing.T) {
 	if got.Version != strings.TrimSpace(strings.TrimPrefix(out, "auu ")) {
 		t.Fatalf("the two forms disagree: %q and %q", out, got.Version)
 	}
-	// One field, and no relay was asked anything: a version is a fact
-	// about the binary in the user's hand.
+	// Two fields, both facts about the binary in the user's hand — its
+	// version and the skills it carries — and no relay was asked anything.
 	raw := alice.run("version", "--json")
 	var fields map[string]any
 	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
 		t.Fatal(err)
 	}
-	if len(fields) != 1 {
-		t.Fatalf("auu version --json is %s, want the one field", raw)
+	if len(fields) != 2 || fields["skills"] == nil {
+		t.Fatalf("auu version --json is %s, want version and skills", raw)
 	}
 	usageError(t, alice, `unexpected argument "extra"`, "version", "extra")
 }

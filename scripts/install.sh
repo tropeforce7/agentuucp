@@ -22,6 +22,11 @@
 # a relay's own host does not need — the kit carries that binary — but a
 # host that builds kits does.
 #
+# The Claude Code skills are in the binary. Run as yourself, it ends by
+# writing them under your ~/.claude/skills with 'auu skill install'; run as
+# root it says that each person runs that once, since the skills belong to
+# whoever runs Claude Code. --no-skills skips that either way.
+#
 # Running it again is how you update: it says what each tool was and what it
 # is now, and leaves a Go that is already new enough alone.
 set -eu
@@ -42,6 +47,7 @@ from=""
 version=latest
 prefix=""
 relay=""
+skills=yes
 while [ $# -gt 0 ]; do
 	case $1 in
 	--from)
@@ -59,12 +65,16 @@ while [ $# -gt 0 ]; do
 		prefix=$2
 		shift 2
 		;;
+	--no-skills)
+		skills=""
+		shift
+		;;
 	--relay)
 		relay=yes
 		shift
 		;;
 	-h | --help)
-		sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+		sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'
 		exit 0
 		;;
 	*) fail "unknown option $1; run with --help" ;;
@@ -273,3 +283,23 @@ case ":$PATH:" in
 *":$bindir:"*) ;;
 *) say "$bindir is not on your PATH. Add it:  export PATH=\"$bindir:\$PATH\"" ;;
 esac
+
+# --- the skills ---------------------------------------------------------------
+
+# The Claude Code skills are in the binary, and belong to whoever runs
+# Claude Code: written out for the person running this, and not for root,
+# whose home is nobody's. A file that person has edited is kept and named
+# by auu itself, which is not a failed install.
+if [ -z "$skills" ]; then
+	:
+elif [ "$(id -u)" = 0 ]; then
+	say ""
+	say "the Claude Code skills are in the binary; each person runs 'auu skill install' once to have them"
+else
+	say ""
+	if "$bindir/auu" skill install; then
+		say "the Claude Code skills are installed for $(id -un) under the directory above"
+	else
+		say "the Claude Code skills were not all installed; the lines above say which file and why"
+	fi
+fi

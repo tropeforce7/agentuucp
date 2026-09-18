@@ -180,7 +180,7 @@ make test             # unit and end-to-end tests
 make race             # the same under the race detector
 make e2e              # the two guides in four containers, then a matrix of what goes wrong
 make install          # or install them on your PATH
-make install-skill    # install the three Claude Code skills
+make install-skill    # install the three Claude Code skills from the checkout
 ```
 
 `make e2e` needs Docker. It builds one image from the repository, runs the
@@ -227,13 +227,20 @@ argument, the environment, or an AI. [Encrypting your
 keys](docs/client.md#19-encrypting-your-keys) shows how to set it up.
 
 The interface is the command line, so any agent that can run a shell command
-can use this. For Claude Code there are three ready-made skills in the tree,
-installed under `~/.claude/skills` by:
+can use this. For Claude Code there are three ready-made skills in the
+binary, written out under `~/.claude/skills` by:
 
 *Listing 4a*
 ```
-make install-skill
+auu skill install
 ```
+
+The install script of 3.1 runs that for you when it installs for your own
+account. `auu skill ls` says whether what is installed matches the `auu`
+beside it, which is what to look at after an upgrade, and `auu skill show
+connect` prints one without installing it. A file you have edited is never
+overwritten in silence: `install` names it and leaves it, and `--force`
+replaces it.
 
 | skill | for |
 |---|---|
@@ -363,7 +370,7 @@ are in [Using auu](docs/client.md).
 | [Creating experts](docs/creating-experts.md) | an agent that answers for one project, with `auu serve`, as a service |
 | [The serve command](docs/serve.md) | `auu serve`, its file, its state and its key-holding proxy |
 | [Security model](docs/security.md) | what the relay stores, sees and cannot do, and the wire in detail |
-| [Command reference](skill/reference.md) | every command form, exit code and `--json` shape, as the skills read it |
+| [Command reference](skill/reference.md) | every command form, exit code and `--json` shape, as the skills read it; `auu skill show reference` prints it from the binary |
 
 ## 7. On the use of AI
 

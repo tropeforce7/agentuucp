@@ -4,9 +4,11 @@
 # The CI job runs this, and so can anybody with docker. It checks the floor
 # against go.mod, parses the script, runs shellcheck where there is one, and
 # then does the whole of it inside ubuntu:24.04 — a machine with no curl, no
-# git and no Go — four times over: an install from a checkout, the same
-# again to prove it changes nothing, --relay to add the fourth binary, and
-# an unprivileged install that has to find the Go the first one put there.
+# git and no Go — five times over: an install from a checkout, the same
+# again to prove it changes nothing, --relay to add the fourth binary, an
+# unprivileged install that has to find the Go the first one put there and
+# ends with the Claude Code skills under that user's home, and the same
+# with --no-skills, which writes none.
 #
 # It writes nothing outside the container and its own temporary directory.
 set -eu
@@ -39,7 +41,7 @@ fi
 
 # 3. The whole of it, on a machine with nothing.
 command -v docker >/dev/null 2>&1 || fail "docker is not here, and the rest of this needs a machine with nothing on it"
-say "running the four installs in ubuntu:24.04; the first downloads Go"
+say "running the five installs in ubuntu:24.04; the first downloads Go"
 
 docker run -i --rm -v "$here:/src:ro" ubuntu:24.04 sh -s <<'CONTAINER'
 set -eu
@@ -85,6 +87,9 @@ esac
 # A fixed string, never a pattern: a pseudo-version carries a '+', which is
 # repetition to grep -E.
 grep -qF "auu: $version" /tmp/first || fail "the report does not say what auu is now"
+# Root is told about the skills and given none: they are each person's.
+has /tmp/first "the Claude Code skills are in the binary; each person runs 'auu skill install' once to have them" "root was not told about the skills"
+[ ! -e /root/.claude/skills ] || fail "the root install wrote skills under /root"
 
 echo "--- 3. the same again, which changes nothing --------------------------"
 sh scripts/install.sh --from /work >/tmp/second 2>&1 || { cat /tmp/second; fail "the second install"; }
@@ -112,8 +117,24 @@ has /tmp/tester "/usr/local/go/bin/go is new enough" "it did not find the machin
 [ -x /home/tester/.local/bin/auu-relay ] && fail "the tester got auu-relay without asking" || true
 has /tmp/tester "is not on your PATH" "it did not say the PATH line"
 has /tmp/tester "export PATH=\"/home/tester/.local/bin:\$PATH\"" "the PATH line is not the one to paste"
+# And the skills, for that user, from the binary just installed.
+has /tmp/tester "installed connect, auu-setup and auu-relay in /home/tester/.claude/skills" "the skills were not installed for the tester"
+has /tmp/tester "the Claude Code skills are installed for tester under the directory above" "the closing line does not say whose skills they are"
+for s in connect auu-setup auu-relay; do
+	[ -s "/home/tester/.claude/skills/$s/SKILL.md" ] || fail "no SKILL.md for $s under the tester's home"
+	[ -s "/home/tester/.claude/skills/$s/reference.md" ] || fail "no reference.md for $s under the tester's home"
+	cmp -s "/home/tester/.claude/skills/$s/SKILL.md" "/work/skill/$s/SKILL.md" || fail "$s's SKILL.md is not the tree's"
+done
+[ "$(stat -c %U /home/tester/.claude/skills/connect/SKILL.md)" = tester ] || fail "the skills are not the tester's own"
+
+echo "--- 6. --no-skills, which writes none ------------------------------------"
+useradd -m nobody2
+su nobody2 -c 'sh /work/scripts/install.sh --from /work --no-skills' >/tmp/noskills 2>&1 || { cat /tmp/noskills; fail "the --no-skills install"; }
+cat /tmp/noskills
+hasnot /tmp/noskills "skill" "--no-skills said something about skills"
+[ ! -e /home/nobody2/.claude ] || fail "--no-skills wrote under the user's .claude"
 
 echo "ALL OK"
 CONTAINER
 
-say "ok: the four installs"
+say "ok: the five installs"

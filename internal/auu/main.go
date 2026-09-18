@@ -109,6 +109,10 @@ Usage:
 
   auu version [--json]               # the version this binary was built from
 
+  auu skill install [--dir DIR] [--force] [--json]   # write the Claude Code skills the binary carries
+  auu skill ls [--dir DIR] [--json]  # which of them the directory holds, and whether they match
+  auu skill show NAME|reference      # print one, without installing it
+
   auu completion zsh|bash            # print a completion script for your shell
 
 Every command that talks to a relay takes --relay NAME. Without it the relay
@@ -310,6 +314,8 @@ func dispatch(args []string) error {
 		return cmdAgent(rest)
 	case "version":
 		return cmdVersion(rest)
+	case "skill", "skills":
+		return cmdSkill(rest)
 	case "completion":
 		return cmdCompletion(rest)
 	case "__complete":
