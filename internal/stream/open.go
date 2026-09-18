@@ -219,6 +219,28 @@ func (o *Opened) OpenPayload(r io.Reader, out Writers) error {
 	if remaining != 0 {
 		return fmt.Errorf("%w: %d payload bytes never arrived", ErrTruncated, remaining)
 	}
+	// An attachment of no bytes has no chunk to arrive in, so the loop above
+	// never opened it unless bytes for a later one followed: every one the
+	// manifest still names that is empty is made here, empty, its digest
+	// checked like any other's, now that the final chunk has opened and
+	// everything with bytes has landed. A stream that ended with an empty
+	// attachment, or was one, used to be refused as truncated, and the
+	// receiver acknowledged it away as damaged. One with bytes still
+	// unwritten is truncated, below, as before.
+	for next < len(m.Attachments) && m.Attachments[next].Size == 0 {
+		a := m.Attachments[next]
+		next++
+		if got := hex.EncodeToString(sha256.New().Sum(nil)); got != a.SHA256 {
+			return fmt.Errorf("%w: %q", ErrDigest, a.Name)
+		}
+		wc, err := out(a)
+		if err != nil {
+			return err
+		}
+		if err := wc.Close(); err != nil {
+			return err
+		}
+	}
 	if next != len(m.Attachments) {
 		return fmt.Errorf("%w: %d attachments were never written", ErrTruncated,
 			len(m.Attachments)-next)

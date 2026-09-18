@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -190,5 +192,48 @@ func TestLookupPrintsAHostileNameEscaped(t *testing.T) {
 	}
 	if _, err := identity.ParseExportLine(out.ExportLine); err == nil {
 		t.Fatal("the export line built from a hostile name parses")
+	}
+}
+
+// TestAnEmptyAttachmentIsDeliveredNotAckedAway: 'auu send --attach empty'
+// as a stream used to succeed at the sender and arrive as a truncated
+// stream at the receiver, who kept the manifest as damaged and
+// acknowledged the message away: silent loss. The empty file arrives now,
+// alone and beside a large one, as an empty file in the attachment
+// directory.
+func TestAnEmptyAttachmentIsDeliveredNotAckedAway(t *testing.T) {
+	relayURL, _ := startRelayConfig(t, relay.Config{Streams: true, Limits: relay.DefaultLimits()})
+	alice, bob := watchers(t, relayURL)
+	empty := filepath.Join(t.TempDir(), "empty.txt")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	big := filepath.Join(t.TempDir(), "big.bin")
+	if err := os.WriteFile(big, bytes.Repeat([]byte("x"), 200<<10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alice.run("send", "--to", "bob", "--subject", "empty alone", "--stream", "--attach", empty, "nothing in it")
+	alice.run("send", "--to", "bob", "--subject", "empty last", "--attach", big, "--attach", empty, "one of each")
+	var inbox inboxJSON
+	if err := json.Unmarshal([]byte(bob.run("inbox", "--json")), &inbox); err != nil {
+		t.Fatal(err)
+	}
+	if inbox.Fetch.Delivered != 2 || inbox.Fetch.Unreadable != 0 {
+		t.Fatalf("the fetch says %+v, want both delivered and nothing unreadable", inbox.Fetch)
+	}
+	for _, subject := range []string{"empty alone", "empty last"} {
+		rec := recordOf(t, bob, store.Inbox, subject)
+		if !rec.Streamed {
+			t.Fatalf("%q did not arrive as a stream", subject)
+		}
+		bs, _, _ := bob.opened()
+		path := filepath.Join(bs.AttachmentDir(store.Inbox, rec.Inner.ID), "empty.txt")
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("%q: the empty attachment is not there: %v", subject, err)
+		}
+		if info.Size() != 0 {
+			t.Fatalf("%q: the empty attachment has %d bytes", subject, info.Size())
+		}
 	}
 }
