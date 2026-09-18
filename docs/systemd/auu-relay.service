@@ -2,8 +2,8 @@
 #
 # Install as /etc/systemd/system/auu-relay.service. Everything the relay
 # writes lives under /var/lib/auu, which systemd creates and owns for it;
-# everything else on the filesystem is read-only to it. Ports 80 and 443 are
-# bound with one capability rather than by running as root.
+# everything else on the filesystem is read-only to it. It runs with no
+# capability at all, on a port that needs none.
 #
 # The full walk-through is docs/deploy-linux.md.
 
@@ -33,8 +33,8 @@ Restart=on-failure
 RestartSec=5s
 
 # State. systemd creates /var/lib/auu owned by auu:auu at this mode, and it is
-# the one place the relay may write: the database, the message files, and the
-# ACME account key and certificates all live there.
+# the one place the relay may write: the database and the message files live
+# there. Its certificate is minted in memory from the bundle and never written.
 StateDirectory=auu
 StateDirectoryMode=0700
 UMask=0077

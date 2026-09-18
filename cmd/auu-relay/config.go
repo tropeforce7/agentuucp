@@ -503,9 +503,9 @@ func (c *Config) Resolve() {
 
 // Validate reports the first thing wrong with the configuration.
 //
-// It creates the ACME cache directory rather than only inspecting it, so a
-// relay that cannot persist its account key fails at startup with a path in
-// the message instead of at the first TLS handshake.
+// It creates the messages directory rather than only inspecting it, so a
+// relay that cannot write where its message files go fails at startup with a
+// path in the message instead of at the first post.
 func (c Config) Validate() error {
 	if c.Listen == "" {
 		return errors.New("listen address is empty")

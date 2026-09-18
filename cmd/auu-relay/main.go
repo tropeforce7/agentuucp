@@ -2,8 +2,8 @@
 //
 // It holds sealed envelopes it cannot read and enforces four things about
 // them: who may create a mailbox, who may drop mail into whose, how fast, and
-// how much. It can obtain its own TLS certificate from an ACME certificate
-// authority such as Let's Encrypt, and it is administered over its own API by
+// how much. It mints its own short-lived TLS certificate from the signing
+// bundle its authority issued it, and it is administered over its own API by
 // the identities named in the file it was started with.
 package main
 

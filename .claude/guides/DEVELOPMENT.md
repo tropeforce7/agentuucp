@@ -280,13 +280,6 @@ state.** The startup warning about file permissions is returned beside the
 `Config`, not stored on it, because `Config` round-trips through
 `--print-config`.
 
-**Reject what a public CA will never issue for.** `localhost` and other
-single-label domains are refused at validation so the failure is at startup
-with a clear message, not at the first handshake with a confusing one.
-
-**Pin the ACME host whitelist.** Without it, any client naming an arbitrary
-host in SNI triggers issuance for it and burns the rate limit.
-
 ## Storage
 
 **One SQLite connection.** `MaxOpenConns(1)` with `busy_timeout`. That means

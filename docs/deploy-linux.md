@@ -462,11 +462,13 @@ so that you can judge any change to it:
   the one `relay.json` names; all three must agree, and a test in the
   repository holds the two shipped files to it. The credentials directory is
   inside the service's own mount namespace and needs no `ReadOnlyPaths=`.
-- **`User=auu`** with **`AmbientCapabilities=CAP_NET_BIND_SERVICE`**: ports 80
-  and 443 are bound with one capability, and nothing runs as root.
+- **`User=auu`** with **`CapabilityBoundingSet=`** empty: nothing runs as
+  root and the relay holds no capability. It needs none, because it makes its
+  own certificate and so has no reason to be on 80 or 443; the comment in the
+  unit says which two lines to add back if you put it on 443 anyway.
 - **`StateDirectory=auu`** at mode `0700`: systemd creates `/var/lib/auu`,
-  owns it for the service, and makes it the only writable path. The database,
-  the database and the message files live under it.
+  owns it for the service, and makes it the only writable path. The database
+  and the message files live under it.
 - **`ProtectSystem=strict`** with **`ProtectHome=true`**: the rest of the
   filesystem is read-only. `/etc/auu` is readable, which is all the relay ever
   does with it.

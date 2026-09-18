@@ -490,8 +490,14 @@ signed by the identity key, so the relay always knew who was asking; what it
 could not tell was one of your machines from a copy of your `~/.auu` on
 somebody else's. A certificate is generated on the machine, its private key
 never leaves, and the relay records the serial. So a laptop can be revoked
-without touching the identity, and a stranger is refused at the TLS handshake
-rather than after the relay has read their request.
+without touching the identity. A machine presenting a certificate the
+authority did not issue fails the TLS handshake; one presenting none
+completes it and is refused at every mailbox route and at the key lookup.
+Without a certificate a machine reaches the trust anchor, the health check
+and enrolment, which a new machine needs before it has one, and the
+administration routes if it signs as an administrator: an administrator's
+authority is the file on the relay's host, so administering a relay never
+depends on holding a certificate from it.
 
 What it does not add is confidentiality. Message contents are sealed end to end
 with HPKE either way, and the relay can no more read them with client

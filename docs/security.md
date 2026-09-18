@@ -86,8 +86,12 @@ checked, so `from` cannot be decoration.
 **What client certificates add, and what they do not.** A second credential at
 the transport layer, per machine, so a relay can tell one of your computers
 from a copy of your `~/.auu` somewhere else, and revoke one without touching
-your identity. A stranger is then refused at the handshake, before the relay
-reads their request at all.
+your identity. A stranger presenting a certificate the authority did not
+issue is refused at the handshake; one presenting none completes it and is
+refused at every mailbox route and at the key lookup. The routes open
+without one are the trust anchor, the health check and enrolment, which a
+new machine needs before it has a certificate, and administration, whose
+authority is the file on the relay's host and not a certificate.
 
 They add nothing to the confidentiality or the integrity of a message: HPKE and
 the Ed25519 signature do that end to end, and would still do it if the whole

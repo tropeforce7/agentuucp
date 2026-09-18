@@ -4,7 +4,7 @@
 
 Secure store-and-forward messaging between agents, experts and people who
 work for different organisations. Each side has a key. A relay in the middle
-carries sealed messages it cannot open and never stores who wrote them.
+carries sealed messages it cannot open, and the sender's name is inside them.
 
 - **Agent to agent.** Your Claude Code asks a colleague's Claude Code to look
   at a bug, with the file attached, and gets an answer back when their agent
@@ -41,11 +41,17 @@ relay.
 ## 2. How it stays private
 
 **The relay.** A relay is one static binary, `auu-relay`, with a database
-and a directory of message files. Anybody can run one. It stores three things
-about a message: the recipient's fingerprint, the ciphertext, and the channel
-it was posted to. The sender's name is inside the ciphertext. So the relay's
-rows never say who wrote anything, and its operator can list and delete
-messages but not read them.
+and a directory of message files. Anybody can run one. Its row for a message
+holds the recipient's fingerprint, the channel it was posted to, when it
+arrived, its size and its kind. The ciphertext is a file beside it. The
+sender's name is inside the ciphertext. So the relay's rows never say who
+wrote anything, and its operator can list and delete messages but not read
+them.
+
+There is one exception, and it is short-lived. While a large message is
+being uploaded the relay holds the sender's fingerprint, so that only the
+sender can add to the upload and the space is charged to them. That row is
+deleted when the upload completes or is abandoned.
 
 The relay does see the sender at the moment of posting, because posting is
 authenticated. Its access log records that moment, and the default,
@@ -72,8 +78,13 @@ no ACME.
 
 The relay can also require every machine to present a client certificate of
 its own. It is issued when the machine enrols, and it can be revoked one
-machine at a time without touching the identity behind it. A stranger is then
-refused at the TLS handshake, before the relay reads a request.
+machine at a time without touching the identity behind it. A machine that
+presents a certificate the authority did not issue fails the TLS handshake.
+One that presents none completes it and is refused at every mailbox route.
+What it can reach is what a new machine needs before it has a certificate,
+the trust anchor, the health check and enrolment itself, and administration
+if it signs as an administrator, whose authority is a file on the relay's
+host and not a certificate.
 
 Every certificate in the chain is ML-DSA, so the transport's authentication
 is post-quantum. It runs over TLS 1.3 with the same hybrid key exchange as
@@ -91,16 +102,22 @@ recipient's fingerprint. A message cannot be re-addressed or passed off as
 written for someone else.
 
 Messages larger than 64 KiB go as a stream of sealed chunks under one HPKE
-context. A two-gigabyte attachment crosses a relay that never holds more than
-a chunk of it. The [security model](docs/security.md) says exactly what
-the relay stores, sees, and cannot do.
+context. A large attachment, up to the limits the relay's operator sets,
+crosses a relay that never holds more than a chunk of it in memory. On disk
+it is one file until it is collected. The [security model](docs/security.md)
+says exactly what the relay stores, sees, and cannot do.
 
 All message cryptography comes from the Go standard library and nothing is
-hand-rolled: the imports are `crypto/hpke`, `crypto/ed25519`, `crypto/sha256`
-and `crypto/rand`, with `crypto/mldsa` for the certificates. One package
-outside it is used, `golang.org/x/crypto/argon2`, only to encrypt the offline
-authority's private keys under a passphrase; it touches no message and no
-connection.
+hand-rolled: the imports are `crypto/hpke`, `crypto/ed25519`, `crypto/sha256`,
+`crypto/rand`, `crypto/mlkem`, `crypto/ecdh` and `crypto/sha3`, with
+`crypto/mldsa` for the certificates. One piece of the KEM's internals is
+repeated rather than called. The identity package expands X-Wing's seed with
+SHAKE256 itself, so that the key agent can hold the ML-KEM and X25519 halves
+separately, and recomposes them with the standard library's own constructor.
+A test fails if the library ever expands the seed differently. One package
+outside the standard library is used, `golang.org/x/crypto/argon2`, only to
+encrypt the offline authority's private keys under a passphrase; it touches
+no message and no connection.
 
 Everything from here down is reference: how to install and use the client,
 then how to run and administer a relay, then the security model and the wire
@@ -452,9 +469,11 @@ bug in the claim.
 | package | role |
 |---------|------|
 | `internal/identity` | keys, fingerprints, export lines |
-| `internal/envelope` | seal and open over `crypto/hpke`, the only place plaintext meets the network |
+| `internal/envelope` | seal and open one message over `crypto/hpke`; with `internal/stream`, the only places plaintext meets a key |
 | `internal/stream` | the chunked format for messages too large to seal in one piece |
 | `internal/message` | the message body and its validation |
+| `internal/channels` | a mailbox's directory of channels, signed by its owner |
+| `internal/allowlist` | a mailbox's allow list, signed by its owner and verified by the relay on every post |
 | `internal/relayapi` | wire types and request signing, shared by both sides |
 | `internal/relay` | relay storage, HTTP handlers, and the limit policy |
 | `internal/ratelimit` | the token bucket the relay's limits are built from |
@@ -465,12 +484,17 @@ bug in the claim.
 | `internal/agent` | the process that holds a user's unlocked keys and performs their private operations over a socket; the client side that composes an identity from it |
 | `internal/term` | whether a file descriptor is a terminal, turning its echo off, and reading a passphrase |
 | `internal/client` | relay client |
-| `internal/store` | local identity, peers, and spool |
+| `internal/store` | local identity, settings, peers, relays and the spool |
+| `internal/lockfile` | one lock per file, released by the kernel when the process exits |
+| `internal/kit` | the relay kit: one archive that installs a relay on a host |
+| `internal/buildinfo` | what version a binary was built from |
 | `internal/testutil` | seeded randomness and bit-flipping, for tests |
-| `internal/auu` | the client command, as a package |
-| `cmd/auu`, `cmd/auu-relay`, `cmd/auu-admin` | the three binaries; `cmd/auu` is one line |
+| `internal/auu` | the client command, as a package, with `auu serve` and its key-holding proxy |
+| `skill` | the three Claude Code skills and the reference, embedded for `auu skill install` |
+| `cmd/auu`, `cmd/auu-relay`, `cmd/auu-admin`, `cmd/auu-ca` | the four binaries; `cmd/auu` is one line |
 | `main.go` | the client again, as `agentuucp`, so the bare `go install` path has something to build |
-| `docs` | deploying a relay: the Linux walk-through, the systemd unit and a settings file |
+| `scripts` | the public install script and the checks CI runs over it, the kit and the unit |
+| `docs` | the seven guides, the systemd unit and a settings file, and the serve handler script |
 | `docker/testing` | the container suite: four machines, the two guides in order, and the matrix of what goes wrong, with its report |
 | `.claude/guides` | development and testing rules for contributors |
 
