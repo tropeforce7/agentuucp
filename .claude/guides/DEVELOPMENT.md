@@ -170,6 +170,15 @@ with an identity they did not hold. `verified(w, fp)` is called only after
 **Never log a body, a token string, or anything else that is a credential.**
 There is a test that enrols with a token and greps the whole log for it.
 
+**A log line limited to once a minute is keyed by the thing it is about,
+never by the sentence.** The fault log says why a storage fault was
+answered as a 500, once a minute per path, so a broken disk under a busy
+relay does not fill the journal with one line; the allow list's "does not
+verify; refusing every post" line goes through the same limiter, keyed
+`allowlist:FP`, so a burst of refused posts is one line and two broken
+mailboxes are two. Limit by the sentence and the second mailbox is never
+mentioned; do not limit and a sender in a retry loop writes the journal.
+
 **Names are local labels.** A display name that arrives on the wire is
 discarded; `envelope.Open` clears `sender.Name`. Peer names come from the
 local `authorized_peers` file and nowhere else, and they must be unique
@@ -281,6 +290,29 @@ version-zero database with tables in it is from before versioning and is
 refused with a message saying to delete it. Migrations are an ordered list,
 each in its own transaction, each setting the version on the way out, so an
 interrupted upgrade resumes rather than half-applies.
+
+**A migration is keyed by the version it starts from, and a pre-migration
+creates what it fills.** `migrations[5]` takes a database from 5 to 6; the
+plan that took it from 6 to 7 wrote `preMigrations[7]`, and code that
+followed the plan would have refused to open a version 6 database, wanting
+a migration from 6 that was not there. A pre-migration runs outside and
+before its transaction, so the table the Go half writes into does not
+exist yet: it creates it from the same constant the fresh path uses
+(`CREATE TABLE IF NOT EXISTS`, so `sqlite_master` still matches) and
+writes with `ON CONFLICT DO UPDATE`, and the SQL half repeats the constant
+as a no-op and drops the old table. Both halves are idempotent because a
+crash between them leaves the old version, and the next start runs both
+again. The old migration tests built the past from the table constant;
+when the constant became the new table they would have built the wrong
+past, so the old DDL is written out as a literal, as every earlier
+schema's is.
+
+**A time the relay wrote orders nothing the owner did.** A legacy allow
+list converted by the migration carries the migration's clock as its
+issue time; had the 409 rule applied to it, an owner whose machine clock
+ran behind the relay's could never push over it. A signed document
+replaces a legacy row whatever its time, and the newer-issued rule holds
+only between two documents the owner signed.
 
 **Share DDL between the fresh-create path and the migration that introduces a
 table.** Each table is one `const` used by both, so a database created from
@@ -509,6 +541,62 @@ holds one and proves the stop returns at once; without the `Close` it fails
 on the grace running out. The test harness in `internal/relay` does the
 same in its cleanup, since `httptest.Server.Close` waits the same way.
 
+## Processes, accounts and the shell
+
+**Windows builds its own command line.** `exec.Command("cmd", "/c", line)`
+quotes the line the way `CommandLineToArgvW` unquotes it, and cmd.exe is
+os/exec's documented exception: it unquotes differently, so an exec line
+that opens with a quoted path — every line naming a program whose path
+might hold a space — reaches cmd quoted again and does not run. Resolve
+cmd.exe with `exec.Command("cmd")` and set `SysProcAttr.CmdLine` to
+`cmd /S /C "LINE"`: `/S` strips exactly the outer pair of quotes and leaves
+the rest as written. A `GOOS=windows` vet proves it compiles; the Windows
+job is what proved it runs.
+
+**Killing a tree is the process group on Unix and `taskkill /T /F` on
+Windows.** There is no process group to signal on Windows, so killing the
+shell left the handler under it running and holding the file its stderr
+was going to, and the test's directory could not be removed. Walk the tree
+with `taskkill /T /F /PID`, and fall back to killing the one process where
+`taskkill` is not there to be run. Nothing a program serve starts may
+outlive its timeout on either platform, and the documentation says so
+without "on Unix".
+
+**A tool you assume is on every Linux host is not, until a bare image says
+so.** `uuidgen` is not on Debian 13: it is in `uuid-runtime`, which nothing
+installs by default and which util-linux does not carry, so the wrapper as
+the plan drew it would have died at the first message of every new session
+with `uuidgen: not found` — and there `set -e` does end the script, since
+the assignment is a plain command. The wrapper tries `uuidgen`, falls back
+to `/proc/sys/kernel/random/uuid`, which is on every Linux machine, and
+refuses by name when there is neither. A `debian:13-slim` container is
+where this was found, and the install check runs in `ubuntu:24.04` with
+nothing on it for the same reason.
+
+**Give git a setting for one command through `GIT_CONFIG_COUNT`, never
+`--global`.** A checkout somebody else owns — root building in a user's
+tree, a user building in one root unpacked — is what git calls dubious
+ownership and refuses to read, and `go install` then cannot stamp the
+version. The install script names that one directory safe for that one
+command with `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory
+GIT_CONFIG_VALUE_0=$PWD`; nothing is written to a config file, and nothing
+is left in the environment. The private-repository token travelled to git
+the same way while there was one. And a version string with a `+` in it is
+a pattern to `grep -E`: compare versions with `grep -F`.
+
+**A caller admitted to a group to reach a socket is in the group that reads
+what the socket guards.** The split proxy's socket is 0660, and the first
+draft of its guide, and the first run of row S11, put the expert's account
+in the proxy's group to let it connect — the group that may read the key
+file, which is the whole of what the split proxy exists to prevent; the
+row's first assertion, `sudo -u auu-expert cat /etc/auu-proxy/key`
+failing, is what caught it. The socket takes the callers' group, never the
+holder's: the proxy is put in that group by its unit's
+`SupplementaryGroups=` so that it may give the socket and its directory
+away with `chown`, and it refuses to start, naming that line, when it
+cannot. Two lines admit a caller, the file mode and the kernel's account of
+its uid and groups, and neither touches the key.
+
 ## The command line
 
 **Destructive commands say what will go, then ask.** `mailboxes rm` fetches
@@ -625,6 +713,17 @@ after the admin work: the build section named two binaries, the plan's layout
 listing omitted three packages, an example log line had its fields in the
 wrong order. Compare the documents' tables against the code, not against your
 memory of the code.
+
+**A document that moves breaks every link to it, and a test keeps them
+resolving.** When the README was broken up into `docs/client.md`,
+`docs/relay.md` and `docs/security.md`, every anchor in every document
+changed with the section numbers, two tests that read the README for the
+exit-code table went with the table, and a grep for "README" was the only
+thing that found them. `TestEveryDocumentLinkResolves` at the module root
+now walks every Markdown file in the tree and fails on a relative link or
+`#anchor` that does not resolve to a file or a heading, by GitHub's slug;
+it is part of `make test`. Move a section and the test says which link you
+forgot, by document and line.
 
 **Do not overclaim in the security model.** The README said the relay "cannot
 build a social graph from what it stores". True of the database, false of the

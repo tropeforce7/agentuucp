@@ -38,9 +38,11 @@ const (
 	// what a relay with a publicly trusted certificate wants anyway.
 	LegacyPrefix = "ccxt1"
 
-	// signDomain separates token signatures from the other two things an
-	// identity key signs: requests (ccx-http-v1) and messages (ccx-sig-v1).
-	// A signature made for one purpose must not verify for another.
+	// signDomain separates token signatures from the other five things an
+	// identity key signs: requests (ccx-http-v1), messages (ccx-sig-v1),
+	// stream manifests (ccx-stream-sig-v1), channel directories
+	// (ccx-channels-v1) and allow lists (ccx-allow-v1). A signature made
+	// for one purpose must not verify for another.
 	signDomain = "ccx-token-v1"
 
 	// UseRegister creates one mailbox.

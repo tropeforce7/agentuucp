@@ -48,6 +48,21 @@ content" by searching the body for the word `queued`, which matched the field
 name `queued_messages`; the test was wrong. Neither was a code bug, and either
 fix to the code would have been a regression.
 
+**A claim about another program's behaviour is run against that program,
+not believed.** Two examples. The wrapper's `[ -n "$AUU_ATTACHMENTS" ]
+&& prompt=…` line was reported as a bug under `set -e` that would end the
+script before `claude` ran; running it on `/bin/sh` here and on dash in a
+`debian:13-slim` container showed the opposite — POSIX exempts a failing
+command in an AND-OR list unless it is the script's last line — and the
+report was retracted before anything was changed for it. The same plan
+rested on Claude Code accepting `ANTHROPIC_BASE_URL` on loopback with a
+path and a key that does not begin `sk-ant`, and that was proved against
+the real binary with a fake upstream on 127.0.0.1 before the pre-read went
+back, which also found the `HEAD /api/hello` probe and the tool-search
+warning nobody had guessed at. If the claim is about a shell, a container
+or another program, the test is to run it there; a sentence in a note is
+not one.
+
 ## Adversarial input
 
 Three rules for unit tests of anything that checks a value, transforms data,
@@ -334,6 +349,18 @@ directly, close, `OpenStore` again, assert `Reconciled()` is non-zero and the
 counters agree with a fresh `COUNT` and `SUM`. `assertCountersAgree` does the
 comparison for every mailbox and for `relay_stats`.
 
+**When the threat is the host, edit the row, not the wire.** The allow list
+was a plain table the relay trusted, and the plan that signed it asked for
+one test above the others: `UPDATE allowlists SET doc = …` through the
+store's own handle to admit a stranger, then a post from that stranger
+through the HTTP path, refused with the sentence a refused sender always
+gets. Against the old code the stranger is admitted and the test fails,
+which is the point. A test that pushes a forged document over
+the wire proves the push's check; only a test that writes the database
+proves the enforcement's. The same test then edits one byte of the
+signature and replaces the mailbox's bundle, and asserts the owner's own
+request fails too, since that is what the model says an attacker buys.
+
 **Refuse the databases you must refuse.** Version zero with tables present, and
 any version above the current one, each with the specified message. Both are
 tested; keep them passing when you bump the version.
@@ -352,6 +379,15 @@ audit test greps the whole log for the token string and for anything starting
 
 **The `limit=` field turns a wall of 429s into a diagnosis.** There is a test
 that a refusal produces it. Add a limit, extend that test.
+
+**A line limited to once a minute is tested as one line for a burst and a
+second after the clock advances.** The fault log's limiter is keyed by the
+thing the line is about — a path for a storage fault, `allowlist:FP` for a
+list that no longer verifies — never by the sentence alone, since two
+mailboxes broken at once are two lines an operator needs. The allow-list
+test refuses two senders inside the minute and counts one line, advances
+the harness clock two minutes, refuses again and counts two. Both halves
+matter: the first proves the limit, the second that it lifts.
 
 ## Command-line and end-to-end
 
@@ -468,6 +504,17 @@ see locally. The same goes for `HeapAlloc` assertions: the claim is "not
 proportional to what was sent", so the bound is a small multiple of the cap and
 not a precise figure, which would measure the garbage collector.
 
+**No sub-second timeout in a test that starts a process.** Every row of
+the after-hook test gave the handler and the hooks 200ms, and under the
+race detector this test binary — which is the handler — takes longer than
+that to start, so the handler was killed and the after hook, on the same
+clock, was killed before it printed the status the test asked about. It
+was one of the four things the first push of `auu serve` turned up in the
+Windows job and the race job, and the one that reproduces here with
+`-race`. A row that runs to the end gets ten
+seconds; a row that is about the timeout gets two seconds against a handler
+that sleeps thirty, since what it proves is the kill, not the clock.
+
 **Reproduce CI's contention before blaming CI, and reproduce the job that
 failed.** Six copies of `go test -count=2 ./...` in parallel, four rounds, is a
 closer approximation of a shared runner than one quiet run, and it is thirty
@@ -502,6 +549,58 @@ asserts that `aad` covers whatever the map holds, and the comment, which now
 says which check actually fires. Running the suite against deliberately broken
 code is the only thing that finds this class of mistake, and it takes a
 minute.
+
+**A break that passes anyway is not a proof, and is written down as one
+that was tried.** "Serve never releases the split proxy's token" should
+have left the token live for the twin test to find, and the test passed:
+a `net.Conn` nobody references any more is closed by Go's finalizer, and
+the proxy revokes on close, so the product covered the mistake by
+accident of the collector's timing. That is worth knowing and worth
+recording — it is in the notes — but it is not a break the tests catch,
+and it was replaced in the break record by one they do (serve taking the
+whole URL as the token), not counted.
+
+**Know what the library does before you choose the break.** Go's reverse
+proxy flushes a `text/event-stream` response immediately whatever
+`FlushInterval` says, so setting the interval to zero did not make the
+streaming test fail, and would have been counted as a proof of nothing.
+The break that proves that test is the counting `ResponseWriter` without
+`Flush` and `Unwrap`, which hides the flusher from the proxy and makes the
+three chunks arrive together; and the test's clock starts before the
+request, since a buffering proxy hands over the headers at the end too.
+
+## Windows
+
+The Windows job runs the agent, lockfile, store, keyfile, identity and
+term packages whole and a named list of the CLI's tests, which is the list
+to extend when a test with Windows-specific code is added. Its first run
+of anything new is the proof; `GOOS=windows go vet ./...` on the ubuntu
+leg is only the proof that it compiles. These are what it found.
+
+**The line endings are the fixture's, not the machine's.** A runner with
+`core.autocrlf` on checks a worktree out with CRLF, so the test that proves
+a tracked edit does not survive a read-only worktree's move compared
+`"the project\r\n"` against `"the project\n"` and said the edit had
+survived. A repository a test makes sets `core.autocrlf false`, and so does
+the clone an asker applies a patch in, so that both sides of `git apply`
+agree; a byte comparison against a file git wrote is otherwise a
+comparison against the runner's settings.
+
+**A lock's pid cannot be read while it is held on Windows.** The serve lock
+is a handle opened with no sharing, which is what stands in for `flock`
+there, so nobody can open the file again while it is held: not the second
+process that wanted to read the pid for its refusal, and not the holder
+that wanted to write it. The sentence says one less thing on Windows, and
+the test asks for the pid only where it can be had. The lock's sharing mode
+was left alone: it is a primitive the agent and every fetch depend on, and
+a pid in a sentence is not worth changing it for.
+
+**A test about a signal, a process group or a file mode runs off Windows,
+and says so.** There is no process group to signal, Go's `FileMode` on
+Windows is made from the read-only attribute and says nothing about 0600,
+and a `Stat` mode check there is a check of nothing. Skip with the reason
+in the sentence, as `TestAnotherUidIsRefused` does for peer credentials,
+rather than loosen the assertion for every platform.
 
 ## The container suite
 
