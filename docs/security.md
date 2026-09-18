@@ -214,6 +214,32 @@ the inbox at all. Nothing arrives unasked: mail moves only when a command
 fetches it — `auu inbox`, `auu wait`, `auu watch --fetch`, or each round of
 `auu serve`.
 
+**What an induced action can do.** The cryptography authenticates whatever
+the key signs, so the attack that matters against an AI is not breaking a
+message but talking the AI into originating one: while the key agent is
+unlocked, any process running as the user can have it sign, and a message
+built to subvert an AI could have it send as the person. No confirmation
+the agent asked for in-band would help, since the same process answers it.
+So an unlock has a scope, and the agent decides by the domain string at the
+front of what it is asked to sign — every construction here has one, and a
+relay request its method and path against the relay's route table — never
+by who asks. A plain `auu unlock` is receive scope: the agent opens mail,
+signs the transport, and signs what lists, fetches, watches and
+acknowledges, and refuses to sign a message, a stream's manifest, a channel
+directory, an allow list, a token, or any request that posts, uploads,
+registers, pushes or administers; anything it does not recognise is
+refused too. `auu unlock --send` — the passphrase again, ten minutes by
+default — is everything, and then back to receive. An induced action in
+receive scope can therefore fetch mail and acknowledge it, which is to say
+delete it from the relay, and nothing more; in a send window it can
+originate as the person, which is why the window is short and typed for.
+This does not reach a home that was never encrypted, whose keys are files
+any process can read, nor one whose passphrase is in a file, which the AI
+can read too. The one accepted exception is `auu serve`: an expert
+originates unattended by design, to the channel it serves, and is unlocked
+with `--send --ttl 0` on a machine that is nobody's desktop; serve refuses
+to start under receive scope and says so.
+
 ## 2. The wire, in detail
 
 What the relay stores for one message is three fields, and a fourth on a

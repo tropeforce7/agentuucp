@@ -246,9 +246,15 @@ in the spirit of `ssh-agent`, hold them unlocked in memory for the hours you
 choose. You type the passphrase once, in your own terminal. Every command
 Claude runs after that works without it.
 
-When the agent is locked, a command stops with exit code 4 and one sentence.
-Claude's job is then to ask you to run `auu unlock` and try again. The
-passphrase is read only from a terminal, a file or a pipe, never from an
+Your agent reads mail on its own. Sending needs you: `auu unlock` unlocks
+the keys to receive — open mail, list, fetch, watch, acknowledge — and
+nothing that originates, so an AI that reads a message written to talk it
+into sending one cannot. `auu unlock --send`, your passphrase again, opens a
+ten-minute window in which it can send as you, and then it is back to
+reading. When the agent is locked, or unlocked only to receive and the
+command sends, the command stops with exit code 4 and one sentence naming
+the unlock to run. Claude's job is then to ask you to run it and try again.
+The passphrase is read only from a terminal, a file or a pipe, never from an
 argument, the environment, or an AI. [Encrypting your
 keys](docs/client.md#19-encrypting-your-keys) shows how to set it up.
 

@@ -427,6 +427,36 @@ allow list. There is a test that a signature over the same bytes in one
 domain does not verify in another, in both directions. Add a seventh thing
 to sign and you add a seventh domain and a seventh test.
 
+**The agent decides by the domain it is asked to sign under, never by who
+asks.** The second outside review's closing point: key extraction was
+defended and key misuse was not, because any process running as the user
+can have the unlocked agent sign, and content that subverts an AI can make
+it originate as the person. No in-band confirmation helps, since the same
+process answers it. So an unlock has a scope (`internal/agent/scope.go`):
+receive, the default, and send, for `auu unlock --send` with the passphrase
+again and ten minutes by default. The agent classifies each operation from
+what it is asked to sign, and the domain strings above are what make that
+possible without a protocol change — which is a second reason every signed
+thing has one at the front. The table:
+
+| asked to sign | scope |
+|---|---|
+| `ccx-http-v1` + a method and path in the receive set: `GET` of a listing, a blob, an allow list, a directory, certs or a key; `DELETE` of a message; `HEAD` of an upload | receive |
+| `ccx-http-v1` + anything else — a post, an upload, a push, a registration, an admin route | send |
+| `ccx-sig-v1`, `ccx-stream-sig-v1`, `ccx-channels-v1`, `ccx-allow-v1`, `ccx-token-v1` | send |
+| anything else under the identity key, malformed included | send |
+| a machine key (`cert:`, `pending:`): the TLS handshake, a CSR | receive |
+| `generate`, a new machine key | send |
+
+Unknown is send, always; over-strict is the right side, because a wrong
+receive costs a signature and a wrong send costs a retry.
+`TestTheClassifierAgreesWithTheRelay` in `internal/relay` walks every route
+the relay registers against this table, so a route added without a row
+fails. Add a signed thing, or a route, and you decide its scope on purpose.
+The client surfaces a refusal as exit 4 with the agent's sentence verbatim,
+and `auu serve` — the one thing that originates unattended by design —
+refuses to start under receive scope in its own words.
+
 **An HPKE context cannot be rewound, so seal to disk before you upload.** A
 stream is one context and a run of chunks; the nonce counter advances on every
 `Seal` and never goes back. A chunk the network lost cannot be sealed a second
@@ -473,7 +503,10 @@ format two machines have already agreed on. Renaming any of them invalidates eve
 identity, message and token in existence and silently breaks compatibility with
 any deployed relay. If a future rename tempts you, rename the commands and
 leave the wire alone. When a format does have to change, do what `ccx2` did: a
-new prefix, the old one still read, only the new one written.
+new prefix, the old one still read, only the new one written. One of the
+nine is spelt a second time, in `internal/agent/scope.go`, where the agent
+recognises a relay request by its domain without importing `relayapi`;
+`TestTheClassifierAgreesWithTheRelay` is what fails if the two ever differ.
 
 `X-CCX-Token` used to be on that list and is now retired rather than renamed:
 the enrolment token moved inside the certificate request, where the signature

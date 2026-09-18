@@ -170,8 +170,10 @@ Keys under a passphrase:
 
 ```
 auu passphrase set|change|remove                   # the user runs these; they prompt
-auu unlock [--ttl 8h] [--passphrase-file PATH]     # the user runs this in their own terminal
-auu lock
+auu unlock [--ttl 8h] [--passphrase-file PATH]     # the user runs this in their own terminal: receive scope, reads and does not send
+auu unlock --send [--ttl 10m]                      # the passphrase again: send scope for the window, then back to receive; --ttl 0 is until lock
+auu lock                                           # drop the keys
+auu lock --send                                    # end the send window, keep receive
 auu agent start|stop|status [--json]
 ```
 
@@ -243,8 +245,9 @@ Field names are as the code prints them. A field marked *when set* is
 absent otherwise.
 
 `auu id --json`: `name`, `fingerprint`, `short`, `suite`, `suite_id`,
-`pq_category`, `encrypted`, `locked`, `until` (when set), `relays`,
-`relay_name` (when set), `relay`, `export_line`.
+`pq_category`, `encrypted`, `locked`, `until` (when set), `scope`
+(`receive` or `send`, when unlocked), `send_expires` (when send scope has
+an end), `relays`, `relay_name` (when set), `relay`, `export_line`.
 
 `auu peers ls --json`: a list of `name`, `fingerprint`, `short`, `suite`,
 `suite_id`, `pq_category`.
@@ -323,8 +326,9 @@ when set) and `present`.
 `label`, `spki`, `not_before`, `not_after`, `revoked`, `reason` (when set),
 `current` (when set).
 
-`auu agent status --json`: `running`, `locked`, `until` (when set), `keys`,
-`socket`.
+`auu agent status --json`: `running`, `locked`, `until` (when set), `scope`
+(`receive` or `send`, when unlocked), `send_expires` (when send scope has
+an end), `keys`, `socket`.
 
 `auu skill install --json`: `dir`, and `skills`, a list of every file
 written or looked at: `name` (the skill), `path`, and `state` (`new`,
@@ -359,6 +363,11 @@ Anywhere:
 
 - `your identity is locked: run 'auu unlock' in your own terminal` — exit
   4. The user runs it; you never handle the passphrase.
+- `the agent is unlocked to receive; run 'auu unlock --send' at a terminal
+  to send for the next 10 minutes` — exit 4 too: the keys are unlocked,
+  but only to read, and this command originates. The user runs it; same
+  rule. `auu serve` says it in its own words, naming `auu unlock --send
+  --ttl 0`, since an expert sends until it is locked.
 - A damaged file is always the same shape: the path, what is wrong with it,
   Go's reason in brackets when there is one, and what to do — exit 5. Stop
   and name the file.

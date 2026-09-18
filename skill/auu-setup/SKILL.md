@@ -198,17 +198,31 @@ operator's command, not this skill's.
 
 `auu passphrase set` puts this home's secret keys under a passphrase, and
 starts an agent that holds them unlocked for a while so that every command
-does not ask.
+does not ask. An unlock has a scope. `auu unlock` is for reading: the
+agent opens mail and signs what lists, fetches, watches and acknowledges,
+for eight hours by default. Sending needs `auu unlock --send`, the
+passphrase again, for a ten-minute window (`--ttl` changes it; `0` is
+until `auu lock`), after which the agent is back to reading; `auu lock
+--send` ends the window early and `auu lock` drops everything. The reason
+is the AI: while the agent is unlocked anything running as the user can
+have it sign, so originating is kept behind the one thing an AI cannot do,
+which is type the passphrase.
 
 **The user runs these themselves, in their own terminal.** Never ask them
 for the passphrase, never pass one on a command line or in the environment,
-and never run `auu unlock`, `auu lock`, `auu passphrase` or `auu agent`
-yourself. The passphrase is the user's; the unlock is theirs to do.
+never suggest a passphrase file, and never run `auu unlock`, `auu lock`,
+`auu passphrase`, `auu agent start` or `auu agent stop` yourself; `auu
+agent status` is a read, and is wanted. The passphrase is the user's; the
+unlock is theirs to do.
 
-When a command exits 4 with `your identity is locked: run 'auu unlock' in
-your own terminal`, tell them exactly that and retry the command after they
-have. `auu id --json` says `"locked": true` when this is the state; check
-it before starting a long task rather than finding out at the end.
+When a command exits 4, the sentence says which of two things it is: `your
+identity is locked: run 'auu unlock' in your own terminal`, or `the agent
+is unlocked to receive; run 'auu unlock --send' at a terminal to send for
+the next 10 minutes`. Tell them exactly that and retry the command after
+they have. `auu id --json` and `auu agent status --json` say `"locked"`
+and `"scope"` (`receive` or `send`); check them before starting a long
+task rather than finding out at the end, and `"scope"` before one that
+ends in a send.
 
 ## 8. Setting up an expert host
 
@@ -223,9 +237,11 @@ The steps, in order:
 
 1. **The checkout and the machine.** A clone of the project, `git` and the
    project's toolchain, and the handler program installed. A home whose
-   key is usable unattended: unencrypted on a machine that is nobody's
-   desktop, or unlocked by the user with `auu unlock` and `auu agent
-   start` after each boot. That unlock is the user's, never yours.
+   key is usable unattended, and to send: unencrypted on a machine that
+   is nobody's desktop, or unlocked by the user with `auu unlock --send
+   --ttl 0` and `auu agent start` after each boot — a plain `auu unlock`
+   reads and does not send, and serve refuses to start under it. That
+   unlock is the user's, never yours.
 1a. **The API key, in a file serve holds.** For Claude Code the service
    way is a key file — the guide's `/etc/auu-expert/key`, root-owned,
    readable by the expert's group, written empty and locked down before
@@ -307,7 +323,7 @@ not admitted the user, a mailbox that is full, a certificate that is
 missing or expired. A transport failure may pass on its own; one retry
 after a pause is enough before telling the user.
 
-**Exit 4, the keys are locked.** Section 7.
+**Exit 4, the keys are locked, or unlocked only to receive.** Section 7.
 
 **Exit 5, a file in the home is damaged or has been altered.** The sentence
 names the file, says what is wrong with it and what to do. Stop there. Do
@@ -323,7 +339,8 @@ is missing; do not retry the same words.
 
 - Add a peer the user has not confirmed, from any source.
 - Answer `Continue? [y/N]`, or pass `--yes`, unless the user said to.
-- Handle a passphrase, or run `unlock`, `lock`, `passphrase` or `agent`.
+- Handle a passphrase, or run `unlock`, `lock`, `passphrase`, `agent start`
+  or `agent stop`; `agent status` is a read.
 - Run `auu init --force`, which loses an identity.
 - Run `auu relay rm`, which forgets a relay and its certificate.
 - Run `auu-admin` or `auu-ca`: those are the relay operator's, and the

@@ -450,31 +450,66 @@ fixed time after you unlock it:
 
 *Listing 1.9b*
 ```
-auu unlock                         # asks once; the agent holds the keys for 8 hours
+auu unlock                         # asks once; the agent reads for 8 hours
 auu unlock --ttl 2h                # or for as long as you say; 0 means until 'auu lock'
-auu lock                           # drop them now
-auu agent status                   # running? locked? until when?
+auu unlock --send                  # asks again; the agent sends as well, for 10 minutes
+auu unlock --send --ttl 0          # or until 'auu lock', for a machine that answers unattended
+auu lock --send                    # stop sending now, keep reading
+auu lock                           # drop the keys now
+auu agent status                   # running? which scope? until when?
 auu agent stop
 auu passphrase change              # rewrites one file; nothing else on disk changes
 auu passphrase remove              # back to keys in the clear
 ```
 
-While the agent is unlocked, every `auu` command — yours, a script's, your
-AI's — works as it always did. When it is locked, a command that needs a key
-asks you for the passphrase if you are at a terminal, and otherwise stops with
-exit code 4 and one sentence:
+An unlock has a scope. `auu unlock` unlocks to **receive**: the agent opens
+your mail, signs the handshake with your machine's certificate, and signs
+the requests that list, fetch, watch and acknowledge — `auu inbox`, `auu
+wait`, `auu watch`, `auu rm`, `auu lookup` and the rest of what reads —
+for eight hours by default. It refuses to sign anything that originates: a
+message, a reply, a stream, a channel directory, an allow list, an
+enrolment, an administrator's request. `auu unlock --send` unlocks to
+**send**, everything the agent can do, for ten minutes by default; when
+that ends the agent is back to receive for the rest of its eight hours,
+not locked. `auu lock --send` ends the window early. The agent decides by
+what it is asked to sign under — every construction in this project puts
+its domain at the front, and a relay request its method and path — never
+by who is asking, because anything running as you can ask.
+
+The point is your AI. While the agent is unlocked, any process running as
+you can have it sign, and a message your AI reads could be written to talk
+it into sending one you never meant, signed as you. No confirmation the
+agent could ask for in-band would help, since the same process can answer
+it. The one thing an AI cannot do is type your passphrase, so that is what
+originating costs: one command from you, the way `ssh-add -c` asks for a
+touch, and your AI can read the inbox and the quarantine all day and cannot
+originate anything until you do. Sending from your own terminal is the same
+command first.
+
+While the agent is unlocked in the right scope, every `auu` command — yours,
+a script's, your AI's — works as it always did. When it is locked, a command
+that needs a key asks you for the passphrase if you are at a terminal, and
+otherwise stops with exit code 4 and one sentence; when it is unlocked to
+receive and the command originates, it stops with exit code 4 and the other
+one, terminal or not, since the unlock it needs is a decision:
 
 *Listing 1.9c*
 ```
 auu: your identity is locked: run 'auu unlock' in your own terminal
+auu: the agent is unlocked to receive; run 'auu unlock --send' at a terminal to send for the next 10 minutes
 ```
 
-That sentence is the whole of the arrangement with an AI. It never sees the
-passphrase and cannot unlock anything; the `connect` skill tells it to ask
-you to run `auu unlock` and then try again. `auu unlock` reads a passphrase
-from the terminal, from `--passphrase-file` for a secret manager, or from
-standard input when that is a pipe; no other command reads one from anywhere
-but a terminal, and none takes one as an argument or from the environment.
+Those two sentences are the whole of the arrangement with an AI. It never
+sees the passphrase and cannot unlock anything; the `connect` skill tells
+it to ask you to run the command the sentence names and then try again, and
+to check `auu agent status --json` for `scope` before its first send. `auu
+unlock` reads a passphrase from the terminal, from `--passphrase-file` for
+a secret manager, or from standard input when that is a pipe; no other
+command reads one from anywhere but a terminal, and none takes one as an
+argument or from the environment. One command is an exception on purpose:
+`auu enrol` on an encrypted home registers this machine, which is a human
+act, so at a terminal it asks for the passphrase into send scope itself
+rather than sending you off to run the unlock.
 
 Commands that need only your public half — `auu id`, `auu id export`,
 `auu peers`, `auu relay`, `auu anchor`, `auu inbox --no-fetch`, `auu read`,
@@ -492,8 +527,16 @@ so a change of passphrase rewrites one file. While the agent is unlocked, any
 process running as you can *use* the keys by asking it, exactly as with
 `ssh-agent`, and cannot *read* them: the files are ciphertext, the keys never
 cross the socket, and the agent refuses debugger attachment and writes no
-core file. Root can do anything. A keylogger at unlock, and a process that
-asks the agent to sign something you did not mean, are not defended against.
+core file. Root can do anything. A keylogger at unlock is not defended
+against. A process that asks the agent to sign something you did not mean
+is held to the scope: in receive scope it can fetch, and it can acknowledge
+— which is to say delete — mail on the relay, and nothing more; in the ten
+minutes after `auu unlock --send` it can originate as you, which is what
+the window is short for. Two things are outside this. A home that was never
+encrypted has no agent and no boundary: its keys are files, and any process
+running as you can read them. And a passphrase in a file
+(`--passphrase-file`) is a passphrase your AI can read, so a person who
+keeps one has opted out of the arrangement above, whatever the scope says.
 And one thing stays as it was: `inbox/` and `sent/` hold your mail after it
 has been opened, in the clear. Encrypting the keys protects the keys.
 
