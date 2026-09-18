@@ -42,6 +42,13 @@ func lockedErr() error {
 		err: fmt.Errorf("your identity is locked: run '%s unlock' in your own terminal", prog)}
 }
 
+// receiveOnlyErr is the other thing exit code 4 says: the agent is unlocked
+// to receive and this command originates. The sentence is the agent's own,
+// verbatim, so the skill has one string to know.
+func receiveOnlyErr() error {
+	return &exitError{code: exitLocked, err: errors.New(agent.ReceiveOnlyMessage)}
+}
+
 // isLocked tells a locked agent apart from every other failure. The
 // sentinel is the rule; the text is for the one path that loses the
 // chain — crypto/tls builds a fresh error around a signer's — and the text
@@ -53,30 +60,59 @@ func isLocked(err error) bool {
 	return errors.Is(err, identity.ErrLocked) || strings.Contains(err.Error(), agent.LockedMessage)
 }
 
+// isReceiveOnly tells an agent that would not originate apart from every
+// other failure, by the agent's own sentence. It never comes wrapped in
+// identity.ErrLocked, so the text is the whole test.
+func isReceiveOnly(err error) bool {
+	return err != nil && strings.Contains(err.Error(), agent.ReceiveOnlyMessage)
+}
+
 // ensureUnlocked makes sure the agent for an encrypted home is running and
-// unlocked, asking a person at a terminal for the passphrase if it is not,
-// and refusing anything that is not a person.
-func ensureUnlocked(s *store.Store) error {
+// unlocked in at least the scope asked for, asking a person at a terminal
+// for the passphrase if it is not, and refusing anything that is not a
+// person.
+//
+// Every command asks for receive: one that originates finds out at the
+// agent, which refuses with the receive sentence, and exit 4 says what to
+// run. Enrolment asks for send, because registering a machine is a human
+// act and the person is at the terminal already: asked once into send
+// scope for its ten minutes, rather than into receive and then refused.
+func ensureUnlocked(s *store.Store, scope agent.Scope) error {
 	c, err := agent.NewClient(s.Root())
 	if err != nil {
 		return err
 	}
 	st, err := c.Status()
-	if err == nil && !st.Locked {
+	if err == nil && !st.Locked && (scope == agent.ScopeReceive || st.Scope == agent.ScopeSend) {
 		return nil
 	}
 	if err != nil && !errors.Is(err, agent.ErrNotRunning) {
 		return err
 	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	if !stdinIsTerminal() {
+		if err == nil && !st.Locked {
+			return receiveOnlyErr()
+		}
 		return lockedErr()
 	}
-	secret, err := term.FromTerminal(fmt.Sprintf("Passphrase for %s: ", s.Root()))
+	secret, err := askPassphrase(fmt.Sprintf("Passphrase for %s: ", s.Root()))
 	if err != nil {
 		return err
 	}
-	return unlockWith(s, c, secret, agent.DefaultTTL, agent.ScopeReceive)
+	ttl := agent.DefaultTTL
+	if scope == agent.ScopeSend {
+		ttl = agent.DefaultSendTTL
+	}
+	return unlockWith(s, c, secret, ttl, scope)
 }
+
+// The terminal, as ensureUnlocked sees it. Variables so that a test, which
+// has no terminal, can stand one in and see which scope a command asks a
+// person for; nothing else reads a passphrase through these.
+var (
+	stdinIsTerminal = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+	askPassphrase   = term.FromTerminal
+)
 
 // unlockWith starts the agent if none is running, unlocks it in the scope
 // asked for, and says until when.
@@ -99,11 +135,21 @@ func unlockWith(s *store.Store, c *agent.Client, secret []byte, ttl time.Duratio
 	return nil
 }
 
+// untilLine is the one line every unlock and status prints: the scope,
+// and when each ends.
 func untilLine(st agent.Status) string {
-	if st.Until.IsZero() {
-		return "unlocked until lock or logout"
+	receive := "until lock or logout"
+	if !st.Until.IsZero() {
+		receive = "until " + st.Until.Local().Format("15:04")
 	}
-	return "unlocked until " + st.Until.Local().Format("15:04")
+	if st.Scope != agent.ScopeSend {
+		return "unlocked to receive " + receive
+	}
+	send := "until lock or logout"
+	if !st.SendUntil.IsZero() {
+		send = "until " + st.SendUntil.Local().Format("15:04")
+	}
+	return "unlocked to send " + send + " (receive " + receive + ")"
 }
 
 // encryptedHome opens the store and says whether it is encrypted, refusing
@@ -346,10 +392,12 @@ func cmdUnlock(args []string) error {
 	return unlockWith(s, c, secret, *ttl, scope)
 }
 
-// cmdLock drops the keys from the agent. The agent keeps running, so the
-// next unlock needs no restart.
+// cmdLock drops the keys from the agent, or with --send drops send scope
+// and keeps receive. The agent keeps running, so the next unlock needs no
+// restart.
 func cmdLock(args []string) error {
 	fs := newFlagSet("lock")
+	send := fs.Bool("send", false, "drop send scope only; the agent stays unlocked to receive")
 	positional, err := parseArgs(fs, args)
 	if err != nil {
 		return err
@@ -364,6 +412,25 @@ func cmdLock(args []string) error {
 	c, err := agent.NewClient(s.Root())
 	if err != nil {
 		return err
+	}
+	if *send {
+		if err := c.LockSend(); err != nil {
+			if errors.Is(err, agent.ErrNotRunning) {
+				fmt.Println("no agent is running; nothing was unlocked")
+				return nil
+			}
+			return err
+		}
+		st, err := c.Status()
+		if err != nil {
+			return err
+		}
+		if st.Locked {
+			fmt.Println("locked")
+			return nil
+		}
+		fmt.Println(untilLine(st))
+		return nil
 	}
 	if err := c.Lock(); err != nil {
 		if errors.Is(err, agent.ErrNotRunning) {
@@ -456,11 +523,17 @@ func agentStop(args []string) error {
 }
 
 type agentStatusJSON struct {
-	Running bool     `json:"running"`
-	Locked  bool     `json:"locked"`
-	Until   string   `json:"until,omitempty"`
-	Keys    []string `json:"keys"`
-	Socket  string   `json:"socket"`
+	Running bool   `json:"running"`
+	Locked  bool   `json:"locked"`
+	Until   string `json:"until,omitempty"`
+	// Scope is receive or send while unlocked, and SendExpires is when
+	// send scope ends, RFC 3339; absent when send scope lasts until lock,
+	// and when the scope is receive. The skill reads Scope before its
+	// first send.
+	Scope       string   `json:"scope,omitempty"`
+	SendExpires string   `json:"send_expires,omitempty"`
+	Keys        []string `json:"keys"`
+	Socket      string   `json:"socket"`
 }
 
 func agentStatus(args []string) error {
@@ -492,6 +565,10 @@ func agentStatus(args []string) error {
 		if !st.Until.IsZero() {
 			out.Until = st.Until.Format(time.RFC3339)
 		}
+		out.Scope = string(st.Scope)
+		if !st.SendUntil.IsZero() {
+			out.SendExpires = st.SendUntil.Format(time.RFC3339)
+		}
 		if st.Keys != nil {
 			out.Keys = st.Keys
 		}
@@ -505,19 +582,34 @@ func agentStatus(args []string) error {
 		return nil
 	}
 	fmt.Printf("agent:  running\n")
-	switch {
-	case out.Locked:
+	if out.Locked {
 		fmt.Printf("keys:   locked\n")
-	case st.Until.IsZero():
-		fmt.Printf("keys:   unlocked until lock or logout\n")
-	default:
-		fmt.Printf("keys:   unlocked until %s\n", st.Until.Local().Format("2006-01-02 15:04"))
+	} else {
+		fmt.Printf("keys:   %s\n", statusLine(st))
 	}
 	if len(out.Keys) > 0 {
 		fmt.Printf("held:   %s\n", strings.Join(out.Keys, ", "))
 	}
 	fmt.Printf("socket: %s\n", out.Socket)
 	return nil
+}
+
+// statusLine is untilLine with dates, for 'agent status', where a window
+// that ends tomorrow should say so.
+func statusLine(st agent.Status) string {
+	const layout = "2006-01-02 15:04"
+	receive := "until lock or logout"
+	if !st.Until.IsZero() {
+		receive = "until " + st.Until.Local().Format(layout)
+	}
+	if st.Scope != agent.ScopeSend {
+		return "unlocked to receive " + receive
+	}
+	send := "until lock or logout"
+	if !st.SendUntil.IsZero() {
+		send = "until " + st.SendUntil.Local().Format(layout)
+	}
+	return "unlocked to send " + send + " (receive " + receive + ")"
 }
 
 // agentRun is the agent itself, in the foreground: what start runs

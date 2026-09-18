@@ -597,30 +597,43 @@ func e19Revoke(t *testing.T) {
 
 const locked = "auu: your identity is locked: run 'auu unlock' in your own terminal"
 
+// receiveOnly is the other sentence exit 4 carries: the agent is unlocked
+// to receive and the command originates.
+const receiveOnly = "auu: the agent is unlocked to receive; run 'auu unlock --send' at a terminal to send for the next 10 minutes"
+
 func e20Passphrase(t *testing.T) {
 	expectCode(t, alice.exec("", "sh", "-c", "umask 077 && printf 'alice passphrase\\n' > "+alicePass), 0)
 	r := alice.auu("passphrase", "set", "--passphrase-file", alicePass)
 	expectSays(t, r, 0, "encrypted the keys in /home/alice/.auu")
-	expectSays(t, alice.auu("agent", "status"), 0, "agent:  running", "keys:   unlocked")
+	expectSays(t, alice.auu("agent", "status"), 0, "agent:  running", "keys:   unlocked to receive until")
+	// Unlocked to receive, which is what set leaves: reading works and
+	// sending is the other sentence.
+	expectCode(t, alice.auu("inbox"), 0)
+	r = alice.auu("send", "--to", "bob", "while unlocked to receive")
+	expectCode(t, r, 4)
+	stderrIs(t, r, receiveOnly)
 	expectSays(t, alice.auu("lock"), 0, "locked")
 	r = alice.auu("send", "--to", "bob", "while locked")
 	expectCode(t, r, 4)
 	stderrIs(t, r, locked)
-	r = alice.auu("unlock", "--ttl", "2s", "--passphrase-file", alicePass)
-	expectCode(t, r, 0)
-	expectSays(t, alice.auu("send", "--to", "bob", "while unlocked"), 0, "sent to bob")
+	r = alice.auu("unlock", "--send", "--ttl", "2s", "--passphrase-file", alicePass)
+	expectSays(t, r, 0, "unlocked to send until")
+	expectSays(t, alice.auu("send", "--to", "bob", "while unlocked to send"), 0, "sent to bob")
 	time.Sleep(3 * time.Second)
-	r = alice.auu("send", "--to", "bob", "after the ttl")
+	// Send scope ended; the agent is back to receive, not locked.
+	r = alice.auu("send", "--to", "bob", "after the send ttl")
 	expectCode(t, r, 4)
-	stderrIs(t, r, locked)
+	stderrIs(t, r, receiveOnly)
 	var st struct {
-		Running bool `json:"running"`
-		Locked  bool `json:"locked"`
+		Running bool   `json:"running"`
+		Locked  bool   `json:"locked"`
+		Scope   string `json:"scope"`
 	}
 	jsonOf(t, alice.auu("agent", "status", "--json"), &st)
-	if !st.Running || !st.Locked {
-		t.Errorf("agent status: %+v", st)
+	if !st.Running || st.Locked || st.Scope != "receive" {
+		t.Errorf("agent status: %+v, want running, unlocked to receive", st)
 	}
+	expectCode(t, alice.auu("inbox"), 0)
 	// Bob's side sees nothing of any of it: one message, from the window.
 	var in inboxJSON
 	jsonOf(t, bob.auu("inbox", "--json"), &in)
@@ -631,7 +644,7 @@ func e20Passphrase(t *testing.T) {
 	expectSays(t, alice.auu("passphrase", "remove", "--passphrase-file", alicePass), 0,
 		"decrypted the keys in /home/alice/.auu; they are on disk in the clear again")
 	expectSays(t, alice.auu("agent", "status"), 0, "agent:  not running")
-	verdict(t, "ok", "Exit code 4 and one sentence, on the wire nothing; the TTL locks on its own.")
+	verdict(t, "ok", "Exit code 4 and one of two sentences, on the wire nothing; the send window closes on its own and the agent goes on reading.")
 }
 
 func e21DayTwo(t *testing.T) {

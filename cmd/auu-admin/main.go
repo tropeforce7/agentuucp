@@ -110,6 +110,11 @@ func adviseLocked(err error) error {
 		return &exitError{code: exitLocked,
 			err: errors.New("your identity is locked: run 'auu unlock' in your own terminal")}
 	}
+	// Unlocked to receive, and every administrative route originates: the
+	// agent's sentence, verbatim, with the same code.
+	if strings.Contains(err.Error(), agent.ReceiveOnlyMessage) {
+		return &exitError{code: exitLocked, err: errors.New(agent.ReceiveOnlyMessage)}
+	}
 	// An administrator's home is an auu home: a damaged file in it is the
 	// same person's problem, with the same code.
 	if errors.Is(err, store.ErrDamaged) {

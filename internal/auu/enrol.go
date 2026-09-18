@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/agent"
 	"github.com/tropeforce7/agentuucp/internal/client"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
@@ -102,9 +103,10 @@ func cmdEnrol(args []string) error {
 
 	id, err := s.Identity()
 	if err == nil && id.Remote() {
-		// Registering signs requests and makes a machine key: the agent
-		// has to be unlocked, and a person at the terminal is asked.
-		if err := ensureUnlocked(s); err != nil {
+		// Registering signs requests and makes a machine key, which is
+		// send scope: the agent has to be unlocked to send, and a person
+		// at the terminal is asked for the passphrase into it.
+		if err := ensureUnlocked(s, agent.ScopeSend); err != nil {
 			return err
 		}
 	}

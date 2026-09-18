@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/agent"
 	"github.com/tropeforce7/agentuucp/internal/client"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
@@ -199,6 +200,11 @@ func run(args []string) error {
 		// the agent would not sign is not a certificate problem.
 		return lockedErr()
 	}
+	if isReceiveOnly(err) {
+		// The same code, the agent's other sentence: unlocked, but not to
+		// originate what this command originates.
+		return receiveOnlyErr()
+	}
 	if errors.Is(err, store.ErrDamaged) {
 		// A file in this home is damaged or has been altered. The message
 		// names it and what to do; the code says it is a person's to do,
@@ -352,7 +358,7 @@ func loadIdentity() (*store.Store, *identity.Identity, error) {
 		return nil, nil, err
 	}
 	if id.Remote() {
-		if err := ensureUnlocked(s); err != nil {
+		if err := ensureUnlocked(s, agent.ScopeReceive); err != nil {
 			return nil, nil, err
 		}
 	}

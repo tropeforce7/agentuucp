@@ -169,8 +169,12 @@ type idJSON struct {
 	Encrypted bool `json:"encrypted"`
 	Locked    bool `json:"locked"`
 	// Until is when the agent will lock, RFC 3339, when it is unlocked
-	// for a fixed time.
-	Until string `json:"until,omitempty"`
+	// for a fixed time. Scope is receive or send while unlocked, and
+	// SendExpires when send scope ends; the skill reads Scope before its
+	// first send.
+	Until       string `json:"until,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	SendExpires string `json:"send_expires,omitempty"`
 	// Relay is the default relay's URL and RelayName what this home calls
 	// it; Relays is every relay the home knows, by name. One identity is on
 	// all of them, which is what one home means.
@@ -241,6 +245,10 @@ func cmdID(args []string) error {
 				secrets = "encrypted, " + untilLine(st)
 				if !st.Until.IsZero() {
 					out.Until = st.Until.Format(time.RFC3339)
+				}
+				out.Scope = string(st.Scope)
+				if !st.SendUntil.IsZero() {
+					out.SendExpires = st.SendUntil.Format(time.RFC3339)
 				}
 			}
 		}

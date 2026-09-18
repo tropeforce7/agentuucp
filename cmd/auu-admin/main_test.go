@@ -765,8 +765,9 @@ func TestAnAdministratorsEncryptedHomeGoesThroughTheAgent(t *testing.T) {
 	if e.Error() != "your identity is locked: run 'auu unlock' in your own terminal" {
 		t.Errorf("the advice is %q", e.Error())
 	}
-	// Unlocked to send, which every administrative route needs: an
-	// in-process agent on the socket, and status works.
+	// Unlocked to receive: an in-process agent on the socket, and every
+	// administrative route originates, so status is refused with the
+	// agent's own sentence and the same code.
 	srv := agent.NewServer(s, agent.Options{})
 	l, err := agent.Listen(f.boss.home)
 	if err != nil {
@@ -775,6 +776,15 @@ func TestAnAdministratorsEncryptedHomeGoesThroughTheAgent(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(l) }()
 	t.Cleanup(func() { srv.Stop(); <-done; l.Close() })
+	if err := srv.Unlock([]byte("correct horse battery staple"), 0, agent.ScopeReceive); err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.boss.tryRun("status")
+	advised = adviseLocked(err)
+	if !errors.As(advised, &e) || e.code != exitLocked || e.Error() != agent.ReceiveOnlyMessage {
+		t.Fatalf("status in receive scope gave %v, want exit %d and %q", advised, exitLocked, agent.ReceiveOnlyMessage)
+	}
+	// Unlocked to send, and status works.
 	if err := srv.Unlock([]byte("correct horse battery staple"), 0, agent.ScopeSend); err != nil {
 		t.Fatal(err)
 	}

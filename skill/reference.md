@@ -227,7 +227,7 @@ from and the database schema it speaks, as `auu-relay v0.3.0 (schema 6)`.
 | 1 | bad usage, unknown peer, or missing identity | fix the command, or tell the user what is missing; do not retry the same words |
 | 2 | could not reach the relay, or it refused | read the sentence: a refusal names what to change, a transport failure may pass, and one retry after a pause is enough |
 | 3 | `auu wait` or `auu watch` timed out | nothing arrived; say so and ask whether to wait again |
-| 4 | the user's keys are locked | tell them to run `auu unlock` in their own terminal, then retry; never handle a passphrase |
+| 4 | the user's keys are locked, or unlocked only to receive | read the sentence: "locked" means tell them to run `auu unlock` in their own terminal; "unlocked to receive" means tell them to run `auu unlock --send` at their terminal, which lasts ten minutes; then retry; never handle a passphrase |
 | 5 | a file in the user's home is damaged or has been altered | stop; tell the person which file the sentence names; do not retry, rephrase, or touch the file |
 
 `auu-admin` uses the same codes, without 3: nothing in it waits.

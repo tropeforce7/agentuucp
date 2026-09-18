@@ -479,9 +479,10 @@ but a terminal, and none takes one as an argument or from the environment.
 Commands that need only your public half — `auu id`, `auu id export`,
 `auu peers`, `auu relay`, `auu anchor`, `auu inbox --no-fetch`, `auu read`,
 `auu extract`, `auu quarantine ls` — never touch the agent and work with the
-keys locked. `auu id` says `secrets: encrypted, unlocked until 17:04`,
+keys locked. `auu id` says `secrets: encrypted, unlocked to receive until
+17:04`, `encrypted, unlocked to send until 17:14 (receive until 01:04)`,
 `encrypted, locked`, or `not encrypted`, and `auu id --json` carries
-`encrypted` and `locked` for a script to check before it starts.
+`encrypted`, `locked` and `scope` for a script to check before it starts.
 
 What this protects, said plainly. At rest, every private key is ciphertext
 under a passphrase that is stored nowhere: `home.key` is a random key
@@ -516,7 +517,7 @@ Windows; nobody has used it there by hand.
 | 1 | bad usage, unknown peer, or missing identity |
 | 2 | could not reach the relay, or it refused |
 | 3 | `auu wait` or `auu watch` timed out |
-| 4 | your keys are encrypted and locked: run `auu unlock` in your own terminal |
+| 4 | your keys are encrypted and locked: run `auu unlock` in your own terminal; or unlocked to receive and this command originates: run `auu unlock --send` at a terminal, which lasts ten minutes |
 | 5 | a file in this machine's auu home is damaged, has been altered, or has an unsafe mode; a person needs to look, and the message names the file |
 
 ## 2. Local state

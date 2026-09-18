@@ -21,7 +21,7 @@ var expiryRows = []matrixRow{
 	{"X06", "anchor_expired", "a bundle from an authority created eleven years ago", x06},
 	{"X07", "client_cert_expired_on_relay", "the relay's record of alice's certificate expires", x07},
 	{"X09", "rotation_rolled_back", "the earlier bundle delivered again after a rotation", x09},
-	{"X10", "unlock_ttl", "an unlock for two seconds", x10},
+	{"X10", "unlock_ttl", "an unlock for two seconds, to receive and then to send", x10},
 	{"X08", "short_cert_lifetime", "client certificates issued for one hour, the relay's minimum", x08},
 	{"X11", "client_cert_expires_for_real", "a one-hour certificate, an hour later (AUU_E2E_SLOW=1)", x11},
 }
@@ -213,13 +213,26 @@ func x09(t *testing.T) {
 func x10(t *testing.T) {
 	defer encryptAlice(t)()
 	expectSays(t, alice.auu("lock"), 0, "locked")
+	// The receive TTL locks: a two-second unlock reads inside it and is
+	// locked after it.
 	r := alice.auu("unlock", "--ttl", "2s", "--passphrase-file", alicePass)
-	expectSays(t, r, 0, "unlocked until")
-	expectSays(t, alice.auu("send", "--to", "bob", "inside the ttl"), 0, "sent to bob")
+	expectSays(t, r, 0, "unlocked to receive until")
+	expectCode(t, alice.auu("inbox"), 0)
 	time.Sleep(3 * time.Second)
-	r = alice.auu("send", "--to", "bob", "after the ttl")
+	r = alice.auu("inbox")
 	expectCode(t, r, 4)
 	stderrIs(t, r, locked)
+	// The send TTL narrows: a two-second send window sends inside it and
+	// is refused with the other sentence after it, with the agent still
+	// unlocked to receive for its own eight hours.
+	r = alice.auu("unlock", "--send", "--ttl", "2s", "--passphrase-file", alicePass)
+	expectSays(t, r, 0, "unlocked to send until", "(receive until")
+	expectSays(t, alice.auu("send", "--to", "bob", "inside the send ttl"), 0, "sent to bob")
+	time.Sleep(3 * time.Second)
+	r = alice.auu("send", "--to", "bob", "after the send ttl")
+	expectCode(t, r, 4)
+	stderrIs(t, r, receiveOnly)
+	expectCode(t, alice.auu("inbox"), 0)
 	drain(bob)
 	verdict(t, "ok", "")
 }

@@ -174,7 +174,7 @@ func TestPassphraseSetEncryptsTheHomeAndUnlocksTheAgent(t *testing.T) {
 		t.Errorf("agent status says %+v", st)
 	}
 	text := alice.run("id")
-	if !strings.Contains(text, "secrets:     encrypted, unlocked until ") {
+	if !strings.Contains(text, "secrets:     encrypted, unlocked to receive until ") {
 		t.Errorf("id does not report the secrets:\n%s", text)
 	}
 	// The very next command that reads works, through the agent; sending
@@ -325,8 +325,8 @@ func TestUnlockThenSendInAnotherProcess(t *testing.T) {
 	alice.run("lock")
 	if _, stderr, code := alice.inAnotherProcess("unlock", "--send", "--passphrase-file", passphraseFile(t, agentPassphrase)); code != 0 {
 		t.Fatalf("unlock --send in another process exited %d:\n%s", code, stderr)
-	} else if !strings.Contains(stderr, "unlocked until ") {
-		t.Errorf("unlock did not say until when:\n%s", stderr)
+	} else if !strings.Contains(stderr, "unlocked to send until ") {
+		t.Errorf("unlock --send did not say the scope and until when:\n%s", stderr)
 	}
 	stdout, stderr, code := alice.inAnotherProcess("send", "--to", "self", "--subject", "from the AI", "--json", "hello")
 	if code != 0 {
