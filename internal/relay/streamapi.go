@@ -402,6 +402,14 @@ func (s *Server) handleBlob(w http.ResponseWriter, r *http.Request, body []byte,
 // one is decided from the row rather than the path.
 func (s *Server) authedNoMailbox(fn func(w http.ResponseWriter, r *http.Request, body []byte, callerFP string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Before the body is read, as authedWithCert and uploadAuthed do: a
+		// caller without a certificate this relay honours is refused
+		// without the relay accepting what they wanted to send. verifyCaller
+		// checks the certificate again below; the answer is the same, and
+		// this one comes first.
+		if _, ok := s.clientCert(w, r); !ok {
+			return
+		}
 		body, ok := s.readBody(w, r)
 		if !ok {
 			return

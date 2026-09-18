@@ -336,6 +336,35 @@ func TestRoutesThatNeedNoCertificate(t *testing.T) {
 	}
 }
 
+// TestTheCertificateIsCheckedBeforeTheBodyIsRead: on every authenticated
+// route, including the one addressed by upload id, a caller without a
+// certificate is refused before the relay accepts what they wanted to
+// send. Proved with a body over readBody's bound: read, it would be 413;
+// refused first, it is 401 and the body is never read.
+func TestTheCertificateIsCheckedBeforeTheBodyIsRead(t *testing.T) {
+	h := newCertHarness(t, func(c *Config) { c.MaxBytes = 4096 })
+	alice := ids(t, "alice")[0]
+	h.enrolMachine(alice, h.registerToken(token.UseRegister, ""))
+	fp := alice.Fingerprint()
+	over := bytes.Repeat([]byte("x"), 4096+relayapi.FramingAllowance+1)
+
+	for _, tc := range []struct{ name, method, path string }{
+		{"completion, by upload id", "POST", "/v1/uploads/" + strings.Repeat("ab", 16) + "/complete"},
+		{"post, by mailbox", "POST", "/v1/mailbox/" + fp},
+		{"allow list, by mailbox", "PUT", "/v1/mailbox/" + fp + "/allow"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, body, _ := h.send(alice, tc.method, tc.path, over, nil)
+			if status != http.StatusUnauthorized {
+				t.Fatalf("an over-bound body from a caller with no certificate: %d, want 401 before the body is read: %s", status, body)
+			}
+			if got := errorText(t, body); got != msgCertRequired {
+				t.Errorf("error %q, want %q", got, msgCertRequired)
+			}
+		})
+	}
+}
+
 func TestACertificateForAnotherIdentityIsRefused(t *testing.T) {
 	// Two credentials that do not agree are worth less than one. Mallory
 	// holds a certificate the relay issued to her, and signs as alice.
