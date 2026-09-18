@@ -118,6 +118,126 @@ not fit. Absolute value is a red flag on sight — there is no correct `abs` ove
 the whole range of a two's-complement integer, so write the comparison that
 does not need one.
 
+### The ways an integer goes wrong, and the value that shows each
+
+The rule above says what to inject. This says where to look, because an
+overflow is not one bug but a family, and each member has its own tell in
+the code and its own value in the test. Go traps none of them: an
+arithmetic overflow is a wrong number with no signal, and only a slice
+index, a `make` length, a division by zero or a nil map write panics.
+Every example here is from this tree, and the fix for each is in it.
+
+**A sum of two claimed values.** `queued + size > quota` is the natural
+way to write a quota and the wrong one: two non-negative operands the
+peer chose can sum past `MaxInt64` into a negative, and a negative is
+under any quota. That was `OpenUpload` before v0.9.0, and once the row was
+in, `SUM(size)` over the table overflowed inside SQLite, which does signal
+("integer overflow"), and every later open was a storage error. The
+shape that cannot wrap is `size > quota - queued - reserved`: each
+subtrahend is non-negative and together under the quota, so the
+difference is in range. Test value: the size that makes the old sum land
+exactly on `MinInt64`, and one under it; assert the refusal, then that a
+second, small request is refused or taken and never a storage error.
+
+**A difference of two values that may be either way round.** `now - ts`,
+`size - offset`, `to - from + 1`: each is correct while the operands are
+in the order the writer pictured. A peer picks the other order. The
+freshness check took an absolute value and met `-MinInt64 == MinInt64`
+(the first rule above). `to - from + 1` is a `make` length in
+`readBlobRange`; both operands are this side's own there, but the same
+expression with a wire operand is a panic when `to < from - 1`. Test
+value: the operands reversed, and the pair that makes the difference
+`MinInt64`; where the difference sizes a `make`, assert the refusal came
+before it (measure `TotalAlloc`, as under Length and allocation).
+
+**A multiplication by a unit.** Seconds to nanoseconds is a thousand
+million, so anything over about 292 years of seconds wraps a
+`time.Duration`. Three places in this tree had `time.Duration(n) *
+time.Second` with no bound on `n`: a token's lifetime (negative, so under
+the cap), `Retry-After` (fixed alongside it), and the agent's unlock TTL
+(found in the sweep after the second trace). The TTL case has the tell
+worth remembering: a multiple of 2^55 seconds wraps to exactly zero,
+which unlock read as "until lock". A negative check after the multiply
+misses it, because the wrap is not negative. Bound the operand before
+the multiply, at a number a person would recognise (a year, a hundred
+years), and test the bound, one over, `MaxInt64`, and the multiplier that
+lands on zero: `2^64 / 10^9` has no integer solution, but `2^55 * 10^9`
+is `2^64 * 5^9`, so 2^55 is that value for nanoseconds.
+
+**A count times a size.** `chunks * chunkSize`, `uses * something`, a
+loop that allocates per item. Both operands from the wire multiply to
+anything. `ChunkCount` derives the count from the size and refuses a
+manifest whose stated count differs, so there is one operand, not two;
+the attachment total is checked against what is left of
+`MaxPayloadBytes` before each add. Test value: the pair whose product
+is one over the cap, and the pair whose product wraps to a small
+positive.
+
+**A narrowing conversion.** `int64` to `int` is a no-op on every platform
+this project ships for, but `uint32(n)` and `uint8(n)` drop bits without
+a word: 256 threads is 0 threads, and Argon2 panics on 0. `costFor`
+bounds each parameter to what the narrower type holds before the cast,
+and the test is the first value that does not fit: 256 for a `uint8`,
+2^32 for a `uint32`. A float in a JSON number field declared `int64` is
+refused by `encoding/json`; a float field converted with `int(f)` is not,
+and is implementation-defined out of range. Do not declare a wire number
+as float.
+
+**An unsigned subtraction.** `n - 1` where `n` is a `uint32` length
+prefix and zero is legal wraps to four billion. The agent's frame reader
+checks `n == 0` and `n > MaxFrame` before anything, and its length is
+never decremented. Test value: zero, and `MaxUint32`.
+
+**A running counter that goes below zero.** `queued_bytes` and
+`queued_messages` are decremented on delete and on abort. A double
+delete, or an abort of a row the purge already took, would carry one
+under zero, and a negative queued total is room. Every decrement is
+inside the transaction that removes the row, so a row is charged off
+once; the Storage section's "corrupt the counters and reopen" test is
+the check that a wrong total is noticed rather than trusted. Test value:
+the same delete twice, asserting the counter moved once.
+
+**A loop bound from the wire.** `for i := 0; i <= n; i++` with `n ==
+MaxInt` never ends: `i++` wraps past it. `for i := n; i >= 0; i--` with an
+unsigned `i` never ends either. Bound `n` first (the count rule under
+Length and allocation), and write `<`, not `<=`, against a cap the code
+chose.
+
+**A slice index or a `make` from a number.** These panic rather than
+wrap, which is better and still a crash: `s[:16]` on fifteen bytes,
+`make([]byte, n)` with `n` negative or over memory. The relay's answers
+were sliced for display with no check until commit 7 of the second
+trace's fixes. The rule under What the network names covers the slice;
+for `make`, the length is compared against a cap the operator chose
+before the call, and the test measures that the refusal allocated
+nothing.
+
+**A shift by a wire value.** `1 << n` is 0 for `n >= 64` in Go and a panic
+for `n < 0`. There is none in this tree from the wire; if one is added,
+test `63`, `64` and `-1`.
+
+**A database integer.** SQLite's INTEGER is a signed 64-bit, and `SUM()`
+over a column can exceed it while every row fits: that is the second half
+of the quota story above. Any aggregate the code reads back is bounded by
+what the code lets into the rows, and the test is the row that makes the
+aggregate overflow: assert the refusal came at the insert.
+
+**Time.** `time.Time` compares safely with `Before`, `After` and `Equal`
+over its whole range; `Sub` saturates at the `Duration` limits rather than
+wrapping; `Unix(sec, 0)` takes any `int64`. The hazards are the
+conversions: a span to a `Duration` (the multiply above), a `Duration` to
+an `int` of seconds, and a stamp from a peer used as an order (the second
+trace's commit 9: a message stamped in the year 9999 was the latest on
+its thread). Compare times as times, bound a span in the unit it arrived
+in, and never order by a clock the peer set.
+
+For any expression with a wire operand, the recipe is the same: write
+down which operands the peer chose; for each operator, the value that
+lands the result on `MinInt64`, `MaxInt64`, zero or minus one; and a test
+that feeds it and asserts the refusal fired before the expression, by the
+error, by the order of the checks, or by the bytes allocated. The wrong
+answer is silent, so the test must know where the right answer stops.
+
 **Messages for cryptographic tests are random, and a failing test publishes
 its seed.** A test that seals and opens, signs and verifies, issues and
 verifies, or encodes and decodes must run over messages random in content and
@@ -332,6 +452,135 @@ a header signed by one key and rewrites the fingerprint field to name the
 victim, so it is a well-formed header claiming someone else. The test then
 asserts the victim's own request still succeeds after the attacker has
 exhausted the address bucket.
+
+## What the network names
+
+The second adversarial trace (reviews/trace/report-v0.9.0.md, at v0.9.0)
+found nothing wrong with any cryptographic or authentication check and
+nine faults in what happened after one passed: a thread id joined onto a
+path, a turn count keyed on a string the sender chose, a name that two
+filesystems spell as one file, a relay's sentence printed as it came.
+Every rule here is a test that would have caught one of them.
+
+**Nothing the network names is a path until its rule has run, and one
+test walks them all.** A fingerprint in a URL, an upload id, a token id,
+an attachment name, a channel name, a relay host, a message id and a
+thread id each become part of a path somewhere, and each has a rule at a
+named point (security.md lists them in one paragraph, in the test's
+order). The test that keeps
+this true is a single table: every component, fed `..`, `../x`, `a/b`,
+`.`, the empty string and a NUL, asserting the refusal at the point the
+table names. When a new place turns something from the network into a
+path, its row goes into that table first, before the code. A rule that
+is not in the table is a rule somebody will forget.
+
+**A name has one rule, and both ends run it, on every path.** A thread
+id is a message id; an attachment name is a base name; a channel name has
+no slash. Each is one predicate in one package, called at send and at
+open, and called on the stream path as well as the envelope path. The
+stream manifest once copied its body into the message unchecked, so a
+rule that held for a small message was a door for a large one. The test
+for a new rule sends the bad value both ways and by both paths, and the
+value the sender's own command refuses is crafted past it with the wire
+constants as literals, the way `damaged_test` forges an envelope.
+
+**A string from the network is never sliced before its rule has run.**
+`s[:16]` on a fifteen-byte string is a panic, and a fingerprint, a serial
+or a token id that a relay lists back is a string the relay chose. The
+rule for each id-shaped field in a relay answer runs in the client
+package, in one place per answer type, and a field that fails makes the
+whole answer a malformed-answer error naming the field and the relay; the
+command that prints short ids slices what the client already checked.
+The test is a relay that answers one two-byte field for each answer type,
+asserting the sentence and the exit code; a panic fails the test by
+itself. The same rule holds for a value from a peer: the thread id was
+sliced to twelve characters in `auu reply` before it had any rule at all.
+
+**What a filesystem folds is refused, and the test skips only where it
+cannot fold.** Two attachment names equal under case folding are refused
+at Validate with `ErrForm`, so a Linux sender is told before anything
+leaves; and an `fs.ErrExist` out of an `O_EXCL` open at delivery is
+wrapped as `ErrForm` too, so whatever a filesystem folds that Validate
+could not foresee (Unicode normalisation on APFS) is kept under damaged
+and acknowledged rather than met again at every fetch. The Validate test
+runs everywhere; the delivery test builds a manifest past Validate and
+skips itself when `probe` says the filesystem keeps the two names apart,
+so that a pass on Linux is a skip and not a false proof.
+
+**A count against a quota is one arithmetic in one helper, and the test
+drives every caller through it.** `Put` and `OpenUpload` each compared
+against the same quota with their own sums, and only one of them counted
+the other's reservations. The helper answers the question once, by
+subtraction (`size > quota - queued - reserved`, never a sum that can
+wrap), and the test for a quota opens a reservation through one caller
+and asserts the refusal through the other, in both directions.
+
+**A limit keyed on a string the sender chose is not a limit.** `max_turns`
+counted answers by the thread id in the follow-up, so a follow-up under a
+fresh id was on turn one. A limit is keyed on something the ledger already
+holds: the thread of the message being answered, found by the reply's
+`in_reply_to`. The test for any per-thread limit sends the follow-up with
+a renamed thread and asserts it is not answered and the count does not
+move.
+
+**Housekeeping never waits on a sender.** A purge that runs inside an
+unrelated caller's request took the lock an append holds across its body
+read, so one dribbling upload stalled every hundredth request. Housekeeping
+uses `TryLock`, skips what is held and returns to it next time. The test
+holds an upload's lock from a goroutine that is still "reading" and asserts
+the purge returns within a bound while the lock is held, then that the
+skipped upload is gone after the lock is released and the purge runs again.
+
+**A number from the network is bounded before it is multiplied or
+allocated from, and the test is the value one over the bound.** The sweep
+after the second trace found every parse in the tree already doing this,
+and the shapes are worth copying: the freshness window compares against
+both edges and never subtracts (relayapi.go, `FreshAt`); `Retry-After`
+is clamped to a named maximum before it is multiplied by `time.Second`
+(client.go, `retryAfter`); a list `limit` is capped and `after` refused
+below zero before either reaches SQL; a stream header's chunk length is
+held to `[MinChunk0, MaxChunk0]` before the buffer is made; a manifest's
+attachment sizes are checked against what is left of `MaxPayloadBytes`
+before they are added; an agent frame's length is checked against
+`MaxFrame` before `make`; the key file's Argon2 costs are bounded so the
+`uint32` and `uint8` casts cannot narrow. The two that multiplied first
+(the agent's unlock TTL, auu-admin's printed seconds) are in the same
+plan as this rule. For any new number from the wire, the socket or a
+file, the test drives the bound, one over it and the type's MaxInt64,
+and asserts the refusal or the clamp, never the wrapped value.
+
+**A message's own words are held to a rule at Validate and escaped again
+where they are shown.** A subject is one line and an attachment name is
+one name: no control, format, private-use or separator rune, refused at
+both ends on both paths. Text keeps newline and tab and nothing else from
+those classes. And because a record from before a rule, or written by
+hand, is still in the spool, every print of a subject, text, name or
+sender goes through an escaper all the same; `--json` is encoding/json's.
+The test for a rule is a table at `Body.Validate` and `Manifest.Validate`
+with ESC, `\r`, a bidi override, a private-use rune, U+2028, a newline, a
+tab and invalid UTF-8, saying for each field whether it is refused or
+kept; the test for the escaper saves a record by hand with an ESC in
+every field and asserts no 0x1b reaches stdout from `inbox`, `quarantine`
+or `read`. A quarantine listing prints what a stranger wrote, so it is
+never left out of that test.
+
+**Nothing is ordered by a clock the sender set.** A thread's latest
+message, its opener and the completion list were ordered by the sender's
+timestamp first, so a peer stamping year 9999 was "latest" for as long as
+the message was kept. Order by arrival here, then the relay's id; use the
+sender's time to break a tie and to display. A timestamp ahead of the
+receiver's clock by more than the freshness skew is malformed at open. The
+test sends the earlier-arriving message with the later stamp and asserts
+the later-arriving one is picked, and seals an inner a day ahead and
+asserts malformed.
+
+**A trace's test is kept under a name that says what it proves, and its
+assertion is never weakened to make it pass.** The tests under
+`reviews/trace/` fail on the code they were written against; when the fix
+lands, each becomes the regression for its commit, renamed for what it now
+proves (the refusal, the sentence, the absence of the file), with the
+assertion changed only from "this happens" to "this is refused". A test
+made to pass by asserting less proves the fix was not made.
 
 ## Storage and migrations
 

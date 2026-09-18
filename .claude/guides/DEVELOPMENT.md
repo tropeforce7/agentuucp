@@ -270,6 +270,36 @@ near the filesystem or the database.** Message ids are 32 lowercase hex;
 fingerprints are 64 lowercase hex. A signature proves who wrote a value, not
 that the value is safe.
 
+**What a peer names is never a path.** The second adversarial trace sent
+`--thread "../../outside"` from an admitted peer, and `auu serve` joined it
+onto its serve directory, wrote the message's text there, asked git for a
+worktree there, and ended every round for good on the error: a thread id
+was the one thing a message named that had no rule. Now a thread id and
+an `in_reply_to` are message ids, one predicate in `message` that the
+envelope, the manifest, the store, `send` and `serve` all run; and the
+eight things the network names that become a path — a fingerprint, an
+upload id, a token id, an attachment name, a channel name, a relay host,
+a message id, a thread id — each have one rule at one named point, walked
+by one table test that a new such place gets its row in first. A rule
+must run on both paths: the manifest's body was never opened as an
+envelope's is, and a rule that held for a small message was a door for a
+large one until `Manifest.Validate` ran the same predicate.
+
+**A fault a message chose is that message's failure, never the run's.**
+`serve` treated every error out of `handle` as the host's — a disk, a
+lock, a key — and ended the run, so one message with a bad thread id
+stopped the expert at every start until a person removed it by hand. The
+message's own fault, its thread id, is refused before the id is joined
+onto anything and recorded in the ledger as its failure, and the round
+goes on to the next; what is the host's — git failing, the channel's
+directory gone, the disk — still ends the run, since a host fault
+counted against each message would burn their retries and give up on
+messages that were fine. And a limit keyed on a string the sender chose
+is not a limit: `max_turns` counted answers by the thread id in the
+follow-up, so a peer renaming the thread on each reply was on turn one
+every time; a reply is answered on the thread the ledger sent its reply
+on, and a reply that names another is nobody's here.
+
 ## Configuration
 
 **Defaults, then the file, then the flags actually typed.** A flag left off
@@ -346,6 +376,28 @@ transaction is the wrong tool for it: one open for the length of a
 network read would hold the one connection every other request needs.
 Serialise with a lock what a transaction cannot span, and test it with
 two callers, one parked inside the copy.
+
+**A count against a quota is one arithmetic in one helper.** `Put` and
+`OpenUpload` each compared against the same quotas with sums of their
+own, and only one of them counted the other's reservations: a sender who
+opened a stream for everything free could post envelopes into the
+reservation and complete the stream on top, ending a mailbox and the
+relay over their quotas by up to one stream. `roomFor` answers once, by
+subtraction (`size > quota - queued - reserved`, never a sum that can
+wrap), with the open uploads' reservations counted for an envelope as
+for a stream, and both callers ask it. Two callers with two arithmetics
+are a quota with a gap between them.
+
+**Housekeeping never waits on a sender.** The upload purge runs inside an
+unrelated caller's request, every hundredth, and it took each expired
+upload's lock as an abort does — the lock an append holds across the
+body copy by design — so one sender dribbling an append to an expired
+upload parked every hundredth request on the relay for as long as the
+read timeout let the dribble go on, slot held and answer unsent. The
+purge uses `TryLock`, skips what is held, says how many it skipped, and
+meets them next time; and the routes themselves refuse an expired upload
+with 410 and abort it, so nothing waits on the purge to end a reservation
+that a sender keeps touching.
 
 **Counters, not aggregates, and adjust them in the same transaction as the
 row.** Per-mailbox and relay-wide queued totals are columns updated inside
@@ -658,6 +710,50 @@ rather than being refused.
 
 **Health is exempt from every limit.** Monitoring that flaps during an attack
 tells the operator nothing.
+
+**Every byte from the network is escaped before a terminal sees it, and the
+relay's sentences are from the network.** `identity.Printable`'s comment
+promised that every place a name from the network reaches a terminal goes
+through it, and three did not: `auu-admin`'s confirmation before it
+removes a mailbox printed the relay's name raw at the one moment an
+administrator is reading carefully; a certificate label dropped control
+characters alone, so a bidi override reversed the rest of a listing's
+line; and the sentence a relay attaches to every refusal, which every
+user of every relay reads on standard error, was printed as it came. The
+escaper runs where the value is made, not where it is printed —
+`HTTPError` escapes the sentence in its one constructor, so no caller can
+forget — and a name, a label and a sentence each have a form:
+`Printable` for a name with a rule, `PrintableText` for a sentence (space
+and tab kept, quotes and backslashes too), `PrintableLines` for prose.
+
+**A string from the network is never sliced before its rule has run.**
+`m.FP[:16]`, `cert.Serial[:16]`, `t.ID[:12]` and `t.Subject[:8]` in
+`auu-admin` and `auu` sliced fingerprints, serials and token ids straight
+out of a relay's JSON, and a Go slice past the end of a string is a
+panic: a relay that answered a two-byte fingerprint crashed the tool. The
+client checks every id-shaped field of every answer type in one place
+per type as it comes off the wire, refuses an answer that fails whole as
+malformed, naming the field and the relay, and the command slices what
+it was given. The same holds for a number: bounded before it is
+multiplied or allocated from, the way `retryAfter` clamps `Retry-After`
+before `time.Second` — the agent's unlock TTL was not, and a multiple of
+2^55 seconds wrapped to exactly zero, which unlock read as until lock.
+
+**What a peer writes is held to a rule at Validate and escaped again where
+it is shown, and nothing is ordered by a clock the sender set.** A
+subject and a text reached the terminal as they came, and `Validate`
+held the subject to a length only: a subject is one line, an attachment
+name is one name, and neither carries a control, format, private-use or
+separator character; text keeps a line break and a tab and nothing else
+from those classes; and every print of them escapes all the same,
+because a record from before the rule, or written by hand, is still in
+the spool. The stamp inside a message is the sender's word: `FindThread`
+ordered by it first, so a peer stamping year 9999 was the latest on a
+thread for as long as the message was kept and drew every reply by
+thread. Order by arrival here, then the relay's counter, and use the
+stamp to break a tie and to display, labelled as the sender's; the one
+bound on it is the future, the same skew a request is held to, so a
+message may be old but not from a clock no relay would have accepted.
 
 **Retry-After is an integer number of seconds, never a date, never zero.**
 Rounded up; a zero would invite the client straight back into a refusal.
