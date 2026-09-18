@@ -368,8 +368,8 @@ a limit worth knowing about:
   machine, not per person: it is what lets you revoke a stolen laptop without
   touching its owner's identity. It costs each user an extra token when they
   add a second machine, and switching it on later costs each existing user one
-  ordinary token. See *Client certificates* below, and the README section of
-  that name for what it does and does not protect.
+  ordinary token. See *Client certificates* below, and the section of that
+  name in `relay.md` for what it does and does not protect.
 - **`limits.max_waiting`**, 64 unless you set it, caps how many listings
   the relay holds open at once for `auu watch` and `auu wait`, which ask it
   to answer only when mail arrives rather than at once. A held listing
@@ -709,7 +709,7 @@ protects against is root on the running relay, or the relay process's own
 memory; those were never in scope, and the disposable intermediates are the
 answer to them — rotate, as above.
 
-**Limits** are the defaults in the README's *Limits* table unless the settings
+**Limits** are the defaults in the *Limits* table of `relay.md` unless the settings
 say otherwise, and at those defaults a two gigabyte file is refused. If your
 users send large things, raise `limits.post_bytes_per_hour` and
 `limits.mailbox_max_bytes`; both are per person, so they are a decision about

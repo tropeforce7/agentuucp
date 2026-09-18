@@ -177,7 +177,7 @@ while it goes on. Tell the user to treat the host as compromised and look
 at who could write `/var/lib/auu/relay.db`; asking the owner to push
 again clears the state but not the question.
 
-**Limits** are the README's defaults unless the settings say otherwise.
+**Limits** are the defaults in `docs/relay.md` unless the settings say otherwise.
 Two worth knowing: mail now stays on the relay after its owner has read it
 until they remove it, so `limits.mailbox_max_messages` and
 `limits.mailbox_max_bytes` bound what a mailbox holds rather than what is

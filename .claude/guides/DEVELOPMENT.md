@@ -620,10 +620,10 @@ Do not commit anything from it, and do not write anything there except
 ## Documentation
 
 **When you change a flag, a command, a default or a response code, the README
-changes in the same commit.** A mechanical check caught five stale places
+or the document under `docs/` that describes it changes in the same commit.** A mechanical check caught five stale places
 after the admin work: the build section named two binaries, the plan's layout
 listing omitted three packages, an example log line had its fields in the
-wrong order. Compare the README's tables against the code, not against your
+wrong order. Compare the documents' tables against the code, not against your
 memory of the code.
 
 **Do not overclaim in the security model.** The README said the relay "cannot

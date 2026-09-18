@@ -205,9 +205,9 @@ person, not a substitute for it.
 
 `allow push` tells the relay that only the people on your list may queue mail
 for you. Without it anyone registered on the relay can, and their messages
-land in quarantine rather than your inbox. From here the README's *Quick
-start for two people* is the rest: `auu send`, `auu inbox`, `auu read`,
-`auu reply`.
+land in quarantine rather than your inbox. From here the README's quick
+start is the rest: `auu send`, `auu inbox`, `auu read`, `auu reply`; and
+`client.md` is the client in full.
 
 ## 7. Day to day
 
@@ -396,5 +396,5 @@ holds them unlocked for eight hours, so nothing else changes about how you use
 `auu`. When it locks, a command that needs the keys asks you for the
 passphrase again; an AI running `auu` for you cannot unlock them and will ask
 you to run `auu unlock` in your own terminal instead. `auu id` says whether
-the keys are encrypted and whether they are unlocked right now. The README's
-*Encrypting your keys* section says what this protects and what it does not.
+the keys are encrypted and whether they are unlocked right now. *Encrypting
+your keys* in `client.md` says what this protects and what it does not.

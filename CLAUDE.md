@@ -14,8 +14,8 @@ plans left open, and a reviewer's checklist in a directory called
 never has it, and that is the expected state, not a problem.** If you are
 working from a clone, do not report its absence, do not ask for it, and do
 not create it or write a plan of your own to stand in for it. Everything a
-contributor needs is in the tree: the guides above, the README's security
-model, and the documents under `docs/`.
+contributor needs is in the tree: the guides above, the README, and the
+documents under `docs/`, `security.md` among them.
 
 ## For the maintainers, when `reviews/` is present
 

@@ -541,10 +541,10 @@ func TestAgentStartStopAndStatus(t *testing.T) {
 	}
 }
 
-// TestTheSkillsExitCodeIsDocumented: the README's table and SKILL.md both
-// name 4.
+// TestTheSkillsExitCodeIsDocumented: the client document's table and
+// SKILL.md both name 4.
 func TestTheSkillsExitCodeIsDocumented(t *testing.T) {
-	for _, f := range []string{"../../README.md", "../../skill/connect/SKILL.md"} {
+	for _, f := range []string{"../../docs/client.md", "../../skill/connect/SKILL.md"} {
 		data, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -718,10 +718,10 @@ func TestALockedAgentMidCommandDiscardsNothing(t *testing.T) {
 	}
 }
 
-// TestTheDamagedExitCodeIsDocumented: the README's table and SKILL.md both
-// name 5, and the skill says whose it is to deal with.
+// TestTheDamagedExitCodeIsDocumented: the client document's table and
+// SKILL.md both name 5, and the skill says whose it is to deal with.
 func TestTheDamagedExitCodeIsDocumented(t *testing.T) {
-	for _, f := range []string{"../../README.md", "../../skill/connect/SKILL.md"} {
+	for _, f := range []string{"../../docs/client.md", "../../skill/connect/SKILL.md"} {
 		data, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)

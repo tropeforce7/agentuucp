@@ -614,8 +614,9 @@ Encrypt run — say that it is outstanding and what it needs, and record it.
   limit — is refused over its cap before anything is allocated from it, and
   the test proves the order by which error came back.
 - `go.mod` and `go.sum` unchanged, or the change is the one scoped exception.
-- The README's tables agree with the code: flags, config keys, defaults,
-  commands, response codes. Check mechanically, not from memory.
+- The README's and the `docs/` documents' tables agree with the code: flags,
+  config keys, defaults, commands, response codes. Check mechanically, not
+  from memory.
 - Departures from the specification are in `reviews/IMPLEMENTATION_NOTES.md`
   with reasons.
 - Nothing under `reviews/`, `bin/` or `.claude/settings.local.json` is
