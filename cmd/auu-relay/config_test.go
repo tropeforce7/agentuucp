@@ -15,8 +15,25 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
-// resolve runs the same pipeline main does: defaults, file, typed flags.
+// resolve runs the same pipeline main does: defaults, file, typed flags —
+// with one thing added. A relay that says nothing about TLS is refused at
+// validation, since TLS is the default and there is nothing to serve it
+// from; the tests here are about every other setting, and want the plain
+// relay a person testing on one machine runs. So a call whose args and
+// file say nothing about TLS gets `--tls-mode off` put in front, exactly
+// as that person types it. A test about TLS says what it means, and
+// resolveBare is the same pipeline with nothing added.
 func resolve(t *testing.T, file string, args ...string) (Config, error) {
+	t.Helper()
+	if !mentionsTLS(t, file, args) {
+		args = append([]string{"--tls-mode", "off"}, args...)
+	}
+	return resolveBare(t, file, args...)
+}
+
+// resolveBare is resolve with nothing added: what main does, and nothing
+// else.
+func resolveBare(t *testing.T, file string, args ...string) (Config, error) {
 	t.Helper()
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -31,10 +48,33 @@ func resolve(t *testing.T, file string, args ...string) (Config, error) {
 	return cfg, err
 }
 
+// mentionsTLS says whether a test's args or file set anything under tls.
+func mentionsTLS(t *testing.T, file string, args []string) bool {
+	t.Helper()
+	for _, a := range args {
+		if strings.HasPrefix(a, "--tls-") {
+			return true
+		}
+	}
+	if file == "" {
+		return false
+	}
+	data, err := os.ReadFile(file)
+	if err != nil {
+		// A file that is not there is the test's own point; the pipeline
+		// says so, and nothing is added to what it says.
+		return true
+	}
+	return strings.Contains(string(data), `"tls"`)
+}
+
 // merged runs the pipeline but stops before validation, for cases that are
 // deliberately invalid.
 func merged(t *testing.T, file string, args ...string) (Config, string, error) {
 	t.Helper()
+	if !mentionsTLS(t, file, args) {
+		args = append([]string{"--tls-mode", "off"}, args...)
+	}
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	f := registerFlags(fs)
@@ -77,10 +117,17 @@ func TestDefaultsAlone(t *testing.T) {
 		t.Fatalf("max_bytes %d", cfg.MaxBytes)
 	}
 	if cfg.TLS.Mode != ModeOff {
-		t.Fatalf("mode %q, expected off with nothing configured", cfg.TLS.Mode)
+		t.Fatalf("mode %q, expected off when the test helper said so", cfg.TLS.Mode)
 	}
 	if cfg.Registration != relayapi.RegistrationOpen {
 		t.Fatalf("registration %q, want open by default", cfg.Registration)
+	}
+	// And with nothing said at all: TLS is the default, and there is
+	// nothing to serve it from, so the relay refuses in the one sentence a
+	// person who ran it bare will read.
+	_, err = resolveBare(t, "")
+	if err == nil || err.Error() != msgNoTLS {
+		t.Fatalf("nothing configured gave %v, want %q", err, msgNoTLS)
 	}
 }
 
@@ -269,30 +316,42 @@ func TestFlagsAlone(t *testing.T) {
 	}
 }
 
-// TestModeInference pins what an unset tls.mode becomes. An operator who
-// names a bundle or a certificate means to serve TLS; one who names neither
-// does not.
+// TestModeInference pins what an unset tls.mode becomes: files, whatever
+// else is set, because a relay serves TLS unless somebody writes down that
+// it does not. Nothing is inferred from a bundle or a certificate any more;
+// what they decide is whether files has something to serve from, which is
+// TestValidation's. Off is off only when said, on the command line or in
+// the file, and a flag over a file that says nothing is the flag.
 func TestModeInference(t *testing.T) {
 	dir := t.TempDir()
 	bundle := testBundlePath(t, dir)
 	for _, tc := range []struct {
 		name string
+		file string
 		args []string
 		want string
 	}{
-		{"nothing", nil, ModeOff},
-		{"a bundle", []string{"--tls-bundle", bundle}, ModeFiles},
-		{"a certificate", []string{"--tls-cert", "c.pem", "--tls-key", "k.pem"}, ModeFiles},
-		{"explicit off", []string{"--tls-mode", "off"}, ModeOff},
+		{"nothing", "", nil, ModeFiles},
+		{"a bundle", "", []string{"--tls-bundle", bundle}, ModeFiles},
+		{"a certificate", "", []string{"--tls-cert", "c.pem", "--tls-key", "k.pem"}, ModeFiles},
+		{"explicit off", "", []string{"--tls-mode", "off"}, ModeOff},
+		{"off in the file", `{"tls": {"mode": "off"}}`, nil, ModeOff},
+		{"off on the line over a file that says nothing", `{"listen": ":9"}`, []string{"--tls-mode", "off"}, ModeOff},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fs := flag.NewFlagSet("test", flag.ContinueOnError)
 			f := registerFlags(fs)
 			args := append([]string{"--db", filepath.Join(t.TempDir(), "relay.db")}, tc.args...)
+			if tc.file != "" {
+				args = append([]string{"--config", writeFile(t, tc.file)}, args...)
+			}
 			if err := fs.Parse(args); err != nil {
 				t.Fatal(err)
 			}
-			cfg := Defaults()
+			cfg, _, err := Load(f.config)
+			if err != nil {
+				t.Fatal(err)
+			}
 			cfg.Merge(fs, f)
 			cfg.Resolve()
 			if cfg.TLS.Mode != tc.want {
@@ -312,7 +371,10 @@ func TestValidation(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"files with neither", []string{"--tls-mode", "files"}, "auu-ca"},
+		{"files with neither", []string{"--tls-mode", "files"}, msgNoTLS},
+		{"nothing at all", nil, msgNoTLS},
+		{"files with a certificate and no key", []string{"--tls-cert", "c.pem"}, "both a certificate file and a key file"},
+		{"off with a bundle", []string{"--tls-mode", "off", "--tls-bundle", bundle}, "off but tls.bundle names a bundle"},
 		{"a bundle and a certificate", []string{"--tls-bundle", bundle, "--tls-cert", "c.pem", "--tls-key", "k.pem"},
 			"not both"},
 		{"off with a certificate", []string{"--tls-mode", "off", "--tls-cert", "c.pem"}, "off but a certificate"},

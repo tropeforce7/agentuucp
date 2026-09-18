@@ -490,16 +490,21 @@ func (c *Config) Resolve() {
 	if c.ClientCerts.Mode == "" {
 		c.ClientCerts.Mode = relayapi.ClientCertsOff
 	}
+	// A default is a decision: a relay serves TLS unless somebody writes
+	// down that it does not. Nothing is inferred from the other settings
+	// any more; a mode of files with nothing to serve from is refused at
+	// startup by Validate, in a sentence that names both ways out.
 	if c.TLS.Mode == "" {
-		switch {
-		case c.TLS.Bundle != "", c.TLS.BundleCredential != "",
-			c.TLS.CertFile != "" || c.TLS.KeyFile != "":
-			c.TLS.Mode = ModeFiles
-		default:
-			c.TLS.Mode = ModeOff
-		}
+		c.TLS.Mode = ModeFiles
 	}
 }
+
+// msgNoTLS is what a relay started with no bundle and no certificate says.
+// It is the first thing a person who ran the binary bare will read, so it
+// names the two commands that make a bundle, the section that walks them,
+// and the one flag that says plain HTTP on purpose.
+const msgNoTLS = "no TLS bundle or certificate: a relay serves TLS; make an authority and a bundle " +
+	"with 'auu-ca init' and 'auu-ca relay' (docs/relay.md, 1.5), or for a try on your own machine only, --tls-mode off"
 
 // Validate reports the first thing wrong with the configuration.
 //
@@ -618,9 +623,12 @@ func (c Config) Validate() error {
 				return err
 			}
 		} else {
+			if c.TLS.CertFile == "" && c.TLS.KeyFile == "" {
+				return errors.New(msgNoTLS)
+			}
 			if c.TLS.CertFile == "" || c.TLS.KeyFile == "" {
-				return errors.New("tls mode is files: give tls.bundle or tls.bundle_credential " +
-					"from auu-ca, or both a certificate file and a key file")
+				return errors.New("tls mode is files: give both a certificate file and a key file, " +
+					"or a bundle from auu-ca")
 			}
 			if _, err := loadKeyPair(c.TLS.CertFile, c.TLS.KeyFile); err != nil {
 				return fmt.Errorf("tls certificate and key: %w", err)

@@ -9,12 +9,19 @@ binary, the settings and administrators for the host, the unit and the
 signing bundle into one archive, and its `install.sh` installs the relay as
 a system service, or brings one already there up to date with `update`.
 [`docs/deploy-linux.md`](deploy-linux.md) has the recipe under *The
-short way*, and the long way beside it. By hand:
+short way*, and the long way beside it. By hand, with a bundle from
+*Certificates without a public CA* below:
 
 *Listing 1a*
 ```
-auu-relay --listen :8080 --db /var/lib/auu/relay.db
+auu-relay --listen :9443 --db /var/lib/auu/relay.db --tls-bundle relay-bundle.json
 ```
+
+A relay serves TLS by default. Started with no bundle and no certificate
+it refuses, in one sentence naming `auu-ca init`, `auu-ca relay` and the
+one way out: `--tls-mode off` is plain HTTP, for a try on your own machine
+and not for a relay anybody reaches over a network, and it exists only
+when written down.
 
 Settings come from three places. Later ones win: built-in defaults, then the
 file named by `--config`, then the flags actually typed on the command line. A
@@ -36,7 +43,7 @@ flag you do not type never overrides the file.
 | `--token-max-age DURATION` | `admin.token_max_age` | `720h` |
 | `--client-certs off\|required` | `client_certs.mode` | `off` |
 | `--client-cert-lifetime DURATION` | `client_certs.lifetime` | `8760h`, between `1h` and `87600h` |
-| `--tls-mode off\|files` | `tls.mode` | inferred, see below |
+| `--tls-mode off\|files` | `tls.mode` | `files`; `off` only when said, see below |
 | `--tls-cert PATH` | `tls.cert_file` | none |
 | `--tls-key PATH` | `tls.key_file` | none |
 | `--tls-bundle PATH` | `tls.bundle` | none; an export from `auu-ca` |
@@ -55,10 +62,12 @@ flag you do not type never overrides the file.
 | `--access-log full\|minimal` | `access_log` | `full` |
 | `--print-config` | | print the merged settings and exit |
 
-The TLS mode is inferred when you do not set it: `files` if a bundle or a
-certificate is configured, otherwise `off`. `off` with a bundle is refused:
-a bundle is what the relay serves TLS from, and nothing stands in front of
-the relay to terminate for it.
+The TLS mode is `files` unless you set it to `off`. `files` with no bundle
+and no certificate is refused at startup, in a sentence that names the two
+`auu-ca` commands and the flag. `off` is plain HTTP, logged as such on the
+relay's first lines, and exists for a try on one machine; `off` with a
+bundle is refused: a bundle is what the relay serves TLS from, and nothing
+stands in front of the relay to terminate for it.
 
 `tls.bundle` and `tls.bundle_credential` name the same file two ways, and
 you give one of them. The first is a path. The second is the name of a

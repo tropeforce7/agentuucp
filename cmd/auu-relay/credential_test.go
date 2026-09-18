@@ -230,10 +230,9 @@ func TestCredentialNameBoundaries(t *testing.T) {
 				c = Defaults()
 				c.DB = filepath.Join(t.TempDir(), "relay.db")
 				c.TLS.BundleCredential = tc.name
-				// An empty name is the setting left unset, which infers
-				// TLS off and is fine; the refusal is files mode with
-				// nothing to serve, so say files.
-				c.TLS.Mode = ModeFiles
+				// An empty name is the setting left unset, and files is
+				// the mode whether said or not; the refusal is then files
+				// with nothing to serve from.
 				c.Resolve()
 			}
 			err := c.Validate()
@@ -248,9 +247,10 @@ func TestCredentialNameBoundaries(t *testing.T) {
 			}
 			if tc.name == "" {
 				// An empty name is no credential at all, and with no bundle
-				// either files mode has nothing to serve.
-				if !strings.Contains(err.Error(), "tls.bundle_credential") {
-					t.Errorf("error %q does not name the setting", err)
+				// either files mode has nothing to serve: the one sentence
+				// a bare relay gets.
+				if err.Error() != msgNoTLS {
+					t.Errorf("error %q, want %q", err, msgNoTLS)
 				}
 				return
 			}

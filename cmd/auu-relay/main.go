@@ -105,7 +105,7 @@ func registerFlags(fs *flag.FlagSet) *flagValues {
 	fs.StringVar(&f.clientCertLifetime, "client-cert-lifetime", "",
 		"how long an issued client certificate lives")
 
-	fs.StringVar(&f.tlsMode, "tls-mode", "", "off or files (default: inferred from the other settings)")
+	fs.StringVar(&f.tlsMode, "tls-mode", "", "off or files (default files)")
 	fs.StringVar(&f.tlsCert, "tls-cert", "", "TLS certificate file (requires --tls-key)")
 	fs.StringVar(&f.tlsKey, "tls-key", "", "TLS key file (requires --tls-cert)")
 	fs.StringVar(&f.tlsBundle, "tls-bundle", "",
@@ -448,8 +448,7 @@ func logStartup(cfg Config, admins *relay.Admins, log *slog.Logger) {
 	case ModeOff:
 		log.Info("relay starting", "addr", cfg.Listen, "tls", "off", "db", cfg.DB,
 			"max_bytes", cfg.MaxBytes, "messages", cfg.MessagesDir)
-		log.Warn("serving plain HTTP; message contents are encrypted end to end, " +
-			"but put TLS in front of this before exposing it")
+		log.Warn("serving plain HTTP: for a try on one machine, not for a relay anybody reaches over a network")
 	case ModeFiles:
 		// Validate has already resolved the bundle, so the path here is
 		// the one it loaded.

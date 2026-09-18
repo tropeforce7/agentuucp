@@ -345,8 +345,12 @@ own machine for a first try:
 
 *Listing 5a*
 ```
-bin/auu-relay --listen :8080 --db relay.db
+bin/auu-relay --listen :8080 --db relay.db --tls-mode off
 ```
+
+Plain HTTP, for a first try on one machine. A relay other people reach
+serves TLS, which is its default and refuses to start without a bundle;
+[Running a relay](docs/relay.md) says how.
 
 Each person, once. `init` prints an export line, one token with no spaces:
 

@@ -12,8 +12,12 @@ party can: the relay learns nothing either way. To run one locally:
 
 *Listing 1a*
 ```
-bin/auu-relay --listen :8080 --db relay.db
+bin/auu-relay --listen :8080 --db relay.db --tls-mode off
 ```
+
+Plain HTTP, for a first try on one machine. A relay other people reach
+serves TLS, which is its default and refuses to start without a bundle;
+[Running a relay](relay.md) says how.
 
 ### 1.1 Each person, once
 

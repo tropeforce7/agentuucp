@@ -270,6 +270,17 @@ with rate zero allows everything, allocates nothing, and takes no locks.
 **Unknown config keys are an error.** A misspelled key that silently does
 nothing is the worst kind of misconfiguration.
 
+**A default is a decision: the safe mode is the one that applies when
+nothing is said.** The relay's `tls.mode` used to be inferred — `files`
+when a bundle or a certificate was named, `off` otherwise — so `auu-relay
+--listen :8080 --db relay.db` was a plain-HTTP relay without anybody having
+said so, and the quick starts taught it that way. Now an empty mode is
+`files`, a relay with nothing to serve TLS from refuses at startup in one
+sentence naming `auu-ca init`, `auu-ca relay` and `--tls-mode off`, and
+`off` exists only when written down and says so on its first lines. When
+you add a mode, the value that applies to a setting nobody wrote is the
+safe one, and the unsafe one has to be typed.
+
 **`encoding/json` HTML-escapes by default.** `--print-config` rendered
 `<redacted>` as `<redacted>`. Use a `json.Encoder` with
 `SetEscapeHTML(false)` for anything a person reads or pastes back in, and test

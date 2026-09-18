@@ -180,6 +180,15 @@ while it goes on. Tell the user to treat the host as compromised and look
 at who could write `/var/lib/auu/relay.db`; asking the owner to push
 again clears the state but not the question.
 
+**TLS is the default.** `tls.mode` is `files` unless the settings say
+`off`, and a relay with no bundle and no certificate refuses to start in
+one sentence naming `auu-ca init`, `auu-ca relay` and `--tls-mode off`.
+`off` is plain HTTP for a try on the user's own machine — `auu-relay
+--listen :8080 --db relay.db --tls-mode off` — and never for a relay other
+people reach; it is written down or it does not happen, and the relay's
+first log lines say so. A kit's settings carry a bundle credential and
+need no mode.
+
 **Limits** are the defaults in `docs/relay.md` unless the settings say otherwise.
 Two worth knowing: mail now stays on the relay after its owner has read it
 until they remove it, so `limits.mailbox_max_messages` and
