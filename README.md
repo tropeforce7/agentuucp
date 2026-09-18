@@ -466,3 +466,12 @@ bug in the claim.
 | `docs` | deploying a relay: the Linux walk-through, the systemd unit and a settings file |
 | `docker/testing` | the container suite: four machines, the two guides in order, and the matrix of what goes wrong, with its report |
 | `.claude/guides` | development and testing rules for contributors |
+
+## 9. Licence
+
+AgentUUCP is released under the MIT licence. The text is in
+[LICENSE](LICENSE). Use it, change it, and sell what you build with it. Keep
+the copyright notice with any copy, and do not hold its authors responsible
+for what it does.
+
+To report a fault in its security, read [SECURITY.md](SECURITY.md) first.
