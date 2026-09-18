@@ -22,23 +22,23 @@ Nobody has to be online at the same time. A message waits on the relay until
 its owner collects it, the way UUCP mail waited for the next call. The name is
 the design: UUCP with modern cryptography, for agents.
 
-## Get started
+## 1. Get started
 
 | you want to | read |
 |---|---|
-| put `auu` on a machine | [Install](#install) |
-| talk to one colleague through any relay | [Quick start for two people](#quick-start-for-two-people) |
+| put `auu` on a machine | [Install](#3-install) |
+| talk to one colleague through any relay | [Quick start for two people](#5-quick-start-for-two-people) |
 | run a relay for your group, on a Linux host | [Deploying a relay on Linux](docs/deploy-linux.md) |
 | join a relay that requires certificates | [Enrolling on a relay](docs/enrolling.md) |
 | give an agent a project to be the expert on | [Creating experts](docs/creating-experts.md) |
-| let Claude Code drive all of it | [Using it from Claude Code](#using-it-from-claude-code) |
+| let Claude Code drive all of it | [Using it from Claude Code](#4-using-it-from-claude-code) |
 
 The whole interface is the command line, so any agent that can run a shell
 command can use it. Three Claude Code skills are in the tree: one for sending
 and reading mail, one for your own identity and machines, one for running a
 relay.
 
-## How it stays private
+## 2. How it stays private
 
 **The relay.** A relay is one static binary, `auu-relay`, with a database
 and a directory of message files. Anybody can run one. It stores three things
@@ -85,7 +85,7 @@ written for someone else.
 
 Messages larger than 64 KiB go as a stream of sealed chunks under one HPKE
 context. A two-gigabyte attachment crosses a relay that never holds more than
-a chunk of it. The [security model](#security-model) below says exactly what
+a chunk of it. The [security model](#9-security-model) below says exactly what
 the relay stores, sees, and cannot do.
 
 All message cryptography comes from the Go standard library and nothing is
@@ -99,7 +99,7 @@ Everything from here down is reference: how to install and use the client,
 then how to run and administer a relay, then the security model and the wire
 format, in that order.
 
-## Install
+## 3. Install
 
 Requires Go 1.27 or later, for the standard library's `crypto/hpke` and `crypto/mldsa`.
 
@@ -130,7 +130,7 @@ correctly in its own output; this document and the skill use the short one.
 Go names an installed binary after the last element of its import path, which
 is why the bare form cannot be made to produce `auu`.
 
-### On a Linux host, with the script
+### 3.1 On a Linux host, with the script
 
 `scripts/install.sh` installs or updates the tools on a Linux host, and
 installs Go first if the host has none new enough to build them. It reads
@@ -185,7 +185,7 @@ is what its version control says. `auu-admin version`, `auu-ca version` and
 `auu-relay --version` do the same, and the relay's line adds the database
 schema it speaks.
 
-### Tab completion
+### 3.2 Tab completion
 
 ```
 eval "$(auu completion zsh)"     # in ~/.zshrc (e.g. macOS)
@@ -198,7 +198,7 @@ messages and threads. `--attach <tab>` completes file names. The candidates
 come from your local store, never from the relay, so a tab is always instant
 and never a network request.
 
-## Using it from Claude Code
+## 4. Using it from Claude Code
 
 An agent runs `auu` many times an hour, and it must never see your
 passphrase. So put your keys under a passphrase and let `auu`'s own agent,
@@ -210,7 +210,7 @@ When the agent is locked, a command stops with exit code 4 and one sentence.
 Claude's job is then to ask you to run `auu unlock` and try again. The
 passphrase is read only from a terminal, a file or a pipe, never from an
 argument, the environment, or an AI. [Encrypting your
-keys](#encrypting-your-keys) shows how to set it up.
+keys](#59-encrypting-your-keys) shows how to set it up.
 
 The interface is the command line, so any agent that can run a shell command
 can use this. For Claude Code there are three ready-made skills in the tree,
@@ -283,7 +283,7 @@ The skills never guess a fingerprint, never add a peer without you, and never
 apply a patch to your work without asking. Everything they run is in the
 sections that follow, which is the same thing done by hand.
 
-## Quick start for two people
+## 5. Quick start for two people
 
 This is the command line, for a person at a terminal, and it is also what
 the skills run underneath.
@@ -295,7 +295,7 @@ party can: the relay learns nothing either way. To run one locally:
 bin/auu-relay --listen :8080 --db relay.db
 ```
 
-### Each person, once
+### 5.1 Each person, once
 
 ```
 auu init --name bunty --relay http://localhost:8080
@@ -319,7 +319,7 @@ step is one command, which creates the identity and registers it:
 auu enrol --name bunty ccxt1.eyJpZCI6...
 ```
 
-### Exchange keys
+### 5.2 Exchange keys
 
 Send your export line to your colleague over a channel you both already trust,
 and confirm the fingerprint with them. Then each of you adds the other:
@@ -355,7 +355,7 @@ everyone until you push again, and `auu inbox` tells you so. `auu allow
 show` prints what each relay holds for you, verified with your own key;
 `auu allow clear` opens the mailbox again.
 
-### Send something
+### 5.3 Send something
 
 ```
 auu send --to colleague --subject 'padding oracle?' --attach Decrypt.java \
@@ -401,7 +401,7 @@ said on stderr and tried again at the next interval; a refusal no interval
 would change, such as a certificate the relay will not accept, ends the wait
 at once with exit 2.
 
-### Channels
+### 5.4 Channels
 
 A mailbox can have named sub-mailboxes — channels — that you define and a
 sender chooses between: `bug reports`, `cfp`, `default`. Each has a
@@ -467,7 +467,7 @@ and nothing was queued.
 `auu channel keep NAME off` says that mail fetched from that channel is
 acknowledged away on the relay, as a fetch always did; `on`, which is the
 default for every channel, leaves it queued there until you remove it with
-[`auu rm`](#receive). It is this machine's own policy: nothing is signed,
+[`auu rm`](#55-receive). It is this machine's own policy: nothing is signed,
 nothing is pushed, no relay is told, and the command works with the keys
 locked. It lives in `channel-settings.json` in your home, so a copy of the
 home takes it to a second machine, `auu channel pull` never touches it, and
@@ -487,7 +487,7 @@ for alice does not verify against the key you hold; do not trust it` and
 exit 2. `--json` gives the structure, with `open` as a boolean and `why` as
 the sentence.
 
-### Receive
+### 5.5 Receive
 
 ```
 auu inbox                    # fetch from the relay and list
@@ -567,7 +567,7 @@ refused there as malformed, since a manifest is read strictly, and kept
 under `damaged/`; envelopes are not affected, and a stream sent with no
 `--channel` is not either. Upgrade that machine rather than resend.
 
-### An expert on a channel
+### 5.6 An expert on a channel
 
 A channel can be answered by a program rather than by a person. `auu serve`
 hands every message that arrives on one to a handler — Claude Code, in the
@@ -591,7 +591,7 @@ peers, since quarantine is never read. `docs/serve.md` is the command, its
 file and its state; `docs/creating-experts.md` is how to set one up well,
 and `docs/serve-claude.sh` is the wrapper the guide starts from.
 
-### Watching
+### 5.7 Watching
 
 To be told when something happens, rather than asking:
 
@@ -640,7 +640,7 @@ cannot tell and does not need to. There are no delivery receipts, and
 cannot be: the relay does not know who posted a message, so it cannot say
 whose was collected.
 
-### Several relays
+### 5.8 Several relays
 
 One home can be on any number of relays — a company's and your own, say — with
 one identity, one peer list and one inbox. That last part is the point: your
@@ -690,7 +690,7 @@ anything. It has a cost worth knowing: anybody who can see two of those relays
 can tell that the same person is on both. Being a different person on each
 relay is what a second `AUU_HOME` is for.
 
-### Encrypting your keys
+### 5.9 Encrypting your keys
 
 `identity.json` holds your two secret keys, and each `relays/<name>/cert.json`
 holds that machine's certificate key, all in the clear behind a file mode. A
@@ -767,7 +767,7 @@ the whole of the same-user check: Windows gives a socket no peer
 credentials, and there is no attachment guard. CI runs the agent's tests on
 Windows; nobody has used it there by hand.
 
-### Exit codes
+### 5.10 Exit codes
 
 | code | meaning |
 |------|---------|
@@ -778,7 +778,7 @@ Windows; nobody has used it there by hand.
 | 4 | your keys are encrypted and locked: run `auu unlock` in your own terminal |
 | 5 | a file in this machine's auu home is damaged, has been altered, or has an unsafe mode; a person needs to look, and the message names the file |
 
-## Local state
+## 6. Local state
 
 Everything lives in `~/.auu`, or `$AUU_HOME` if set. The directory is mode 0700
 and every file in it is 0600, and `auu` checks: a key file — `identity.json`
@@ -838,7 +838,7 @@ moved rather than rewritten, so what was pinned stays pinned byte for byte,
 and the relay keeps working under the name of its host. It is one way: an
 older build will not understand the moved home.
 
-## Running a relay
+## 7. Running a relay
 
 The short way onto a Linux host with systemd is a kit: `auu-ca kit` packs the relay
 binary, the settings and administrators for the host, the unit and the
@@ -915,7 +915,7 @@ compared without regard to case, addresses as addresses.
 Use `--print-config` to see exactly what the relay resolved. Its output is
 valid input for `--config`.
 
-### Where the mail lives
+### 7.1 Where the mail lives
 
 The database holds the bookkeeping; the mail itself is one file per message
 beside it.
@@ -953,7 +953,7 @@ database was lost, and the relay refuses to start, saying so, and naming the
 two remedies, restoring `relay.db` from a backup or moving the message
 directory aside to start empty.
 
-### Large messages
+### 7.2 Large messages
 
 Above 64 KiB a client stops posting one envelope and uploads a stream in
 chunks, resuming if it is interrupted. Three settings govern it:
@@ -979,7 +979,7 @@ auu-relay --db /var/lib/auu/relay.db \
 The refusal names the setting that stopped it, and arrives before any of the
 file is uploaded, so nothing is wasted finding out.
 
-### Config file
+### 7.3 Config file
 
 ```json
 {
@@ -1003,7 +1003,7 @@ that silently does nothing. Nothing in the file is secret, but whoever can
 write it can change who administers the relay; the relay warns at startup if
 it is writable by anyone but its owner.
 
-### Limits
+### 7.4 Limits
 
 One registered peer, one source address, or one runaway agent should not be
 able to take the relay away from everybody else. Every limit is a number you
@@ -1083,7 +1083,7 @@ One line a minute per path, so a broken disk under a busy relay does not fill
 the journal with the same line. A full disk is not a storage fault: it is the
 `507` above, and the sender is told whose problem the room is.
 
-### Certificates without a public CA
+### 7.5 Certificates without a public CA
 
 A relay makes its own certificates, from an authority you create on a machine
 that has no open sockets. No ACME, no Let's Encrypt, no port 80 or 443.
@@ -1196,7 +1196,7 @@ secret the offline machine holds: no bundle ever had a path on it. If you
 wrote one with `--out FILE`, it is in your backups until you delete it, and
 `auu-ca show` says so.
 
-#### How a machine comes to trust it
+#### 7.5.1 How a machine comes to trust it
 
 The enrolment token carries the anchor's hash. `auu enrol` fetches the anchor
 from the relay over a connection nothing has verified, checks it against the
@@ -1226,7 +1226,7 @@ hash, or a relay that cannot serve one, leaves the identity as it was. A relay
 serves its anchor whenever it runs from a bundle, whether or not it requires
 client certificates.
 
-#### If the relay's authority is rotated
+#### 7.5.2 If the relay's authority is rotated
 
 A machine records the server signing intermediate it last accepted. A *newer*
 one is a rotation — only the offline authority can issue one — so it is
@@ -1240,7 +1240,7 @@ it is stated rather than hidden: a stolen intermediate that has not yet been
 rotated away is indistinguishable from the real relay, and detecting that is
 outside the protocol.
 
-#### What still needs a public certificate
+#### 7.5.3 What still needs a public certificate
 
 Nothing, unless you want ordinary tools to reach the relay. `curl` linked
 against LibreSSL — which is what macOS ships — cannot speak ML-DSA at all, and
@@ -1249,13 +1249,13 @@ neither can OpenSSL before 3.5. `auu` can, because it is Go 1.27. If you want
 use *Your own certificate* below with a publicly trusted one, and tokens will
 then carry no anchor.
 
-### Your own certificate
+### 7.6 Your own certificate
 
 ```
 auu-relay --tls-cert /etc/ssl/relay.pem --tls-key /etc/ssl/relay.key
 ```
 
-### Running under systemd
+### 7.7 Running under systemd
 
 Binding ports 80 and 443 without running as root needs a capability:
 
@@ -1298,7 +1298,7 @@ who has only been sent a token, is
 [Enrolling on a relay with certificates enabled](docs/enrolling.md), from
 installing Go to adding a second machine.
 
-### Client certificates
+### 7.8 Client certificates
 
 A relay can require each machine to hold a certificate of its own, issued when
 that machine enrols:
@@ -1358,7 +1358,7 @@ The relay must be able to see a certificate, which means terminating TLS
 itself. A relay with client certificates required and TLS off refuses to
 start rather than refuse every request afterwards.
 
-### Keeping a relay private
+### 7.9 Keeping a relay private
 
 Set `registration` to `token` and nobody creates a mailbox without an
 invitation an administrator signed. Combined with each user running
@@ -1380,9 +1380,9 @@ hardening from the kit stays in place. What an attacker on the host still
 cannot do is read a message or write one as somebody else, because the keys
 for that were never on the machine.
 
-## Administering a relay
+## 8. Administering a relay
 
-### Who is an administrator
+### 8.1 Who is an administrator
 
 Whoever the relay's host says. Point `--admin-file` at a file of export lines,
 one per administrator, in exactly the format a user keeps in
@@ -1411,7 +1411,7 @@ keeps the set it last loaded and warns once, with the count it kept. Without
 `--admin-file` a relay has no administrators and the whole admin API answers
 403.
 
-### auu-admin
+### 8.2 auu-admin
 
 `auu-admin` is a separate binary from `auu`, deliberately: the privilege
 boundary is visible in what is installed where, and the `connect` skill never
@@ -1447,7 +1447,7 @@ It deletes nothing: purge the mailbox separately if that is what you mean.
 Blocks never apply to administrators, so a mistake there cannot lock you out of
 undoing it.
 
-### Enrolment tokens
+### 8.3 Enrolment tokens
 
 An enrolment token is a short signed string that says who issued it, which
 relay it is for, what it is for, and when it stops working:
@@ -1500,7 +1500,7 @@ auu register --token ccxt1.eyJpZCI6...
 Either of them can read a token before acting on it with `auu token show`,
 which says what use it is for.
 
-### Getting onto a relay from a second machine
+### 8.4 Getting onto a relay from a second machine
 
 On a relay with client certificates, copying `~/.auu` to another computer is
 not enough: the identity comes with it, but each relay's `cert.json` under
@@ -1538,7 +1538,7 @@ A token authorises a mailbox. It says nothing about who is safe to talk to:
 exchanging keys with the people you will actually message is still the
 out-of-band step it always was, and enrolment does not change it.
 
-### The audit log
+### 8.5 The audit log
 
 Every administrative change and every enrolment writes one line, in both access
 log modes:
@@ -1553,7 +1553,7 @@ This is the operator's record of what their own administrators did, not a
 record of users' traffic, which is why `access_log: "minimal"` does not turn it
 off. The token string itself never appears in a log.
 
-## Security model
+## 9. Security model
 
 **What the relay stores.** The recipient's fingerprint, the size of each
 message, when it arrived, and the channel it was posted to. That is all: the
@@ -1747,7 +1747,7 @@ as data by the skill, never as instructions, and unknown senders never reach
 the inbox at all. Nothing arrives in the background: mail moves only when a
 person runs `auu inbox` or `auu wait`.
 
-## The wire, in detail
+## 10. The wire, in detail
 
 What the relay stores for one message is three fields: `v`, the format
 version; `to`, the recipient's fingerprint; and `ct`, about 4 KiB of
@@ -1757,7 +1757,7 @@ public keys, the subject, thread, message id and time, the text, and any
 attachments. Sign-then-encrypt, so the signature is inside the box: the relay
 can see that somebody posted to Bob, and cannot see that it was you.
 
-### The round trip
+### 10.1 The round trip
 
 With keys already swapped, in person or over something you both trust:
 
@@ -1779,9 +1779,9 @@ With keys already swapped, in person or over something you both trust:
 The `DELETE` at step 9 is the interesting one: the message leaves the relay
 only after it is safely on local disk. Crash anywhere in between and you fetch
 it twice, never zero times. It happens at the fetch only for a channel you
-have set to `off` with [`auu channel keep`](#channels); by default a channel
+have set to `off` with [`auu channel keep`](#54-channels); by default a channel
 keeps its mail, so the fetch leaves it queued and the `DELETE` is what
-[`auu rm`](#receive) sends when you remove it.
+[`auu rm`](#55-receive) sends when you remove it.
 
 The answer at step 7 lists what is after this machine's cursor and, beside
 it, how many messages the mailbox holds in all (`queued`). The two normally
@@ -1878,7 +1878,7 @@ it is kept under `damaged/` with the cause word `misfiled`, the warning says
 messages, so the mailbox is not blocked. A relay from before channels lists
 no channel, and the sealed record alone decides.
 
-### A large message
+### 10.2 A large message
 
 Above 64 KiB, `auu send` stops building one envelope and builds a stream. It is
 one HPKE context and a run of sealed chunks: the manifest first, saying what
@@ -1911,7 +1911,7 @@ twice. A relay whose disk fills part way through is the same case: it answers
 `507`, keeps what it has, and `auu send` says the upload is kept and to resume
 it when there is room.
 
-## On the use of AI
+## 11. On the use of AI
 
 This project was written with [Claude Code](https://claude.com/claude-code),
 under human direction and review. Two models did the work: **Claude Opus 5**
@@ -1930,7 +1930,7 @@ record, and a reviewer's checklist live in `reviews/`, which is git-ignored:
 they are working documents rather than part of the software, so a clone gets
 the code and not the argument behind it.
 
-### Contributing with an AI
+### 11.1 Contributing with an AI
 
 If you want to send a patch, and you are working with an agent of your own,
 point it at `.claude/guides/`. Unlike the specifications, the guides **are**
@@ -1969,7 +1969,7 @@ overruled what had already been built. Where a model got something wrong and it
 was caught, the correction is in the git history and in the notes, not quietly
 edited away.
 
-### What this should mean to you
+### 11.2 What this should mean to you
 
 **Review this code before you trust it with anything.** That is true of any cryptographic software, and it is not
 less true here. The parts most worth your attention are the envelope layer in
@@ -1979,7 +1979,7 @@ subtle mistake would not show up as a failing test. Every claim in the security
 model above is meant to be checkable against the code; if one is not, that is a
 bug in the claim.
 
-## Layout
+## 12. Layout
 
 | package | role |
 |---------|------|
