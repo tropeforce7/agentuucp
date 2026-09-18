@@ -95,13 +95,20 @@ func ensureUnlocked(s *store.Store, scope agent.Scope) error {
 		}
 		return lockedErr()
 	}
-	secret, err := askPassphrase(fmt.Sprintf("Passphrase for %s: ", s.Root()))
-	if err != nil {
-		return err
-	}
+	// The prompt says which scope it opens, because a command that sends
+	// may ask twice at a terminal: this prompt, into receive, and then the
+	// receive sentence naming the unlock that sends. By design — the send
+	// unlock is a decision, not something a command makes for you — and
+	// said here so the second asking is not a surprise.
+	prompt := fmt.Sprintf("Passphrase for %s (to receive; a command that sends will ask again): ", s.Root())
 	ttl := agent.DefaultTTL
 	if scope == agent.ScopeSend {
+		prompt = fmt.Sprintf("Passphrase for %s: ", s.Root())
 		ttl = agent.DefaultSendTTL
+	}
+	secret, err := askPassphrase(prompt)
+	if err != nil {
+		return err
 	}
 	return unlockWith(s, c, secret, ttl, scope)
 }

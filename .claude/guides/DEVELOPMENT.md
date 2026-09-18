@@ -516,10 +516,16 @@ and not the error — `%v`, not `%w` — so `errors.Is(err, io.ErrUnexpectedEOF)
 stays false and nobody downstream mistakes it for the end of a stream.
 
 **`ccx` in a constant is not a leftover: it is on the wire.** The binaries are
-`auu`, `auu-relay` and `auu-admin`, and the project is AgentUUCP, but fourteen
-constants deliberately still say `ccx` — the nine `ccx-*-v1` domain
-separators, the `ccx1` and `ccx2` export-line prefixes, the `ccxt1` (read)
-and `ccxt2` (written) token prefixes, and the `X-CCX-Auth` header. Every one
+`auu`, `auu-relay`, `auu-admin` and `auu-ca`, and the project is AgentUUCP,
+but fifteen constants deliberately still say `ccx` — the ten `ccx-*-v1`
+domain strings (`ccx-allow-v1`, `ccx-channels-v1`, `ccx-chunk-v1`,
+`ccx-envelope-v1`, `ccx-http-v1`, `ccx-id-v1`, `ccx-sig-v1`,
+`ccx-stream-sig-v1`, `ccx-stream-v1`, `ccx-token-v1`: six under a
+signature, three in an HPKE `info` or a chunk's additional data, one under
+the fingerprint hash), the `ccx1` and `ccx2` export-line prefixes, the
+`ccxt1` (read) and `ccxt2` (written) token prefixes, and the `X-CCX-Auth`
+header. Recount with `grep -rn '"ccx' --include='*.go' internal cmd | grep
+-v _test` when you add one. Every one
 of them is either inside a signature, inside an HPKE `info` string, or in a
 format two machines have already agreed on. Renaming any of them invalidates every
 identity, message and token in existence and silently breaks compatibility with

@@ -510,10 +510,15 @@ to check `auu agent status --json` for `scope` before its first send. `auu
 unlock` reads a passphrase from the terminal, from `--passphrase-file` for
 a secret manager, or from standard input when that is a pipe; no other
 command reads one from anywhere but a terminal, and none takes one as an
-argument or from the environment. One command is an exception on purpose:
-`auu enrol` on an encrypted home registers this machine, which is a human
-act, so at a terminal it asks for the passphrase into send scope itself
-rather than sending you off to run the unlock.
+argument or from the environment. At your own terminal a command that
+sends may ask you twice when the agent is locked — once for the passphrase,
+which unlocks to receive and says so in the prompt, and then in the
+sentence above for `auu unlock --send` — because the send unlock is a
+decision you make, not one a command makes for you on the way to something
+else. One command is an exception on purpose: `auu enrol` on an encrypted
+home registers this machine, which is a human act, so at a terminal it
+asks for the passphrase into send scope itself rather than sending you off
+to run the unlock.
 
 Commands that need only your public half — `auu id`, `auu id export`,
 `auu peers`, `auu relay`, `auu anchor`, `auu inbox --no-fetch`, `auu read`,

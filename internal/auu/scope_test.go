@@ -215,15 +215,24 @@ func TestEnrolAsksForSendScopeAtATerminal(t *testing.T) {
 	// asked into is send scope for its ten minutes, so enrol goes through
 	// and the agent says so.
 	asked := 0
+	var prompts []string
 	wasTerminal, wasAsk := stdinIsTerminal, askPassphrase
 	stdinIsTerminal = func() bool { return true }
-	askPassphrase = func(prompt string) ([]byte, error) { asked++; return []byte(agentPassphrase), nil }
+	askPassphrase = func(prompt string) ([]byte, error) {
+		asked++
+		prompts = append(prompts, prompt)
+		return []byte(agentPassphrase), nil
+	}
 	t.Cleanup(func() { stdinIsTerminal, askPassphrase = wasTerminal, wasAsk })
 	if err := enrol(); err != nil {
 		t.Fatalf("enrol at a terminal with the agent locked: %v", err)
 	}
 	if asked != 1 {
 		t.Fatalf("the person was asked %d times, want once", asked)
+	}
+	// Enrol asks into send, so its prompt does not warn of a second asking.
+	if want := "Passphrase for " + alice.home + ": "; prompts[0] != want {
+		t.Fatalf("enrol's prompt is %q, want %q", prompts[0], want)
 	}
 	if st := alice.agentStatus(); st.Scope != string(agent.ScopeSend) || st.SendExpires == "" {
 		t.Fatalf("after enrol at a terminal the agent says %+v, want send scope with an expiry", st)
@@ -252,6 +261,12 @@ func TestEnrolAsksForSendScopeAtATerminal(t *testing.T) {
 	}
 	if st := alice.agentStatus(); st.Locked || st.Scope != string(agent.ScopeReceive) {
 		t.Fatalf("after send at a terminal the agent says %+v, want receive scope", st)
+	}
+	// The double asking is by design, and the receive prompt says so, so
+	// the second asking — the sentence naming unlock --send — is no
+	// surprise.
+	if want := "Passphrase for " + alice.home + " (to receive; a command that sends will ask again): "; prompts[2] != want {
+		t.Fatalf("the receive prompt is %q, want %q", prompts[2], want)
 	}
 	stdinIsTerminal = wasTerminal
 	// register --token, for a second machine key, is not enrol: it loads
