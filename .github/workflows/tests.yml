@@ -214,8 +214,9 @@ jobs:
       # shellcheck — the runner has one — and then installs four times over
       # in the container: from a checkout, again to prove it changes
       # nothing, --relay for the fourth binary, and unprivileged, which has
-      # to find the Go the first install put on the machine. The token path
-      # needs a secret and is not run here; it is proved by hand.
+      # to find the Go the first install put on the machine. The path that
+      # fetches the module from GitHub is not run here, since it wants the
+      # network and a release to fetch; it is proved by hand.
       - name: scripts/install-check.sh
         run: sh scripts/install-check.sh
 

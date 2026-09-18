@@ -141,20 +141,27 @@ installs Go first if the host has none new enough to build them. It reads
 root and `~/.local` for anybody else; and running it again is how you
 update, which it reports tool by tool.
 
+Read it before you run it. Download it, look it over, then run it as
+root for the machine or as yourself for your own account:
+
 *Listing 3.1a*
 ```
-curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github.raw' \
-  https://api.github.com/repos/tropeforce7/agentuucp/contents/scripts/install.sh \
-  | sudo env GH_TOKEN="$GH_TOKEN" sh
+curl -fsSL -o install.sh https://raw.githubusercontent.com/tropeforce7/agentuucp/main/scripts/install.sh
+less install.sh
+sudo sh install.sh              # the three client tools, in /usr/local/bin
+sudo sh install.sh --relay      # and auu-relay, for a relay host or one that builds kits
 ```
 
-`GH_TOKEN` is a fine-grained token with read access to this repository's
-contents, which is needed twice while the repository is private: once to
-fetch the script and once by the script, which hands it to git for the one
-`go install` and writes it nowhere. From a checkout it needs no token at
-all:
+Or, once you trust it, in one line:
 
 *Listing 3.1b*
+```
+curl -fsSL https://raw.githubusercontent.com/tropeforce7/agentuucp/main/scripts/install.sh | sudo sh
+```
+
+From a checkout it builds what is there rather than fetching a release:
+
+*Listing 3.1c*
 ```
 sh scripts/install.sh --from .          # the three client tools
 sh scripts/install.sh --from . --relay  # and auu-relay, for a host that builds kits
@@ -165,7 +172,7 @@ puts Go and the binaries somewhere of your choosing.
 
 From a clone:
 
-*Listing 3.1c*
+*Listing 3.1d*
 ```
 make build            # produces bin/auu, bin/auu-relay, bin/auu-admin and bin/auu-ca
 make relay-linux      # the relay for a Linux host, static, in bin/linux_amd64/; ARCH=arm64 for ARM

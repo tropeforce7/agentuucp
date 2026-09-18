@@ -2,18 +2,17 @@
 # install.sh: install or update the AgentUUCP tools on a Linux host, with Go
 # if the host has none new enough to build them.
 #
-#   curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github.raw' \
-#     https://api.github.com/repos/tropeforce7/agentuucp/contents/scripts/install.sh \
-#     | sudo env GH_TOKEN="$GH_TOKEN" sh
+# Read it before you run it:
 #
-# GH_TOKEN is a fine-grained token with read access to the repository's
-# contents, needed twice while the repository is private: once by the curl
-# above and once by this script, which hands it to git for the one 'go
-# install' and never writes it anywhere. With no GH_TOKEN it installs from a
-# public repository, so the day this one is public the curl line loses two
-# headers and nothing else changes.
+#   curl -fsSL -o install.sh https://raw.githubusercontent.com/tropeforce7/agentuucp/main/scripts/install.sh
+#   less install.sh
+#   sudo sh install.sh
 #
-# From a checkout, with no token at all:
+# or, once you trust it, in one line:
+#
+#   curl -fsSL https://raw.githubusercontent.com/tropeforce7/agentuucp/main/scripts/install.sh | sudo sh
+#
+# From a checkout, building what is there rather than fetching a release:
 #
 #   sh scripts/install.sh --from .
 #
@@ -65,7 +64,7 @@ while [ $# -gt 0 ]; do
 		shift
 		;;
 	-h | --help)
-		sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
+		sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
 		exit 0
 		;;
 	*) fail "unknown option $1; run with --help" ;;
@@ -236,13 +235,6 @@ if [ -n "$from" ]; then
 		GIT_CONFIG_COUNT=1 \
 		GIT_CONFIG_KEY_0=safe.directory \
 		GIT_CONFIG_VALUE_0="$PWD" \
-		"$go" install -trimpath "$@" || fail "the build failed; the sentence above says why"
-elif [ -n "${GH_TOKEN:-}" ]; then
-	say "using GH_TOKEN for the private repository"
-	GOBIN=$bindir CGO_ENABLED=0 GOPRIVATE=$MODULE \
-		GIT_CONFIG_COUNT=1 \
-		GIT_CONFIG_KEY_0="url.https://x-access-token:$GH_TOKEN@github.com/.insteadOf" \
-		GIT_CONFIG_VALUE_0="https://github.com/" \
 		"$go" install -trimpath "$@" || fail "the build failed; the sentence above says why"
 else
 	GOBIN=$bindir CGO_ENABLED=0 \
