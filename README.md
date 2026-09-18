@@ -105,6 +105,7 @@ Requires Go 1.27 or later, for the standard library's `crypto/hpke` and `crypto/
 
 Without cloning anything, `go install` fetches the module and builds it:
 
+*Listing 3a*
 ```
 go install github.com/tropeforce7/agentuucp/cmd/...@latest
 ```
@@ -115,12 +116,14 @@ are named as an administrator of, and `auu-ca` is the offline authority that
 issues a relay its certificates. Only `auu` needs to be on the PATH of a
 machine that just sends and reads mail, and it can be installed alone:
 
+*Listing 3b*
 ```
 go install github.com/tropeforce7/agentuucp/cmd/auu@latest
 ```
 
 The bare module path works too, and gives you the client under its full name:
 
+*Listing 3c*
 ```
 go install github.com/tropeforce7/agentuucp@latest    # installs agentuucp
 ```
@@ -138,6 +141,7 @@ installs Go first if the host has none new enough to build them. It reads
 root and `~/.local` for anybody else; and running it again is how you
 update, which it reports tool by tool.
 
+*Listing 3.1a*
 ```
 curl -fsSL -H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github.raw' \
   https://api.github.com/repos/tropeforce7/agentuucp/contents/scripts/install.sh \
@@ -150,6 +154,7 @@ fetch the script and once by the script, which hands it to git for the one
 `go install` and writes it nowhere. From a checkout it needs no token at
 all:
 
+*Listing 3.1b*
 ```
 sh scripts/install.sh --from .          # the three client tools
 sh scripts/install.sh --from . --relay  # and auu-relay, for a host that builds kits
@@ -160,6 +165,7 @@ puts Go and the binaries somewhere of your choosing.
 
 From a clone:
 
+*Listing 3.1c*
 ```
 make build            # produces bin/auu, bin/auu-relay, bin/auu-admin and bin/auu-ca
 make relay-linux      # the relay for a Linux host, static, in bin/linux_amd64/; ARCH=arm64 for ARM
@@ -187,6 +193,7 @@ schema it speaks.
 
 ### 3.2 Tab completion
 
+*Listing 3.2a*
 ```
 eval "$(auu completion zsh)"     # in ~/.zshrc (e.g. macOS)
 eval "$(auu completion bash)"    # in ~/.bashrc (e.g. Linux), or the output to /etc/bash_completion.d/auu
@@ -216,6 +223,7 @@ The interface is the command line, so any agent that can run a shell command
 can use this. For Claude Code there are three ready-made skills in the tree,
 installed under `~/.claude/skills` by:
 
+*Listing 4a*
 ```
 make install-skill
 ```
@@ -291,12 +299,14 @@ the skills run underneath.
 Both people need a relay to talk through. Either one can host it, or a third
 party can: the relay learns nothing either way. To run one locally:
 
+*Listing 5a*
 ```
 bin/auu-relay --listen :8080 --db relay.db
 ```
 
 ### 5.1 Each person, once
 
+*Listing 5.1a*
 ```
 auu init --name bunty --relay http://localhost:8080
 auu register
@@ -304,6 +314,7 @@ auu register
 
 `init` prints an export line that looks like this:
 
+*Listing 5.1b*
 ```
 ccx2.<1664 characters of base64>.bunty
 ```
@@ -315,6 +326,7 @@ digits, dots, underscores and hyphens.
 If somebody sent you an enrolment token for their relay instead, that whole
 step is one command, which creates the identity and registers it:
 
+*Listing 5.1c*
 ```
 auu enrol --name bunty ccxt1.eyJpZCI6...
 ```
@@ -324,6 +336,7 @@ auu enrol --name bunty ccxt1.eyJpZCI6...
 Send your export line to your colleague over a channel you both already trust,
 and confirm the fingerprint with them. Then each of you adds the other:
 
+*Listing 5.2a*
 ```
 auu peers add ccx2.<base64>.colleague-name
 auu peers ls
@@ -332,6 +345,7 @@ auu peers ls
 If what you were given is a fingerprint, or the 16-character short id that
 listings print, rather than a whole export line, ask the relay:
 
+*Listing 5.2b*
 ```
 auu lookup 4c1d9e2a7b0f3c58        # a fingerprint, a short id, or a peer's name
 ```
@@ -342,6 +356,7 @@ trust anchor: that is for checking with the person, and `lookup` adds nobody.
 
 Restrict your relay mailbox to the people on your list:
 
+*Listing 5.2c*
 ```
 auu allow push
 ```
@@ -357,6 +372,7 @@ show` prints what each relay holds for you, verified with your own key;
 
 ### 5.3 Send something
 
+*Listing 5.3a*
 ```
 auu send --to colleague --subject 'padding oracle?' --attach Decrypt.java \
   'Is this a genuine gap in the provider, or am I missing an entry point?'
@@ -374,6 +390,7 @@ then `$VISUAL`, then `$EDITOR`, then `vi`. The draft is kept at
 
 A note to yourself needs no peer at all:
 
+*Listing 5.3b*
 ```
 auu send --to self --subject 'remember' 'the milk'
 ```
@@ -385,6 +402,7 @@ you can read from any machine holding your identity. Nobody can be named
 
 That prints a message id and a thread id. To block until the answer arrives:
 
+*Listing 5.3c*
 ```
 auu wait --thread THREAD-ID --timeout 30m
 ```
@@ -409,6 +427,7 @@ description and, if you like, a period in which it takes mail. Until you
 define any, your mailbox has the one channel, `default`, and nothing
 changes.
 
+*Listing 5.4a*
 ```
 auu channel ls [PEER] [--json]
 auu channel create NAME [--description TEXT] [--not-before T] [--not-after T]
@@ -489,6 +508,7 @@ the sentence.
 
 ### 5.5 Receive
 
+*Listing 5.5a*
 ```
 auu inbox                    # fetch from the relay and list
 auu read MESSAGE-ID          # read one
@@ -510,12 +530,14 @@ reply's own indented beneath it, and `--json` adds `thread_subject` beside
 
 Mail from a sender who is not on your peer list is held back:
 
+*Listing 5.5b*
 ```
 auu quarantine ls
 auu quarantine show MESSAGE-ID
 auu quarantine trust MESSAGE-ID    # adds them to your peer list
 ```
 
+*Listing 5.5c*
 ```
 auu rm MESSAGE-ID...               # from the relay and from here
 auu rm MESSAGE-ID --remote-only    # from the relay; keep the local copy
@@ -574,6 +596,7 @@ hands every message that arrives on one to a handler — Claude Code, in the
 case it was built for — running in a git worktree of the project's
 checkout, and sends back what the handler printed:
 
+*Listing 5.6a*
 ```
 auu serve check                    # read serve.json and say what it would serve
 auu serve --once                   # one round: fetch, answer what is pending, stop
@@ -595,6 +618,7 @@ and `docs/serve-claude.sh` is the wrapper the guide starts from.
 
 To be told when something happens, rather than asking:
 
+*Listing 5.7a*
 ```
 auu watch                          # returns when mail arrives, on any relay you are on
 auu watch --event directory        # ...or when a colleague changes their channels
@@ -646,6 +670,7 @@ One home can be on any number of relays — a company's and your own, say — wi
 one identity, one peer list and one inbox. That last part is the point: your
 mail is your mail, and which relay it came through is a detail of delivery.
 
+*Listing 5.8a*
 ```
 auu relay ls                       # what this home knows; * is the default
 auu relay add https://relay.example:9443 --name work --anchor HASH
@@ -663,6 +688,7 @@ Which relay a command uses is `--relay NAME`, then `AUU_RELAY` in the
 environment, then the default. A name may be shortened to a unique prefix, and
 a relay's URL works wherever its name does.
 
+*Listing 5.8b*
 ```
 auu send --to bob --relay personal 'over here'
 AUU_RELAY=personal auu lookup bob
@@ -680,6 +706,7 @@ is where the other person's mailbox was. `--relay` overrides it. And a send to
 somebody with no mailbox on the relay you chose says where their mail has been
 arriving from instead:
 
+*Listing 5.8c*
 ```
 bob is not registered on work; mail from bob has arrived through personal
 ```
@@ -697,6 +724,7 @@ holds that machine's certificate key, all in the clear behind a file mode. A
 backup, a snapshot, a synced home directory or a stolen laptop yields every one
 of them. You can put them under a passphrase:
 
+*Listing 5.9a*
 ```
 auu passphrase set                 # asks twice; encrypts this home's keys
 ```
@@ -709,6 +737,7 @@ unlocked keys in memory and performs every private-key operation for the
 commands that ask, over a socket only your own processes can reach, for a
 fixed time after you unlock it:
 
+*Listing 5.9b*
 ```
 auu unlock                         # asks once; the agent holds the keys for 8 hours
 auu unlock --ttl 2h                # or for as long as you say; 0 means until 'auu lock'
@@ -724,6 +753,7 @@ AI's — works as it always did. When it is locked, a command that needs a key
 asks you for the passphrase if you are at a terminal, and otherwise stops with
 exit code 4 and one sentence:
 
+*Listing 5.9c*
 ```
 auu: your identity is locked: run 'auu unlock' in your own terminal
 ```
@@ -847,6 +877,7 @@ a system service, or brings one already there up to date with `update`.
 [`docs/deploy-linux.md`](docs/deploy-linux.md) has the recipe under *The
 short way*, and the long way beside it. By hand:
 
+*Listing 7a*
 ```
 auu-relay --listen :8080 --db /var/lib/auu/relay.db
 ```
@@ -920,6 +951,7 @@ valid input for `--config`.
 The database holds the bookkeeping; the mail itself is one file per message
 beside it.
 
+*Listing 7.1a*
 ```
 /var/lib/auu/
   relay.db                     mailboxes, counters, one row per message
@@ -970,6 +1002,7 @@ sender's whole `post_bytes_per_hour` budget is 256 MiB and one recipient's
 per-message, so raising them is a decision about how much of your disk one
 person may fill, not about how big a file may be. To allow it, raise those two:
 
+*Listing 7.2a*
 ```
 auu-relay --db /var/lib/auu/relay.db \
   --limit-post-bytes 8589934592 \
@@ -981,6 +1014,7 @@ file is uploaded, so nothing is wasted finding out.
 
 ### 7.3 Config file
 
+*Listing 7.3a*
 ```json
 {
   "listen": ":443",
@@ -1031,6 +1065,7 @@ protocol rather than of one relay, since the body limit alone would let a
 single request queue a quarter of a million inserts, and both sides of a
 directory check the same bounds.
 
+*Listing 7.4a*
 ```json
 {
   "limits": {
@@ -1075,6 +1110,7 @@ nothing the client can do would help; `auu` turns that into "the relay could
 not store or read a message (storage error); whoever runs it needs to look at
 its log". The log is where the relay says why:
 
+*Listing 7.4b*
 ```
 level=WARN msg="storage fault" path=/var/lib/auu/messages/tmp err="open /var/lib/auu/messages/tmp/3f…: permission denied"
 ```
@@ -1088,6 +1124,7 @@ the journal with the same line. A full disk is not a storage fault: it is the
 A relay makes its own certificates, from an authority you create on a machine
 that has no open sockets. No ACME, no Let's Encrypt, no port 80 or 443.
 
+*Listing 7.5a*
 ```
 auu-ca init  --name "Your Organisation"                       # asks for a passphrase
 auu-ca relay --host relay.example.com --out relay-bundle.json  # asks for it again
@@ -1139,6 +1176,7 @@ remedy is to delete the file promptly, or not to write it.
 
 Everything above the line stays on that machine:
 
+*Listing 7.5b*
 ```
   KEPT OFFLINE — every key here
   ─────────────────────────────────────────────────────────────────
@@ -1168,6 +1206,7 @@ rather than intentions.
 Both intermediates are **disposable**, and that is the point of the extra
 level. If the relay is compromised:
 
+*Listing 7.5c*
 ```
 auu-ca relay --host relay.example.com --out relay-bundle.json
 scp relay-bundle.json relay.example.com:
@@ -1208,6 +1247,7 @@ relay URL. Putting the hash in the token makes it checkable.
 Joining without a token, or setting the relay up yourself, with `HASH` as
 `auu-ca init` printed it:
 
+*Listing 7.5.1a*
 ```
 auu init --name you --relay https://relay.example.com:9443 --anchor HASH
 ```
@@ -1216,6 +1256,7 @@ An identity that already exists pins without being replaced, which is what
 the first administrator needs, since their export line is already on the
 relay:
 
+*Listing 7.5.1b*
 ```
 auu anchor pin HASH
 auu anchor            # what is pinned, and the relay's current signing intermediate
@@ -1251,6 +1292,7 @@ then carry no anchor.
 
 ### 7.6 Your own certificate
 
+*Listing 7.6a*
 ```
 auu-relay --tls-cert /etc/ssl/relay.pem --tls-key /etc/ssl/relay.key
 ```
@@ -1259,6 +1301,7 @@ auu-relay --tls-cert /etc/ssl/relay.pem --tls-key /etc/ssl/relay.key
 
 Binding ports 80 and 443 without running as root needs a capability:
 
+*Listing 7.7a*
 ```ini
 [Unit]
 Description=auu relay
@@ -1303,6 +1346,7 @@ installing Go to adding a second machine.
 A relay can require each machine to hold a certificate of its own, issued when
 that machine enrols:
 
+*Listing 7.8a*
 ```json
 "client_certs": { "mode": "required" }
 ```
@@ -1344,6 +1388,7 @@ chair is [Enrolling on a relay with certificates enabled](docs/enrolling.md).
 
 To take one away:
 
+*Listing 7.8b*
 ```
 auu-admin certs ls                        # every machine, and whose it is
 auu-admin certs revoke SERIAL --reason "laptop stolen"
@@ -1388,6 +1433,7 @@ Whoever the relay's host says. Point `--admin-file` at a file of export lines,
 one per administrator, in exactly the format a user keeps in
 `authorized_peers`:
 
+*Listing 8.1a*
 ```
 # /etc/auu/admins
 ccx2.<base64>.bunty
@@ -1418,6 +1464,7 @@ boundary is visible in what is installed where, and the `connect` skill never
 touches it. It reads your identity and relay from `AUU_HOME` like `auu` does,
 so an administrator can keep a dedicated identity in its own home.
 
+*Listing 8.2a*
 ```
 auu-admin status
 
@@ -1452,6 +1499,7 @@ undoing it.
 An enrolment token is a short signed string that says who issued it, which
 relay it is for, what it is for, and when it stops working:
 
+*Listing 8.3a*
 ```
 auu-admin token issue --note "Bob, for the protocol review" --expires 168h
 ```
@@ -1472,6 +1520,7 @@ A token has a **use**. The default, `register`, creates a mailbox. On a relay
 with client certificates, somebody who already has a mailbox and wants to add
 a second machine needs `--use cert`, which is always bound to one identity:
 
+*Listing 8.3b*
 ```
 auu-admin token issue --use cert --for FINGERPRINT --note "Bob's desktop"
 ```
@@ -1485,6 +1534,7 @@ what makes the next request a second machine. No path is token-free.
 
 On their side, with nothing set up yet:
 
+*Listing 8.3c*
 ```
 auu enrol --name bob ccxt1.eyJpZCI6...
 ```
@@ -1493,6 +1543,7 @@ which shows them who issued it, for what, for which relay and until when, asks
 them to confirm, creates their identity, takes the relay from the token, and
 registers. With an identity already:
 
+*Listing 8.3d*
 ```
 auu register --token ccxt1.eyJpZCI6...
 ```
@@ -1507,6 +1558,7 @@ not enough: the identity comes with it, but each relay's `cert.json` under
 `relays/<name>/` is that machine's and must not, and the relay refuses the
 new machine. `auu` says exactly that, and what to do:
 
+*Listing 8.4a*
 ```
 this relay requires a client certificate and this machine's is missing:
 run 'auu register --token TOKEN' with a token from an administrator
@@ -1514,6 +1566,7 @@ run 'auu register --token TOKEN' with a token from an administrator
 
 Ask an administrator for `--use cert --for` your fingerprint, then:
 
+*Listing 8.4b*
 ```
 auu register --token ccxt1.eyJpZCI6... --label desktop
 ```
@@ -1522,6 +1575,7 @@ An ordinary `register` token is refused here, because the identity already
 holds a live certificate on the first machine, and the refusal says so and
 names the token to ask for, with your fingerprint filled in:
 
+*Listing 8.4c*
 ```
 this identity already holds a live certificate on another machine, so adding
 this one needs a certificate token: ask the administrator for one issued with
@@ -1543,6 +1597,7 @@ out-of-band step it always was, and enrolment does not change it.
 Every administrative change and every enrolment writes one line, in both access
 log modes:
 
+*Listing 8.5a*
 ```
 msg=admin action=token.issue admin=9bd6f672f1aab1b2 target=5d1f0c…  outcome=ok uses=1 not_after=2026-09-13T06:01:22Z
 msg=admin action=enrol       admin=-                target=77d9de79…  outcome=ok token=5d1f0c…
