@@ -123,7 +123,7 @@ func (u *user) elsewhere(args ...string) {
 // with its output, never after it as a panic that hides the output. CI's
 // macOS runner had a create fail after its test had ended, and the panic
 // that followed said nothing about why.
-func joined(t *testing.T, f func()) {
+func joined(t *testing.T, f func()) chan struct{} {
 	t.Helper()
 	done := make(chan struct{})
 	t.Cleanup(func() { <-done })
@@ -131,6 +131,7 @@ func joined(t *testing.T, f func()) {
 		defer close(done)
 		f()
 	}()
+	return done
 }
 
 // onTheHold runs a command for this user in another process once the gate
@@ -141,10 +142,17 @@ func joined(t *testing.T, f func()) {
 // at how long the watch's setup takes: a dial and a directory fetch on a
 // loaded machine can take longer, and then the change is in the baseline
 // and never an event, and the watch runs to its timeout.
+//
+// It waits for this user's previous command in another process first:
+// the watch that follows returns when the relay reports the change, which
+// is before the process that made it has written its local record, and a
+// next command started on the event rather than the exit read a directory
+// not yet written. Wait for the process, not the event.
 func (u *user) onTheHold(gate *waitGate, args ...string) {
 	u.t.Helper()
+	u.settle()
 	gate.lists.Store(0)
-	joined(u.t, func() {
+	u.busy = joined(u.t, func() {
 		awaitListing(gate)
 		u.elsewhere(args...)
 	})

@@ -94,6 +94,25 @@ func (b *syncBuffer) String() string {
 type user struct {
 	t    *testing.T
 	home string
+	// busy is the done channel of this user's last command in another
+	// process, when one was started by onTheHold: closed when that process
+	// has exited. A command for the same user waits on it first, so that
+	// what the previous process wrote locally is there to be read. See
+	// settle.
+	busy chan struct{}
+}
+
+// settle waits for this user's last command in another process to exit.
+// A change the relay reports is not the end of the command that made it:
+// a push PUTs to the relay first and writes the local record after, and a
+// watch in this process reports the change as soon as the relay has it,
+// so the next command for the same user, started at once, could read a
+// local directory the previous process had not yet written. CI saw one
+// such read under load, once.
+func (u *user) settle() {
+	if u.busy != nil {
+		<-u.busy
+	}
 }
 
 func newUser(t *testing.T, name, relayURL string) *user {
@@ -116,6 +135,7 @@ func (u *user) run(args ...string) string {
 
 func (u *user) tryRun(args ...string) (string, error) {
 	u.t.Helper()
+	u.settle()
 	u.t.Setenv("AUU_HOME", u.home)
 
 	realStdout := os.Stdout

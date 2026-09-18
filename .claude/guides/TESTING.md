@@ -396,6 +396,22 @@ through it, with the negative assertions (no key in the log, not the whole
 token) made on the log it returned. Any line a goroutine writes after the
 thing the test waited on is the same shape.
 
+**A change the relay reports is not the end of the command that made it;
+wait for the process, not the event.** The same shape across processes. A
+push PUTs the directory to the relay first and writes the local record
+after; a watch in the test's own process reports the change as soon as
+the relay has it; and the watch tests started the next step's command for
+the same user, in another process, on that report — while the previous
+process might not yet have written its local directory, which the next
+one reads. On every fast machine the write won; on CI's ubuntu runner,
+with the package at 519 seconds, it lost once, and `channel delete` found
+"a directory issued T, newer than this machine's", T being the step
+before. `onTheHold` now keeps its process's done channel on the user and
+the next command for that user — in another process or in this one —
+waits on it first. When a test chains steps through separate processes,
+the thing to wait for between them is the process's exit, never the
+event it caused.
+
 **A line limited to once a minute is tested as one line for a burst and a
 second after the clock advances.** The fault log's limiter is keyed by the
 thing the line is about — a path for a storage fault, `allowlist:FP` for a
