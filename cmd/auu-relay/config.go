@@ -772,8 +772,23 @@ func (c Config) clientCertsValidate() error {
 		return errors.New("client certificates are required but tls mode is off: " +
 			"the relay must terminate TLS itself to see one; set tls.mode to files")
 	}
+	// Registration consults no presented certificate — it is how a machine
+	// gets one — so with registration open, any holder of the identity key
+	// re-registers with no token and is issued a fresh certificate, and
+	// revoking a machine's certificate revokes nothing. The pair cancels
+	// the guarantee certificates exist for, and is refused rather than
+	// documented.
+	if c.Registration == relayapi.RegistrationOpen {
+		return errors.New(msgOpenWithCerts)
+	}
 	return nil
 }
+
+// msgOpenWithCerts is the refusal of open registration beside required
+// client certificates.
+const msgOpenWithCerts = "client certificates are required but registration is open: a revoked machine " +
+	"could re-register with no token and be issued a new certificate, so revocation would revoke nothing; " +
+	"set registration to token or closed"
 
 // Encode writes a configuration as the config file format.
 //

@@ -18,12 +18,16 @@ import (
 )
 
 // certConfig is a configuration that would start, with client certificates
-// on, from a real auu-ca bundle.
+// on, from a real auu-ca bundle. Registration is token, since certificates
+// beside open registration are refused: a machine could re-register with
+// no token and be issued a new one.
 func certConfig(t *testing.T) Config {
 	t.Helper()
 	dir := t.TempDir()
 	c := Defaults()
 	c.DB = filepath.Join(dir, "relay.db")
+	c.Registration = relayapi.RegistrationToken
+	c.Admin.AuthorizedFile = adminFile(t, "boss")
 	c.ClientCerts.Mode = relayapi.ClientCertsRequired
 	c.TLS.Mode = ModeFiles
 	c.TLS.Bundle = testBundlePath(t, dir)
@@ -100,10 +104,11 @@ func TestClientCertsNeedSomewhereToSeeACertificate(t *testing.T) {
 	dir := t.TempDir()
 	c := Defaults()
 	c.DB = filepath.Join(dir, "relay.db")
+	c.Registration = relayapi.RegistrationClosed
 	c.ClientCerts.Mode = relayapi.ClientCertsRequired
 	c.TLS.Bundle = testBundlePath(t, dir)
 	c.Resolve()
-	c.TLS.Mode = ModeOff // Resolve infers files from a bundle; this is set by hand.
+	c.TLS.Mode = ModeOff // files is the default; off is set by hand.
 
 	err := c.Validate()
 	if err == nil {
@@ -203,6 +208,7 @@ func TestTheParameterSetComesFromTheBundle(t *testing.T) {
 		}
 		c := Defaults()
 		c.DB = filepath.Join(dir, "relay.db")
+		c.Registration = relayapi.RegistrationClosed
 		c.ClientCerts.Mode = relayapi.ClientCertsRequired
 		c.TLS.Bundle = path
 		c.Resolve()
@@ -486,5 +492,41 @@ func TestTheRelayWarnsBeforeItsIntermediatesExpire(t *testing.T) {
 	c.TLS.Bundle = path
 	if _, err := openBundle(c); err == nil || !strings.Contains(err.Error(), "auu-ca relay") {
 		t.Fatalf("an expired bundle at startup: %v, want a refusal naming 'auu-ca relay'", err)
+	}
+}
+
+// TestOpenRegistrationWithRequiredCertificatesIsRefused: registration
+// consults no presented certificate — it is how a machine gets one — so
+// with registration open, any holder of the identity key re-registers with
+// no token and is issued a fresh certificate, and revoking a machine's
+// certificate revokes nothing. The pair cancels the guarantee certificates
+// exist for, and is refused at startup in one sentence; open without
+// certificates, and token or closed with them, are the pairs that stand.
+func TestOpenRegistrationWithRequiredCertificatesIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		registration string
+		certs        string
+		ok           bool
+	}{
+		{"open with certificates required", relayapi.RegistrationOpen, relayapi.ClientCertsRequired, false},
+		{"open without certificates", relayapi.RegistrationOpen, relayapi.ClientCertsOff, true},
+		{"token with certificates required", relayapi.RegistrationToken, relayapi.ClientCertsRequired, true},
+		{"closed with certificates required", relayapi.RegistrationClosed, relayapi.ClientCertsRequired, true},
+		{"token without certificates", relayapi.RegistrationToken, relayapi.ClientCertsOff, true},
+		{"closed without certificates", relayapi.RegistrationClosed, relayapi.ClientCertsOff, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := certConfig(t)
+			c.Registration = tc.registration
+			c.ClientCerts.Mode = tc.certs
+			err := c.Validate()
+			if tc.ok && err != nil {
+				t.Fatalf("%s was refused: %v", tc.name, err)
+			}
+			if !tc.ok && (err == nil || err.Error() != msgOpenWithCerts) {
+				t.Fatalf("%s: %v, want %q", tc.name, err, msgOpenWithCerts)
+			}
+		})
 	}
 }

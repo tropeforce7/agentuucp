@@ -117,6 +117,14 @@ func validate(s Spec) (port int, arch string, err error) {
 	if port, err = listenPort(s.Listen); err != nil {
 		return 0, "", err
 	}
+	// The relay refuses this pair at startup, so a kit that carried it
+	// would install a relay that never starts; refused here, in the relay's
+	// own words.
+	if s.Registration == relayapi.RegistrationOpen && s.ClientCerts == relayapi.ClientCertsRequired {
+		return 0, "", errors.New("client certificates are required but registration is open: a revoked machine " +
+			"could re-register with no token and be issued a new certificate, so revocation would revoke nothing; " +
+			"use --registration token or closed")
+	}
 	if s.Registration == relayapi.RegistrationToken && len(s.Admins) == 0 {
 		return 0, "", errors.New("a token relay needs an administrator: --admin LINE, or --registration open")
 	}

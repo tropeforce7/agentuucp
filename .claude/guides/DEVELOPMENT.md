@@ -294,6 +294,18 @@ with rate zero allows everything, allocates nothing, and takes no locks.
 **Unknown config keys are an error.** A misspelled key that silently does
 nothing is the worst kind of misconfiguration.
 
+**A setting pair that cancels a guarantee is refused, not documented.**
+`registration: open` beside `client_certs.mode: required` let any holder
+of the identity key re-register with no token and be issued a fresh
+certificate, so revoking a machine's certificate revoked nothing; the code
+had a comment saying the cost was the registration mode's business, and
+the adversarial trace read it as a design limitation worth a sentence in
+the docs. It is refused at startup instead, in one sentence saying why,
+and the kit refuses the pair before it writes a settings file. When two
+settings are each fine alone and together undo what one of them is for,
+`Validate` says so; a sentence in a guide is read by fewer people than a
+refusal is.
+
 **A default is a decision: the safe mode is the one that applies when
 nothing is said.** The relay's `tls.mode` used to be inferred — `files`
 when a bundle or a certificate was named, `off` otherwise — so `auu-relay
@@ -320,6 +332,20 @@ state.** The startup warning about file permissions is returned beside the
 **One SQLite connection.** `MaxOpenConns(1)` with `busy_timeout`. That means
 every statement inside a transaction must go through the `*sql.Tx`; calling
 `s.db` from inside an open transaction deadlocks.
+
+**One upload's operations are serialised by a lock held across the copy,
+never a transaction.** `AppendUpload` read the row, copied the body onto
+the file and only then updated the row, and two appends at one offset
+both passed the offset check and both landed: an admitted sender held
+twice what they declared and twice what was reserved, bounded only by the
+in-flight cap, and the upload could never complete. Now the store keeps a
+mutex per upload in progress, taken by an append from the offset check
+through the file write and the row's update, and by a completion or an
+abort for its whole length; the entry goes with the upload. A SQLite
+transaction is the wrong tool for it: one open for the length of a
+network read would hold the one connection every other request needs.
+Serialise with a lock what a transaction cannot span, and test it with
+two callers, one parked inside the copy.
 
 **Counters, not aggregates, and adjust them in the same transaction as the
 row.** Per-mailbox and relay-wide queued totals are columns updated inside

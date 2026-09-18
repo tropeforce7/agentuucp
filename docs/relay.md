@@ -41,7 +41,7 @@ flag you do not type never overrides the file.
 | `--public-url URL` | `public_url` | none |
 | `--admin-file PATH` | `admin.authorized_file` | none, no administrators |
 | `--token-max-age DURATION` | `admin.token_max_age` | `720h` |
-| `--client-certs off\|required` | `client_certs.mode` | `off` |
+| `--client-certs off\|required` | `client_certs.mode` | `off`; `required` needs `registration` `token` or `closed` |
 | `--client-cert-lifetime DURATION` | `client_certs.lifetime` | `8760h`, between `1h` and `87600h` |
 | `--tls-mode off\|files` | `tls.mode` | `files`; `off` only when said, see below |
 | `--tls-cert PATH` | `tls.cert_file` | none |
@@ -496,6 +496,13 @@ that machine enrols:
 ```json
 "client_certs": { "mode": "required" }
 ```
+
+Not beside `"registration": "open"`: registration is how a machine gets a
+certificate and consults none, so with registration open a machine whose
+certificate was revoked would re-register with no token and be issued a
+new one, and revocation would revoke nothing. The relay refuses to start
+on that pair, in one sentence, and so does `auu-ca kit`; `token` or
+`closed` is what certificates go with.
 
 What it adds is a **second, per-machine credential**. Every request the relay
 verifies is already signed by the identity key — the health check and a key

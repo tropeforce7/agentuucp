@@ -267,6 +267,23 @@ func TestPublicURLIsTheFirstHostAndTheListenPort(t *testing.T) {
 	refused(t, s, "a kit needs a host: the first is what public_url names")
 }
 
+// TestAKitRefusesOpenRegistrationWithRequiredCertificates: the relay
+// refuses the pair at startup, so a kit that carried it would install a
+// relay that never starts; the kit refuses first, in the relay's words.
+func TestAKitRefusesOpenRegistrationWithRequiredCertificates(t *testing.T) {
+	s := aSpec(t)
+	s.Registration = "open"
+	s.ClientCerts = "required"
+	refused(t, s, "client certificates are required but registration is open: a revoked machine "+
+		"could re-register with no token and be issued a new certificate, so revocation would revoke nothing; "+
+		"use --registration token or closed")
+	// Token with certificates, and open without, are kits that build.
+	s.Registration = "token"
+	build(t, s)
+	s.Registration, s.ClientCerts = "open", "off"
+	build(t, s)
+}
+
 func TestATokenRelayNeedsAnAdministrator(t *testing.T) {
 	s := aSpec(t)
 	s.Admins = nil
@@ -541,7 +558,8 @@ func TestTheEmbeddedFilesAreTheShippedOnes(t *testing.T) {
 // touched, and nothing HTML-escaped.
 func TestTheSettingsSetFourKeysAndCarryTheRestAsShipped(t *testing.T) {
 	s := aSpec(t)
-	s.Listen, s.Registration, s.ClientCerts = "0.0.0.0:8443", "open", "required"
+	// closed with certificates: open with them is a pair the kit refuses.
+	s.Listen, s.Registration, s.ClientCerts = "0.0.0.0:8443", "closed", "required"
 	archive, _ := build(t, s)
 	var got, shipped map[string]any
 	if err := json.Unmarshal(fileIn(t, archive, "relay.json").data, &got); err != nil {
@@ -552,7 +570,7 @@ func TestTheSettingsSetFourKeysAndCarryTheRestAsShipped(t *testing.T) {
 	}
 	shipped["listen"] = "0.0.0.0:8443"
 	shipped["public_url"] = "https://relay.example.com:8443"
-	shipped["registration"] = "open"
+	shipped["registration"] = "closed"
 	shipped["client_certs"].(map[string]any)["mode"] = "required"
 	a, _ := json.Marshal(got)
 	b, _ := json.Marshal(shipped)

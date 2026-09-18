@@ -265,6 +265,7 @@ func TestCredentialNameBoundaries(t *testing.T) {
 // come from a credential as well as a file, and the refusal names both.
 func TestClientCertsNeedABundleFromEitherSetting(t *testing.T) {
 	c, _ := credentialConfig(t, "relay-bundle")
+	c.Registration = relayapi.RegistrationClosed
 	c.ClientCerts.Mode = relayapi.ClientCertsRequired
 	if err := c.Validate(); err != nil {
 		t.Fatalf("client certificates from a credential were refused: %v", err)
