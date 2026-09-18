@@ -31,6 +31,10 @@ the command, its file and its state.
   away instead. An encrypted key on a person's own account is the other
   shape, `auu unlock` and `auu agent start` after each boot and a user
   unit with lingering; `serve.md` has that unit.
+- **An API key of its own**, made in a workspace of its own with a spend
+  limit, so that revoking it stops this expert and nothing else and a
+  runaway thread cannot spend past the limit. It goes in a file the proxy
+  reads, never in the handler's environment; 7.2 and 7.6a say where.
 - **A clone of the project on that machine**, owned by the expert's
   account. The expert never writes to it; every answer is worked out in a
   git worktree made from it.
@@ -109,7 +113,13 @@ What it does: keeps a session per channel or per thread according to
 is a colleague's message and not instructions; and runs `claude -p` with
 a tool list. The tool list is yours to set. A read-only expert needs
 `Read`, `Grep`, `Glob` and enough `Bash` to run the tests; a side-copy
-expert needs `Edit` and `Write` as well. Never put `auu` or `auu-admin`
+expert needs `Edit` and `Write` as well. With a proxy configured, serve
+hands the wrapper `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY`, the
+proxy's address with a token for this run and the same token as the key,
+and Claude Code reads both from its environment; the wrapper sets
+`ENABLE_TOOL_SEARCH=auto` when it sees the base URL, since Claude Code
+turns that search off behind a proxy unless told the proxy forwards
+requests untouched, which serve's does. Never put `auu` or `auu-admin`
 in the allow list: the reply goes out through serve and nowhere else, and
 a handler that runs `auu` speaks as the machine's identity.
 
@@ -143,15 +153,18 @@ container.
       "retries": 3,
       "thread_ttl": "168h"
     }
+  },
+  "proxy": {
+    "key_file": "/etc/auu-expert/key"
   }
 }
 ```
 
 `dir` is the clone, `exec` the wrapper, `mode` one of the two. The rest
-are optional and default as shown. A `proxy` section beside `channels`,
-naming the key file of 7.2, is what gives the handler a way to reach
-Anthropic without holding the key; a file without one hands it nothing.
-Then:
+of a channel is optional and defaults as shown. The `proxy` section names
+the key file of 7.2 and is what gives the handler a way to reach Anthropic
+without holding the key; a file without one hands it nothing, and with the
+split proxy of 7.6a it names the control socket instead. Then:
 
 ```
 auu serve check
@@ -182,6 +195,16 @@ Once, to see it work:
 ```
 auu serve --once
 ```
+
+With a proxy configured the run says so on standard error before anything
+else, `proxy: holding the key from PATH, listening on 127.0.0.1:PORT`, and
+each answered message is bracketed by the proxy's lines: the token minted,
+one line per request through it with the method, path, status, bytes and
+time, and the token revoked. The key is in none of them. On a machine where
+`claude` is also signed in to claude.ai, the handler's own standard error
+carries a warning that the login is overridden because a key is set; that
+is the proxy's variables taking precedence, it is expected, and serve
+keeps it out of the reply.
 
 It fetches, answers everything pending in order, and exits. The first
 run with mail already in the inbox skips that mail and says so; `auu serve
