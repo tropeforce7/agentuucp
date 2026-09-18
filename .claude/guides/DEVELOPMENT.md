@@ -452,12 +452,23 @@ thing has one at the front. The table:
 
 | asked to sign | scope |
 |---|---|
-| `ccx-http-v1` + a method and path in the receive set: `GET` of a listing, a blob, an allow list, a directory, certs or a key; `DELETE` of a message; `HEAD` of an upload | receive |
+| `ccx-http-v1` + a method and path in the receive set: `GET` of a listing, a blob, an allow list, a directory, certs, a key or the health check; `DELETE` of a message; `HEAD` of an upload; `POST` of this identity's certs, which is renewal | receive |
 | `ccx-http-v1` + anything else — a post, an upload, a push, a registration, an admin route | send |
 | `ccx-sig-v1`, `ccx-stream-sig-v1`, `ccx-channels-v1`, `ccx-allow-v1`, `ccx-token-v1` | send |
 | anything else under the identity key, malformed included | send |
 | a machine key (`cert:`, `pending:`): the TLS handshake, a CSR | receive |
-| `generate`, a new machine key | send |
+| `generate` under a `cert:` name, a new machine key for renewal, or for enrolment before `POST /v1/register` makes it send | receive |
+| `generate` under any other name | send |
+
+Renewal is receive because it is maintenance of this machine's transport
+credential and not an act of the person: the relay issues the certificate
+to the fingerprint of the identity that signed the request and to no other,
+the request must arrive on the live certificate it then retires, it carries
+no token and enrols no machine, and the new key never leaves the agent.
+Without that row a home in receive scope — the default — would be warned
+for the last sixty days and then lose its certificate. The health check is
+receive because the client signs it before it makes a key and the relay
+serves it to anybody, signature or none.
 
 Unknown is send, always; over-strict is the right side, because a wrong
 receive costs a signature and a wrong send costs a retry.

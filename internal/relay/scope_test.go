@@ -18,9 +18,11 @@ import (
 // tested against the relay and its database.
 func TestTheClassifierAgreesWithTheRelay(t *testing.T) {
 	want := map[string]agent.Scope{
-		// Unauthenticated, never signed; send by the classifier because
-		// they are not in the set, and never asked of it.
-		"GET /v1/health":       agent.ScopeSend,
+		// Unauthenticated on the relay. The client signs the health check
+		// all the same, before it makes a machine key, so it is receive;
+		// the anchor is fetched without an identity and never signed, and
+		// is send for not being in the set.
+		"GET /v1/health":       agent.ScopeReceive,
 		"GET /v1/trust-anchor": agent.ScopeSend,
 
 		// The receive set.
@@ -32,6 +34,7 @@ func TestTheClassifierAgreesWithTheRelay(t *testing.T) {
 		"GET /v1/keys/{fp}":              agent.ScopeReceive,
 		"DELETE /v1/mailbox/{fp}/{id}":   agent.ScopeReceive,
 		"HEAD /v1/uploads/{id}":          agent.ScopeReceive,
+		"POST /v1/mailbox/{fp}/certs":    agent.ScopeReceive, // renewal: this identity's own certificate, on the live one, no token
 
 		// Everything that originates.
 		"POST /v1/register":                        agent.ScopeSend,
@@ -42,7 +45,6 @@ func TestTheClassifierAgreesWithTheRelay(t *testing.T) {
 		"POST /v1/uploads/{id}/complete":           agent.ScopeSend,
 		"PUT /v1/mailbox/{fp}/allow":               agent.ScopeSend,
 		"PUT /v1/mailbox/{fp}/channels":            agent.ScopeSend,
-		"POST /v1/mailbox/{fp}/certs":              agent.ScopeSend,
 		"GET /v1/admin/status":                     agent.ScopeSend,
 		"GET /v1/admin/mailboxes":                  agent.ScopeSend,
 		"GET /v1/admin/mailboxes/{fp}":             agent.ScopeSend,

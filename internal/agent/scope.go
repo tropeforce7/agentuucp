@@ -27,6 +27,19 @@ import (
 // not receive. A machine key signs only the TLS handshake and its own
 // certificate request, which originate nothing, and is receive by its name.
 //
+// Renewing this machine's certificate is receive too, on both of its
+// halves: a new machine key made under a cert: name, and the request that
+// spends it, POST /v1/mailbox/{fp}/certs. Renewal is maintenance of the
+// transport credential, and nothing about it lets a process act as the
+// person: the relay issues the certificate to the fingerprint of the
+// identity that signed the request and to no other, the request must
+// arrive on the live certificate it then retires, it carries no token and
+// can enrol no machine, and the new key never leaves the agent. Without
+// this a home in receive scope — the default — would be warned on every
+// command for the last sixty days and then lose its certificate.
+// Enrolment stays send: the same generate, but the request that spends it
+// is POST /v1/register, which makes a mailbox or a machine.
+//
 // Over-strict is the right side. Go's ServeMux serves HEAD through a GET
 // pattern, so `HEAD /v1/mailbox/{fp}` reaches the listing on the relay; the
 // classifier makes it send, because HEAD is in the set for one path only.
@@ -70,6 +83,8 @@ var receiveRoutes = []struct {
 	{"GET", "/v1/keys/*"},             // a lookup
 	{"DELETE", "/v1/mailbox/*/*"},     // acknowledging a message, and auu rm
 	{"HEAD", "/v1/uploads/*"},         // how much of a resumable upload the relay holds
+	{"POST", "/v1/mailbox/*/certs"},   // renewing this machine's certificate; see above
+	{"GET", "/v1/health"},             // the relay's parameter set, asked before a key is made; unauthenticated on the relay, signed by the client all the same
 }
 
 // ScopeOf is the scope an operation needs: the pure decision, made from the
@@ -80,7 +95,12 @@ func ScopeOf(op, key string, message []byte) Scope {
 	case OpStatus, OpLock, OpStop, OpDecapsulate, OpExchange:
 		return ScopeReceive
 	case OpGenerate:
-		// A new machine key is made at enrolment, which is a human act.
+		// A new machine key under a cert: name is renewal's, or enrolment's
+		// before the request that makes enrolment send; anything else is
+		// not a name generate makes keys under, and is send.
+		if strings.HasPrefix(key, CertPrefix) {
+			return ScopeReceive
+		}
 		return ScopeSend
 	case OpSign:
 		if strings.HasPrefix(key, CertPrefix) || strings.HasPrefix(key, PendingPrefix) {

@@ -44,6 +44,9 @@ func TestTheClassifierAdmitsTheReceiveSetAndNothingElse(t *testing.T) {
 		"acknowledging":                  "DELETE /v1/mailbox/" + fp + "/12",
 		"how much the relay holds":       "HEAD /v1/uploads/u-1",
 		"{id} equal to allow under blob": "GET /v1/mailbox/" + fp + "/allow/blob", // routed to the blob handler, which refuses the id; nothing originates
+		"a certificate renewed":          "POST /v1/mailbox/" + fp + "/certs",
+		"the health check":               "GET /v1/health",                       // signed by the client before it makes a key, ignored by the relay
+		"another mailbox's certs":        "POST /v1/mailbox/" + other + "/certs", // by shape; the relay refuses "not your mailbox", and the signature is the caller's
 	}
 	send := map[string]string{
 		"a post":                      "POST /v1/mailbox/" + fp,
@@ -53,7 +56,6 @@ func TestTheClassifierAdmitsTheReceiveSetAndNothingElse(t *testing.T) {
 		"an upload completed":         "POST /v1/uploads/u-1/complete",
 		"an allow list pushed":        "PUT /v1/mailbox/" + fp + "/allow",
 		"a directory pushed":          "PUT /v1/mailbox/" + fp + "/channels",
-		"a certificate renewed":       "POST /v1/mailbox/" + fp + "/certs",
 		"a registration":              "POST /v1/register",
 		"admin status":                "GET /v1/admin/status",
 		"admin mailboxes":             "GET /v1/admin/mailboxes",
@@ -68,8 +70,8 @@ func TestTheClassifierAdmitsTheReceiveSetAndNothingElse(t *testing.T) {
 		"admin add token":             "POST /v1/admin/tokens",
 		"admin tokens":                "GET /v1/admin/tokens",
 		"admin revoke token":          "DELETE /v1/admin/tokens/t-1",
-		"the health check":            "GET /v1/health",
 		"the trust anchor":            "GET /v1/trust-anchor",
+		"HEAD of the health check":    "HEAD /v1/health",
 		"a path with ..":              "GET /v1/mailbox/" + fp + "/../allow",
 		"a path with . ":              "GET /v1/mailbox/./allow",
 		"an extra segment":            "GET /v1/mailbox/" + fp + "/allow/x",
@@ -163,6 +165,17 @@ func TestTheClassifierAdmitsTheReceiveSetAndNothingElse(t *testing.T) {
 			t.Errorf("%q is %s, want %s", op, got, want)
 		}
 	}
+	// generate: a machine key under a cert: name is renewal's, receive;
+	// under any other name — the pending: handle it returns, the identity,
+	// nothing — send, and not a name the agent makes keys under anyway.
+	for key, want := range map[string]Scope{
+		CertPrefix + "work": ScopeReceive, PendingPrefix + "work": ScopeSend,
+		KeyIdentity: ScopeSend, "": ScopeSend, "work": ScopeSend,
+	} {
+		if got := ScopeOf(OpGenerate, key, nil); got != want {
+			t.Errorf("generate under %q is %s, want %s", key, got, want)
+		}
+	}
 }
 
 // TestTheReceiveSentenceNamesTheDefaultSendTTL: the sentence the client
@@ -225,6 +238,14 @@ func TestReceiveScopeRefusesWhatOriginates(t *testing.T) {
 		},
 		"decapsulate": func() error { _, err := a.client.Decapsulate(KeyIdentity, make([]byte, 1088)); return err },
 		"exchange":    func() error { _, err := a.client.Exchange(KeyIdentity, peerPoint(t)); return err },
+		"a renewal's new key": func() error {
+			_, err := a.client.Generate(CertPrefix+"renewed", 65)
+			return err
+		},
+		"a renewal's request": func() error {
+			_, err := a.client.Sign(KeyIdentity, signingString("POST", listing+"/certs"), nil)
+			return err
+		},
 	}
 	sendOps := map[string]func() error{
 		"a post": func() error { _, err := a.client.Sign(KeyIdentity, signingString("POST", listing), nil); return err },
@@ -247,7 +268,6 @@ func TestReceiveScopeRefusesWhatOriginates(t *testing.T) {
 			_, err := a.client.Sign(KeyIdentity, signingString("GET", "/v1/admin/status"), nil)
 			return err
 		},
-		"generate": func() error { _, err := a.client.Generate(CertPrefix+"other", 65); return err },
 		"nothing in particular": func() error {
 			_, err := a.client.Sign(KeyIdentity, []byte("m"), nil)
 			return err

@@ -214,7 +214,9 @@ start is the rest: `auu send`, `auu inbox`, `auu read`, `auu reply`; and
 **Renewal is automatic.** The certificate lasts as long as the relay's
 operator set, a year by default, and `auu` renews it from sixty days before
 expiry as a side effect of whatever command you run, over the certificate it
-already holds. `auu cert renew` does it now if you want to watch. A machine
+already holds; on an encrypted home a plain `auu unlock` is enough, since
+renewing this machine's own certificate originates nothing. `auu cert
+renew` does it now if you want to watch. A machine
 left unused past its expiry cannot renew, because the request would be
 presented with an expired certificate; `auu` then says:
 

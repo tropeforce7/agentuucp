@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/agent"
 	"github.com/tropeforce7/agentuucp/internal/relay"
@@ -381,5 +382,58 @@ func TestTheTestBinaryKnowsAHandlerRunFromAnAuuRun(t *testing.T) {
 		if got := isHandlerRun(tc.args); got != tc.want {
 			t.Errorf("%s: isHandlerRun(%q) = %v, want %v", name, tc.args, got, tc.want)
 		}
+	}
+}
+
+// TestRenewalIsReceiveScope: a home in receive scope — the default after
+// 'passphrase set' — renews its machine certificate, by hand with
+// 'auu cert renew' and on its own at sixty days before expiry, because
+// renewal is maintenance of this machine's transport credential and lets
+// nothing act as the person. Enrolment still asks for send.
+func TestRenewalIsReceiveScope(t *testing.T) {
+	_, issue := certRelay(t)
+	agentEnv(t)
+	alice := &user{t: t, home: t.TempDir()}
+	alice.run("enrol", "--name", "alice", "--yes", issue(token.UseRegister, ""))
+	alice.encrypt()
+	if st := alice.agentStatus(); st.Scope != string(agent.ScopeReceive) {
+		t.Fatalf("after passphrase set the agent says %+v, want receive", st)
+	}
+	before := alice.certRecord()
+
+	// By hand, in receive scope: a new serial, the key wrapped, the
+	// handshake with it completing.
+	if out := alice.run("cert", "renew"); !strings.HasPrefix(out, "renewed: ") {
+		t.Fatalf("cert renew said %q", out)
+	}
+	renewed := alice.certRecord()
+	if renewed.Serial == before.Serial || !renewed.Encrypted() {
+		t.Fatalf("cert renew in receive scope: serial %s → %s, encrypted %v", before.Serial[:8], renewed.Serial[:8], renewed.Encrypted())
+	}
+	if !strings.Contains(alice.run("cert", "ls"), "* is this machine") {
+		t.Fatal("a handshake with the renewed key did not complete")
+	}
+
+	// On its own, at sixty days: a command that reads renews first, still
+	// in receive scope, and then reads.
+	setExpiry(t, alice, time.Now().Add(store.RenewBefore-time.Second))
+	alice.run("inbox")
+	auto := alice.certRecord()
+	if auto.Serial == renewed.Serial {
+		t.Fatal("the automatic renewal inside the window did not happen in receive scope")
+	}
+	if st := alice.agentStatus(); st.Scope != string(agent.ScopeReceive) {
+		t.Fatalf("after two renewals the agent says %+v; renewal must not have needed send scope", st)
+	}
+
+	// Enrolment is not renewal: from a pipe in receive scope it is the
+	// receive sentence, at the request that makes it enrolment.
+	_, err := alice.withStdin("", "register", "--token", issue(token.UseCert, alice.exportFingerprint()), "--label", "again")
+	var e *exitError
+	if !asExit(err, &e) || e.code != exitLocked || e.Error() != agent.ReceiveOnlyMessage {
+		t.Fatalf("register from a pipe in receive scope gave %v, want exit %d and the receive sentence", err, exitLocked)
+	}
+	if alice.certRecord().Serial != auto.Serial {
+		t.Fatal("a refused register changed the certificate")
 	}
 }

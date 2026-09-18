@@ -231,8 +231,12 @@ registers, pushes or administers; anything it does not recognise is
 refused too. `auu unlock --send` — the passphrase again, ten minutes by
 default — is everything, and then back to receive. An induced action in
 receive scope can therefore fetch mail and acknowledge it, which is to say
-delete it from the relay, and nothing more; in a send window it can
-originate as the person, which is why the window is short and typed for.
+delete it from the relay, and renew this machine's own certificate — which
+the relay issues to the signing identity's fingerprint and to no other, on
+the live certificate it then retires, with no token and for no other
+machine, so it is maintenance and not an act — and nothing more; in a send
+window it can originate as the person, which is why the window is short
+and typed for.
 This does not reach a home that was never encrypted, whose keys are files
 any process can read, nor one whose passphrase is in a file, which the AI
 can read too. The one accepted exception is `auu serve`: an expert

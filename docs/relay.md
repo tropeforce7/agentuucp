@@ -539,7 +539,8 @@ keeps working, as *Certificates without a public CA* above describes. Only the
 
 Certificates last a year by default and `auu` renews them from sixty days out,
 over the certificate it already holds, so a machine in regular use never
-reaches the day it stops working. What all of this looks like from the user's
+reaches the day it stops working; a home under a passphrase renews in
+receive scope, the plain `auu unlock`. What all of this looks like from the user's
 chair is [Enrolling on a relay with certificates enabled](enrolling.md).
 
 To take one away:
