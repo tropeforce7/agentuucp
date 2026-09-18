@@ -118,7 +118,12 @@ directory, and no two names that are one file where case does not count.
 `Report.txt` beside `report.txt`, or `Makefile` beside `makefile`, is
 refused before anything leaves, because the receiver may be on a disk that
 spells them as one — macOS by default, Windows always — and a message that
-cannot be written there is no use to anyone. Above 64 KiB in all, the
+cannot be written there is no use to anyone. For the same reason a name is
+a file name on Windows too: not a device name such as `con`, `nul.txt` or
+`com1.log`, which would open the device rather than a file there, and
+not ending in a dot or a space, which Windows strips; the refusal names
+the rule and says it holds for every receiver, since a sender cannot know
+where a message lands. Above 64 KiB in all, the
 message goes as a stream, in pieces, resumed with `auu send --resume` if
 it is interrupted; nothing about the command changes.
 

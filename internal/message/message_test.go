@@ -228,3 +228,63 @@ func freeTextRows() []freeTextRow {
 		{"letters beyond ASCII", "café 中文", true, true, true},
 	}
 }
+
+// An attachment name is a file name on Windows too, since the receiver
+// may be there and a sender cannot know where a message lands: a stem
+// that is a device name opens the device rather than a file, and a
+// trailing dot or space is stripped, so two names collide. The table is
+// what a name may be, at ValidAttachmentName; the stream package runs the
+// same rows through Manifest.Validate.
+func TestAnAttachmentNameIsAFileNameOnWindowsToo(t *testing.T) {
+	for _, tc := range windowsNameRows() {
+		err := ValidAttachmentName(tc.name)
+		if (err == nil) != tc.allowed {
+			t.Errorf("%q: %v, want accepted=%v", tc.name, err, tc.allowed)
+		}
+		if err != nil && !strings.Contains(err.Error(), "for every receiver") {
+			t.Errorf("%q: %v does not say the rule is for every receiver", tc.name, err)
+		}
+	}
+	if err := ValidAttachmentName("nul.txt"); err == nil || !strings.Contains(err.Error(), "NUL is a device name on Windows") {
+		t.Errorf("nul.txt: %v, want the device named", err)
+	}
+	if err := ValidAttachmentName("report.txt."); err == nil || !strings.Contains(err.Error(), "ends in a dot or a space, which Windows strips") {
+		t.Errorf("report.txt.: %v, want the trailing rule named", err)
+	}
+}
+
+// windowsNameRow is one attachment name and whether Windows would make a
+// file of it.
+type windowsNameRow struct {
+	name    string
+	allowed bool
+}
+
+// windowsNameRows is the table both Validates are held to; the stream
+// package's test carries the same rows as a literal.
+func windowsNameRows() []windowsNameRow {
+	return []windowsNameRow{
+		{"CON", false},
+		{"con", false},
+		{"con.txt", false},
+		{"Con.tar.gz", false},
+		{"COM1", false},
+		{"com9.log", false},
+		{"LPT1", false},
+		{"lpt0", false},
+		{"COM0", false},
+		{"COM\u00b9", false},
+		{"lpt\u00b3", false},
+		{"COM10", true},
+		{"nul", false},
+		{"aux.", false},
+		{"report.txt.", false},
+		{"report.txt ", false},
+		{".hidden", true},
+		{"console.txt", true},
+		{"prn", false},
+		{"PRN.dat", false},
+		{"report.txt", true},
+		{"comet.md", true},
+	}
+}

@@ -391,3 +391,41 @@ func TestAManifestStampedInTheFutureIsMalformed(t *testing.T) {
 		t.Errorf("a year ago: %v, want opened", err)
 	}
 }
+
+// The manifest's attachment names are held to the same Windows rows
+// ValidAttachmentName is, on this path as on the envelope's.
+func TestValidateHoldsTheManifestNamesToWindowsToo(t *testing.T) {
+	from, to := pair(t)
+	const id = "0123456789abcdef0123456789abcdef"
+	for _, tc := range []struct {
+		name    string
+		allowed bool
+	}{
+		{"CON", false},
+		{"con", false},
+		{"con.txt", false},
+		{"Con.tar.gz", false},
+		{"COM1", false},
+		{"com9.log", false},
+		{"LPT1", false},
+		{"lpt0", false},
+		{"COM0", false},
+		{"COM\u00b9", false},
+		{"lpt\u00b3", false},
+		{"COM10", true},
+		{"nul", false},
+		{"aux.", false},
+		{"report.txt.", false},
+		{"report.txt ", false},
+		{".hidden", true},
+		{"console.txt", true},
+	} {
+		_, err := BuildManifest(from, to.Public(), id, Body{Type: "ask", Thread: id, Text: "x"},
+			sourcesOf(memSource{tc.name, []byte("x")}), MinChunkSize)
+		if (err == nil) != tc.allowed {
+			t.Errorf("%q: %v, want accepted=%v", tc.name, err, tc.allowed)
+		} else if err != nil && !errors.Is(err, ErrForm) {
+			t.Errorf("%q: %v is not ErrForm", tc.name, err)
+		}
+	}
+}

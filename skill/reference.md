@@ -368,6 +368,12 @@ A refused send names what to change, and nothing was queued:
   message is prose: a subject is one line, and none of the three may carry
   a character a terminal would obey (the text may hold line breaks and
   tabs). Remove the character; nothing was sent.
+- `attachment "NAME": NUL is a device name on Windows, so the name is
+  refused for every receiver`, or `name ends in a dot or a space, which
+  Windows strips, ...` — the receiver may be on Windows and the sender
+  cannot know; rename the file (`con`, `prn`, `aux`, `nul`, `com0`–`com9`
+  and `lpt0`–`lpt9`, their superscript forms too, with any extension are
+  devices there). Nothing was sent.
 
 Anywhere:
 

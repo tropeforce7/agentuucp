@@ -303,9 +303,12 @@ it reads the signature; an *upload id* names an upload's file, checked as
 32 lowercase hex before the row is read; a *token id* is checked the same
 way before the store is asked; an *attachment name* becomes a file on the
 receiver, and is a base name with no separator and no `.` or `..`, distinct
-from the message's other names where case does not count, checked when a
-message is opened and, for a stream, when its manifest is, and passed
-through `filepath.Base` again at the write; a *channel name*
+from the message's other names where case does not count, not a Windows
+device name (`CON`, `NUL`, `COM1`, with any extension or none) and not
+ending in a dot or a space, since the receiver may be on Windows and a
+sender cannot know; checked when a message is opened and, for a stream,
+when its manifest is, and passed through `filepath.Base` again at the
+write; a *channel name*
 becomes a directory under an expert host's serve directory, and is held to
 the directory format's rule at the relay for every post, at every push of
 a directory, and at the client's `--channel`; a *relay host* names the
