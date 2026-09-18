@@ -116,6 +116,21 @@ client turns the refusal into a sentence naming the relay, since Go's is
 for you is a setting you have chosen by omission; write it down, and test
 the refusal from both sides.
 
+And test it through the public constructor, not the helper. The pin lived
+in `transportFor`, and `NewWithAnchor` called it only when it had a
+certificate or an anchor to add; with neither — a relay with a public
+certificate and no client certificates, which is also `auu-admin`'s path
+to such a relay — the `http.Client` kept a nil `Transport`, which is
+`http.DefaultTransport` and Go's handshake, TLS 1.2 and any curve. The
+v0.7.0 regression test built its client through `transportFor` and so
+proved the helper and not the path; an outside reader found the gap three
+releases later. A pin in a helper is a pin only where every path reaches
+the helper: the constructor now always builds its transport through it,
+and `TestThePinHoldsWithNoCertificateAndNoAnchor` builds the client with
+nothing to add and asserts the refusal and the negotiated hybrid. When a
+test reaches for an internal helper to prove a property of the public
+thing, that is the sign it is proving the wrong one.
+
 ## Ordering of checks
 
 This is where the project's real bugs were. Every one of them was a correct

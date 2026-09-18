@@ -78,12 +78,15 @@ func NewWithAnchor(base string, id *identity.Identity, cert *tls.Certificate, an
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return nil, fmt.Errorf("relay URL must be http or https, got %q", u.Scheme)
 	}
-	httpClient := &http.Client{Timeout: 2 * time.Minute}
-	var transport *http.Transport
-	if cert != nil || anchor != nil {
-		transport = transportFor(cert, anchor)
-		httpClient.Transport = transport
-	}
+	// Always the project's own transport, with the pin in it, and never
+	// http.DefaultTransport by omission: a relay with a public certificate
+	// and no client certificates gave this constructor nothing to add, and
+	// for three releases that path left Transport nil and made Go's default
+	// handshake — TLS 1.2 and any curve — against a relay that offered less
+	// than the hybrid. A pin in a helper is a pin only where every path
+	// reaches the helper.
+	transport := transportFor(cert, anchor)
+	httpClient := &http.Client{Timeout: 2 * time.Minute, Transport: transport}
 	c := &Client{
 		base:      strings.TrimSuffix(base, "/"),
 		id:        id,

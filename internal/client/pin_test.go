@@ -169,3 +169,94 @@ func TestNeitherEndAcceptsLessThanTheHybridOverTLS13(t *testing.T) {
 		})
 	}
 }
+
+// TestThePinHoldsWithNoCertificateAndNoAnchor is the path the v0.7.0 test
+// above did not take: a relay with a public certificate and no client
+// certificates gives the constructor nothing to add, and for three
+// releases that left the http.Client's Transport nil, which is Go's
+// default handshake — TLS 1.2 and any curve. The client is built through
+// the public constructor with nil for both, as auu and auu-admin build it
+// for such a relay, and must refuse a relay offering less and negotiate
+// the hybrid with one offering it. The refusals need no trust in the
+// relay's certificate: the handshake fails at the key exchange before a
+// certificate is looked at, which is also why the pin is the first thing
+// a new user meets.
+func TestThePinHoldsWithNoCertificateAndNoAnchor(t *testing.T) {
+	bundle := pki.TestHierarchy(t, []string{"127.0.0.1"}, mldsa.MLDSA65())
+	for _, c := range []struct {
+		label string
+		alter func(*tls.Config)
+		alert string
+	}{
+		{"a relay offering only X25519", func(cfg *tls.Config) { cfg.CurvePreferences = []tls.CurveID{tls.X25519} }, "tls: handshake failure"},
+		{"a relay capped at TLS 1.2", func(cfg *tls.Config) { cfg.MaxVersion = tls.VersionTLS12 }, "tls: protocol version not supported"},
+	} {
+		t.Run(c.label, func(t *testing.T) {
+			srv := relayOffering(t, bundle, c.alter)
+			for _, build := range []struct {
+				name string
+				cl   func() (*Client, error)
+			}{
+				{"NewWithAnchor(nil, nil)", func() (*Client, error) { return NewWithAnchor(srv.URL, testIdentity(t, "alice"), nil, nil) }},
+				{"New(nil)", func() (*Client, error) { return New(srv.URL, testIdentity(t, "alice"), nil) }},
+			} {
+				cl, err := build.cl()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if cl.transport == nil || cl.http.Transport == nil {
+					t.Fatalf("%s: the client has no transport of its own, so its requests go through http.DefaultTransport and Go's handshake", build.name)
+				}
+				err = cl.Health(t.Context())
+				var refused *NoPQTransportError
+				if !errors.As(err, &refused) {
+					t.Fatalf("%s against %s: %v, want NoPQTransportError", build.name, c.label, err)
+				}
+				if !strings.HasPrefix(refused.Error(), noPQ+" (") || !strings.Contains(refused.Error(), c.alert) {
+					t.Fatalf("%s: the sentence: %q", build.name, refused)
+				}
+			}
+		})
+	}
+
+	// A relay offering the hybrid, reached without an anchor: the root the
+	// process trusts for it is supplied to the transport the constructor
+	// built — the public-CA case in miniature — and the pin in that
+	// transport is what makes the handshake, which both ends then see as
+	// TLS 1.3 with X25519MLKEM768.
+	var seen tls.ConnectionState
+	again := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = *r.TLS
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	again.StartTLS()
+	defer again.Close()
+	cl, err := NewWithAnchor(again.URL, testIdentity(t, "alice"), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cl.transport.TLSClientConfig.RootCAs = again.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+	if cfg := cl.transport.TLSClientConfig; cfg.MinVersion != tls.VersionTLS13 || len(cfg.CurvePreferences) != 1 || cfg.CurvePreferences[0] != tls.X25519MLKEM768 {
+		t.Fatalf("the transport built with nothing to add is not pinned: min %x curves %v", cfg.MinVersion, cfg.CurvePreferences)
+	}
+	if err := cl.Health(t.Context()); err != nil {
+		t.Fatalf("a relay offering the hybrid, without an anchor: %v", err)
+	}
+	req, err := http.NewRequest("GET", again.URL+"/v1/health", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := cl.transport.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	for _, end := range []struct {
+		name string
+		st   tls.ConnectionState
+	}{{"the client's", *resp.TLS}, {"the relay's", seen}} {
+		if end.st.Version != tls.VersionTLS13 || end.st.CurveID != tls.X25519MLKEM768 {
+			t.Errorf("%s view of the handshake is version %x curve %v; want TLS 1.3 and X25519MLKEM768", end.name, end.st.Version, end.st.CurveID)
+		}
+	}
+}
