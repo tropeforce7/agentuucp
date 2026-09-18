@@ -97,7 +97,7 @@ func composeIn(s *store.Store, cfg store.Config, template string) (text, subject
 func readComposed(raw, template string) (text, subject string) {
 	comments := templateComments(template)
 	var lines []string
-	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+	for _, line := range strings.Split(foldCRLF(raw), "\n") {
 		body, isComment := uncomment(line, comments)
 		if !isComment {
 			lines = append(lines, strings.TrimRight(line, " \t"))
@@ -201,7 +201,7 @@ func templateSubject(template string) string {
 // lines removed. Blank lines inside the message are kept; they are paragraphs.
 func stripComments(raw string) string {
 	var lines []string
-	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+	for _, line := range strings.Split(foldCRLF(raw), "\n") {
 		if strings.HasPrefix(line, "#") {
 			continue
 		}

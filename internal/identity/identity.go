@@ -374,14 +374,23 @@ func Printable(name string) string {
 // Printable is for a name, which has a rule and rarely needs escaping;
 // this is for text that has none, such as the sentence a relay sends with
 // a refusal, which every user of every relay reads on standard error.
-func PrintableText(s string) string {
+func PrintableText(s string) string { return printable(s, false) }
+
+// PrintableLines is PrintableText with the line break kept as well, for a
+// message's text, which is prose of many lines: what a terminal shows and
+// a line break are kept, and everything else is escaped. The rule at
+// Validate refuses a text with anything else in it; this is for a record
+// from before the rule, or written by hand.
+func PrintableLines(s string) string { return printable(s, true) }
+
+func printable(s string, keepNewline bool) string {
 	var b strings.Builder
 	for i := 0; i < len(s); {
 		r, size := utf8.DecodeRuneInString(s[i:])
 		switch {
 		case r == utf8.RuneError && size == 1:
 			fmt.Fprintf(&b, `\x%02x`, s[i])
-		case r == ' ' || r == '\t' || strconv.IsPrint(r):
+		case r == ' ' || r == '\t' || (keepNewline && r == '\n') || strconv.IsPrint(r):
 			b.WriteString(s[i : i+size])
 		default:
 			q := strconv.QuoteRune(r)

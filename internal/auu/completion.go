@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/tropeforce7/agentuucp/internal/channels"
+	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
 
@@ -341,7 +342,7 @@ func messages(boxes ...store.Box) []candidate {
 			}
 			out = append(out, candidate{
 				value:    m.Inner.ID,
-				describe: fmt.Sprintf("%s — %s (%s)", orNone(m.Inner.Body.Subject), from, box),
+				describe: fmt.Sprintf("%s — %s (%s)", orNone(identity.PrintableText(m.Inner.Body.Subject)), identity.Printable(from), box),
 			})
 		}
 	}
@@ -370,7 +371,7 @@ func threads() []candidate {
 	}
 	var out []candidate
 	for t, m := range latest {
-		out = append(out, candidate{t, "thread: " + orNone(m.Inner.Body.Subject)})
+		out = append(out, candidate{t, "thread: " + orNone(identity.PrintableText(m.Inner.Body.Subject))})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].value < out[j].value })
 	return out

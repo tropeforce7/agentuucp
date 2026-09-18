@@ -584,9 +584,9 @@ func printInboxLine(m *store.Stored) {
 	fmt.Printf("%s %s  %-14s %-8s %-32s %s%s%s%s\n",
 		flag,
 		m.Inner.ID[:12],
-		truncate(orNone(m.SenderName), 14),
+		truncate(orNone(identity.Printable(m.SenderName)), 14),
 		m.Inner.Body.Type,
-		truncate(orNone(m.Inner.Body.Subject), 32),
+		truncate(orNone(identity.PrintableText(m.Inner.Body.Subject)), 32),
 		m.Received.Local().Format("2006-01-02 15:04"),
 		att, ch, whereElse(m))
 }
@@ -662,17 +662,20 @@ func printMessage(s *store.Store, box store.Box, m *store.Stored) {
 	if box == store.Quarantine {
 		fmt.Println("!! QUARANTINED: this sender is not in your peer list.")
 	}
-	fmt.Printf("from:    %s <%s>\n", orNone(m.SenderName), m.Inner.From[:16])
+	// Everything the sender wrote goes through an escaper here, though the
+	// rule at Validate has refused what would need one: a record from
+	// before the rule, or written by hand, is still in the spool.
+	fmt.Printf("from:    %s <%s>\n", orNone(identity.Printable(m.SenderName)), m.Inner.From[:16])
 	fmt.Printf("type:    %s\n", m.Inner.Body.Type)
 	// The thread's subject, and under it this message's own when it was
 	// given one: a reply can be about something of its own without
 	// starting a thread of its own, and both are worth seeing.
 	subject := threadSubject(s, m)
-	fmt.Printf("subject: %s\n", orNone(subject))
+	fmt.Printf("subject: %s\n", orNone(identity.PrintableText(subject)))
 	if m.Inner.Body.Subject != subject {
-		fmt.Printf("%-9s%s\n", "  "+m.Inner.Body.Type+":", orNone(m.Inner.Body.Subject))
+		fmt.Printf("%-9s%s\n", "  "+m.Inner.Body.Type+":", orNone(identity.PrintableText(m.Inner.Body.Subject)))
 	}
-	fmt.Printf("channel: %s\n", channelName(m.Channel))
+	fmt.Printf("channel: %s\n", identity.PrintableText(channelName(m.Channel)))
 	// Where it is besides here: kept on the relay until 'auu rm' removes
 	// it, or acknowledged away when it was fetched.
 	if m.RelayID != 0 {
@@ -688,7 +691,7 @@ func printMessage(s *store.Store, box store.Box, m *store.Stored) {
 	if len(m.Inner.Body.Attachments) > 0 {
 		fmt.Println("files:")
 		for _, a := range m.Inner.Body.Attachments {
-			fmt.Printf("  %-32s %10s  %s\n", a.Name, humanBytes(a.Size), a.SHA256[:16])
+			fmt.Printf("  %-32s %10s  %s\n", identity.PrintableText(a.Name), humanBytes(a.Size), a.SHA256[:16])
 		}
 		if box == store.Sent && m.Streamed {
 			// A sent stream was read from the sender's own files and never
@@ -698,7 +701,7 @@ func printMessage(s *store.Store, box store.Box, m *store.Stored) {
 			fmt.Printf("  save them with: %s extract %s\n", prog, m.Inner.ID[:12])
 		}
 	}
-	fmt.Printf("\n%s\n", strings.TrimRight(m.Inner.Body.Text, "\n"))
+	fmt.Printf("\n%s\n", identity.PrintableLines(strings.TrimRight(m.Inner.Body.Text, "\n")))
 }
 
 func cmdExtract(args []string) error {
@@ -1131,7 +1134,7 @@ func cmdQuarantine(args []string) error {
 		}
 		for _, m := range msgs {
 			fmt.Printf("%s  from %s  %s%s\n", m.Inner.ID[:12], m.Inner.From[:16],
-				truncate(orNone(m.Inner.Body.Subject), 40), whereElse(m))
+				truncate(orNone(identity.PrintableText(m.Inner.Body.Subject)), 40), whereElse(m))
 		}
 		fmt.Println("\nThese senders are not in your peer list. Confirm who they are out of band,")
 		fmt.Printf("then run: %s quarantine trust <id>\n", prog)

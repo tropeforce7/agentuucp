@@ -10,6 +10,9 @@ import (
 	"mime"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/tropeforce7/agentuucp/internal/channels"
 )
 
 // Message types.
@@ -101,10 +104,7 @@ func ValidHeader(typ, thread, inReplyTo, subject string) error {
 			return fmt.Errorf("message: in_reply_to is %w", err)
 		}
 	}
-	if len(subject) > maxSubjectBytes {
-		return errors.New("message: subject too long")
-	}
-	return nil
+	return ValidSubject(subject)
 }
 
 // NewAttachment builds an attachment from a file's base name and contents,
@@ -158,6 +158,54 @@ func ValidAttachmentName(name string) error {
 	if strings.ContainsRune(name, 0) {
 		return fmt.Errorf("attachment %q: name contains a null byte", name)
 	}
+	// The set a channel name may not hold either: a name is printed in a
+	// column by 'auu read', and an escape sequence or a bidi override in
+	// it would drive the terminal rather than be shown.
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("attachment %q: name is not valid UTF-8", name)
+	}
+	if r, what := channels.ForbiddenRune(name); what != "" {
+		return fmt.Errorf("attachment %q: name contains %U, a %s", name, r, what)
+	}
+	return nil
+}
+
+// ValidSubject applies the rules for a subject: valid UTF-8, at most 4096
+// bytes, and one line — none of the characters a channel name may not
+// hold, which a line break is one of. A subject is printed in a column by
+// every listing, and a message is prose: a control or a format character
+// in what it says about itself has no honest use.
+func ValidSubject(subject string) error {
+	if len(subject) > maxSubjectBytes {
+		return errors.New("message: subject too long")
+	}
+	if !utf8.ValidString(subject) {
+		return errors.New("message: subject is not valid UTF-8")
+	}
+	if r, what := channels.ForbiddenRune(subject); what != "" {
+		return fmt.Errorf("message: subject contains %U, a %s; a subject is one line", r, what)
+	}
+	return nil
+}
+
+// ValidText applies the rules for a message's text: valid UTF-8, and of
+// the characters a channel name may not hold, only a line break and a tab.
+// Everything else a terminal would obey rather than show is refused here,
+// on both ends and on both paths, which is what makes the terminal safe by
+// rule rather than by every printer remembering; the printers escape all
+// the same, for a record from before the rule.
+func ValidText(text string) error {
+	if !utf8.ValidString(text) {
+		return errors.New("message: text is not valid UTF-8")
+	}
+	for _, r := range text {
+		if r == '\n' || r == '\t' {
+			continue
+		}
+		if what := channels.Forbidden(r); what != "" {
+			return fmt.Errorf("message: text contains %U, a %s", r, what)
+		}
+	}
 	return nil
 }
 
@@ -208,6 +256,9 @@ func (a *Attachment) Validate() error {
 // opened. An opened message is untrusted input, so this runs on both sides.
 func (b *Body) Validate() error {
 	if err := ValidHeader(b.Type, b.Thread, b.InReplyTo, b.Subject); err != nil {
+		return err
+	}
+	if err := ValidText(b.Text); err != nil {
 		return err
 	}
 	names := make([]string, 0, len(b.Attachments))

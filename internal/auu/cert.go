@@ -215,7 +215,7 @@ func certStatus(args []string) error {
 		return printJSON(out)
 	}
 	fmt.Printf("relay:   %s (%s)\n", r.Name, rec.Relay)
-	fmt.Printf("machine: %s\n", rec.Label)
+	fmt.Printf("machine: %s\n", identity.PrintableText(rec.Label))
 	fmt.Printf("serial:  %s\n", rec.Serial)
 	if n := keyParams(rec); n != 0 {
 		fmt.Printf("key:     ML-DSA-%d\n", n)
@@ -294,7 +294,7 @@ func certList(args []string) error {
 		} else if time.Now().After(cert.NotAfter) {
 			state = "expired " + cert.NotAfter.Local().Format("2006-01-02")
 		}
-		fmt.Printf("%s %s  %-20s  %s\n", mark, cert.Serial[:16], trim(cert.Label, 20), state)
+		fmt.Printf("%s %s  %-20s  %s\n", mark, cert.Serial[:16], trim(identity.PrintableText(cert.Label), 20), state)
 	}
 	fmt.Printf("\n* is this machine\n")
 	return nil
@@ -424,11 +424,8 @@ func fingerprintOf(der []byte) string {
 
 // trim shortens a label for a column.
 func trim(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
 	if n <= 1 {
-		return s[:n]
+		return truncate(s, n+1)[:n]
 	}
-	return s[:n-1] + "…"
+	return truncate(s, n)
 }

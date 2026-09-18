@@ -553,7 +553,7 @@ func (ev *directoryEvent) sentence() string {
 	add("updated", updated)
 	add("removed", ev.Removed)
 	if len(parts) == 0 {
-		return fmt.Sprintf("%s changed their channels (issued %s)", ev.Peer, stampLocal(ev.Issued))
+		return fmt.Sprintf("%s changed their channels (issued %s)", identity.Printable(ev.Peer), stampLocal(ev.Issued))
 	}
-	return ev.Peer + " " + strings.Join(parts, ", ")
+	return identity.Printable(ev.Peer) + " " + strings.Join(parts, ", ")
 }

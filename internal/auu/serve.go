@@ -438,7 +438,7 @@ func (r *serveRun) sayRenamed(m *store.Stored, e *ledgerEntry) {
 	}
 	r.renamed[m.Inner.ID] = true
 	fmt.Fprintf(os.Stderr, "%s: %s from %s answers reply %s on thread %s but names thread %s; left alone\n",
-		prog, shortID(m.Inner.ID), orNone(m.SenderName), shortID(m.Inner.Body.InReplyTo),
+		prog, shortID(m.Inner.ID), orNone(identity.Printable(m.SenderName)), shortID(m.Inner.Body.InReplyTo),
 		shortID(e.Thread), shortID(m.Inner.Body.Thread))
 }
 
@@ -768,10 +768,10 @@ func (r *serveRun) settle(m *store.Stored, ch *serveChannel, replyID string) err
 	if !r.asJSON {
 		switch {
 		case replyID == "":
-			fmt.Printf("%s: %s from %s had nothing to say\n", ch.name, shortID(m.Inner.ID), orNone(m.SenderName))
+			fmt.Printf("%s: %s from %s had nothing to say\n", ch.name, shortID(m.Inner.ID), orNone(identity.Printable(m.SenderName)))
 		default:
 			fmt.Printf("%s: answered %s from %s (reply %s)\n",
-				ch.name, shortID(m.Inner.ID), orNone(m.SenderName), shortID(replyID))
+				ch.name, shortID(m.Inner.ID), orNone(identity.Printable(m.SenderName)), shortID(replyID))
 		}
 	}
 	return nil
@@ -795,7 +795,7 @@ func (r *serveRun) failed(m *store.Stored, ch *serveChannel, why string) {
 		tail = fmt.Sprintf("given up after %s", plural(e.Failures, "attempt"))
 	}
 	fmt.Fprintf(os.Stderr, "%s: %s from %s was not answered: %s (%s)\n",
-		ch.name, shortID(m.Inner.ID), orNone(m.SenderName), why, tail)
+		ch.name, shortID(m.Inner.ID), orNone(identity.Printable(m.SenderName)), why, tail)
 }
 
 // report is one message as --json names it, under the channel that answers

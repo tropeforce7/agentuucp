@@ -55,7 +55,7 @@ row has no sender, so nothing ties a message being collected to the person
 who posted it, and building that would mean recording the sender on every
 message, which is the social graph the relay is built not to hold.
 
-**What the relay says reaches a terminal escaped.** A relay is trusted
+**What the network says reaches a terminal escaped.** A relay is trusted
 with routing and nothing else, and what it sends back is read on a
 terminal: a display name in a listing, a machine's certificate label, and
 the sentence it attaches to every refusal, which every user of every relay
@@ -63,7 +63,15 @@ reads on standard error. Each is made printable before it is shown — a
 name and a label are held to a rule that leaves no control or format
 character in them, and a sentence has every character a terminal would
 obey rather than show escaped the way Go quotes a string, where the error
-is made rather than where it is printed, so no command can forget. The
+is made rather than where it is printed, so no command can forget. What a
+peer writes is held to the same standard twice over: a subject, a text
+and an attachment name are refused at open, on both paths, if they carry
+a control character (a line break and a tab in the text excepted), a
+format character, a private-use character or a line or paragraph
+separator, and every print of one — the inbox listing, `read`,
+quarantine, watch, serve's console lines, completion — escapes it all the
+same, for a record from before the rule; sender names, which come from
+this machine's own peer list, go through the same escaper. The
 same treatment covers a name from a relay older than the rule, and
 `auu-admin`'s confirmation before it removes a mailbox, which prints the
 name at the one moment an administrator is reading carefully. And what

@@ -311,3 +311,48 @@ func TestNamesTheDiskSpellsAsOneAreRefusedAtTheOpen(t *testing.T) {
 		t.Error("the temporary directory was left behind")
 	}
 }
+
+// The manifest's body is held to the same table Body.Validate is: what a
+// subject, a text or an attachment name may carry is one rule on both
+// paths. The rows are the message package's, written again here since a
+// test cannot import another's.
+func TestValidateHoldsTheManifestBodyToWhatATerminalShows(t *testing.T) {
+	from, to := pair(t)
+	const id = "0123456789abcdef0123456789abcdef"
+	build := func(subject, text, name string) error {
+		_, err := BuildManifest(from, to.Public(), id, Body{Type: "ask", Thread: id, Subject: subject, Text: text},
+			sourcesOf(memSource{name, []byte("x")}), MinChunkSize)
+		return err
+	}
+	for _, tc := range []struct {
+		name, bytes               string
+		inSubject, inText, inName bool
+	}{
+		{"an escape", "\x1b[2K", false, false, false},
+		{"a carriage return", "\r", false, false, false},
+		{"a bidi override", "\u202e", false, false, false},
+		{"a private-use rune", "\ue000", false, false, false},
+		{"a line separator", "\u2028", false, false, false},
+		{"a newline", "\n", false, true, false},
+		{"a tab", "\t", false, true, false},
+		{"a byte that is not UTF-8", "\xff", false, false, false},
+		{"plain prose", "hello, world", true, true, true},
+		{"letters beyond ASCII", "café 中文", true, true, true},
+	} {
+		if err := build("s"+tc.bytes+"s", "x", "a"); (err == nil) != tc.inSubject {
+			t.Errorf("subject with %s: %v, want accepted=%v", tc.name, err, tc.inSubject)
+		} else if err != nil && !errors.Is(err, ErrForm) {
+			t.Errorf("subject with %s: %v is not ErrForm", tc.name, err)
+		}
+		if err := build("s", "x"+tc.bytes+"x", "a"); (err == nil) != tc.inText {
+			t.Errorf("text with %s: %v, want accepted=%v", tc.name, err, tc.inText)
+		} else if err != nil && !errors.Is(err, ErrForm) {
+			t.Errorf("text with %s: %v is not ErrForm", tc.name, err)
+		}
+		if err := build("s", "x", "n"+tc.bytes+"n"); (err == nil) != tc.inName {
+			t.Errorf("attachment name with %s: %v, want accepted=%v", tc.name, err, tc.inName)
+		} else if err != nil && !errors.Is(err, ErrForm) {
+			t.Errorf("attachment name with %s: %v is not ErrForm", tc.name, err)
+		}
+	}
+}

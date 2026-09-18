@@ -169,3 +169,62 @@ func TestValidateRejectsNamesThatAreOneFileWhereCaseDoesNotCount(t *testing.T) {
 		t.Fatalf("two names that are two files were refused: %v", err)
 	}
 }
+
+// A subject is one line and free text is prose: neither may carry what a
+// terminal would obey rather than show. The table is what a message may
+// say about itself, at Body.Validate; the stream package runs the same
+// rows through Manifest.Validate, so both paths refuse the same things.
+func TestValidateHoldsSubjectTextAndNamesToWhatATerminalShows(t *testing.T) {
+	for _, tc := range freeTextRows() {
+		subject := Body{Type: TypeAsk, Thread: "0123456789abcdef0123456789abcdef", Subject: "s" + tc.bytes + "s", Text: "x"}
+		if err := subject.Validate(); (err == nil) != tc.inSubject {
+			t.Errorf("subject with %s: %v, want accepted=%v", tc.name, err, tc.inSubject)
+		}
+		text := Body{Type: TypeAsk, Thread: "0123456789abcdef0123456789abcdef", Text: "x" + tc.bytes + "x"}
+		if err := text.Validate(); (err == nil) != tc.inText {
+			t.Errorf("text with %s: %v, want accepted=%v", tc.name, err, tc.inText)
+		}
+		data := []byte("d")
+		sum := sha256.Sum256(data)
+		a := Attachment{Name: "n" + tc.bytes + "n", Media: DefaultMedia, Size: 1, SHA256: hex.EncodeToString(sum[:]), Data: data}
+		named := Body{Type: TypeAsk, Thread: "0123456789abcdef0123456789abcdef", Text: "x", Attachments: []Attachment{a}}
+		if err := named.Validate(); (err == nil) != tc.inName {
+			t.Errorf("attachment name with %s: %v, want accepted=%v", tc.name, err, tc.inName)
+		}
+	}
+	// The refusal names the character and its kind, and for a subject
+	// says the rule.
+	err := (&Body{Type: TypeAsk, Thread: "0123456789abcdef0123456789abcdef", Subject: "two\nlines", Text: "x"}).Validate()
+	if err == nil || !strings.Contains(err.Error(), "U+000A, a control character; a subject is one line") {
+		t.Errorf("a two-line subject: %v", err)
+	}
+	err = (&Body{Type: TypeAsk, Thread: "0123456789abcdef0123456789abcdef", Text: "run\x1b[2K"}).Validate()
+	if err == nil || !strings.Contains(err.Error(), "text contains U+001B, a control character") {
+		t.Errorf("an escape in the text: %v", err)
+	}
+}
+
+// freeTextRow is one thing a sender might put in a subject, a text or an
+// attachment name, and where it is allowed.
+type freeTextRow struct {
+	name, bytes               string
+	inSubject, inText, inName bool
+}
+
+// freeTextRows is the table both Validates are held to; the stream
+// package's test carries the same rows as a literal, since a test cannot
+// import another's.
+func freeTextRows() []freeTextRow {
+	return []freeTextRow{
+		{"an escape", "\x1b[2K", false, false, false},
+		{"a carriage return", "\r", false, false, false},
+		{"a bidi override", "\u202e", false, false, false},
+		{"a private-use rune", "\ue000", false, false, false},
+		{"a line separator", "\u2028", false, false, false},
+		{"a newline", "\n", false, true, false},
+		{"a tab", "\t", false, true, false},
+		{"a byte that is not UTF-8", "\xff", false, false, false},
+		{"plain prose", "hello, world", true, true, true},
+		{"letters beyond ASCII", "café 中文", true, true, true},
+	}
+}

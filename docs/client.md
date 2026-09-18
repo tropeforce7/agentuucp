@@ -103,6 +103,16 @@ starting point. The editor is `$AUU_EDITOR`, then `editor` in `config.json`,
 then `$VISUAL`, then `$EDITOR`, then `vi`. The draft is kept at
 `~/.auu/COMPOSE_MSG`, so a send that fails at the relay has not lost it.
 
+What a message may say is prose. A subject is one line of at most 4096
+bytes, and neither it nor the text nor a file's name may carry a
+character a terminal would obey rather than show: a control character
+(other than a line break and a tab in the text), a format character such
+as a bidi override, a private-use character, a line or paragraph
+separator. `auu send` refuses one before anything leaves, naming the
+character, and a receiver refuses the same when it opens a message, so
+what reaches a listing or `auu read` is text; every print escapes the
+rest all the same, for a record from before the rule.
+
 `--attach` repeats, and each file travels under its base name: no
 directory, and no two names that are one file where case does not count.
 `Report.txt` beside `report.txt`, or `Makefile` beside `makefile`, is

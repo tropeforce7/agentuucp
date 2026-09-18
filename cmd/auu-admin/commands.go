@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tropeforce7/agentuucp/internal/client"
 	"github.com/tropeforce7/agentuucp/internal/clientca"
@@ -538,7 +539,7 @@ func tokenList(args []string) error {
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%d/%d\t%s\t%s%s\n",
 			t.ID[:12], t.Use, t.State, t.UsesLeft, t.Uses,
-			token.Until(t.NotAfter, now), truncate(t.Note, 40), bound)
+			token.Until(t.NotAfter, now), truncate(identity.PrintableText(t.Note), 40), bound)
 	}
 	return w.Flush()
 }
@@ -644,11 +645,21 @@ func orNone(s string) string {
 	return s
 }
 
+// truncate cuts s to at most n characters, on a rune boundary, with an
+// ellipsis where it cut; bytes were cut before, which left a broken final
+// rune on the terminal for a label of wide characters.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	kept := 0
+	for i := range s {
+		if kept == n-1 {
+			return s[:i] + "…"
+		}
+		kept++
+	}
+	return s
 }
 
 func humanBytes(n int64) string {
@@ -720,13 +731,13 @@ func certsList(args []string) error {
 		case cert.Revoked:
 			state = "revoked"
 			if cert.Reason != "" {
-				state += " (" + truncate(cert.Reason, 30) + ")"
+				state += " (" + truncate(identity.PrintableText(cert.Reason), 30) + ")"
 			}
 		case now.After(cert.NotAfter):
 			state = "expired " + cert.NotAfter.Format("2006-01-02")
 		}
 		fmt.Printf("%s  %s  %-20s  %s\n",
-			cert.Serial[:16], cert.FP[:16], truncate(cert.Label, 20), state)
+			cert.Serial[:16], cert.FP[:16], truncate(identity.PrintableText(cert.Label), 20), state)
 	}
 	return nil
 }

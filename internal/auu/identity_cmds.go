@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tropeforce7/agentuucp/internal/agent"
 	"github.com/tropeforce7/agentuucp/internal/identity"
@@ -515,9 +516,19 @@ func orNone(s string) string {
 	return s
 }
 
+// truncate cuts s to at most n characters, on a rune boundary, with an
+// ellipsis where it cut. Bytes were cut before, which left a broken final
+// rune on the terminal for a name or a subject of wide characters.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
-	return s[:n-1] + "…"
+	kept := 0
+	for i := range s {
+		if kept == n-1 {
+			return s[:i] + "…"
+		}
+		kept++
+	}
+	return s
 }

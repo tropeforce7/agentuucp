@@ -589,6 +589,16 @@ func ctx() context.Context { return context.Background() }
 
 // readText resolves message text from a positional argument, a file, or stdin.
 func readText(positional []string, bodyFile string) (string, error) {
+	text, err := rawText(positional, bodyFile)
+	if err != nil {
+		return "", err
+	}
+	return foldCRLF(text), nil
+}
+
+// rawText is the text as it was given, from the arguments, a file or
+// standard input.
+func rawText(positional []string, bodyFile string) (string, error) {
 	switch {
 	case bodyFile != "" && len(positional) > 0:
 		return "", usageErrf("give message text or --body-file, not both")
@@ -619,6 +629,14 @@ func readText(positional []string, bodyFile string) (string, error) {
 		return "", usageErrf("no message text: pass it as an argument, with --body-file, or on stdin")
 	}
 }
+
+// foldCRLF is the one place a message's text is made ready for the rule:
+// a Windows line ending becomes a line break, since a file or an editor
+// there writes CRLF and a refusal naming U+000D at every send would be the
+// wrong sentence for an honest file. A carriage return on its own is left
+// for the rule to refuse; the wire rule is unchanged, and a receiver from
+// this build refuses a text with one however it was sent.
+func foldCRLF(s string) string { return strings.ReplaceAll(s, "\r\n", "\n") }
 
 // stringList collects a repeatable flag.
 type stringList []string

@@ -733,10 +733,10 @@ func ed25519Signer(t *testing.T) crypto.Signer {
 // channel name may not hold, which is one set, written once.
 func TestALabelCarriesNoFormatCharacter(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
-		{"build-box‮gnp.exe", "build-boxgnp.exe"},
-		{"zero‍width​joined", "zerowidthjoined"},
-		{"privateuse", "privateuse"},
-		{"line sep para", "lineseppara"},
+		{"build-box\u202egnp.exe", "build-boxgnp.exe"},
+		{"zero\u200dwidth\u200bjoined", "zerowidthjoined"},
+		{"private\ue000use", "privateuse"},
+		{"line\u2028sep\u2029para", "lineseppara"},
 		{"esc\x1b[2Kape\nline", "esc[2Kapeline"},
 		{"  plain-name  ", "plain-name"},
 		{"café 中文", "café 中文"},

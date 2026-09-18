@@ -138,20 +138,31 @@ func ValidDescription(desc string) error {
 // which is held to the same set, so the set is written once.
 func ForbiddenRune(s string) (rune, string) {
 	for _, r := range s {
-		switch {
-		case unicode.Is(unicode.Cc, r):
-			return r, "control character"
-		case unicode.Is(unicode.Cf, r):
-			return r, "format character"
-		case unicode.Is(unicode.Co, r):
-			return r, "private-use character"
-		case unicode.Is(unicode.Zl, r):
-			return r, "line separator"
-		case unicode.Is(unicode.Zp, r):
-			return r, "paragraph separator"
+		if what := Forbidden(r); what != "" {
+			return r, what
 		}
 	}
 	return 0, ""
+}
+
+// Forbidden is ForbiddenRune for one character: the category's name in
+// words when it is one of the five, and nothing otherwise. A message's
+// subject and text are held to the same set, the text with a line break
+// and a tab allowed back in, so the set is written once.
+func Forbidden(r rune) string {
+	switch {
+	case unicode.Is(unicode.Cc, r):
+		return "control character"
+	case unicode.Is(unicode.Cf, r):
+		return "format character"
+	case unicode.Is(unicode.Co, r):
+		return "private-use character"
+	case unicode.Is(unicode.Zl, r):
+		return "line separator"
+	case unicode.Is(unicode.Zp, r):
+		return "paragraph separator"
+	}
+	return ""
 }
 
 // Validate applies every rule in the format to a directory. The error names

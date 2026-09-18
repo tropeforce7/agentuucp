@@ -26,7 +26,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
@@ -262,13 +261,14 @@ func (m *Manifest) Validate() error {
 		return fmt.Errorf("%w: attachments total %d bytes, payload_bytes says %d",
 			ErrForm, total, m.PayloadBytes)
 	}
-	if !utf8.ValidString(m.Body.Text) || !utf8.ValidString(m.Body.Subject) {
-		return fmt.Errorf("%w: body is not valid UTF-8", ErrForm)
-	}
 	// The body is held to the message rules here, since a manifest's is
 	// never opened as an envelope's is: without this the stream path was
-	// a second door for a thread id that is a path.
+	// a second door for a thread id that is a path, and would be one for
+	// a subject or a text that drives a terminal.
 	if err := message.ValidHeader(m.Body.Type, m.Body.Thread, m.Body.InReplyTo, m.Body.Subject); err != nil {
+		return fmt.Errorf("%w: %v", ErrForm, err)
+	}
+	if err := message.ValidText(m.Body.Text); err != nil {
 		return fmt.Errorf("%w: %v", ErrForm, err)
 	}
 	return nil

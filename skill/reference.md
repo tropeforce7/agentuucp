@@ -362,6 +362,12 @@ A refused send names what to change, and nothing was queued:
   id is the id of the message that opened it` — a thread is named by the
   `thread` a `send` or `inbox` reported, never by a name of your own;
   `--reply-to` is held to the same shape.
+- `message: subject contains U+000A, a control character; a subject is one
+  line`, `message: text contains U+001B, a control character`, or
+  `attachment "NAME": name contains U+202E, a format character` — a
+  message is prose: a subject is one line, and none of the three may carry
+  a character a terminal would obey (the text may hold line breaks and
+  tabs). Remove the character; nothing was sent.
 
 Anywhere:
 
