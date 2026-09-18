@@ -299,6 +299,21 @@ func fetchOneStream(ctx context.Context, s *store.Store, id *identity.Identity, 
 		res.Quarantined++
 		return nil
 	}
+	// What the signed manifest says the stream weighs, against what the
+	// relay listed the stored file at. They agree for every stream a
+	// sender's own client made; one that disagrees was made to — a
+	// manifest that declares more than was uploaded, from a sender on the
+	// allow list, used to turn the download's end into a 416 the fetch
+	// took as a transport failure, and every later fetch of the mailbox
+	// stopped at it. It is the sender's fault and the stream is refused
+	// before a byte of payload is asked for: kept under damaged/ with the
+	// two numbers, acknowledged, and the fetch goes on.
+	if want := stream.Size(opened.SealedManifestBytes, opened.Manifest.PayloadBytes, opened.Manifest.ChunkSize); want != m.Size {
+		if err := keepDamaged(s, r, relayID, m.Received, manifest, sizeCause(want, m.Size), res); err != nil {
+			return err
+		}
+		return c.Ack(ctx, relayID)
+	}
 	// Kept on the relay, or acknowledged away, as this machine's setting
 	// for the manifest's channel says.
 	keep := keepFor(settings, channel)
@@ -343,6 +358,17 @@ func isGone(err error) bool {
 	return errors.As(err, &httpErr) && httpErr.Status == http.StatusGone
 }
 
+// isBeyondTheFile reports a 416 from the relay for a stream's body: the
+// receiver asked for a range past the end of the stored file. The manifest
+// is checked against the listing before any range is asked for, so this is
+// the file having changed under its row since — and either way the stream
+// will never open, so it is permanent, kept and acknowledged rather than
+// met again on every fetch.
+func isBeyondTheFile(err error) bool {
+	var httpErr *client.HTTPError
+	return errors.As(err, &httpErr) && httpErr.Status == http.StatusRequestedRangeNotSatisfiable
+}
+
 // isMissingOnRelay reports a 404 from the relay for a stream's body: the
 // message is not in the mailbox any more, which for a quarantined stream
 // means the body it was waiting on has gone — removed by another machine
@@ -363,7 +389,7 @@ func isPermanent(err error) bool {
 	if isLocked(err) {
 		return false
 	}
-	return isGone(err) ||
+	return isGone(err) || isBeyondTheFile(err) ||
 		errors.Is(err, stream.ErrForm) ||
 		errors.Is(err, stream.ErrSignature) ||
 		errors.Is(err, stream.ErrOpenFailed) ||

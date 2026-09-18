@@ -47,6 +47,14 @@ func streamCause(err error) string {
 	return envelope.ErrMalformed.Error()
 }
 
+// sizeCause is the cause for a stream whose signed manifest and the relay's
+// listing disagree about its size: the word, and the two numbers, since
+// the person reading it can then say which side lied.
+func sizeCause(manifest, listed int64) string {
+	return fmt.Sprintf("%s: the manifest says the stream is %d bytes on the wire and the relay holds %d",
+		envelope.ErrMalformed, manifest, listed)
+}
+
 // keepDamaged keeps a message that could not be opened and says so. It
 // returns an error only when the keep itself failed, and then the caller
 // must not acknowledge: a message is acknowledged once it is safely on local
