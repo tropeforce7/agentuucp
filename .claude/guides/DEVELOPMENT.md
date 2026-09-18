@@ -285,6 +285,37 @@ must run on both paths: the manifest's body was never opened as an
 envelope's is, and a rule that held for a small message was a door for a
 large one until `Manifest.Validate` ran the same predicate.
 
+**Every path a file operation takes has its provenance written down, and
+one that is not the program's own has run a rule before the call.** Every
+`os.Open`, `OpenFile`, `Create`, `ReadFile`, `WriteFile`, `Mkdir`,
+`MkdirAll`, `Remove`, `RemoveAll`, `Rename`, `Stat`, `ReadDir`,
+`CreateTemp`, `Symlink`, the path in `sql.Open` and `net.Listen`, and
+every `exec.Command` whose arguments are paths, is a row in the file-open
+ledger (`internal/fileopens/ledger.txt`), keyed by file, enclosing
+function, callee and the argument as written, and each row says where the
+path came from: *local*, made by the program from a directory it chose
+and names it wrote; *operator*, a config value, a flag, a relay name or
+an argument the person running it typed; *derived*, made from something
+the program read back from its own files or environment — an entry of a
+directory it owns, a record it wrote, `os.Executable`; or *network*, a
+component a peer or a relay sent, with the rule that ran on it and the
+point where it ran, the rule a function in the tree or, for a number the
+JSON decoder held to a number, the standard-library function that writes
+it. A message id from the spool is *network*: it was the sender's, and
+the rule that made it a name ran at open and at save. Where a path has
+components of several kinds the row names the least trusted, and a
+helper's row the least trusted of its callers'. The store's exported
+edges run the rule again at the call — `Load`, `Save`, `Remove`,
+`DamagedPath`, `SetLeftBehind` — since a caller's slip must not walk a
+path out of the home. A test walks the tree for those calls and fails on
+a call with no row, a row with no call, a key twice, rows out of order,
+and a network row naming a rule that does not exist. So a
+new file operation is refused by CI until its path's provenance is
+written down, and a path from the network cannot reach the disk without
+naming the check that made it a name and not a path. The previous rule
+found the eight components the network names; this one is how the ninth
+is found before it is a finding.
+
 **A fault a message chose is that message's failure, never the run's.**
 `serve` treated every error out of `handle` as the host's — a disk, a
 lock, a key — and ended the run, so one message with a bad thread id
@@ -529,6 +560,23 @@ learns nothing of the key from anything it can read.
 afterwards.** `UseNonce` and `AddToken` re-query after a failed insert. Reporting
 every failure as a replay or a duplicate would hide a broken database behind a
 401 or a 409.
+
+**A value reaches SQL only as a parameter, and the query text is made of
+constants.** Every `Query`, `QueryRow`, `Exec` and `Prepare` in the tree
+takes its text from string constants, joined by `+` where a clause is
+optional (`certRows`, `Tokens`), and every value goes in `args`, `?` for
+`?`, and a parameter that carries a query is one every caller passes a
+constant for. The exceptions are three, allowlisted in the test by site
+and reason: the two `PRAGMA user_version = %d` writes, because a PRAGMA
+takes no placeholder and the operand is the schema version the store
+owns; and the migration's statements, chosen from the `migrations` map
+by the version the store read from itself, each a `+` of the schema
+constants. A `LIKE` takes
+its pattern as a parameter too, and the value's own rule is what keeps
+`%` and `_` out of it (a short id is hex before it is a prefix). A test
+parses the tree for those calls and fails on a query argument that is
+not a constant expression, so a `Sprintf` into a query text is refused
+by CI, whatever it formats.
 
 ## Signatures and tokens
 

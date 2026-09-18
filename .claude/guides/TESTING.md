@@ -207,10 +207,17 @@ chose.
 wrap, which is better and still a crash: `s[:16]` on fifteen bytes,
 `make([]byte, n)` with `n` negative or over memory. The relay's answers
 were sliced for display with no check until commit 7 of the second
-trace's fixes. The rule under What the network names covers the slice;
-for `make`, the length is compared against a cap the operator chose
-before the call, and the test measures that the refusal allocated
-nothing.
+trace's fixes, and `token.Describe` sliced a pasted token's issuer to
+sixteen characters on claims `Parse` had checked nothing about, until
+the integer review; an index into a unit string is the same shape, and
+`humanBytes` indexed `"KMGT"[exp]` with `exp` at 4 for a pebibyte a peer
+declared, so the loop that finds the unit is bounded by the units now.
+The rule under What the network names covers the slice; for `make`, the
+length is compared against a cap the operator chose before the call, and
+the test measures that the refusal allocated nothing. Test values for a
+slice of a string from outside: the empty string and one byte shorter
+than the slice; for an index by magnitude, the first value past the last
+unit and `MaxInt64`.
 
 **A shift by a wire value.** `1 << n` is 0 for `n >= 64` in Go and a panic
 for `n < 0`. There is none in this tree from the wire; if one is added,
@@ -228,8 +235,14 @@ wrapping; `Unix(sec, 0)` takes any `int64`. The hazards are the
 conversions: a span to a `Duration` (the multiply above), a `Duration` to
 an `int` of seconds, and a stamp from a peer used as an order (the second
 trace's commit 9: a message stamped in the year 9999 was the latest on
-its thread). Compare times as times, bound a span in the unit it arrived
-in, and never order by a clock the peer set.
+its thread). And a saturated `Sub` negated: `-d` of the minimum
+`Duration` is the minimum, so `token.Until` read an expiry from
+centuries ago as inside the relay's skew with a negative age, until the
+integer review; it compares times with `Before` now and negates nothing.
+Compare times as times, bound a span in the unit it arrived in, and never
+order by a clock the peer set. Test values: `time.Unix(math.MinInt64, 0)`,
+the first instant at which `Sub` saturates and the one just inside it, a
+year in the past, and a day and a year ahead.
 
 For any expression with a wire operand, the recipe is the same: write
 down which operands the peer chose; for each operator, the value that
@@ -474,6 +487,53 @@ table names. When a new place turns something from the network into a
 path, its row goes into that table first, before the code. A rule that
 is not in the table is a rule somebody will forget.
 
+**A query's text is a constant, and the test parses the tree to say so.**
+Beside the file-open ledger, `internal/sqlshape` (test only) finds every
+call to `Query`, `QueryRow`, `Exec`, `Prepare` and their `Context` forms
+on a `*sql.DB`, `*sql.Tx` or `*sql.Conn`, and requires the query argument
+to be a constant expression: a literal, a named constant, a `+` of those,
+a local variable assigned only from those and `+=` of them, or a
+parameter for which every call of the function in its package passes
+one (`certRows` takes its query from two callers that build it by `+=`).
+A `fmt.Sprintf`, a `strings.Join`, a function call, a map lookup or a
+parameter with a caller that passes anything else fails the test with
+the site and the expression; three sites are the allowlist, by key, each
+with its reason: the two PRAGMA writes, and the migration's `tx.Exec(stmts)`,
+whose text is a value of the `migrations` map, each a `+` of the schema
+constants, chosen by the version the store read from itself. An
+allowlisted site that is gone is a problem of its own. Two self-tests
+plant a `Sprintf` query and a parameter with a non-constant caller and
+assert the sentences. A SQL call is told from `url.Values.Query` by its
+receiver, an identifier named `db`, `tx` or `conn`, since a type-checker
+over the tree would need a loader the dependency rule does not allow; a
+prepared statement's `Exec` takes values alone. Values are proven to
+travel as parameters by the tests that already send `'; DROP` as a name
+and `%` as a short id and assert the row and the refusal.
+
+**Every file operation's path has a row in the ledger, and the test
+walks the tree to find the ones that do not.** `internal/fileopens` holds
+`ledger.txt`, one line per call site of an `os`, `filepath.Walk`,
+`exec`, `sql.Open`, `net.Listen` or `net.Dial` call that takes a path,
+keyed by module-relative file, enclosing function (receiver-qualified),
+callee and the argument's source text, with its provenance: `local`,
+`operator` (with a note after a colon where the store runs the rule
+again at the call), `derived: <what>`, or `network: <component>, <rule>
+at <point>`, the rule being a function in the tree or, for a component
+whose rule is its type (a number the JSON decoder holds to a number),
+the standard-library function that writes it, `strconv.FormatInt` or
+`filepath.Base`. A helper's row names the least trusted of its callers'
+paths. The test parses every non-test file under `internal/` and `cmd/`
+with `go/parser`, finds those calls, and fails on a site with no row, a
+row with no site, a key listed twice, rows out of order, and a network
+row whose rule is none of those; a parse that finds under two hundred
+sites fails too, so a broken walk cannot pass by finding nothing. Line numbers are not in the
+key, so a row survives an edit above it; a change to the argument
+expression is a new site and needs a new row, which is the point. When
+this test fails on your change, write the row: the provenance is the
+thing you had to know to write the call, and the row is where the next
+reader finds it. A `network` row's rule and point should read the same as
+the matching row in the paths table.
+
 **A name has one rule, and both ends run it, on every path.** A thread
 id is a message id; an attachment name is a base name; a channel name has
 no slash. Each is one predicate in one package, called at send and at
@@ -573,6 +633,161 @@ receiver's clock by more than the freshness skew is malformed at open. The
 test sends the earlier-arriving message with the later stamp and asserts
 the later-arriving one is picked, and seals an inner a day ahead and
 asserts malformed.
+
+### The ways a string goes wrong, and the value that shows each
+
+A string from the network is bytes with a claim attached: that it is text,
+that it is one line, that it is a name, that it is hex. Every rule in this
+guide about names and paths is a rule about one such claim. This is the
+list of claims, each with the way it fails, this tree's example, and the
+value the test feeds. Go helps less than it looks: a `string` holds any
+bytes, `len` counts them, `s[i]` is a byte, `range` yields runes and
+silently gives U+FFFD for a bad one, and `==` compares bytes, all of which
+is right for some claims and wrong for others.
+
+**It is UTF-8.** A string that is not is still a string. `range` turns
+each bad byte into U+FFFD, `strconv.Quote` writes it as `\x..`, a terminal
+does what it likes. But note where the check runs: `encoding/json`
+replaces every invalid byte with U+FFFD as it decodes, so a
+`utf8.ValidString` after `json.Unmarshal` is a rule on nothing for a
+JSON-carried field. It still earns its place, for a record built in code
+or read from a file the program did not write; the test for the wire is
+at the byte level, before the decoder (a body with a lone `0xff`), and what
+it proves is that the decoder replaced it and the rules downstream saw
+U+FFFD, which is printable and harmless. The escapers here write a bad
+byte as `\xff`, and the test for them feeds one directly.
+
+**It is one line, or it is a name.** Category Cc is the control characters,
+including newline, tab and ESC; Cf the format characters, including the
+bidi overrides that reverse a line and the zero-width joiners that hide
+in it; Co private use; Zl and Zp the line and paragraph separators, which
+are not `\n` and pass a check for it. `channels.ForbiddenRune` is the one
+set, and a subject, a channel name, a description, an attachment name and
+a certificate label are held to it; a message's text keeps `\n` and `\t`
+and nothing else from it, and the two places this program makes a text
+from a file — `auu send` from a body file or standard input, `serve` from
+a handler's output — fold CRLF to `\n` first, since Windows writes it and
+a refusal naming U+000D at every send would be the wrong sentence for an
+honest file; a lone `\r` is still refused. Test values: ESC, `\r`, U+202E, U+200D, U+E000,
+U+2028, U+0085 (a control that is also a line break in some places), and a
+newline, saying for each field whether it is refused or kept.
+
+**Bytes are not characters, and neither is width.** `len(s)` is bytes;
+`s[:12]` can cut a rune in half and print `\xe2`; `%-32s` pads by runes
+but a terminal advances by cells, and an East Asian wide character takes
+two, a combining mark none. `truncate` cuts on a rune boundary now
+(auu-admin's cut bytes until the second trace). Lengths on the wire are
+byte caps, because bytes are what is allocated and signed, and the test
+value is a name of exactly the cap in bytes whose last rune straddles it.
+Column alignment is cosmetic and is not tested; a bidi override in a
+column is not cosmetic and is refused above.
+
+**Two names are two names.** Identity names, channel names and attachment
+names are compared byte for byte, so `Bugs` and `bugs` are two channels,
+and that is the rule the documents state. The one place folding matters is
+the disk, where a directory is named for a value: macOS by default and Windows spell `Report.txt` and
+`report.txt` as one file, so attachment names are also refused when equal
+under `strings.EqualFold`, and a collision the disk still finds (Unicode
+normalisation, which the standard library cannot check) is refused at the
+open, and `serve check` refuses two channel names equal under `EqualFold`
+since each is a directory under `serve/channels/`. Compare with
+`EqualFold`, never `ToLower` then `==`: `ToLower` is not
+a fold (U+0130 lowers to two runes; the Kelvin sign K folds to k but
+lowers to itself). Test values: `Makefile`/`makefile`, `K`/`\u212a`, and
+on a folding filesystem the NFC and NFD spellings of `é`, the test
+skipping where `probe` says the disk keeps them apart.
+
+**It is a base name.** No `/`, and on Windows no `\`, no `.` or `..`, no
+NUL, and then the things Windows adds: a trailing dot or space is
+stripped by the filesystem, so `report.txt.` is `report.txt` and
+collides; a device name (`CON`, `PRN`, `AUX`, `NUL`, `COM0`..`COM9` and
+`LPT0`..`LPT9` with their superscript forms `COM` with U+00B9, U+00B2 or U+00B3, the
+union of what Microsoft's pages have listed) with any extension or none
+opens the device rather than a file, so an attachment named `nul.txt`
+writes nowhere and one named `con.txt` writes to the console. Test values: each of those, `a/b`,
+`a\\b`, `..`, `.`, `.hidden` (allowed), a trailing space, a trailing dot,
+`%2F` (which must stay literal in a name and become a segment only in a
+URL), and the empty string. `filepath.Base` at the open is belt and
+braces, never the rule.
+
+**It has a shape.** Hex is 0-9a-f, lowercase, of one length; a message id
+is 32 of them, a fingerprint 64, a short id 16; base64 has an alphabet and
+a length modulo 4. A rule on shape is also what makes a string safe in
+other syntaxes: a short id goes into `LIKE ?` with `%` appended
+(store.go:784), and `%` and `_` are wildcards there, so it is the hex rule
+before it that keeps a short id from matching every mailbox. A name
+derived from a value the rule may refuse is made valid first and only
+then suffixed, and a loop that tries suffixes has a ceiling:
+`defaultRelayName` tried an IPv6 host as it was and every suffix failed
+the same way, so `auu relay add https://[::1]:8443` spun for ever until
+the file-path review. Test values
+for every shape: the empty string, one under and one over the length,
+uppercase, a wildcard character, a space at either end, and `+1`, ` 1`,
+`0x1` and `1e3` for a numeric string (`strconv.ParseInt` with base 10
+refuses all four; `Atoi` accepts `+1`).
+
+**It is a number written down.** `strconv.ParseInt(s, 10, 64)` refuses
+signs it did not expect, whitespace, a base prefix, an exponent and an
+overflow, and each refusal is an error the caller must look at. A JSON
+number lands in an `int64` only if it is an integer that fits; `1.0` and
+`1e3` are refused, `-0` is 0. Time as a string is RFC 3339 through
+`time.Time`'s own decoder, which refuses years outside 0000–9999. Test
+values as in the shape rule, and the integer rules above for what the
+number is then used for.
+
+**It is a secret.** A token, a capability, a passphrase: compared with
+`crypto/subtle.ConstantTimeCompare`, never `==` in a loop over candidates,
+because `==` stops at the first differing byte. A map lookup keyed by the
+secret is acceptable: Go's string hash is seeded per process and the
+comparison runs only on a hash match (the proxy looks a capability up in
+`p.live` that way; its loop over `p.revoked` compares dead tokens, which
+leak nothing). Test: none for timing; the rule is read.
+
+**It is echoed.** An error that repeats its input repeats whatever the
+peer wrote. Where a sentence must name a value, it is `%q` or through an
+escaper, never `%s`; where the value is the thing that could not be
+trusted, the sentence names the field and not the value (the client's
+malformed-answer error). The relay's own sentences are escaped where the
+client builds the error, so the relay cannot drive a terminal through a
+refusal. Test values: ESC and a newline in the input, asserting neither
+reaches standard error as itself.
+
+**It goes into another syntax.** A string is safe in exactly the syntax
+it was checked for. Into SQL only as a parameter, never by `Sprintf`; into
+a shell never (arguments are a slice to `exec.Command`, and a handler's
+subject and sender name travel as environment variables and a file, not
+as a command line); into a URL path through `url.PathEscape`, so a slash
+in a value is `%2F` and one segment, or, for an id, its shape rule
+before the join (`token revoke` joined an unchecked id until the string
+review, and `x?all=true` was a path and a query); into a log line truncated and quoted;
+into JSON through `encoding/json`, which escapes what JSON needs and no
+more (a terminal escape survives JSON, so `--json` output is for programs,
+and that is documented); into a file name only after the base-name rule;
+onto a terminal only through `Printable`, `PrintableText` or
+`PrintableLines`. Test: for each new sink, the value that is a
+metacharacter in that syntax and nowhere else.
+
+**Empty means something.** An empty channel is the default channel; an
+empty subject is allowed; an empty name is refused; an empty fingerprint
+in a listing is "not present" in one answer type and malformed in
+another. Every rule says what empty means, and the test feeds it. The
+same for whitespace: a name of spaces, a leading or trailing space, and
+`TrimSpace` before the rule where the rule allows it (a passphrase is
+never trimmed).
+
+**It is a prefix.** A short id matches a fingerprint by prefix, and a
+thread by the first characters of its id. Two matches are ambiguous and
+say so with both candidates; zero say so; a prefix shorter than the rule
+allows is refused before the lookup, since a one-character prefix would
+match a sixteenth of everything. Test values: a prefix with two matches,
+one, none, the empty string, and the full id.
+
+For a new string from outside, the recipe: write down every claim the
+code makes about it (text, one line, a name, hex, a number, a secret, a
+prefix), the syntax of every sink it reaches (terminal, file name, SQL,
+URL, log, JSON, environment), and for each claim and each sink the one
+value that breaks it. A rule at the boundary, one escaper per sink, and a
+test row per value.
 
 **A trace's test is kept under a name that says what it proves, and its
 assertion is never weakened to make it pass.** The tests under
