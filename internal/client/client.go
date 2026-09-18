@@ -420,6 +420,9 @@ func (c *Client) Certs(ctx context.Context) ([]relayapi.CertRecord, error) {
 	if err := c.do(ctx, "GET", path, nil, &resp, nil); err != nil {
 		return nil, err
 	}
+	if err := c.checkCerts("this identity's certificate listing", resp.Certs, true); err != nil {
+		return nil, err
+	}
 	return resp.Certs, nil
 }
 

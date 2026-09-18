@@ -613,3 +613,109 @@ func TestARelaysSentenceCannotDriveTheTerminal(t *testing.T) {
 		}
 	}
 }
+
+// fakeRelay answers each path with the JSON it is given and 404 otherwise:
+// a relay that says what a test wants said, however wrong.
+func fakeRelay(t *testing.T, answers map[string]any) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, ok := answers[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestAnAnswerIsCheckedForShapeBeforeItIsReturned: auu-admin and auu print
+// a fingerprint, a serial or a token id from a listing by its first sixteen
+// characters, and a Go slice past the end of a string is a panic, so a
+// relay that answered a two-byte field crashed the tool. Every id-shaped
+// field of every answer type is checked as it comes off the wire, and a
+// field that fails makes the whole answer a malformed-answer error naming
+// the field and the relay, never a partial listing; a seconds field is
+// bounded before anything multiplies it.
+func TestAnAnswerIsCheckedForShapeBeforeItIsReturned(t *testing.T) {
+	alice, err := identity.Generate("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := alice.Fingerprint()
+	const serial = "0123456789abcdef0123456789abcdef"
+	tokenID := strings.Repeat("7", 32)
+	good := map[string]any{
+		"/v1/admin/status": relayapi.AdminStatusResponse{CAFingerprint: fp, TokenMaxAgeSecs: 3600, CertLifetimeSecs: 86400},
+		"/v1/admin/mailboxes": relayapi.MailboxListResponse{
+			Mailboxes: []relayapi.MailboxRecord{{FP: fp, Name: "alice"}}, Next: fp},
+		"/v1/admin/mailboxes/" + fp:    relayapi.MailboxRecord{FP: fp, Name: "alice"},
+		"/v1/admin/blocks":             relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{{FP: fp, ByFP: fp}}},
+		"/v1/admin/tokens":             relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: tokenID, Issuer: fp, Subject: fp}}},
+		"/v1/admin/certs":              relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: serial, FP: fp}}},
+		"/v1/mailbox/" + fp + "/certs": relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: serial}}},
+	}
+	calls := map[string]func(c *Client) error{
+		"/v1/admin/status":             func(c *Client) error { _, err := c.AdminStatus(context.Background()); return err },
+		"/v1/admin/mailboxes":          func(c *Client) error { _, err := c.AdminMailboxes(context.Background(), "", 0); return err },
+		"/v1/admin/mailboxes/" + fp:    func(c *Client) error { _, err := c.AdminMailbox(context.Background(), fp); return err },
+		"/v1/admin/blocks":             func(c *Client) error { _, err := c.AdminBlocks(context.Background()); return err },
+		"/v1/admin/tokens":             func(c *Client) error { _, err := c.AdminTokens(context.Background(), false); return err },
+		"/v1/admin/certs":              func(c *Client) error { _, err := c.AdminCerts(context.Background(), "", false); return err },
+		"/v1/mailbox/" + fp + "/certs": func(c *Client) error { _, err := c.Certs(context.Background()); return err },
+	}
+	// Every answer as a relay gives it is taken.
+	srv := fakeRelay(t, good)
+	c, err := New(srv.URL, alice, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, call := range calls {
+		if err := call(c); err != nil {
+			t.Errorf("%s, well formed: %v", path, err)
+		}
+	}
+
+	// One field wrong at a time: the answer is refused, naming the field
+	// and the relay, and nothing panics.
+	for _, tc := range []struct {
+		path, field string
+		answer      any
+	}{
+		{"/v1/admin/status", "ca_fingerprint", relayapi.AdminStatusResponse{CAFingerprint: "ab"}},
+		{"/v1/admin/status", "token_max_age_seconds", relayapi.AdminStatusResponse{TokenMaxAgeSecs: relayapi.MaxDurationSeconds + 1}},
+		{"/v1/admin/status", "cert_lifetime_seconds", relayapi.AdminStatusResponse{CertLifetimeSecs: -1}},
+		{"/v1/admin/mailboxes", "fp", relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{{FP: "ab"}}}},
+		{"/v1/admin/mailboxes", "next", relayapi.MailboxListResponse{Next: "ab"}},
+		{"/v1/admin/mailboxes/" + fp, "fp", relayapi.MailboxRecord{FP: "ab"}},
+		{"/v1/admin/blocks", "fp", relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{{FP: "ab", ByFP: fp}}}},
+		{"/v1/admin/blocks", "by_fp", relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{{FP: fp, ByFP: "ab"}}}},
+		{"/v1/admin/tokens", "id", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: "ab", Issuer: fp}}}},
+		{"/v1/admin/tokens", "issuer", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: tokenID, Issuer: "ab"}}}},
+		{"/v1/admin/tokens", "subject", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: tokenID, Issuer: fp, Subject: "ab"}}}},
+		{"/v1/admin/certs", "serial", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: "ab", FP: fp}}}},
+		{"/v1/admin/certs", "fp", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: serial, FP: "ab"}}}},
+		{"/v1/admin/certs", "fp", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: serial}}}},
+		{"/v1/mailbox/" + fp + "/certs", "serial", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: "ab"}}}},
+		{"/v1/mailbox/" + fp + "/certs", "fp", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: serial, FP: "ab"}}}},
+	} {
+		srv := fakeRelay(t, map[string]any{tc.path: tc.answer})
+		c, err := New(srv.URL, alice, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = calls[tc.path](c)
+		if !errors.Is(err, ErrMalformedAnswer) {
+			t.Errorf("%s with a bad %s: %v, want ErrMalformedAnswer", tc.path, tc.field, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), tc.field+" is not") || !strings.Contains(err.Error(), srv.URL) {
+			t.Errorf("%s with a bad %s: %q does not name the field and the relay", tc.path, tc.field, err)
+		}
+		if strings.Contains(err.Error(), `"ab"`) {
+			t.Errorf("%s: the refusal repeats the value: %q", tc.path, err)
+		}
+	}
+}

@@ -235,6 +235,10 @@ func (s *Server) dispatch(req *request) *response {
 		if req.TTL < 0 {
 			return &response{Error: "ttl must not be negative"}
 		}
+		// Bounded before the multiplication, which is where the wrap is.
+		if req.TTL > int64(MaxTTL/time.Second) {
+			return &response{Error: fmt.Sprintf("ttl must be at most %d seconds, a year; 0 means until lock", int64(MaxTTL/time.Second))}
+		}
 		scope := ScopeReceive
 		if req.Send {
 			scope = ScopeSend

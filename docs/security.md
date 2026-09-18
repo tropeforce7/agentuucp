@@ -66,7 +66,13 @@ obey rather than show escaped the way Go quotes a string, where the error
 is made rather than where it is printed, so no command can forget. The
 same treatment covers a name from a relay older than the rule, and
 `auu-admin`'s confirmation before it removes a mailbox, which prints the
-name at the one moment an administrator is reading carefully.
+name at the one moment an administrator is reading carefully. And what
+the relay lists is checked for shape before it is used: every fingerprint,
+serial and token id in an answer is held to its rule as it comes off the
+wire, and a lifetime it reports in seconds is bounded before anything
+multiplies it, so an answer with a two-byte fingerprint is refused whole
+as malformed, naming the field and the relay, rather than sliced by a
+command that expected sixty-four characters.
 
 **What protects a large message.** The same HPKE ciphersuite, in its stateful
 multi-shot mode: one context for the whole stream, one sealed chunk at a time.

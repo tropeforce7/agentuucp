@@ -21,6 +21,9 @@ func (c *Client) AdminStatus(ctx context.Context) (*relayapi.AdminStatusResponse
 	if err := c.do(ctx, "GET", "/v1/admin/status", nil, &out, nil); err != nil {
 		return nil, err
 	}
+	if err := c.checkStatus(&out); err != nil {
+		return nil, err
+	}
 	return &out, nil
 }
 
@@ -42,6 +45,9 @@ func (c *Client) AdminMailboxes(ctx context.Context, after string, limit int) (*
 	if err := c.do(ctx, "GET", path, nil, &out, nil); err != nil {
 		return nil, err
 	}
+	if err := c.checkMailboxes(&out); err != nil {
+		return nil, err
+	}
 	return &out, nil
 }
 
@@ -49,6 +55,9 @@ func (c *Client) AdminMailboxes(ctx context.Context, after string, limit int) (*
 func (c *Client) AdminMailbox(ctx context.Context, fp string) (*relayapi.MailboxRecord, error) {
 	var out relayapi.MailboxRecord
 	if err := c.do(ctx, "GET", "/v1/admin/mailboxes/"+fp, nil, &out, nil); err != nil {
+		return nil, err
+	}
+	if err := c.checkMailbox("the mailbox", &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -68,6 +77,9 @@ func (c *Client) AdminPurge(ctx context.Context, fp string) error {
 func (c *Client) AdminBlocks(ctx context.Context) ([]relayapi.BlockRecord, error) {
 	var out relayapi.BlocksResponse
 	if err := c.do(ctx, "GET", "/v1/admin/blocks", nil, &out, nil); err != nil {
+		return nil, err
+	}
+	if err := c.checkBlocks(out.Blocks); err != nil {
 		return nil, err
 	}
 	return out.Blocks, nil
@@ -90,6 +102,9 @@ func (c *Client) AdminAddToken(ctx context.Context, tok string) (*relayapi.Token
 		relayapi.RegisterTokenRequest{Token: tok}, &out, nil); err != nil {
 		return nil, err
 	}
+	if err := c.checkToken("the registered token", &out); err != nil {
+		return nil, err
+	}
 	return &out, nil
 }
 
@@ -102,6 +117,9 @@ func (c *Client) AdminTokens(ctx context.Context, all bool) ([]relayapi.TokenRec
 	}
 	var out relayapi.TokenListResponse
 	if err := c.do(ctx, "GET", path, nil, &out, nil); err != nil {
+		return nil, err
+	}
+	if err := c.checkTokens(out.Tokens); err != nil {
 		return nil, err
 	}
 	return out.Tokens, nil
@@ -128,6 +146,9 @@ func (c *Client) AdminCerts(ctx context.Context, fp string, all bool) ([]relayap
 	}
 	var out relayapi.CertsResponse
 	if err := c.do(ctx, "GET", path, nil, &out, nil); err != nil {
+		return nil, err
+	}
+	if err := c.checkCerts("the certificate listing", out.Certs, false); err != nil {
 		return nil, err
 	}
 	return out.Certs, nil

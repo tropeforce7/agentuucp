@@ -138,6 +138,9 @@ func (c *Client) Unlock(passphrase []byte, ttl time.Duration, scope Scope) error
 	if ttl < 0 {
 		return errors.New("agent: ttl must not be negative")
 	}
+	if ttl > MaxTTL {
+		return fmt.Errorf("agent: ttl must be at most %s, a year; 0 means until lock", MaxTTL)
+	}
 	_, err := c.call(&request{Op: OpUnlock, Passphrase: passphrase, TTL: int64(ttl / time.Second), Send: scope == ScopeSend})
 	return err
 }

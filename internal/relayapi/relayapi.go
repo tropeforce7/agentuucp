@@ -197,6 +197,13 @@ const (
 	RegistrationClosed = "closed"
 )
 
+// MaxDurationSeconds bounds a seconds field in an answer: a hundred years,
+// which no lifetime a relay reports approaches and which is well under the
+// 292 a time.Duration holds, so a client that multiplies the field by
+// time.Second after checking it against this cannot wrap. A number from the
+// network is bounded before it is multiplied.
+const MaxDurationSeconds int64 = 100 * 365 * 24 * 3600
+
 // Administration wire types. Everything here crosses /v1/admin, which only an
 // identity named in the relay host's authorized file can reach.
 type (

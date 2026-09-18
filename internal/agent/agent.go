@@ -47,6 +47,15 @@ const (
 	// When it ends the agent is back in receive scope, not locked.
 	DefaultSendTTL = 10 * time.Minute
 
+	// MaxTTL is the longest an unlock may ask for, a year: nobody means a
+	// longer one, and "until lock" is spelled 0. The number on the socket
+	// is seconds and is bounded by this before it is multiplied into a
+	// Duration; unbounded, a value near 2^63 wrapped, and one that was a
+	// multiple of 2^55 wrapped to exactly zero, which unlock read as until
+	// lock. The same uid could have said 0, so nothing was crossed; the
+	// shape was wrong, and shapes get copied.
+	MaxTTL = 365 * 24 * time.Hour
+
 	// MaxFrame bounds one request or reply. The largest thing a request
 	// carries is a stream's encapsulation or a certificate request, both
 	// kilobytes; a megabyte leaves room and refuses anything else before it

@@ -279,9 +279,15 @@ func decode(payload []byte, c *Claims) error {
 	return nil
 }
 
+// ValidID reports whether s has the shape of a token id: 32 lowercase hex
+// characters, the encoding of the idBytes Issue draws. The relay checks a
+// path segment with it before the value goes near a query, and the client
+// checks a listing's ids with it before a command slices them.
+func ValidID(s string) bool { return len(s) == 2*idBytes && isLowerHex(s) }
+
 // Validate applies every rule in the format to a set of claims.
 func (c Claims) Validate() error {
-	if len(c.ID) != 2*idBytes || !isLowerHex(c.ID) {
+	if !ValidID(c.ID) {
 		return fmt.Errorf("%w: id must be %d lowercase hex characters", ErrForm, 2*idBytes)
 	}
 	if !identity.ValidFingerprint(c.Issuer) {

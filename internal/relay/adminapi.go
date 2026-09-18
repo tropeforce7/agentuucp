@@ -429,7 +429,7 @@ func (s *Server) handleAdminTokens(w http.ResponseWriter, r *http.Request, body 
 
 func (s *Server) handleAdminRevokeToken(w http.ResponseWriter, r *http.Request, body []byte, adminFP string) {
 	id := r.PathValue("id")
-	if !ValidTokenID(id) {
+	if !token.ValidID(id) {
 		s.fail(w, http.StatusBadRequest, "bad token id")
 		return
 	}
@@ -446,10 +446,6 @@ func (s *Server) handleAdminRevokeToken(w http.ResponseWriter, r *http.Request, 
 	s.audit("token.revoke", adminFP, id, "ok")
 	w.WriteHeader(http.StatusNoContent)
 }
-
-// ValidTokenID reports whether s could be a token's id: 32 lowercase hex
-// characters. Checked before the value goes anywhere.
-func ValidTokenID(s string) bool { return len(s) == 32 && isLowerHex(s) }
 
 func isLowerHex(s string) bool {
 	for i := 0; i < len(s); i++ {

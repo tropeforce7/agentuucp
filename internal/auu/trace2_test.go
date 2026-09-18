@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,8 +15,10 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/envelope"
+	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/relay"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
 
@@ -390,5 +394,49 @@ func TestResumeReopensAnUploadThatExpiredBetweenPieces(t *testing.T) {
 	bob.run("extract", id, "--out", dir)
 	if back, err := os.ReadFile(filepath.Join(dir, "lapsed.bin")); err != nil || !bytes.Equal(back, payload) {
 		t.Fatalf("the payload after the reopened upload differs (%v): %d bytes back, %d sent", err, len(back), len(payload))
+	}
+}
+
+// A relay's answer is checked for shape before a command slices it: auu
+// cert ls prints each serial's first sixteen characters, and a relay that
+// answered a two-byte serial crashed it. The client refuses the listing,
+// and the command prints the malformed-answer sentence, naming the field
+// and the relay, and exits 2; a panic would fail the test on its own.
+func TestCertLsRefusesAShortSerialRatherThanSlicingIt(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/certs") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: "ab", Label: "laptop"}}})
+	}))
+	defer srv.Close()
+	home := t.TempDir()
+	s, err := store.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := identity.Generate("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveIdentity(id); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveConfig(store.Config{Name: "alice"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddRelay("", srv.URL); err != nil {
+		t.Fatal(err)
+	}
+	alice := &user{t: t, home: home}
+	out, err := alice.tryRun("cert", "ls")
+	var exit *exitError
+	if !errors.As(err, &exit) || exit.code != exitTransport {
+		t.Fatalf("cert ls against a relay answering a two-byte serial: %v, want exit %d\n%s", err, exitTransport, out)
+	}
+	if !strings.Contains(err.Error(), "malformed answer") || !strings.Contains(err.Error(), "serial is not") || !strings.Contains(err.Error(), srv.URL) {
+		t.Fatalf("cert ls: %q does not say the answer is malformed, naming the field and the relay", err)
 	}
 }

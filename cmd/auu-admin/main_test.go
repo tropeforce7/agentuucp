@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -891,6 +892,67 @@ func TestTheRemovalPromptPrintsAHostileNameEscaped(t *testing.T) {
 		}
 		if !strings.Contains(out, `(alice\x1b[2K`) {
 			t.Errorf("%v does not show the name escaped:\n%s", args[:2], out)
+		}
+	}
+}
+
+// fakeRelay answers each path with the JSON it is given and 404 otherwise:
+// a relay that says what a test wants said, however wrong.
+func fakeRelay(t *testing.T, answers map[string]any) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, ok := answers[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(body)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestAShortFieldInAnAnswerIsRefusedNotSliced: every command that prints an
+// id from a relay's answer prints its first sixteen characters, and a Go
+// slice past the end of a string is a panic; a relay answering a two-byte
+// fingerprint, serial or token id crashed the tool. The client refuses
+// such an answer before the command sees it, and the command prints the
+// malformed-answer sentence, naming the field and the relay, and exits 2.
+// A panic would fail the test on its own.
+func TestAShortFieldInAnAnswerIsRefusedNotSliced(t *testing.T) {
+	boss, err := identity.Generate("boss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := boss.Fingerprint()
+	const serial = "0123456789abcdef0123456789abcdef"
+	for _, tc := range []struct {
+		args   []string
+		path   string
+		field  string
+		answer any
+	}{
+		{[]string{"status"}, "/v1/admin/status", "ca_fingerprint", relayapi.AdminStatusResponse{CAFingerprint: "ab"}},
+		{[]string{"status"}, "/v1/admin/status", "token_max_age_seconds", relayapi.AdminStatusResponse{TokenMaxAgeSecs: relayapi.MaxDurationSeconds + 1}},
+		{[]string{"mailboxes", "ls"}, "/v1/admin/mailboxes", "fp", relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{{FP: "ab"}}}},
+		{[]string{"mailboxes", "show", fp}, "/v1/admin/mailboxes/" + fp, "fp", relayapi.MailboxRecord{FP: "ab"}},
+		{[]string{"blocks", "ls"}, "/v1/admin/blocks", "by_fp", relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{{FP: fp, ByFP: "ab"}}}},
+		{[]string{"token", "ls"}, "/v1/admin/tokens", "id", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: "ab", Issuer: fp}}}},
+		{[]string{"token", "ls"}, "/v1/admin/tokens", "subject", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: strings.Repeat("7", 32), Issuer: fp, Subject: "ab"}}}},
+		{[]string{"certs", "ls"}, "/v1/admin/certs", "serial", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: "ab", FP: fp}}}},
+		{[]string{"certs", "ls"}, "/v1/admin/certs", "fp", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: serial, FP: "ab"}}}},
+	} {
+		srv := fakeRelay(t, map[string]any{tc.path: tc.answer})
+		p := newPersona(t, "boss", srv.URL)
+		out, err := p.tryRun(tc.args...)
+		var exit *exitError
+		if !asExit(err, &exit) || exit.code != exitTransport {
+			t.Errorf("auu-admin %v with a bad %s: %v (exit %+v), want exit %d\n%s", tc.args, tc.field, err, exit, exitTransport, out)
+			continue
+		}
+		if !strings.Contains(err.Error(), "malformed answer") || !strings.Contains(err.Error(), tc.field+" is not") || !strings.Contains(err.Error(), srv.URL) {
+			t.Errorf("auu-admin %v with a bad %s: %q does not say the answer is malformed, naming the field and the relay", tc.args, tc.field, err)
 		}
 	}
 }

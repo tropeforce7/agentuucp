@@ -24,6 +24,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
+	"github.com/tropeforce7/agentuucp/internal/token"
 )
 
 // Nothing the network names is a path until its rule has run, and this one
@@ -143,9 +144,9 @@ func TestNothingTheNetworkNamesIsAPath(t *testing.T) {
 				}
 				return wire(alice, "PATCH", "/v1/uploads/", v, "bad upload id")
 			}},
-		{"a token id in a URL", "relay: handleAdminRevokeToken, relay.ValidTokenID, 400 before the store is asked",
+		{"a token id in a URL", "relay: handleAdminRevokeToken, token.ValidID, 400 before the store is asked",
 			func(v string) string {
-				if relay.ValidTokenID(v) {
+				if token.ValidID(v) {
 					return ""
 				}
 				return wire(boss, "DELETE", "/v1/admin/tokens/", v, "bad token id")

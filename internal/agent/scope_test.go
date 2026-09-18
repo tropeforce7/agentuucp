@@ -4,7 +4,11 @@ import (
 	"crypto/ecdh"
 	"crypto/mldsa"
 	"crypto/rand"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"math"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -454,5 +458,73 @@ func TestTheTwoExpiriesFollowTheRule(t *testing.T) {
 	a.clock.Set(start.Add(time.Hour))
 	if st, _ := a.client.Status(); !st.Locked {
 		t.Errorf("at the receive expiry the agent is %+v, want locked", st)
+	}
+}
+
+// TestTheUnlockTTLIsBoundedBeforeItIsMultiplied: the TTL on the socket is a
+// number of seconds, and it was multiplied by time.Second with only a
+// negative check first, so a value near 2^63 wrapped and one that was a
+// multiple of 2^55 wrapped to exactly zero, which unlock read as "until
+// lock". The same uid could have said 0, so nothing was crossed; the shape
+// was wrong. Now the agent bounds it at MaxTTL, a year, before the
+// multiplication, and says so; the client refuses the same before it asks.
+func TestTheUnlockTTLIsBoundedBeforeItIsMultiplied(t *testing.T) {
+	a := startAgent(t)
+	max := int64(MaxTTL / time.Second)
+	rawUnlock := func(ttl int64) response {
+		t.Helper()
+		conn, err := net.Dial("unix", a.client.Socket())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		raw, err := json.Marshal(&request{Op: OpUnlock, Passphrase: []byte(passphrase), TTL: ttl})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var prefix [4]byte
+		binary.BigEndian.PutUint32(prefix[:], uint32(len(raw)))
+		conn.Write(prefix[:])
+		conn.Write(raw)
+		frame, err := readFrame(conn)
+		if err != nil {
+			t.Fatalf("no reply: %v", err)
+		}
+		var resp response
+		if err := json.Unmarshal(frame, &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	// At the bound: taken, and the expiry is a year out.
+	if resp := rawUnlock(max); !resp.OK {
+		t.Fatalf("a TTL at the bound was refused: %+v", resp)
+	}
+	st, err := a.client.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Until is reported to the second.
+	if want := a.clock.Now().Add(MaxTTL).Truncate(time.Second); st.Locked || st.Until.Sub(want).Abs() > time.Second {
+		t.Errorf("after an unlock at the bound the agent is %+v, want unlocked until %s", st, want)
+	}
+	a.client.Lock()
+	// One over, a value that wrapped to zero before, and one near 2^63:
+	// each refused with the sentence, and the agent stays locked.
+	for _, ttl := range []int64{max + 1, 1 << 55, math.MaxInt64} {
+		resp := rawUnlock(ttl)
+		if resp.OK || !strings.Contains(resp.Error, "at most") || !strings.Contains(resp.Error, "a year") {
+			t.Errorf("a TTL of %d: %+v, want the refusal naming the bound", ttl, resp)
+		}
+		if st, _ := a.client.Status(); !st.Locked {
+			t.Errorf("a TTL of %d unlocked the agent: %+v", ttl, st)
+		}
+	}
+	// The client refuses before it asks.
+	if err := a.client.Unlock([]byte(passphrase), MaxTTL+time.Second, ScopeReceive); err == nil || !strings.Contains(err.Error(), "at most") {
+		t.Errorf("the client sent a TTL over the bound: %v", err)
+	}
+	if err := a.client.Unlock([]byte(passphrase), MaxTTL, ScopeReceive); err != nil {
+		t.Errorf("the client refused a TTL at the bound: %v", err)
 	}
 }
