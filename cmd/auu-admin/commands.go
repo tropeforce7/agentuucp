@@ -209,10 +209,10 @@ func mailboxRemove(args []string, purgeOnly bool) error {
 	what := fmt.Sprintf("%d queued message(s), %s", m.QueuedMessages, humanBytes(m.QueuedBytes))
 	if purgeOnly {
 		fmt.Printf("Purging %s (%s) will discard %s. The mailbox itself stays.\n",
-			m.FP[:16], orNone(m.Name), what)
+			m.FP[:16], orNone(identity.Printable(m.Name)), what)
 	} else {
 		fmt.Printf("Removing %s (%s) will discard %s and its allowlist, "+
-			"and the owner will have to register again.\n", m.FP[:16], orNone(m.Name), what)
+			"and the owner will have to register again.\n", m.FP[:16], orNone(identity.Printable(m.Name)), what)
 	}
 	if !*yes && !confirm("Continue?") {
 		return usageErrf("cancelled")

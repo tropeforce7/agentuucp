@@ -587,7 +587,11 @@ mode the display name a registration carries is held to the export line's
 rule — letters, digits, `.`, `_` and `-`, at most 64 bytes — and refused
 `400` otherwise, since the relay serves it to every enrolled machine and
 the administrator's terminal; `auu lookup` and `auu-admin` print a name
-from a relay older than that rule with anything unprintable escaped.
+from a relay older than that rule with anything unprintable escaped, the
+confirmation before a mailbox is removed included, and every client
+prints a relay's refusal the same way, so a relay's own sentences cannot
+drive a terminal either. A machine's certificate label is stripped of the
+same characters a channel name may not hold before it is stored.
 
 The relay stores nothing it can read and needs no backups beyond whatever is
 still in transit. The relay's bundle can be reissued from the offline

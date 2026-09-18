@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -363,6 +364,32 @@ func Printable(name string) string {
 	}
 	q := strconv.Quote(name)
 	return q[1 : len(q)-1]
+}
+
+// PrintableText is a sentence from the network as it may be written to a
+// terminal: every printable character, the space and the tab kept as they
+// are, quotes and backslashes among them, and everything else — a control
+// character, a format character such as a bidi override, a line break, a
+// byte that is not UTF-8 — escaped the way strconv.Quote would escape it.
+// Printable is for a name, which has a rule and rarely needs escaping;
+// this is for text that has none, such as the sentence a relay sends with
+// a refusal, which every user of every relay reads on standard error.
+func PrintableText(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && size == 1:
+			fmt.Fprintf(&b, `\x%02x`, s[i])
+		case r == ' ' || r == '\t' || strconv.IsPrint(r):
+			b.WriteString(s[i : i+size])
+		default:
+			q := strconv.QuoteRune(r)
+			b.WriteString(q[1 : len(q)-1])
+		}
+		i += size
+	}
+	return b.String()
 }
 
 // ErrLineLength is an export line whose encoded part is not the length of

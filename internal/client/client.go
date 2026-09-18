@@ -206,6 +206,23 @@ type HTTPError struct {
 	RetryAfter time.Duration
 }
 
+// httpError is the one place an HTTPError is made from a relay's answer.
+// The relay's sentence goes through identity.PrintableText here, at
+// construction, so no caller can print it unescaped: a relay is in the
+// client's model as something that may be hostile, and its refusal is the
+// one thing from it that reached every terminal as it came. Printable
+// ASCII is unchanged, so a caller that looks for a known sentence in the
+// message still finds it.
+func httpError(resp *http.Response, body []byte) *HTTPError {
+	var e relayapi.ErrorResponse
+	_ = json.Unmarshal(body, &e)
+	return &HTTPError{
+		Status:     resp.StatusCode,
+		Message:    identity.PrintableText(e.Error),
+		RetryAfter: retryAfter(resp.Header),
+	}
+}
+
 func (e *HTTPError) Error() string {
 	msg := fmt.Sprintf("relay returned %d", e.Status)
 	if e.Message != "" {
@@ -342,13 +359,7 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 		return fmt.Errorf("reading relay response: %w", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		var e relayapi.ErrorResponse
-		_ = json.Unmarshal(respBody, &e)
-		return &HTTPError{
-			Status:     resp.StatusCode,
-			Message:    e.Error,
-			RetryAfter: retryAfter(resp.Header),
-		}
+		return httpError(resp, respBody)
 	}
 	if out == nil || len(respBody) == 0 {
 		return nil

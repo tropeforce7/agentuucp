@@ -12,8 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode"
 	"unicode/utf8"
+
+	"github.com/tropeforce7/agentuucp/internal/channels"
 )
 
 const (
@@ -328,14 +329,17 @@ func keyDescription(csr *x509.CertificateRequest) string {
 
 // cleanLabel reduces a machine's name for itself to something safe to store
 // and print. It never fails: a label is decoration, and refusing an enrolment
-// over one would be a poor trade.
+// over one would be a poor trade. What it drops is the set a channel name
+// may not hold, channels.ForbiddenRune's — control characters, and with
+// them the format characters a bidi override is one of, which a listing
+// would obey and reverse the rest of the line by.
 func cleanLabel(s string) string {
 	s = strings.TrimSpace(s)
 	if !utf8.ValidString(s) {
 		return unnamedLabel
 	}
 	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if _, what := channels.ForbiddenRune(string(r)); what != "" {
 			return -1
 		}
 		return r

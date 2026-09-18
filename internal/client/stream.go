@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -47,7 +46,7 @@ func (c *Client) UploadOffset(ctx context.Context, upload string) (int64, error)
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return 0, &HTTPError{Status: resp.StatusCode, RetryAfter: retryAfter(resp.Header)}
+		return 0, httpError(resp, nil)
 	}
 	return strconv.ParseInt(resp.Header.Get(relayapi.UploadOffsetHeader), 10, 64)
 }
@@ -78,9 +77,7 @@ func (c *Client) AppendStream(ctx context.Context, upload string, offset int64, 
 	if resp.StatusCode == http.StatusNoContent {
 		return strconv.ParseInt(resp.Header.Get(relayapi.UploadOffsetHeader), 10, 64)
 	}
-	var e relayapi.ErrorResponse
-	_ = json.Unmarshal(payload, &e)
-	httpErr := &HTTPError{Status: resp.StatusCode, Message: e.Error, RetryAfter: retryAfter(resp.Header)}
+	httpErr := httpError(resp, payload)
 	// A conflict carries the truth about where the upload actually is, which
 	// is what makes it recoverable rather than fatal.
 	if resp.StatusCode == http.StatusConflict {
@@ -155,10 +152,7 @@ func (c *Client) Blob(ctx context.Context, fp string, id int64, from, to int64) 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		defer resp.Body.Close()
 		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
-		var e relayapi.ErrorResponse
-		_ = json.Unmarshal(payload, &e)
-		return nil, 0, &HTTPError{Status: resp.StatusCode, Message: e.Error,
-			RetryAfter: retryAfter(resp.Header)}
+		return nil, 0, httpError(resp, payload)
 	}
 	return resp.Body, resp.ContentLength, nil
 }

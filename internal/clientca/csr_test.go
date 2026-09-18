@@ -23,6 +23,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/channels"
 )
 
 // testFP is a well-formed fingerprint: 64 lowercase hex characters.
@@ -720,4 +722,33 @@ func ed25519Signer(t *testing.T) crypto.Signer {
 		t.Fatal(err)
 	}
 	return priv
+}
+
+// TestALabelCarriesNoFormatCharacter: cleanLabel is what makes a
+// certificate request's CommonName safe to store and print, and it dropped
+// control characters alone. A right-to-left override (U+202E) is a format
+// character, not a control, and went through to the relay's certs table,
+// 'auu cert ls' and 'auu-admin certs ls', where it reversed the rest of the
+// line, serial and fingerprint included. Now a label drops the set a
+// channel name may not hold, which is one set, written once.
+func TestALabelCarriesNoFormatCharacter(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"build-box‮gnp.exe", "build-boxgnp.exe"},
+		{"zero‍width​joined", "zerowidthjoined"},
+		{"privateuse", "privateuse"},
+		{"line sep para", "lineseppara"},
+		{"esc\x1b[2Kape\nline", "esc[2Kapeline"},
+		{"  plain-name  ", "plain-name"},
+		{"café 中文", "café 中文"},
+	} {
+		got := cleanLabel(tc.in)
+		if got != tc.want {
+			t.Errorf("cleanLabel(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		for _, r := range got {
+			if r, what := channels.ForbiddenRune(string(r)); what != "" {
+				t.Errorf("cleanLabel(%q) kept %U, a %s", tc.in, r, what)
+			}
+		}
+	}
 }

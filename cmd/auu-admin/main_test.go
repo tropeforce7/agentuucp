@@ -852,3 +852,45 @@ func TestMailboxesPrintAHostileNameEscaped(t *testing.T) {
 		}
 	}
 }
+
+// TestTheRemovalPromptPrintsAHostileNameEscaped: the mailbox listing and
+// the one-mailbox view pass the relay's name through identity.Printable,
+// whose comment says every place a name from the network reaches a
+// terminal goes through it; the confirmation that 'mailboxes rm' and
+// 'mailboxes purge' print before asking did not, and put a relay's escape
+// sequence on the administrator's terminal at the one moment they are
+// reading carefully. Now it is escaped as the listing escapes it.
+func TestTheRemovalPromptPrintsAHostileNameEscaped(t *testing.T) {
+	f := newFixture(t, relay.Config{})
+	alice, err := identity.Generate("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.enroll(alice)
+	db, err := sql.Open("sqlite", f.dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	hostile := "alice\x1b[2K\x1b[1;31mowned\nccx2.evil"
+	if _, err := db.Exec(`UPDATE mailboxes SET name = ? WHERE fp = ?`, hostile, alice.Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"mailboxes", "purge", alice.Fingerprint()},
+		{"mailboxes", "rm", alice.Fingerprint()},
+	} {
+		// Declined, so nothing changes; the prompt is what is under test.
+		out, _ := f.boss.answer("n", args...)
+		for i := 0; i < len(out); i++ {
+			if c := out[i]; c == 0x1b || (c < 0x20 && c != '\n' && c != '\t') {
+				t.Errorf("%v printed byte %#x from the relay's name in its confirmation prompt; expected the name escaped as the listing escapes it:\n%q",
+					strings.Join(args[:2], " "), c, out)
+				break
+			}
+		}
+		if !strings.Contains(out, `(alice\x1b[2K`) {
+			t.Errorf("%v does not show the name escaped:\n%s", args[:2], out)
+		}
+	}
+}

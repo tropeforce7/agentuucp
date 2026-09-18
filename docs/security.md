@@ -55,6 +55,19 @@ row has no sender, so nothing ties a message being collected to the person
 who posted it, and building that would mean recording the sender on every
 message, which is the social graph the relay is built not to hold.
 
+**What the relay says reaches a terminal escaped.** A relay is trusted
+with routing and nothing else, and what it sends back is read on a
+terminal: a display name in a listing, a machine's certificate label, and
+the sentence it attaches to every refusal, which every user of every relay
+reads on standard error. Each is made printable before it is shown — a
+name and a label are held to a rule that leaves no control or format
+character in them, and a sentence has every character a terminal would
+obey rather than show escaped the way Go quotes a string, where the error
+is made rather than where it is printed, so no command can forget. The
+same treatment covers a name from a relay older than the rule, and
+`auu-admin`'s confirmation before it removes a mailbox, which prints the
+name at the one moment an administrator is reading carefully.
+
 **What protects a large message.** The same HPKE ciphersuite, in its stateful
 multi-shot mode: one context for the whole stream, one sealed chunk at a time.
 The context advances a nonce on every chunk and only on a chunk that opened, so

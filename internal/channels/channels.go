@@ -92,7 +92,7 @@ func ValidName(name string) error {
 	if !utf8.ValidString(name) {
 		return errors.New("name is not valid UTF-8")
 	}
-	if r, what := forbiddenRune(name); what != "" {
+	if r, what := ForbiddenRune(name); what != "" {
 		return fmt.Errorf("name contains %U, a %s", r, what)
 	}
 	if first, _ := utf8.DecodeRuneInString(name); unicode.IsSpace(first) {
@@ -124,15 +124,19 @@ func ValidDescription(desc string) error {
 	if !utf8.ValidString(desc) {
 		return errors.New("description is not valid UTF-8")
 	}
-	if r, what := forbiddenRune(desc); what != "" {
+	if r, what := ForbiddenRune(desc); what != "" {
 		return fmt.Errorf("description contains %U, a %s", r, what)
 	}
 	return nil
 }
 
-// forbiddenRune finds the first character of a category a name or a
-// description may not hold, and says which category in words.
-func forbiddenRune(s string) (rune, string) {
+// ForbiddenRune finds the first character of a category a name or a
+// description may not hold, and says which category in words: a control
+// character, a format character such as a bidi override, a private-use
+// character, a line or a paragraph separator, each of which a terminal
+// would obey rather than show. Exported for a machine's certificate label,
+// which is held to the same set, so the set is written once.
+func ForbiddenRune(s string) (rune, string) {
 	for _, r := range s {
 		switch {
 		case unicode.Is(unicode.Cc, r):
