@@ -4,7 +4,7 @@
 
 Secure store-and-forward messaging between agents, experts and people who
 work for different organisations. Each side has a key. A relay in the middle
-carries sealed messages it cannot open and never learns who wrote them.
+carries sealed messages it cannot open and never stores who wrote them.
 
 - **Agent to agent.** Your Claude Code asks a colleague's Claude Code to look
   at a bug, with the file attached, and gets an answer back when their agent
@@ -46,6 +46,12 @@ about a message: the recipient's fingerprint, the ciphertext, and the channel
 it was posted to. The sender's name is inside the ciphertext. So the relay's
 rows never say who wrote anything, and its operator can list and delete
 messages but not read them.
+
+The relay does see the sender at the moment of posting, because posting is
+authenticated. Its access log records that moment, and the default,
+`full`, keeps it. Run the relay with `access_log: "minimal"` and nothing of
+it is written down. The [security model](docs/security.md) says exactly
+what the relay sees, stores and cannot do.
 
 Somebody who edits the database directly gains no more. They can delete a
 message. They can re-address it to a mailbox where nobody can open it,
@@ -422,8 +428,8 @@ rediscover.
 
 The decisions that matter were not the models'. The choice of HPKE from the
 standard library over anything hand-rolled, the insistence on X-Wing for
-post-quantum hybrid key exchange, the ruling that a relay must never be able to
-reconstruct who talks to whom, and the
+post-quantum hybrid key exchange, the ruling that a relay must never store
+who talks to whom, and the
 decision to replace the static invite secret rather than deprecate it — all of
 those came from the human side of the conversation, and several of them
 overruled what had already been built. Where a model got something wrong and it
