@@ -262,3 +262,101 @@ func TestEnrolAsksForSendScopeAtATerminal(t *testing.T) {
 		t.Fatalf("register from a pipe in receive scope gave %v, want exit %d and the receive sentence", err, exitLocked)
 	}
 }
+
+// TestServeNeedsSendScope: serve on a home under a passphrase refuses to
+// start with the agent unlocked to receive, in its own words naming the
+// unlock that lasts until lock; starts under send scope, warning when that
+// scope will end; and when it ends under a running service, stops the same
+// way rather than failing reply after reply, leaving the message for the
+// next serve.
+func TestServeNeedsSendScope(t *testing.T) {
+	alice, bob := newExpertCold(t, modeReadOnly)
+	agentEnv(t)
+	// agentEnv makes this test binary answer as auu wherever it is run with
+	// helperEnv set, and the handler is this test binary too: the handler's
+	// line unsets it for itself, so it is the handler again.
+	bob.row.Exec = helperEnv + "= " + helperLine(t, "handler")
+	bob.write(t)
+	bob.encrypt()
+	const needsSend = "the agent is unlocked to receive, and serve originates every reply: run 'auu unlock --send --ttl 0' at a terminal, which lasts until 'auu lock'"
+
+	// Receive scope: refused before anything, exit 4, serve's sentence.
+	_, err := bob.tryRun("serve", "--once")
+	var e *exitError
+	if !asExit(err, &e) || e.code != exitLocked || e.Error() != needsSend {
+		t.Fatalf("serve in receive scope gave %v, want exit %d and %q", err, exitLocked, needsSend)
+	}
+	// Locked: the locked sentence, as before. And never a prompt, even at
+	// a terminal: a person there is told the unlock to make.
+	asked := 0
+	wasTerminal, wasAsk := stdinIsTerminal, askPassphrase
+	stdinIsTerminal = func() bool { return true }
+	askPassphrase = func(prompt string) ([]byte, error) { asked++; return []byte(agentPassphrase), nil }
+	t.Cleanup(func() { stdinIsTerminal, askPassphrase = wasTerminal, wasAsk })
+	_, err = bob.tryRun("serve", "--once")
+	if !asExit(err, &e) || e.code != exitLocked || e.Error() != needsSend {
+		t.Fatalf("serve in receive scope at a terminal gave %v, want %q", err, needsSend)
+	}
+	bob.run("lock")
+	_, err = bob.tryRun("serve", "--once")
+	if !asExit(err, &e) || e.code != exitLocked || !strings.Contains(e.Error(), "your identity is locked") {
+		t.Fatalf("serve with the agent locked gave %v, want the locked sentence", err)
+	}
+	if asked != 0 {
+		t.Fatalf("serve prompted %d times; it never prompts", asked)
+	}
+	stdinIsTerminal = wasTerminal
+
+	// Send scope with an expiry: starts, and warns naming the time.
+	bob.unlockSend()
+	stderr := captureStderr(t, func() { bob.serve(t) })
+	if !strings.Contains(stderr, "the agent's send scope ends at ") || !strings.Contains(stderr, "serve will stop then; 'auu unlock --send --ttl 0' lasts until 'auu lock'") {
+		t.Fatalf("serve under a send scope that ends did not warn:\n%s", stderr)
+	}
+	// Send scope until lock: starts, and no warning.
+	bob.run("unlock", "--send", "--ttl", "0", "--passphrase-file", passphraseFile(t, agentPassphrase))
+	stderr = captureStderr(t, func() { bob.serve(t) })
+	if strings.Contains(stderr, "send scope ends") {
+		t.Fatalf("serve under a send scope until lock warned:\n%s", stderr)
+	}
+	// Narrowed again: refused again.
+	bob.run("lock", "--send")
+	_, err = bob.tryRun("serve", "--once")
+	if !asExit(err, &e) || e.code != exitLocked || e.Error() != needsSend {
+		t.Fatalf("serve after lock --send gave %v, want %q", err, needsSend)
+	}
+
+	// Send scope that ends under a running service: serve starts inside
+	// it, the handler takes longer than it lasts, the reply is refused,
+	// and serve stops with its sentence. Nothing is recorded against the
+	// message, the reply is on disk, and the next serve, under a proper
+	// unlock, sends it without running the handler again.
+	marker := filepath.Join(t.TempDir(), "runs")
+	t.Setenv(handlerScript, "append:"+marker+";sleep:2s;echo:the expert has spoken")
+	sent := alice.ask(t, "jostle", "a question", "asked while sendable")
+	bob.run("unlock", "--send", "--ttl", "1s", "--passphrase-file", passphraseFile(t, agentPassphrase))
+	stderr = captureStderr(t, func() { _, err = bob.tryRun("serve", "--once") })
+	if !asExit(err, &e) || e.code != exitLocked || e.Error() != needsSend {
+		t.Fatalf("serve whose send scope ended under it gave %v, want exit %d and %q; stderr:\n%s", err, exitLocked, needsSend, stderr)
+	}
+	if runs := strings.Count(readFile(t, marker), "\n"); runs != 1 {
+		t.Fatalf("the handler ran %d times, want once", runs)
+	}
+	if entry := bob.ledgerOf(t).Messages[sent.ID]; entry != nil && (!entry.Handled.IsZero() || entry.Failures != 0) {
+		t.Fatalf("the message was recorded against: %+v", entry)
+	}
+	if st := bob.agentStatus(); st.Locked || st.Scope != string(agent.ScopeReceive) {
+		t.Fatalf("after the send scope ended the agent says %+v, want unlocked to receive", st)
+	}
+	bob.run("unlock", "--send", "--ttl", "0", "--passphrase-file", passphraseFile(t, agentPassphrase))
+	report := bob.round(t)
+	if len(report.Answered) != 1 || report.Answered[0].ID != sent.ID {
+		t.Fatalf("the round after the unlock: %+v", report)
+	}
+	if runs := strings.Count(readFile(t, marker), "\n"); runs != 1 {
+		t.Fatalf("the handler ran %d times in all, want once: the reply was on disk", runs)
+	}
+	if reply := alice.replyOn(t, sent.Thread); reply.Text != "the expert has spoken" {
+		t.Fatalf("the reply is %q", reply.Text)
+	}
+}

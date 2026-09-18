@@ -26,6 +26,7 @@ var serveRows = []matrixRow{
 	{"S09", "hooks", "before and after run around the handler, and a red after sends nothing", s09},
 	{"S10", "key_proxy", "the key-holding proxy: the handler is given a token and never the key", s10},
 	{"S11", "split_proxy", "the proxy as an account of its own, whose key the expert cannot read", s11},
+	{"S12", "send_scope", "an expert host unlocked to send answers; a desktop unlocked plain reads and cannot send", s12},
 }
 
 const (
@@ -668,4 +669,74 @@ func s11(t *testing.T) {
 	expectNot(t, r, again.ID[:12]+" answered")
 	verdict(t, "ok", "The key is readable by the proxy's account alone, the expert's file never names it, "+
 		"the handler gets a token minted for its uid, and a proxy that is down fails the message rather than serve.")
+}
+
+// bobPass is bob's passphrase file, for the one row that puts his home
+// under a passphrase.
+const bobPass = "/home/bob/pass"
+
+// s12: the agent's two scopes, on the two machines they are for. bob's is an
+// expert host: his home under a passphrase and unlocked plain, serve refuses
+// to start in its own words; unlocked with --send --ttl 0, it answers. alice's
+// is a desktop: unlocked plain she reads her inbox, and a send is exit 4 with
+// the agent's sentence until she runs unlock --send.
+func s12(t *testing.T) {
+	defer servedChannel(t, "read-only", answering)()
+	bob.exec("", "sh", "-c", "umask 077 && printf 'bob passphrase\\n' > "+bobPass)
+	expectSays(t, bob.auu("passphrase", "set", "--passphrase-file", bobPass), 0, "encrypted the keys in /home/bob/.auu")
+	defer func() {
+		bob.auu("passphrase", "remove", "--passphrase-file", bobPass)
+		bob.auu("agent", "stop")
+	}()
+	defer encryptAlice(t)()
+
+	// The desktop, unlocked to receive by set: reads, and cannot send.
+	expectSays(t, alice.auu("agent", "status"), 0, "keys:   unlocked to receive until")
+	expectCode(t, alice.auu("inbox"), 0)
+	r := alice.auu("send", "--to", "bob", "--channel", "jostle", "--subject", "from receive scope", "can this go?")
+	expectCode(t, r, 4)
+	stderrIs(t, r, receiveOnly)
+
+	// The expert host, unlocked to receive by set: serve will not start.
+	r = bob.auu("serve", "--once")
+	expectCode(t, r, 4)
+	stderrIs(t, r, "auu: the agent is unlocked to receive, and serve originates every reply: run 'auu unlock --send --ttl 0' at a terminal, which lasts until 'auu lock'")
+	// Unlocked to send for ten minutes: starts, and says when it will stop.
+	r = bob.auu("unlock", "--send", "--passphrase-file", bobPass)
+	expectSays(t, r, 0, "unlocked to send until", "(receive until")
+	r = bob.auu("serve", "--once")
+	expectCode(t, r, 0)
+	if !strings.Contains(r.stderr, "the agent's send scope ends at ") || !strings.Contains(r.stderr, "serve will stop then") {
+		t.Errorf("serve under a ten-minute send scope did not warn:\n%s", r.stderr)
+	}
+	// Unlocked to send until lock, as an expert host is: starts without
+	// the warning, and answers.
+	r = bob.auu("unlock", "--send", "--ttl", "0", "--passphrase-file", bobPass)
+	expectSays(t, r, 0, "unlocked to send until lock or logout (receive until lock or logout)")
+	expectSays(t, bob.auu("agent", "status"), 0, "keys:   unlocked to send until lock or logout (receive until lock or logout)")
+
+	// alice unlocks to send, asks, and is answered by the expert host.
+	r = alice.auu("unlock", "--send", "--passphrase-file", alicePass)
+	expectSays(t, r, 0, "unlocked to send until")
+	sent := ask(t, "from send scope", "now it can")
+	r = bob.auu("serve", "--once")
+	expectSays(t, r, 0, "jostle: answered "+sent.ID[:12])
+	if strings.Contains(r.stderr, "send scope ends") {
+		t.Errorf("serve under a send scope until lock warned:\n%s", r.stderr)
+	}
+	reply := replyOnThread(t, sent.Thread, "", 5*time.Second)
+	if reply.InReplyTo != sent.ID {
+		t.Errorf("the reply: %+v", reply)
+	}
+	// alice back to receive: she reads the reply, and cannot reply to it.
+	expectSays(t, alice.auu("lock", "--send"), 0, "unlocked to receive until")
+	r = alice.auu("reply", reply.ID[:12], "thanks")
+	expectCode(t, r, 4)
+	stderrIs(t, r, receiveOnly)
+	// bob narrowed to receive under a service: serve stops in its own words.
+	expectSays(t, bob.auu("lock", "--send"), 0, "unlocked to receive until lock or logout")
+	r = bob.auu("serve", "--once")
+	expectCode(t, r, 4)
+	stderrIs(t, r, "auu: the agent is unlocked to receive, and serve originates every reply: run 'auu unlock --send --ttl 0' at a terminal, which lasts until 'auu lock'")
+	verdict(t, "ok", "Two scopes on two machines: the desktop reads all day and sends for ten minutes at a time, the expert host is unlocked to send until it is locked, and serve says so when it is not.")
 }

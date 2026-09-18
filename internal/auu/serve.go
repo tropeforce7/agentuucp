@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/agent"
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/lockfile"
@@ -99,8 +100,20 @@ func cmdServe(args []string) error {
 	if err := cfg.check(); err != nil {
 		return err
 	}
-	// Speaking for this identity from here on: a home under a passphrase
-	// says so now, at exit 4, rather than after a handler has run.
+	// Speaking for this identity from here on, and in send scope for the
+	// whole run: every reply originates, and an expert answers unattended
+	// by design. A home under a passphrase says so now, at exit 4, rather
+	// than after a handler has run — locked, or unlocked only to receive,
+	// each in its own sentence, and never a prompt, since a service has no
+	// terminal and a person at one is told the unlock to make. Before
+	// loadIdentity, which would prompt a person into receive scope.
+	if enc, err := s.Encrypted(); err != nil {
+		return err
+	} else if enc {
+		if err := serveNeedsSend(s); err != nil {
+			return err
+		}
+	}
 	s, id, err := loadIdentity()
 	if err != nil {
 		return err
@@ -163,6 +176,46 @@ func cmdServe(args []string) error {
 		return run.once(ctx, *backlog)
 	}
 	return run.long(ctx, *backlog)
+}
+
+// serveNeedsSend reads the agent's scope for a home under a passphrase and
+// refuses locked and receive scope: serve is the one accepted exception to
+// sending needing a person, and the exception is an unlock made for it. A
+// send scope with an expiry is let through with a warning that names the
+// time, because a person who ran 'auu unlock --send' without --ttl 0 may
+// have meant a short run; when it ends, serve stops with the same sentence.
+func serveNeedsSend(s *store.Store) error {
+	c, err := agent.NewClient(s.Root())
+	if err != nil {
+		return err
+	}
+	st, err := c.Status()
+	if errors.Is(err, agent.ErrNotRunning) {
+		return lockedErr()
+	}
+	if err != nil {
+		return err
+	}
+	if st.Locked {
+		return lockedErr()
+	}
+	if st.Scope != agent.ScopeSend {
+		return serveNeedsSendErr()
+	}
+	if !st.SendUntil.IsZero() {
+		fmt.Fprintf(os.Stderr, "%s: the agent's send scope ends at %s and serve will stop then; '%s unlock --send --ttl 0' lasts until '%s lock'\n",
+			prog, st.SendUntil.Local().Format("2006-01-02 15:04"), prog, prog)
+	}
+	return nil
+}
+
+// serveNeedsSendErr is serve's own exit 4: the agent is unlocked, but to
+// receive, and serve originates. It names the unlock an expert needs
+// rather than the ten-minute one, so it is not the agent's sentence.
+func serveNeedsSendErr() error {
+	return &exitError{code: exitLocked, err: fmt.Errorf(
+		"the agent is unlocked to receive, and serve originates every reply: run '%s unlock --send --ttl 0' at a terminal, which lasts until '%s lock'",
+		prog, prog)}
 }
 
 // once is one round, and the exit code that says how it went.
@@ -642,6 +695,11 @@ func (r *serveRun) send(m *store.Stored, ch *serveChannel, text, patch string, f
 			// recorded against the message, the reply is on disk, and the
 			// next serve sends it without running the handler again.
 			return err
+		}
+		if isReceiveOnly(err) {
+			// Send scope ended under a running service: the same, said in
+			// serve's words, which name the unlock that would not have.
+			return serveNeedsSendErr()
 		}
 		r.failed(m, ch, err.Error())
 		return nil

@@ -25,12 +25,16 @@ the command, its file and its state.
   is not installed by default, or `/proc/sys/kernel/random/uuid`, which it
   falls back to and which every Linux machine has. Install the one you
   want or leave it to the fallback.
-- **An identity whose key is usable unattended.** On a dedicated account
-  that means no passphrase: a machine that reboots by itself cannot type
-  one, and the account, its directory and the unit are what lock the key
-  away instead. An encrypted key on a person's own account is the other
-  shape, `auu unlock` and `auu agent start` after each boot and a user
-  unit with lingering; `serve.md` has that unit.
+- **An identity whose key is usable unattended, and to send.** On a
+  dedicated account that means no passphrase: a machine that reboots by
+  itself cannot type one, and the account, its directory and the unit are
+  what lock the key away instead. An encrypted key on a person's own
+  account is the other shape, `auu unlock --send --ttl 0` and `auu agent
+  start` after each boot and a user unit with lingering; `serve.md` has
+  that unit. The `--send --ttl 0` is the point: a plain `auu unlock` lets
+  the agent read and not originate, which is right for a desktop and
+  wrong for an expert, whose every reply originates, and serve refuses to
+  start under it.
 - **An API key of its own**, made in a workspace of its own with a spend
   limit, so that revoking it stops this expert and nothing else and a
   runaway thread cannot spend past the limit. It goes in a file the proxy

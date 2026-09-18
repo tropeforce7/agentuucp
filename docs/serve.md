@@ -247,18 +247,24 @@ and waits for it to come back.
 everything was answered, or a service that was stopped; 1 is a bad file, or
 a `--once` round that left something unanswered; 2 is a relay that could not
 be reached, or another serve already running in this home; 4 is a home whose
-keys are locked.
+keys are locked, or unlocked only to receive.
 
 One serve runs per home, held by `serve/lock`. The owner's own `auu inbox`
 is not blocked by it: that has a lock of its own, per relay, and waits.
 
-The keys must be usable without anybody there. Either leave the home
-unencrypted on a machine that is nobody's desktop, or unlock it once —
-`auu unlock` and `auu agent start` — and let the agent hold it. Serve
-refuses to start with the keys locked and never prompts, and a lock that
-arrives in the middle of a run — the agent's time ran out, somebody ran
-`auu lock` — stops it at exit 4 without counting anything against the
-message it was answering.
+The keys must be usable without anybody there, and usable to send: every
+reply originates, so an expert is the one thing that runs in send scope
+unattended, by design. Either leave the home unencrypted on a machine that
+is nobody's desktop, or unlock it once — `auu unlock --send --ttl 0` and
+`auu agent start` — and let the agent hold it until `auu lock`. Serve
+refuses to start with the keys locked, or unlocked only to receive (a plain
+`auu unlock`), in one sentence each, and never prompts: a person at a
+terminal is told the unlock to make. Under a send scope that will end — an
+`auu unlock --send` without `--ttl 0`, ten minutes by default — it starts
+and says when it will stop. A lock that arrives in the middle of a run —
+the agent's time ran out, somebody ran `auu lock` or `auu lock --send` —
+stops it at exit 4 without counting anything against the message it was
+answering.
 
 ### Under systemd
 
@@ -295,8 +301,8 @@ journalctl --user -u auu-serve -f
 
 Lingering is the step people forget: without it a user unit runs only while
 that user has a session, so the expert would answer for as long as somebody
-was logged in and no longer. With an encrypted home, `auu unlock` and `auu
-agent start` have to happen before the unit starts, and a machine that
+was logged in and no longer. With an encrypted home, `auu unlock --send
+--ttl 0` and `auu agent start` have to happen before the unit starts, and a machine that
 reboots unattended cannot do that for itself — which is the argument for
 leaving an expert host's home unencrypted and locking down the machine
 instead.
