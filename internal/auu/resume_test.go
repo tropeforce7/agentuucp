@@ -80,21 +80,29 @@ func (f *interrupter) counts() (passed, cut int) {
 // several of them.
 func startInterruptibleRelay(t *testing.T, allow int, piece int64) (string, *interrupter) {
 	t.Helper()
+	return startInterruptibleRelayWith(t, allow, piece, nil)
+}
+
+// startInterruptibleRelayWith is startInterruptibleRelay with a hand on the
+// relay's settings before it starts.
+func startInterruptibleRelayWith(t *testing.T, allow int, piece int64, mutate func(*relay.Config)) (string, *interrupter) {
+	t.Helper()
 	dir := t.TempDir()
 	st, err := relay.OpenStore(filepath.Join(dir, "relay.db"), filepath.Join(dir, "messages"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	gate := &interrupter{
-		inner: relay.NewServer(st, relay.Config{
-			MaxBytes: piece,
-			Streams:  true,
-			Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
-			Limits:   relay.DefaultLimits(),
-		}),
-		allow: allow,
+	cfg := relay.Config{
+		MaxBytes: piece,
+		Streams:  true,
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Limits:   relay.DefaultLimits(),
 	}
+	if mutate != nil {
+		mutate(&cfg)
+	}
+	gate := &interrupter{inner: relay.NewServer(st, cfg), allow: allow}
 	srv := httptest.NewServer(gate)
 	t.Cleanup(srv.Close)
 	return srv.URL, gate

@@ -413,7 +413,7 @@ func TestStreamLimitsAndSettings(t *testing.T) {
 			time.Now().Add(-time.Hour).Unix()); err != nil {
 			t.Fatal(err)
 		}
-		n, err := h.store.PurgeUploads(time.Now())
+		n, _, err := h.store.PurgeUploads(time.Now())
 		if err != nil {
 			t.Fatal(err)
 		}

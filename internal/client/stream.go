@@ -104,8 +104,8 @@ func (c *Client) CompleteStream(ctx context.Context, upload string) (int64, erro
 func (c *Client) AbortStream(ctx context.Context, upload string) error {
 	err := c.do(ctx, "DELETE", "/v1/uploads/"+upload, nil, nil, nil)
 	var httpErr *HTTPError
-	if errors.As(err, &httpErr) && httpErr.Status == http.StatusNotFound {
-		return nil // already gone is the state we wanted
+	if errors.As(err, &httpErr) && (httpErr.Status == http.StatusNotFound || httpErr.Status == http.StatusGone) {
+		return nil // already gone, or expired and gone with the answer, is the state we wanted
 	}
 	return err
 }

@@ -448,6 +448,11 @@ An interrupted upload resumes: the sealed copy stays in `outbox/` and
 `auu send --resume` carries on from the byte the relay already has. That is
 also why sending seals to disk first — the nonce counter inside an HPKE context
 only goes forwards, so a chunk that was lost could never be sealed the same way
-twice. A relay whose disk fills part way through is the same case: it answers
+twice. An upload has an expiry, `upload_ttl` on the relay, and past it the
+append, completion and abort routes all answer `410`, naming when it expired
+and saying to open again, with the upload and its reservation gone; the
+resume then opens a new upload for the same sealed bytes rather than
+failing. A resume that names an upload the relay no longer holds at all is
+answered `404`, on the append as on the rest. A relay whose disk fills part way through is the same case: it answers
 `507`, keeps what it has, and `auu send` says the upload is kept and to resume
 it when there is room.

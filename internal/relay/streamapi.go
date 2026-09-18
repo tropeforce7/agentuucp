@@ -114,7 +114,8 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
 		return
 	}
-	now := time.Now()
+	// The server's clock, which is also the one the expiry is read by.
+	now := s.cfg.Now()
 	expires := now.Add(s.uploadTTL())
 	switch err := s.store.OpenUpload(id, fp, callerFP, channel, req.Size, now, expires,
 		s.cfg.Limits.Quotas(), s.cfg.MaxStreamBytes); {
@@ -149,8 +150,21 @@ func (s *Server) uploadTTL() time.Duration {
 	return 24 * time.Hour
 }
 
+// msgNoUpload is the answer for an upload id the relay does not hold: never
+// opened, aborted, completed, or purged.
+const msgNoUpload = "no such upload"
+
 // upload finds an upload and proves the caller owns it. Only the identity that
 // opened it may touch it, so nobody can corrupt or finish somebody else's.
+//
+// An upload past its expiry is refused here, on every route, and aborted
+// there and then: the expiry is when its reservation was promised to end,
+// and until this only the purge read it, every hundredth request, so a
+// sender who kept touching an expired upload kept its bytes landing and
+// its reservation held for as long as they liked. The row goes under the
+// upload's lock, as any abort does, so the reservation is released with
+// the answer; the sender opens again, which is what the client's resume
+// does on any error from HEAD.
 func (s *Server) upload(w http.ResponseWriter, r *http.Request, callerFP string) (*Upload, bool) {
 	id := r.PathValue("id")
 	if !ValidUploadID(id) {
@@ -159,7 +173,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, callerFP string)
 	}
 	u, err := s.store.Upload(id)
 	if errors.Is(err, ErrNoUpload) {
-		s.fail(w, http.StatusNotFound, "no such upload")
+		s.fail(w, http.StatusNotFound, msgNoUpload)
 		return nil, false
 	}
 	if err != nil {
@@ -168,6 +182,16 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, callerFP string)
 	}
 	if u.From != callerFP {
 		s.fail(w, http.StatusForbidden, "not your upload")
+		return nil, false
+	}
+	if now := s.cfg.Now(); !now.Before(u.Expires) {
+		if _, err := s.store.AbortUpload(u.ID); err != nil {
+			s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+			return nil, false
+		}
+		s.fail(w, http.StatusGone, fmt.Sprintf(
+			"this upload expired at %s and is gone; open a new stream and send it again",
+			u.Expires.UTC().Format(time.RFC3339)))
 		return nil, false
 	}
 	return u, true
@@ -214,6 +238,12 @@ func (s *Server) handleAppendStream(w http.ResponseWriter, r *http.Request, call
 	case errors.Is(err, ErrUploadOffset):
 		w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(received, 10))
 		s.fail(w, http.StatusConflict, "upload moved while this request was in flight")
+		return
+	case errors.Is(err, ErrNoUpload):
+		// Aborted, completed or purged between the look above and the
+		// lock: the same answer as for an id never seen, which the sender
+		// does not retry; a 500 here was retried.
+		s.fail(w, http.StatusNotFound, msgNoUpload)
 		return
 	case err != nil:
 		var maxErr *http.MaxBytesError
@@ -275,6 +305,10 @@ func (s *Server) handleCompleteStream(w http.ResponseWriter, r *http.Request, bo
 	if err != nil {
 		if errors.Is(err, ErrUploadOffset) {
 			s.fail(w, http.StatusConflict, "upload is not complete")
+			return
+		}
+		if errors.Is(err, ErrNoUpload) {
+			s.fail(w, http.StatusNotFound, msgNoUpload)
 			return
 		}
 		// Placing the file makes a directory and a directory entry, which

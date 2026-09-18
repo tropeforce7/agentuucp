@@ -1,17 +1,20 @@
 package auu
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/relay"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
 
@@ -298,5 +301,94 @@ func TestARenamedFollowUpIsNotAnswered(t *testing.T) {
 	}
 	if again := bob.round(t); len(again.Answered)+len(again.Failed) != 0 {
 		t.Errorf("the second round did something with it: %+v", again)
+	}
+}
+
+// A relay refuses an upload past its expiry with 410 and forgets it, so an
+// interrupted upload whose reservation has lapsed cannot be resumed as it
+// stands. The sender does not fail on that: --resume asks the relay where
+// it got to, is told the upload is gone, opens a new one for the same
+// sealed bytes and sends them all, and the message arrives once. The
+// relay's clock is moved by hand between the cut and the resume.
+func TestResumeReopensAnUploadThatExpiredBetweenPieces(t *testing.T) {
+	var clockMu sync.Mutex
+	now := time.Now()
+	clock := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return now
+	}
+	relayURL, gate := startInterruptibleRelayWith(t, 2, 64<<10, func(c *relay.Config) {
+		c.UploadTTL = time.Hour
+		c.Now = clock
+	})
+	alice := newUser(t, "alice", relayURL)
+	bob := newUser(t, "bob", relayURL)
+	alice.run("peers", "add", bob.exportLine())
+	bob.run("peers", "add", alice.exportLine())
+	alice.run("allow", "push")
+	bob.run("allow", "push")
+
+	payload := make([]byte, 400<<10)
+	for i := range payload {
+		payload[i] = byte(i*13 + 5)
+	}
+	file := filepath.Join(t.TempDir(), "lapsed.bin")
+	if err := os.WriteFile(file, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := alice.tryRun("send", "--to", "bob", "--subject", "the lapsed one",
+		"--attach", file, "here it is"); err == nil {
+		t.Fatalf("the send should have failed with the relay cut off after two pieces:\n%s", out)
+	}
+	if passed, cut := gate.counts(); passed == 0 || cut == 0 {
+		t.Fatalf("the gate let %d pieces through and cut %d; the test proves nothing", passed, cut)
+	}
+	before := onlyPending(t, alice)
+	sealed, err := os.Stat(filepath.Join(alice.home, "outbox", before.MessageID+".stream"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The reservation lapses while the sender is away.
+	clockMu.Lock()
+	now = now.Add(time.Hour + time.Minute)
+	clockMu.Unlock()
+	gate.open()
+	passedBefore, _ := gate.counts()
+	out := alice.run("send", "--resume")
+	if strings.Contains(out, "nothing to resume") {
+		t.Fatalf("--resume found nothing:\n%s", out)
+	}
+	// Reopened: the whole stream went again under a new upload id, from
+	// the same sealed bytes, and the outbox is clear.
+	passedAfter, _ := gate.counts()
+	const piece = 64 << 10
+	if whole := int((sealed.Size() + piece - 1) / piece); passedAfter-passedBefore != whole {
+		t.Errorf("--resume sent %d pieces after the lapse; want the whole stream of %d, reopened", passedAfter-passedBefore, whole)
+	}
+	if entries, err := os.ReadDir(filepath.Join(alice.home, "outbox")); err == nil && len(entries) != 0 {
+		t.Errorf("the outbox was not cleared after the reopened resume: %d entries", len(entries))
+	}
+
+	var got inboxJSON
+	if err := json.Unmarshal([]byte(bob.run("inbox", "--json")), &got); err != nil {
+		t.Fatal(err)
+	}
+	var found int
+	var id string
+	for _, m := range got.Messages {
+		if m.Subject == "the lapsed one" {
+			found++
+			id = m.ID
+		}
+	}
+	if found != 1 {
+		t.Fatalf("the resumed message arrived %d times, want once: %+v", found, got.Messages)
+	}
+	dir := t.TempDir()
+	bob.run("extract", id, "--out", dir)
+	if back, err := os.ReadFile(filepath.Join(dir, "lapsed.bin")); err != nil || !bytes.Equal(back, payload) {
+		t.Fatalf("the payload after the reopened upload differs (%v): %d bytes back, %d sent", err, len(back), len(payload))
 	}
 }

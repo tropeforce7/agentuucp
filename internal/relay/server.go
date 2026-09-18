@@ -270,10 +270,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err := s.store.PurgeCerts(now.Add(-expiredTokenRetention)); err != nil {
 			s.log.Warn("certificate purge failed", "err", err)
 		}
-		if n, err := s.store.PurgeUploads(now); err != nil {
+		purged, skipped, err := s.store.PurgeUploads(now)
+		if err != nil {
 			s.log.Warn("upload purge failed", "err", err)
-		} else if n > 0 {
-			s.log.Info("abandoned uploads removed", "count", n)
+		}
+		if purged > 0 {
+			s.log.Info("abandoned uploads removed", "count", purged)
+		}
+		if skipped > 0 {
+			// Mid-append, or being completed or aborted as the purge ran:
+			// met again at the next one.
+			s.log.Debug("expired uploads left for the next purge, their locks held", "count", skipped)
 		}
 	}
 }

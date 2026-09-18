@@ -137,7 +137,7 @@ chunks, resuming if it is interrupted. Three settings govern it:
 |---|---|
 | `streams` | whether the relay accepts stream uploads at all. Turn it off and an open is refused with a 403 naming this setting |
 | `max_stream_bytes` | the largest stream the relay will reserve space for, declared up front and refused before a byte is sent. `0` is unlimited, under a cap of 2^62 bytes no setting lifts |
-| `upload_ttl` | how long an unfinished upload is kept before it is swept and its space released |
+| `upload_ttl` | how long an unfinished upload is kept. Past it the relay refuses the next append, completion or abort with a 410 that says when it expired and to open again, and forgets the upload with the answer, so the reservation ends when it was promised to; the sender's `send --resume` opens a new upload for the same sealed bytes. An expired upload nobody touches is swept by the purge that runs every hundredth request, which skips an upload mid-append rather than wait behind its sender and returns to it next time |
 
 **At the shipped defaults a 2 GB file is refused**, and deliberately so: a
 sender's whole `post_bytes_per_hour` budget is 256 MiB and one recipient's

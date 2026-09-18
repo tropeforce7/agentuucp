@@ -208,8 +208,16 @@ func (s *Store) Upload(id string) (*Upload, error) {
 // connection every other request needs.
 func (s *Store) AppendUpload(id string, offset int64, r func(w *os.File, limit int64) (int64, error)) (int64, error) {
 	unlock := s.uploadLock(id)
-	defer unlock()
 	u, err := s.Upload(id)
+	if errors.Is(err, ErrNoUpload) {
+		// Aborted or purged since the caller looked, or never there: the
+		// entry the lock made for it goes too, since ids are never reused
+		// and nothing will come for it again. Kept, it was one mutex per
+		// such race until the store closed.
+		s.forgetUploadLock(id, unlock)
+		return 0, err
+	}
+	defer unlock()
 	if err != nil {
 		return 0, err
 	}
@@ -310,6 +318,11 @@ func (s *Store) CompleteUpload(id string) (int64, error) {
 func (s *Store) AbortUpload(id string) (bool, error) {
 	unlock := s.uploadLock(id)
 	defer s.forgetUploadLock(id, unlock)
+	return s.abortLocked(id)
+}
+
+// abortLocked is AbortUpload with the upload's lock already held.
+func (s *Store) abortLocked(id string) (bool, error) {
 	res, err := s.db.Exec(`DELETE FROM uploads WHERE id = ?`, id)
 	if err != nil {
 		return false, err
@@ -330,7 +343,27 @@ func (s *Store) AbortUpload(id string) (bool, error) {
 // uploadLock takes the lock for one upload, making it if this is the first
 // operation on the id since the store opened, and returns what releases it.
 func (s *Store) uploadLock(id string) func() {
+	mu := s.uploadMutex(id)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// tryUploadLock is uploadLock for a caller that must not wait: the purge,
+// which runs inside an unrelated request. It says whether the lock was
+// taken; when not, an append, a completion or an abort holds it, and the
+// caller comes back another time.
+func (s *Store) tryUploadLock(id string) (unlock func(), ok bool) {
+	mu := s.uploadMutex(id)
+	if !mu.TryLock() {
+		return nil, false
+	}
+	return mu.Unlock, true
+}
+
+// uploadMutex is one upload's mutex, made on first use.
+func (s *Store) uploadMutex(id string) *sync.Mutex {
 	s.uploadsMu.Lock()
+	defer s.uploadsMu.Unlock()
 	if s.uploads == nil {
 		s.uploads = map[string]*sync.Mutex{}
 	}
@@ -339,9 +372,16 @@ func (s *Store) uploadLock(id string) func() {
 		mu = &sync.Mutex{}
 		s.uploads[id] = mu
 	}
-	s.uploadsMu.Unlock()
-	mu.Lock()
-	return mu.Unlock
+	return mu
+}
+
+// uploadLocked reports whether an entry is held for id, for a test that
+// asks what the map remembers.
+func (s *Store) uploadLocked(id string) bool {
+	s.uploadsMu.Lock()
+	defer s.uploadsMu.Unlock()
+	_, ok := s.uploads[id]
+	return ok
 }
 
 // forgetUploadLock releases an upload's lock and drops its entry, for the
@@ -359,31 +399,49 @@ func (s *Store) forgetUploadLock(id string, unlock func()) {
 
 // PurgeUploads abandons uploads nobody finished. Their reservations go with
 // them, which is what stops a forgotten upload holding a mailbox's quota for
-// ever.
-func (s *Store) PurgeUploads(now time.Time) (int, error) {
+// ever. It says how many it removed and how many it left for next time.
+//
+// Housekeeping never waits on a sender. The purge runs inside an unrelated
+// caller's request, and an append holds its upload's lock across the copy
+// of the request body, so a purge that took the lock as an abort does
+// stood behind a dribbling sender for as long as the read timeout let it,
+// with that caller's slot held and its answer unsent. An upload whose lock
+// is held is skipped and met at the next purge; by then the append has
+// ended, or the expiry has refused it and aborted the row itself.
+func (s *Store) PurgeUploads(now time.Time) (purged, skipped int, err error) {
 	rows, err := s.db.Query(`SELECT id FROM uploads WHERE expires < ?`, now.Unix())
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			return 0, err
+			return 0, 0, err
 		}
 		ids = append(ids, id)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	for _, id := range ids {
-		if _, err := s.AbortUpload(id); err != nil {
-			return 0, err
+		unlock, ok := s.tryUploadLock(id)
+		if !ok {
+			skipped++
+			continue
+		}
+		gone, err := s.abortLocked(id)
+		s.forgetUploadLock(id, unlock)
+		if err != nil {
+			return purged, skipped, err
+		}
+		if gone {
+			purged++
 		}
 	}
-	return len(ids), nil
+	return purged, skipped, nil
 }
 
 // MessageKind reports whether a message is an envelope or a stream, and how
