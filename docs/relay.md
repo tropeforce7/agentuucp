@@ -151,10 +151,10 @@ file is uploaded, so nothing is wasted finding out.
 *Listing 1.3a*
 ```json
 {
-  "listen": ":443",
+  "listen": ":9443",
   "db": "/var/lib/auu/relay.db",
   "registration": "token",
-  "public_url": "https://relay.example.com",
+  "public_url": "https://relay.example.com:9443",
   "admin": {
     "authorized_file": "/etc/auu/admins",
     "token_max_age": "720h"
@@ -420,7 +420,7 @@ outside the protocol.
 Nothing, unless you want ordinary tools to reach the relay. `curl` linked
 against LibreSSL — which is what macOS ships — cannot speak ML-DSA at all, and
 neither can OpenSSL before 3.5. `auu` can, because it is Go 1.27. If you want
-`curl https://relay.example.com/v1/health` to work for a monitoring system,
+`curl https://relay.example.com:9443/v1/health` to work for a monitoring system,
 use *Your own certificate* below with a publicly trusted one, and tokens will
 then carry no anchor.
 
@@ -433,7 +433,9 @@ auu-relay --tls-cert /etc/ssl/relay.pem --tls-key /etc/ssl/relay.key
 
 ### 1.7 Running under systemd
 
-Binding ports 80 and 443 without running as root needs a capability:
+The relay needs no capability. It makes its own certificate, so no
+particular port is required, and the example settings use 9443. A minimal
+unit:
 
 *Listing 1.7a*
 ```ini
@@ -446,8 +448,6 @@ User=auu
 Group=auu
 ExecStart=/usr/local/bin/auu-relay --config /etc/auu/relay.json
 LoadCredentialEncrypted=relay-bundle:/etc/auu/relay-bundle.cred
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
@@ -459,7 +459,10 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
-`ReadWritePaths` must cover the database and the message directory. The
+If you do put the relay on 443, add `AmbientCapabilities=CAP_NET_BIND_SERVICE`
+and `CapabilityBoundingSet=CAP_NET_BIND_SERVICE` to the unit; nothing else
+changes, and port 80 has no use here. `ReadWritePaths` must cover the
+database and the message directory. The
 bundle arrives as a credential: `LoadCredentialEncrypted=` unseals
 `/etc/auu/relay-bundle.cred` at start into a directory only this service can
 see, and the settings name it as `"bundle_credential": "relay-bundle"` — the

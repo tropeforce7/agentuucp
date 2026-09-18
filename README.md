@@ -50,8 +50,10 @@ them.
 
 There is one exception, and it is short-lived. While a large message is
 being uploaded the relay holds the sender's fingerprint, so that only the
-sender can add to the upload and the space is charged to them. That row is
-deleted when the upload completes or is abandoned.
+sender can add to the upload. The sender's hourly budget was spent on the
+whole of it when it opened, and its space is reserved against the
+recipient's mailbox. That row is deleted when the upload completes or is
+abandoned.
 
 The relay does see the sender at the moment of posting, because posting is
 authenticated. Its access log records that moment, and the default,
