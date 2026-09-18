@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
@@ -459,5 +460,92 @@ func TestARelayThatAnswersAfterTheHoldIsNotATransportError(t *testing.T) {
 	defer cancel()
 	if _, err := c.ListWait(ctx, ListRequest{Wait: 5 * time.Second}); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a context ending inside the hold: %v", err)
+	}
+}
+
+// TestTheClientSignsOnlyWhatTheRelayVerifies: the health check and the
+// key lookup carry no auth header on the wire, because the relay reads
+// none on them, and a signature there would only put the caller's
+// fingerprint in a full-mode access log on a route that did not need it;
+// a listing, a post and a registration are signed, because the relay
+// verifies those.
+func TestTheClientSignsOnlyWhatTheRelayVerifies(t *testing.T) {
+	id, err := identity.Generate("peer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := id.Fingerprint()
+	rec := &recorder{replies: []reply{
+		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65}},
+		{status: 200, body: relayapi.KeysResponse{Bundle: id.Public().Bundle(), Name: "peer"}},
+		{status: 200, body: relayapi.KeysResponse{Bundle: id.Public().Bundle(), Name: "peer"}},
+		{status: 200, body: relayapi.ListResponse{}},
+		{status: 200, body: relayapi.PostResponse{ID: 1}},
+	}}
+	c, _ := newTestClient(t, rec)
+	rec.replies = append(rec.replies, reply{status: 200, body: relayapi.RegisterResponse{FP: c.id.Fingerprint()}})
+	if err := c.Health(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.MLDSA(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Lookup(t.Context(), fp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.List(t.Context(), 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Post(t.Context(), &envelope.Envelope{V: 1, To: c.id.Fingerprint(), CT: []byte("ct")}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Register(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	for i, want := range []struct {
+		request string
+		signed  bool
+	}{
+		{"GET /v1/health", false},
+		{"GET /v1/health", false},
+		{"GET /v1/keys/" + fp, false},
+		{"GET /v1/mailbox/" + c.id.Fingerprint(), true},
+		{"POST /v1/mailbox/" + c.id.Fingerprint(), true},
+		{"POST /v1/register", true},
+	} {
+		if !strings.HasPrefix(rec.requests[i], want.request) {
+			t.Fatalf("call %d was %q, want %s", i, rec.requests[i], want.request)
+		}
+		if signed := rec.auths[i] != ""; signed != want.signed {
+			t.Errorf("%s: auth header %q; signed %v, want %v", want.request, rec.auths[i], signed, want.signed)
+		}
+	}
+}
+
+// TestTheAnchorFetchCarriesNoIdentity: the trust anchor is asked for
+// before there is anything to prove or anybody to prove it to, and the
+// request says so on the wire: no auth header, and nothing else that names
+// a caller.
+func TestTheAnchorFetchCarriesNoIdentity(t *testing.T) {
+	var header http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header = r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"anchor":""}`))
+	}))
+	defer srv.Close()
+	FetchTrustAnchor(t.Context(), srv.URL) // the reply is not the point
+	if header == nil {
+		t.Fatal("the anchor was never asked for")
+	}
+	if got := header.Get(relayapi.AuthHeader); got != "" {
+		t.Errorf("the anchor fetch carried %s: %q", relayapi.AuthHeader, got)
+	}
+	for k := range header {
+		if strings.HasPrefix(strings.ToLower(k), "x-ccx") {
+			t.Errorf("the anchor fetch carried %s", k)
+		}
 	}
 }

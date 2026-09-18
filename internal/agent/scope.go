@@ -69,8 +69,12 @@ const httpDomain = "ccx-http-v1\n"
 // sign, as the relay registers them. A segment of "*" matches any one
 // non-empty path segment. Everything signed under ccx-http-v1 that is not
 // here is send: a post, a stream's open, append, abort and completion, a
-// directory or an allow list pushed, a certificate issued or renewed, a
-// registration, and every administrative route.
+// directory or an allow list pushed, a certificate issued, a registration,
+// and every administrative route. The health check and the key lookup are
+// not here because the client does not sign them — the relay verifies no
+// signature on either — so they never reach the agent; a signing string
+// for one arriving here is not the client's, and is send like anything
+// else unknown.
 var receiveRoutes = []struct {
 	method string
 	shape  string
@@ -80,11 +84,9 @@ var receiveRoutes = []struct {
 	{"GET", "/v1/mailbox/*/allow"},    // the owner's own allow list
 	{"GET", "/v1/mailbox/*/channels"}, // a directory
 	{"GET", "/v1/mailbox/*/certs"},    // this identity's certificates
-	{"GET", "/v1/keys/*"},             // a lookup
 	{"DELETE", "/v1/mailbox/*/*"},     // acknowledging a message, and auu rm
 	{"HEAD", "/v1/uploads/*"},         // how much of a resumable upload the relay holds
 	{"POST", "/v1/mailbox/*/certs"},   // renewing this machine's certificate; see above
-	{"GET", "/v1/health"},             // the relay's parameter set, asked before a key is made; unauthenticated on the relay, signed by the client all the same
 }
 
 // ScopeOf is the scope an operation needs: the pure decision, made from the

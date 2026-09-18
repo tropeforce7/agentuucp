@@ -18,12 +18,14 @@ import (
 // tested against the relay and its database.
 func TestTheClassifierAgreesWithTheRelay(t *testing.T) {
 	want := map[string]agent.Scope{
-		// Unauthenticated on the relay. The client signs the health check
-		// all the same, before it makes a machine key, so it is receive;
-		// the anchor is fetched without an identity and never signed, and
-		// is send for not being in the set.
-		"GET /v1/health":       agent.ScopeReceive,
+		// Routes the relay verifies no signature on, and the client does
+		// not sign (client.verifiedRoute): a signing string for one never
+		// reaches the agent, and one that did would be send for not being
+		// in the set. Walked here all the same, so the table and the route
+		// table stay the same length.
+		"GET /v1/health":       agent.ScopeSend,
 		"GET /v1/trust-anchor": agent.ScopeSend,
+		"GET /v1/keys/{fp}":    agent.ScopeSend,
 
 		// The receive set.
 		"GET /v1/mailbox/{fp}":           agent.ScopeReceive,
@@ -31,7 +33,6 @@ func TestTheClassifierAgreesWithTheRelay(t *testing.T) {
 		"GET /v1/mailbox/{fp}/allow":     agent.ScopeReceive,
 		"GET /v1/mailbox/{fp}/channels":  agent.ScopeReceive,
 		"GET /v1/mailbox/{fp}/certs":     agent.ScopeReceive,
-		"GET /v1/keys/{fp}":              agent.ScopeReceive,
 		"DELETE /v1/mailbox/{fp}/{id}":   agent.ScopeReceive,
 		"HEAD /v1/uploads/{id}":          agent.ScopeReceive,
 		"POST /v1/mailbox/{fp}/certs":    agent.ScopeReceive, // renewal: this identity's own certificate, on the live one, no token

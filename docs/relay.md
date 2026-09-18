@@ -497,8 +497,10 @@ that machine enrols:
 "client_certs": { "mode": "required" }
 ```
 
-What it adds is a **second, per-machine credential**. Every request is already
-signed by the identity key, so the relay always knew who was asking; what it
+What it adds is a **second, per-machine credential**. Every request the relay
+verifies is already signed by the identity key — the health check and a key
+lookup are not, since the relay reads no signature on them — so the relay
+always knew who was asking; what it
 could not tell was one of your machines from a copy of your `~/.auu` on
 somebody else's. A certificate is generated on the machine, its private key
 never leaves, and the relay records the serial. So a laptop can be revoked

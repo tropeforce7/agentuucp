@@ -291,7 +291,26 @@ func (c *Client) do(ctx context.Context, method, path string, payload any, out a
 	}
 }
 
-// attempt is one signed request.
+// verifiedRoute says whether the relay verifies a signature on this
+// request. The client signs only those: a signature nobody verifies buys
+// nothing, tells the relay's log who is asking on a route that did not
+// need to know, and had to be admitted by the key agent's scope classifier
+// as if it were something. The relay serves the health check to anybody
+// and never reads the header on it (handleHealth); the key lookup is
+// gated by the client certificate and the unauthenticated limiter and
+// never reads the header either (handleKeys), so a signature there only
+// put the looker-up's fingerprint in a full-mode access log on a route
+// about somebody else; the trust anchor is fetched without an identity at
+// all (FetchTrustAnchor); registration is verified, against the bundle in
+// the body, and stays signed. Everything else the relay verifies.
+func verifiedRoute(method, path string) bool {
+	if method != "GET" {
+		return true
+	}
+	return path != "/v1/health" && !strings.HasPrefix(path, "/v1/keys/")
+}
+
+// attempt is one request, signed where the relay verifies a signature.
 func (c *Client) attempt(ctx context.Context, method, path string, body []byte, out any, headers map[string]string) error {
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
 	if err != nil {
@@ -303,7 +322,7 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	if c.id != nil {
+	if c.id != nil && verifiedRoute(method, path) {
 		if err := relayapi.SignRequest(c.id, req, body); err != nil {
 			return err
 		}

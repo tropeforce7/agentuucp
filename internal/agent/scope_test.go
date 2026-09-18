@@ -39,13 +39,10 @@ func TestTheClassifierAdmitsTheReceiveSetAndNothingElse(t *testing.T) {
 		"the allow list":                 "GET /v1/mailbox/" + fp + "/allow",
 		"the directory":                  "GET /v1/mailbox/" + fp + "/channels",
 		"this identity's certs":          "GET /v1/mailbox/" + fp + "/certs",
-		"a lookup":                       "GET /v1/keys/" + fp,
-		"a lookup by short id":           "GET /v1/keys/" + fp[:16],
 		"acknowledging":                  "DELETE /v1/mailbox/" + fp + "/12",
 		"how much the relay holds":       "HEAD /v1/uploads/u-1",
 		"{id} equal to allow under blob": "GET /v1/mailbox/" + fp + "/allow/blob", // routed to the blob handler, which refuses the id; nothing originates
 		"a certificate renewed":          "POST /v1/mailbox/" + fp + "/certs",
-		"the health check":               "GET /v1/health",                       // signed by the client before it makes a key, ignored by the relay
 		"another mailbox's certs":        "POST /v1/mailbox/" + other + "/certs", // by shape; the relay refuses "not your mailbox", and the signature is the caller's
 	}
 	send := map[string]string{
@@ -71,6 +68,9 @@ func TestTheClassifierAdmitsTheReceiveSetAndNothingElse(t *testing.T) {
 		"admin tokens":                "GET /v1/admin/tokens",
 		"admin revoke token":          "DELETE /v1/admin/tokens/t-1",
 		"the trust anchor":            "GET /v1/trust-anchor",
+		"the health check":            "GET /v1/health",     // the client does not sign it, so a signing string for it is not the client's
+		"a lookup":                    "GET /v1/keys/" + fp, // the same
+		"a lookup by short id":        "GET /v1/keys/" + fp[:16],
 		"HEAD of the health check":    "HEAD /v1/health",
 		"a path with ..":              "GET /v1/mailbox/" + fp + "/../allow",
 		"a path with . ":              "GET /v1/mailbox/./allow",
@@ -81,8 +81,7 @@ func TestTheClassifierAdmitsTheReceiveSetAndNothingElse(t *testing.T) {
 		"a prefix of a receive route": "GET /v1/mailbox",
 		"a prefix with a slash":       "GET /v1/mailbox/",
 		"an empty segment":            "GET /v1/mailbox//allow",
-		"HEAD of the listing":         "HEAD /v1/mailbox/" + fp, // served through the GET pattern on the relay; over-strict here, on purpose
-		"HEAD of a lookup":            "HEAD /v1/keys/" + fp,
+		"HEAD of the listing":         "HEAD /v1/mailbox/" + fp,              // served through the GET pattern on the relay; over-strict here, on purpose
 		"DELETE of the allow list":    "DELETE /v1/mailbox/" + fp + "/allow", // the relay routes it to the acknowledgement handler, which refuses the id; in the set by shape, so this proves the classifier and not the route
 		"a double slash":              "GET //v1/mailbox/" + fp,
 		"a query on a send route":     "POST /v1/mailbox/" + fp + "?x=1",
@@ -226,10 +225,6 @@ func TestReceiveScopeRefusesWhatOriginates(t *testing.T) {
 		"a listing": func() error { _, err := a.client.Sign(KeyIdentity, signingString("GET", listing), nil); return err },
 		"an acknowledgement": func() error {
 			_, err := a.client.Sign(KeyIdentity, signingString("DELETE", listing+"/12"), nil)
-			return err
-		},
-		"a lookup": func() error {
-			_, err := a.client.Sign(KeyIdentity, signingString("GET", "/v1/keys/"+fp), nil)
 			return err
 		},
 		"the handshake, under the machine key": func() error {
