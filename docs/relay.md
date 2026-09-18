@@ -201,6 +201,14 @@ switch the lot off.
 | `max_inflight` | requests being handled at once | 256 |
 | `max_waiting` | listings held open at once for watchers; over it the next is answered at once rather than held, and each held listing keeps an in-flight slot, so keep this well under `max_inflight` | 64 |
 
+The three queue limits count a stream from the moment it is opened: what
+an unfinished upload has reserved is charged against the mailbox's messages
+and bytes and against the relay's total exactly as a queued message is, for
+an envelope posted beside it and for another stream alike, so a sender
+cannot fill a mailbox to its quota under an open reservation and then
+complete the stream on top. The reservation is released when the upload
+completes, is abandoned, or expires.
+
 Two limits are not settings: an allow list may name at most 1000 senders,
 and a channel directory may hold at most 64 channels, each with a name of at
 most 64 bytes and a description of at most 1024. They are properties of the

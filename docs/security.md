@@ -28,7 +28,10 @@ It has to, because only the sender may append to their own upload and the
 reservation must be charged to somebody. That row lives for the length of one
 upload and is deleted when the stream completes or is abandoned — it is the
 only place the relay writes down who is sending something, and nothing survives
-it.
+it. While it lives, the reservation counts against the recipient's quotas
+and the relay's as though the stream were already queued, for an envelope
+posted beside it as much as for another stream: one arithmetic answers
+both, so neither can be filled into the other's reservation.
 
 **What the relay sees.** More than it stores, and this is worth being plain
 about. Posting is authenticated, so at the moment a message is accepted the

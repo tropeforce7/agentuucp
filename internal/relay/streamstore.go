@@ -67,11 +67,8 @@ func NewUploadID() (string, error) {
 // before the value goes anywhere near a path.
 func ValidUploadID(s string) bool { return len(s) == 32 && isLowerHex(s) }
 
-// OpenUpload reserves room for a stream and creates its file.
-//
-// The quotas count what other open uploads have reserved as though it were
-// already queued, so two concurrent streams cannot each be told there is room
-// for the last gigabyte.
+// OpenUpload reserves room for a stream and creates its file. Whether
+// there is room is roomFor's answer, the same one Put gets.
 func (s *Store) OpenUpload(id, toFP, fromFP, channel string, size int64, now, expires time.Time,
 	q Quotas, maxStream int64) error {
 
@@ -88,51 +85,8 @@ func (s *Store) OpenUpload(id, toFP, fromFP, channel string, size int64, now, ex
 	}
 	defer tx.Rollback()
 
-	var queuedMessages, queuedBytes int64
-	err = tx.QueryRow(`SELECT queued_messages, queued_bytes FROM mailboxes WHERE fp = ?`, toFP).
-		Scan(&queuedMessages, &queuedBytes)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrNoMailbox
-	}
-	if err != nil {
+	if err := roomFor(tx, toFP, size, q); err != nil {
 		return err
-	}
-
-	var reservedCount, reservedBytes int64
-	if err := tx.QueryRow(
-		`SELECT COUNT(*), COALESCE(SUM(size), 0) FROM uploads WHERE to_fp = ?`, toFP).
-		Scan(&reservedCount, &reservedBytes); err != nil {
-		return err
-	}
-	if q.MailboxMaxMessages > 0 && queuedMessages+reservedCount >= q.MailboxMaxMessages {
-		return ErrMailboxFull
-	}
-	// The size is compared, never added: queued and reserved are each
-	// non-negative and together under any quota, so quota minus both is
-	// what is left and cannot wrap, and a size near MaxInt64 is over it.
-	// Adding first wrapped the sum negative, which is under any quota, and
-	// once such a row existed SUM(size) overflowed inside SQLite and every
-	// later open for the mailbox was a storage error rather than a refusal.
-	// With no quota at all the same bound is kept against MaxInt64, after
-	// the quota's own answer, so the sum SQLite computes on the next open
-	// still fits.
-	if q.MailboxMaxBytes > 0 && size > q.MailboxMaxBytes-queuedBytes-reservedBytes {
-		return ErrMailboxFull
-	}
-	if size > math.MaxInt64-queuedBytes-reservedBytes {
-		return ErrStreamTooBig
-	}
-	if q.RelayMaxBytes > 0 {
-		var relayBytes, relayReserved int64
-		if err := tx.QueryRow(`SELECT queued_bytes FROM relay_stats WHERE id = 1`).Scan(&relayBytes); err != nil {
-			return err
-		}
-		if err := tx.QueryRow(`SELECT COALESCE(SUM(size), 0) FROM uploads`).Scan(&relayReserved); err != nil {
-			return err
-		}
-		if size > q.RelayMaxBytes-relayBytes-relayReserved {
-			return ErrRelayFull
-		}
 	}
 
 	if _, err := tx.Exec(
@@ -153,6 +107,66 @@ func (s *Store) OpenUpload(id, toFP, fromFP, channel string, size int64, now, ex
 	if err := tx.Commit(); err != nil {
 		os.Remove(s.uploadPath(id))
 		return err
+	}
+	return nil
+}
+
+// roomFor is the one arithmetic for what a mailbox and the relay may take
+// on: whether size more bytes, as one more message, fit under the quotas
+// beside what is queued and what open uploads have reserved. Put and
+// OpenUpload both ask it, so an envelope and a stream are charged alike;
+// when Put kept its own sum it counted queued bytes alone, and a sender
+// who opened a stream for everything free could post envelopes into the
+// reservation and complete the stream on top, ending a mailbox and the
+// relay over their quotas by up to one stream.
+//
+// The reservations count as though they were already queued, so two
+// concurrent streams cannot each be told there is room for the last
+// gigabyte. The size is compared, never added: queued and reserved are
+// each non-negative and together under any quota, so quota minus both is
+// what is left and cannot wrap, and a size near MaxInt64 is over it.
+// Adding first wrapped the sum negative, which is under any quota, and
+// once such a row existed SUM(size) overflowed inside SQLite and every
+// later open for the mailbox was a storage error rather than a refusal.
+// With no quota at all the same bound is kept against MaxInt64, after the
+// quota's own answer, so the sum SQLite computes on the next open still
+// fits; an envelope, bounded by max_bytes, can never reach it.
+func roomFor(tx *sql.Tx, toFP string, size int64, q Quotas) error {
+	var queuedMessages, queuedBytes int64
+	err := tx.QueryRow(`SELECT queued_messages, queued_bytes FROM mailboxes WHERE fp = ?`, toFP).
+		Scan(&queuedMessages, &queuedBytes)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNoMailbox
+	}
+	if err != nil {
+		return err
+	}
+	var reservedCount, reservedBytes int64
+	if err := tx.QueryRow(
+		`SELECT COUNT(*), COALESCE(SUM(size), 0) FROM uploads WHERE to_fp = ?`, toFP).
+		Scan(&reservedCount, &reservedBytes); err != nil {
+		return err
+	}
+	if q.MailboxMaxMessages > 0 && queuedMessages+reservedCount >= q.MailboxMaxMessages {
+		return ErrMailboxFull
+	}
+	if q.MailboxMaxBytes > 0 && size > q.MailboxMaxBytes-queuedBytes-reservedBytes {
+		return ErrMailboxFull
+	}
+	if size > math.MaxInt64-queuedBytes-reservedBytes {
+		return ErrStreamTooBig
+	}
+	if q.RelayMaxBytes > 0 {
+		var relayBytes, relayReserved int64
+		if err := tx.QueryRow(`SELECT queued_bytes FROM relay_stats WHERE id = 1`).Scan(&relayBytes); err != nil {
+			return err
+		}
+		if err := tx.QueryRow(`SELECT COALESCE(SUM(size), 0) FROM uploads`).Scan(&relayReserved); err != nil {
+			return err
+		}
+		if size > q.RelayMaxBytes-relayBytes-relayReserved {
+			return ErrRelayFull
+		}
 	}
 	return nil
 }

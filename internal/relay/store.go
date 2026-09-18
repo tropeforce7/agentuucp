@@ -853,29 +853,10 @@ func (s *Store) Put(toFP, channel string, raw []byte, q Quotas) (int64, error) {
 	}
 	defer tx.Rollback()
 
-	var messages, bytes int64
-	err = tx.QueryRow(`SELECT queued_messages, queued_bytes FROM mailboxes WHERE fp = ?`, toFP).
-		Scan(&messages, &bytes)
-	if errors.Is(err, sql.ErrNoRows) {
-		return 0, ErrNoMailbox
-	}
-	if err != nil {
+	// Room is one question with one answer, roomFor's, and open uploads'
+	// reservations are in it: an envelope is charged as a stream is.
+	if err := roomFor(tx, toFP, size, q); err != nil {
 		return 0, err
-	}
-	if q.MailboxMaxMessages > 0 && messages >= q.MailboxMaxMessages {
-		return 0, ErrMailboxFull
-	}
-	if q.MailboxMaxBytes > 0 && bytes+size > q.MailboxMaxBytes {
-		return 0, ErrMailboxFull
-	}
-	if q.RelayMaxBytes > 0 {
-		var relayBytes int64
-		if err := tx.QueryRow(`SELECT queued_bytes FROM relay_stats WHERE id = 1`).Scan(&relayBytes); err != nil {
-			return 0, err
-		}
-		if relayBytes+size > q.RelayMaxBytes {
-			return 0, ErrRelayFull
-		}
 	}
 
 	res, err := tx.Exec(`INSERT INTO messages (to_fp, received, size, channel) VALUES (?, ?, ?, ?)`,
