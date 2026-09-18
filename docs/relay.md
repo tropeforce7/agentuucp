@@ -136,7 +136,7 @@ chunks, resuming if it is interrupted. Three settings govern it:
 | setting | what it does |
 |---|---|
 | `streams` | whether the relay accepts stream uploads at all. Turn it off and an open is refused with a 403 naming this setting |
-| `max_stream_bytes` | the largest stream the relay will reserve space for, declared up front and refused before a byte is sent. `0` is unlimited |
+| `max_stream_bytes` | the largest stream the relay will reserve space for, declared up front and refused before a byte is sent. `0` is unlimited, under a cap of 2^62 bytes no setting lifts |
 | `upload_ttl` | how long an unfinished upload is kept before it is swept and its space released |
 
 **At the shipped defaults a 2 GB file is refused**, and deliberately so: a

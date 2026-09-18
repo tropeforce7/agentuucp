@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"strconv"
@@ -342,5 +343,75 @@ func TestRegisterHoldsTheNameToTheExportLinesRule(t *testing.T) {
 		if status, body := h.do(id, "POST", "/v1/register", h.registerBody(id, name, ""), nil); status != http.StatusOK {
 			t.Errorf("name %q: register answered %d, want 200: %s", name, status, body)
 		}
+	}
+}
+
+// TestAHugeDeclaredSizeIsRefusedNotWrapped: OpenUpload added the declared
+// size to what was queued and reserved before comparing with the quota, so
+// a size near MaxInt64 wrapped the sum negative — under any quota — and
+// the reservation was taken; once on the row, SUM(size) over the uploads
+// overflowed inside SQLite and every later open for the mailbox was a
+// storage error. Now the size is compared with what is left, never added:
+// the huge open is refused, and the one-byte open after it is taken.
+func TestAHugeDeclaredSizeIsRefusedNotWrapped(t *testing.T) {
+	h := newHarness(t, Config{})
+	people := ids(t, "alice", "bob")
+	alice, bob := people[0], people[1]
+	h.register(alice)
+	h.register(bob)
+
+	q := Quotas{MailboxMaxBytes: 1 << 20, RelayMaxBytes: 1 << 20}
+	now := time.Now()
+	open := func(size int64) error {
+		id, err := NewUploadID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return h.store.OpenUpload(id, bob.Fingerprint(), alice.Fingerprint(), "default",
+			size, now, now.Add(time.Hour), q, 0)
+	}
+	if err := open(512 << 10); err != nil {
+		t.Fatalf("a first, modest reservation: %v", err)
+	}
+	err := open(math.MaxInt64)
+	if !errors.Is(err, ErrMailboxFull) && !errors.Is(err, ErrRelayFull) {
+		t.Errorf("a stream of %d bytes was reserved against a %d-byte mailbox and relay quota: err=%v",
+			int64(math.MaxInt64), q.MailboxMaxBytes, err)
+	}
+	// Nothing was reserved, so the next open is taken, and the sum SQLite
+	// computes for it fits.
+	if err := open(1); err != nil {
+		t.Errorf("after the refused huge open, a one-byte open: %v, want it taken", err)
+	}
+	// With no quota at all the same bound holds against MaxInt64, so a size
+	// that would wrap the sum on the next open is refused as too big, and
+	// one that fits beside what is held is taken.
+	q = Quotas{}
+	if err := open(math.MaxInt64); !errors.Is(err, ErrStreamTooBig) {
+		t.Errorf("with no quota, a stream of MaxInt64 bytes beside what is held: %v, want ErrStreamTooBig", err)
+	}
+	if err := open(1 << 40); err != nil {
+		t.Errorf("with no quota, a terabyte: %v, want it taken", err)
+	}
+}
+
+// TestNoRelayAcceptsAStreamPastTheCap: the handler refuses a declared size
+// above MaxStreamSize whatever max_stream_bytes says, 0 for unlimited
+// included, so unlimited is still a number the relay can add to what it
+// holds.
+func TestNoRelayAcceptsAStreamPastTheCap(t *testing.T) {
+	h := newHarness(t, Config{})
+	people := ids(t, "alice", "bob")
+	alice, bob := people[0], people[1]
+	h.register(alice)
+	h.register(bob)
+	for _, size := range []int64{MaxStreamSize + 1, math.MaxInt64} {
+		status, _, body := h.openStream(alice, bob.Fingerprint(), size)
+		if status != http.StatusBadRequest || !strings.Contains(string(body), "no relay accepts more than") {
+			t.Errorf("a stream of %d bytes: %d %s, want 400 naming the cap", size, status, body)
+		}
+	}
+	if status, _, body := h.openStream(alice, bob.Fingerprint(), MaxStreamSize); status == http.StatusBadRequest && strings.Contains(string(body), "no relay accepts") {
+		t.Errorf("a stream at the cap was refused for the cap: %s", body)
 	}
 }

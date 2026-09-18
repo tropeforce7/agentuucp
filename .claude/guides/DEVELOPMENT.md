@@ -180,6 +180,15 @@ no correct `abs` over a two's-complement range: `-math.MinInt64` is
 subtraction wrap was reported fresh. Write the comparison that does not need
 one: two bounds, no subtraction. The same goes for multiplying a number from
 the wire into a `time.Duration`; clamp before the multiplication, not after.
+And for adding one to a total: `OpenUpload` computed `queued + reserved +
+size > quota`, which for a declared size near `MaxInt64` wrapped negative,
+under any quota, and took the reservation; the row then made `SUM(size)`
+overflow inside SQLite and every later open for the mailbox a storage
+error. Compare with what is left instead — `size > quota - queued -
+reserved`, whose terms cannot wrap — and keep a bound against `MaxInt64`
+where there is no quota, so the sum the database computes next time still
+fits; and cap what the wire may declare at all (`MaxStreamSize`, 2^62)
+whatever a setting says, since "0 for unlimited" must still be a number.
 
 **Settle the mailbox cap and blocks before looking at a token.** A registration
 refused by the cap must not have spent the holder's token. Inside

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -29,6 +30,12 @@ var (
 )
 
 const uploadsName = "uploads"
+
+// MaxStreamSize is the largest stream any relay takes, whatever its
+// settings: 2^62 bytes, four exbibytes, which nothing needs and which
+// leaves the arithmetic over what a mailbox and the relay hold room to
+// spare below MaxInt64.
+const MaxStreamSize int64 = 1 << 62
 
 // Upload is an upload in progress. Channel is the name the stream was
 // opened for, checked at open and copied to the message at completion.
@@ -100,8 +107,20 @@ func (s *Store) OpenUpload(id, toFP, fromFP, channel string, size int64, now, ex
 	if q.MailboxMaxMessages > 0 && queuedMessages+reservedCount >= q.MailboxMaxMessages {
 		return ErrMailboxFull
 	}
-	if q.MailboxMaxBytes > 0 && queuedBytes+reservedBytes+size > q.MailboxMaxBytes {
+	// The size is compared, never added: queued and reserved are each
+	// non-negative and together under any quota, so quota minus both is
+	// what is left and cannot wrap, and a size near MaxInt64 is over it.
+	// Adding first wrapped the sum negative, which is under any quota, and
+	// once such a row existed SUM(size) overflowed inside SQLite and every
+	// later open for the mailbox was a storage error rather than a refusal.
+	// With no quota at all the same bound is kept against MaxInt64, after
+	// the quota's own answer, so the sum SQLite computes on the next open
+	// still fits.
+	if q.MailboxMaxBytes > 0 && size > q.MailboxMaxBytes-queuedBytes-reservedBytes {
 		return ErrMailboxFull
+	}
+	if size > math.MaxInt64-queuedBytes-reservedBytes {
+		return ErrStreamTooBig
 	}
 	if q.RelayMaxBytes > 0 {
 		var relayBytes, relayReserved int64
@@ -111,7 +130,7 @@ func (s *Store) OpenUpload(id, toFP, fromFP, channel string, size int64, now, ex
 		if err := tx.QueryRow(`SELECT COALESCE(SUM(size), 0) FROM uploads`).Scan(&relayReserved); err != nil {
 			return err
 		}
-		if relayBytes+relayReserved+size > q.RelayMaxBytes {
+		if size > q.RelayMaxBytes-relayBytes-relayReserved {
 			return ErrRelayFull
 		}
 	}

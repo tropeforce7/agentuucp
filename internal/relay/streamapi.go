@@ -41,6 +41,14 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 		s.fail(w, http.StatusBadRequest, "size must be positive")
 		return
 	}
+	// A cap no setting lifts, well under MaxInt64: max_stream_bytes is
+	// documented as 0 for unlimited, and unlimited must still be a number
+	// the relay can add to what it holds without wrapping.
+	if req.Size > MaxStreamSize {
+		s.fail(w, http.StatusBadRequest, fmt.Sprintf(
+			"stream is %d bytes; no relay accepts more than %d", req.Size, MaxStreamSize))
+		return
+	}
 	if s.cfg.MaxStreamBytes > 0 && req.Size > s.cfg.MaxStreamBytes {
 		s.fail(w, http.StatusForbidden, fmt.Sprintf(
 			"stream is %d bytes; this relay's max_stream_bytes is %d", req.Size, s.cfg.MaxStreamBytes))
