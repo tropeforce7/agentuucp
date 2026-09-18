@@ -380,6 +380,22 @@ audit test greps the whole log for the token string and for anything starting
 **The `limit=` field turns a wall of 429s into a diagnosis.** There is a test
 that a refusal produces it. Add a limit, extend that test.
 
+**A log line the server writes after it has answered is a race to read;
+wait for it with a deadline.** The key-holding proxy writes its request
+line after the response has been copied to the client, because the line
+reports the status, the bytes and the time taken, and writes its refusal
+line after the refusal; with the flush interval at -1 the client finishes
+reading, the test reads the buffer, and the line is not there yet — once in
+a thousand idle runs here, twice in three hundred on the reviewer's
+machine, and CI's ubuntu job on a push that had not touched the proxy. The
+line must come after the answer, so the test waits: `waitForLog` polls the
+buffer with a deadline of five seconds and fails with the whole log, and
+every assertion on a proxy line — a request, a refusal, a mint, a
+revocation written by the socket's goroutine after the client closed — goes
+through it, with the negative assertions (no key in the log, not the whole
+token) made on the log it returned. Any line a goroutine writes after the
+thing the test waited on is the same shape.
+
 **A line limited to once a minute is tested as one line for a burst and a
 second after the clock advances.** The fault log's limiter is keyed by the
 thing the line is about — a path for a storage fault, `allowlist:FP` for a

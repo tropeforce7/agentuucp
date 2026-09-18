@@ -101,12 +101,10 @@ func TestControlSocketMintsForTheAllowedUidAndRevokesOnClose(t *testing.T) {
 	if status, body := call(t, "POST", base+"/v1/messages", `{}`, map[string]string{"x-api-key": token}); status != 200 || body != `{"seen":true}` {
 		t.Fatalf("through the split proxy: %d %s", status, body)
 	}
-	if !strings.Contains(logs.String(), fmt.Sprintf("proxy: token %s minted for uid %d pid ", token[:8], os.Getuid())) {
-		t.Fatalf("the mint is not logged with the uid:\n%s", logs.String())
-	}
+	logged := waitForLog(t, logs, fmt.Sprintf("proxy: token %s minted for uid %d pid ", token[:8], os.Getuid()))
 	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
-		if !strings.Contains(logs.String(), fmt.Sprintf(" pid %d", os.Getpid())) {
-			t.Fatalf("the mint is not logged with this pid:\n%s", logs.String())
+		if !strings.Contains(logged, fmt.Sprintf(" pid %d", os.Getpid())) {
+			t.Fatalf("the mint is not logged with this pid:\n%s", logged)
 		}
 	}
 	if reply := say(t, conn, r, "MINT"); reply != "ERR one mint per connection; close it to revoke" {
@@ -176,10 +174,8 @@ func TestControlSocketRefusesAnotherUidBeforeReading(t *testing.T) {
 	if _, err := readControlLine(r); err == nil {
 		t.Fatal("a stranger's MINT was answered")
 	}
-	if !strings.Contains(logs.String(), fmt.Sprintf("proxy: refused a connection on the control socket from uid %d pid ", os.Getuid())) {
-		t.Fatalf("the refusal is not logged:\n%s", logs.String())
-	}
-	if strings.Contains(logs.String(), "minted") {
+	logged := waitForLog(t, logs, fmt.Sprintf("proxy: refused a connection on the control socket from uid %d pid ", os.Getuid()))
+	if strings.Contains(logged, "minted") {
 		t.Fatal("a token was minted for a stranger")
 	}
 	// The group rule admits by primary group, which this process is in.
@@ -323,11 +319,16 @@ func TestServeAsksTheSplitProxyForATokenPerInvocation(t *testing.T) {
 	if !strings.Contains(stderr, "proxy: asking "+path+" for a token per invocation") || strings.Contains(stderr, "minted") {
 		t.Fatalf("serve's own output should say where it asks and nothing of the mint:\n%s", stderr)
 	}
-	if c := strings.Count(logs.String(), fmt.Sprintf("minted for uid %d", os.Getuid())); c != 2 {
-		t.Fatalf("the proxy logged %d mints for serve's uid, want 2:\n%s", c, logs.String())
+	// The revocation is written by the socket's goroutine after serve
+	// closed the connection, so the count is waited for; a third of
+	// either would be a bug, and is looked for once the two are there.
+	waitForLogCount(t, logs, fmt.Sprintf("minted for uid %d", os.Getuid()), 2)
+	logged := waitForLogCount(t, logs, " revoked\n", 2)
+	if c := strings.Count(logged, fmt.Sprintf("minted for uid %d", os.Getuid())); c != 2 {
+		t.Fatalf("the proxy logged %d mints for serve's uid, want 2:\n%s", c, logged)
 	}
-	if c := strings.Count(logs.String(), " revoked\n"); c != 2 {
-		t.Fatalf("the proxy logged %d revocations, want 2:\n%s", c, logs.String())
+	if c := strings.Count(logged, " revoked\n"); c != 2 {
+		t.Fatalf("the proxy logged %d revocations, want 2:\n%s", c, logged)
 	}
 
 	// Nobody listening: the message fails and is retried, serve goes on.

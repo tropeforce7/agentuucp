@@ -74,6 +74,34 @@ func (l *logBuffer) String() string {
 	return l.buf.String()
 }
 
+// waitForLog waits for a line to appear in the proxy's log and returns
+// the log as it then stands. The proxy writes its request line after the
+// response has been copied to the client, since the line reports the
+// status, the bytes and the time taken, and its refusal line after the
+// refusal has been written; a client can therefore finish reading, and a
+// test can read the buffer, before the line is there. Reading it is a
+// race, and this is the wait that settles it: a deadline of seconds, never
+// less, as the guide says, with the whole log in the failure.
+func waitForLog(t *testing.T, logs *logBuffer, want string) string {
+	t.Helper()
+	return waitForLogCount(t, logs, want, 1)
+}
+
+// waitForLogCount waits until a line has appeared at least n times.
+func waitForLogCount(t *testing.T, logs *logBuffer, want string, n int) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if got := logs.String(); strings.Count(got, want) >= n {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the log did not come to say %q %d time(s) within 5s; it says:\n%s", want, n, logs.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // proxyFor is a running proxy in front of the fake upstream, with its log.
 func proxyFor(t *testing.T, up *upstream) (*keyProxy, *logBuffer) {
 	t.Helper()
@@ -140,10 +168,8 @@ func TestProxyForwardsUnderALiveTokenAndRefusesTheRest(t *testing.T) {
 		got.version != "2023-06-01" || got.body != `{"model":"x"}` {
 		t.Fatalf("upstream saw %+v", got)
 	}
-	if !strings.Contains(logs.String(), "proxy: "+token[:8]+" POST /v1/messages 200 in 13 out 13 ") {
-		t.Fatalf("the log line:\n%s", logs.String())
-	}
-	if strings.Contains(logs.String(), realKey) || strings.Contains(logs.String(), token[8:]) {
+	logged := waitForLog(t, logs, "proxy: "+token[:8]+" POST /v1/messages 200 in 13 out 13 ")
+	if strings.Contains(logged, realKey) || strings.Contains(logged, token[8:]) {
 		t.Fatal("the log carries the key, or the whole token")
 	}
 
@@ -162,15 +188,14 @@ func TestProxyForwardsUnderALiveTokenAndRefusesTheRest(t *testing.T) {
 		if status != http.StatusNotFound || !strings.Contains(body, "no live invocation token") {
 			t.Fatalf("%s: %d %s", c.label, status, body)
 		}
-		if !strings.Contains(logs.String(), "refused: "+c.reason) {
-			t.Fatalf("%s: the log does not say %q:\n%s", c.label, c.reason, logs.String())
-		}
+		waitForLog(t, logs, "refused: "+c.reason)
 	}
 	p.revoke(token)
 	status, _ = call(t, "POST", base+"/v1/messages", `{}`, map[string]string{"x-api-key": token})
-	if status != http.StatusNotFound || !strings.Contains(logs.String(), "refused: revoked token") {
-		t.Fatalf("a revoked token: %d\n%s", status, logs.String())
+	if status != http.StatusNotFound {
+		t.Fatalf("a revoked token: %d", status)
 	}
+	waitForLog(t, logs, "refused: revoked token")
 	if len(up.requests()) != before {
 		t.Fatal("a refused request reached upstream")
 	}
