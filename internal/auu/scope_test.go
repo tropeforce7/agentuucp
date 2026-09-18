@@ -271,12 +271,11 @@ func TestEnrolAsksForSendScopeAtATerminal(t *testing.T) {
 // next serve.
 func TestServeNeedsSendScope(t *testing.T) {
 	alice, bob := newExpertCold(t, modeReadOnly)
+	// agentEnv makes this test binary answer as auu wherever it runs with
+	// helperEnv set, and the handler is this test binary too; TestMain
+	// tells a handler run by its arguments, so the exec line is the one
+	// every serve test uses.
 	agentEnv(t)
-	// agentEnv makes this test binary answer as auu wherever it is run with
-	// helperEnv set, and the handler is this test binary too: the handler's
-	// line unsets it for itself, so it is the handler again.
-	bob.row.Exec = helperEnv + "= " + helperLine(t, "handler")
-	bob.write(t)
 	bob.encrypt()
 	const needsSend = "the agent is unlocked to receive, and serve originates every reply: run 'auu unlock --send --ttl 0' at a terminal, which lasts until 'auu lock'"
 
@@ -358,5 +357,29 @@ func TestServeNeedsSendScope(t *testing.T) {
 	}
 	if reply := alice.replyOn(t, sent.Thread); reply.Text != "the expert has spoken" {
 		t.Fatalf("the reply is %q", reply.Text)
+	}
+}
+
+// TestTheTestBinaryKnowsAHandlerRunFromAnAuuRun: with helperEnv set, the
+// binary is auu for the arguments 'auu agent start' hands it and a test
+// runner for the arguments helperLine hands it, on any platform, since the
+// decision reads the arguments and not the shell.
+func TestTheTestBinaryKnowsAHandlerRunFromAnAuuRun(t *testing.T) {
+	exe := "auu.test"
+	for name, tc := range map[string]struct {
+		args []string
+		want bool
+	}{
+		"the agent, detached":             {[]string{exe, "agent", "run", "--home", "/h"}, false},
+		"a command in another process":    {[]string{exe, "send", "--to", "self", "hello"}, false},
+		"a handler":                       {[]string{exe, "-test.run=TestServeHelperProcess", "handler"}, true},
+		"a before hook":                   {[]string{exe, "-test.run=TestServeHelperProcess", "before"}, true},
+		"the whole line, as sh splits it": {strings.Fields(helperLine(t, "handler")), true},
+		"nothing":                         {[]string{exe}, false},
+		"the flag anywhere but first":     {[]string{exe, "send", "--to", "self", "-test.run=TestServeHelperProcess"}, false},
+	} {
+		if got := isHandlerRun(tc.args); got != tc.want {
+			t.Errorf("%s: isHandlerRun(%q) = %v, want %v", name, tc.args, got, tc.want)
+		}
 	}
 }

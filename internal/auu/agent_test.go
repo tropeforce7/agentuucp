@@ -24,14 +24,29 @@ import (
 // answer as auu when it is asked to: the tests set helperEnv in their own
 // environment, the detached child inherits it, and its TestMain runs Main
 // instead of the tests. Nothing sets the variable outside a test.
+//
+// A serve handler is this binary too, run by helperLine with
+// -test.run=TestServeHelperProcess, and it inherits the variable from a
+// test that has an agent running. The arguments say which it is: a
+// handler run is one, whatever the environment says, because the
+// alternative — unsetting the variable on the exec line — is shell syntax,
+// and the line runs under sh on one platform and cmd on the other.
 const helperEnv = "AUU_TEST_HELPER"
 
 func TestMain(m *testing.M) {
-	if os.Getenv(helperEnv) == "1" {
+	if os.Getenv(helperEnv) == "1" && !isHandlerRun(os.Args) {
 		Main("auu")
 		return
 	}
 	os.Exit(m.Run())
+}
+
+// isHandlerRun says whether these arguments are helperLine's: the test
+// binary asked, first thing, to run TestServeHelperProcess as a handler or
+// a hook. First thing, because that is where helperLine puts it and an
+// auu command never has a flag of Go's test runner among its arguments.
+func isHandlerRun(args []string) bool {
+	return len(args) > 1 && args[1] == "-test.run=TestServeHelperProcess"
 }
 
 const agentPassphrase = "correct horse battery staple"
