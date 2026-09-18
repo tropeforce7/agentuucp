@@ -78,6 +78,16 @@ const (
 	// does not mean a small message.
 	MaxChunk0 = 1 << 20
 
+	// MaxPayloadBytes bounds what a manifest may declare, 2^62 bytes: the
+	// same order as the relay's own cap on a stream, and what keeps every
+	// sum made from a validated manifest — the chunk count, the size on
+	// the wire, the attachments' total — inside int64 without a guard at
+	// each addition. A manifest that declared MaxInt64 used to wrap
+	// ChunkCount to two chunks and Size negative, and was refused only
+	// later, as truncated, after the receiver had asked the relay for a
+	// payload.
+	MaxPayloadBytes int64 = 1 << 62
+
 	// MinChunkSize and MaxChunkSize bound the payload chunk. The useful
 	// property is that ChunkSize+TagSize fits the buffer a receiver reads
 	// into, not that the plaintext is round.
@@ -159,7 +169,9 @@ type Manifest struct {
 
 // ChunkCount is how many chunks a payload of n bytes takes, including the
 // manifest. A stream with no payload still has one, empty, final chunk, so
-// that every stream ends the same way and truncation has one rule.
+// that every stream ends the same way and truncation has one rule. The
+// arithmetic cannot wrap for a payload Validate accepts, which is at most
+// MaxPayloadBytes; for one it would not, the answer means nothing.
 func ChunkCount(payloadBytes int64, chunkSize int) int64 {
 	if chunkSize <= 0 {
 		return 0
@@ -213,6 +225,10 @@ func (m *Manifest) Validate() error {
 	if m.PayloadBytes < 0 {
 		return fmt.Errorf("%w: payload_bytes is negative", ErrForm)
 	}
+	if m.PayloadBytes > MaxPayloadBytes {
+		return fmt.Errorf("%w: payload_bytes %d is over the %d the format carries",
+			ErrForm, m.PayloadBytes, MaxPayloadBytes)
+	}
 	if want := ChunkCount(m.PayloadBytes, m.ChunkSize); m.Chunks != want {
 		return fmt.Errorf("%w: chunks is %d, but %d bytes at %d each needs %d",
 			ErrForm, m.Chunks, m.PayloadBytes, m.ChunkSize, want)
@@ -232,6 +248,13 @@ func (m *Manifest) Validate() error {
 		}
 		if len(a.SHA256) != 64 || !isLowerHex(a.SHA256) {
 			return fmt.Errorf("%w: attachment %q has no valid digest", ErrForm, a.Name)
+		}
+		// Checked before adding: sizes that wrapped the total back round
+		// to payload_bytes were accepted, and the stream refused only after
+		// the receiver had asked for a payload.
+		if a.Size > MaxPayloadBytes-total {
+			return fmt.Errorf("%w: attachments total more than the %d bytes the format carries",
+				ErrForm, MaxPayloadBytes)
 		}
 		total += a.Size
 	}

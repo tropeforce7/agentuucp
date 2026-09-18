@@ -2,8 +2,11 @@ package stream
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
+	"math"
 	"testing"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
@@ -109,5 +112,89 @@ func TestAnEmptyAttachmentArrivesWhereverItStands(t *testing.T) {
 				t.Errorf("%s: attachment %q arrived as %q, want %q", tc.what, f.name, data, f.data)
 			}
 		}
+	}
+}
+
+// TestValidateRefusesSizesThatWrap: Validate summed the attachment sizes
+// and counted the chunks in int64 with no guard, so sizes that wrapped
+// past MaxInt64 passed — three attachments summing to zero beside
+// payload_bytes 0, or payload_bytes MaxInt64 for which ChunkCount wrapped
+// to two chunks — and were refused only later, as truncated, after the
+// receiver had asked the relay for the payload. A manifest whose declared
+// sizes cannot agree with any chunks is malformed where it is read: now
+// payload_bytes and the attachments' running total are bounded at
+// MaxPayloadBytes, 2^62, before anything is added, and the chunk count and
+// the size on the wire cannot wrap for what Validate accepts.
+func TestValidateRefusesSizesThatWrap(t *testing.T) {
+	from, err := identity.Generate("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	to, err := identity.Generate("bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := hex.EncodeToString(sha256.New().Sum(nil))
+	base := func() *Manifest {
+		m, err := BuildManifest(from, to.Public(), hex.EncodeToString(bytes.Repeat([]byte{2}, 16)),
+			Body{Type: "ask", Thread: "t1", Subject: "s", Text: "hello"},
+			sourcesOf(memSource{"a", []byte("x")}), MinChunkSize)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+
+	wrapped := base()
+	wrapped.Attachments = []Attachment{
+		{Name: "a", Media: "x", Size: math.MaxInt64, SHA256: digest},
+		{Name: "b", Media: "x", Size: math.MaxInt64, SHA256: digest},
+		{Name: "c", Media: "x", Size: 2, SHA256: digest},
+	}
+	wrapped.PayloadBytes = 0
+	wrapped.Chunks = ChunkCount(0, wrapped.ChunkSize)
+	if err := wrapped.Validate(); !errors.Is(err, ErrForm) {
+		t.Errorf("attachments of %d, %d and 2 bytes beside payload_bytes 0: %v, want ErrForm", int64(math.MaxInt64), int64(math.MaxInt64), err)
+	}
+
+	huge := base()
+	huge.Attachments = []Attachment{{Name: "a", Media: "x", Size: math.MaxInt64, SHA256: digest}}
+	huge.PayloadBytes = math.MaxInt64
+	huge.Chunks = ChunkCount(math.MaxInt64, huge.ChunkSize)
+	if err := huge.Validate(); !errors.Is(err, ErrForm) {
+		t.Errorf("payload_bytes %d at chunk_size %d: %v, want ErrForm (ChunkCount had wrapped to %d chunks)",
+			int64(math.MaxInt64), huge.ChunkSize, err, huge.Chunks)
+	}
+	// At the bound and one over: the largest payload the format carries is
+	// accepted, and its chunk count and size on the wire are positive.
+	edge := base()
+	edge.Attachments = []Attachment{{Name: "a", Media: "x", Size: MaxPayloadBytes, SHA256: digest}}
+	edge.PayloadBytes = MaxPayloadBytes
+	edge.Chunks = ChunkCount(MaxPayloadBytes, edge.ChunkSize)
+	if err := edge.Validate(); err != nil {
+		t.Errorf("payload_bytes at the bound: %v, want accepted", err)
+	}
+	if edge.Chunks <= 0 || Size(MaxChunk0, MaxPayloadBytes, edge.ChunkSize) <= 0 {
+		t.Errorf("at the bound the chunk count is %d and the size on the wire %d; neither may wrap",
+			edge.Chunks, Size(MaxChunk0, MaxPayloadBytes, edge.ChunkSize))
+	}
+	over := base()
+	over.Attachments = []Attachment{{Name: "a", Media: "x", Size: MaxPayloadBytes + 1, SHA256: digest}}
+	over.PayloadBytes = MaxPayloadBytes + 1
+	over.Chunks = ChunkCount(MaxPayloadBytes+1, over.ChunkSize)
+	if err := over.Validate(); !errors.Is(err, ErrForm) {
+		t.Errorf("payload_bytes one over the bound: %v, want ErrForm", err)
+	}
+	// Two attachments that together pass the bound though each is under
+	// it, beside a payload_bytes that agrees with the wrapped total.
+	pair := base()
+	pair.Attachments = []Attachment{
+		{Name: "a", Media: "x", Size: MaxPayloadBytes, SHA256: digest},
+		{Name: "b", Media: "x", Size: MaxPayloadBytes, SHA256: digest},
+	}
+	pair.PayloadBytes = MaxPayloadBytes
+	pair.Chunks = ChunkCount(MaxPayloadBytes, pair.ChunkSize)
+	if err := pair.Validate(); !errors.Is(err, ErrForm) {
+		t.Errorf("two attachments of the bound each: %v, want ErrForm", err)
 	}
 }
