@@ -123,11 +123,18 @@ does not get to decide who a fingerprint belongs to; opening a message refuses
 a `from` that is not the hash of the bundle beside it. An attacker who wants you to accept a signature they can
 forge has to persuade you to add a new peer, out of band, by hand.
 
-The one thing that genuinely negotiates is the TLS key exchange, and that is
-Go's, not this project's: a relay too old for `X25519MLKEM768` falls back to
-plain X25519. That costs the *metadata* — who is talking to whom — its
-protection against a recording made today, and costs message contents nothing,
-because those are sealed end to end before they reach the transport.
+Nothing negotiates at the transport either. Every connection this project
+makes or takes — a client's requests, the anchor fetch that comes before a
+new user has anything to verify with, and the relay's own listener on both
+its branches — is pinned to TLS 1.3 with `X25519MLKEM768` as the only key
+exchange, and refuses less; there is no option to relax it, since every
+relay is built from this tree and there is nothing older to meet. So a
+recording of who talked to whom made today is protected by the same hybrid
+as the messages inside it. A relay that will not make that handshake — one
+from before v0.7.0, or one behind a TLS terminator that lacks the hybrid — is
+named by the client in one sentence rather than by Go's alert. A relay run
+with `tls.mode: "off"` behind somebody else's terminator is that
+terminator's TLS, not the relay's, and this says nothing about it.
 
 **What an administrator sees.** The list of mailboxes: fingerprints, display
 names, how much each is holding, and how many channels each has defined —

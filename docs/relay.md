@@ -504,9 +504,13 @@ of the ML-KEM-768 inside the X-Wing KEM the messages use, so the transport
 authentication is post-quantum at the same level. The set is the anchor's, and
 every machine's key must match it, stronger or weaker: a machine asks the
 relay which before it generates one, and the relay refuses any other. Changing
-it means a new anchor and every machine enrolling again. ML-DSA requires TLS 1.3, which the relay then insists on — 1.3
-is also the first version to encrypt the client's certificate rather than send
-it in the clear, and the certificate names a fingerprint.
+it means a new anchor and every machine enrolling again. ML-DSA requires TLS
+1.3, which the relay insists on everywhere, with `X25519MLKEM768` as the
+only key exchange and no setting to relax either — 1.3 is also the first
+version to encrypt the client's certificate rather than send it in the
+clear, and the certificate names a fingerprint. That pin is the relay's own
+TLS; a relay run with `tls.mode: "off"` behind a terminator gets the
+terminator's, which is the operator's to hold to the same.
 
 The certificates are issued by the client signing intermediate in the relay's
 bundle, the one `auu-ca relay` wrote; the relay holds no other key for it and

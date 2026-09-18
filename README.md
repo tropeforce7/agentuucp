@@ -76,8 +76,9 @@ machine at a time without touching the identity behind it. A stranger is then
 refused at the TLS handshake, before the relay reads a request.
 
 Every certificate in the chain is ML-DSA, so the transport's authentication
-is post-quantum. It runs over TLS 1.3, which encrypts the client's certificate
-rather than sending it in the clear.
+is post-quantum. It runs over TLS 1.3 with the same hybrid key exchange as
+the messages, and nothing less is accepted; 1.3 also encrypts the client's
+certificate rather than sending it in the clear.
 
 **How messages are encrypted.** Each message is sealed with HPKE (RFC 9180)
 from Go's standard library. The ciphersuite is X-Wing, which combines

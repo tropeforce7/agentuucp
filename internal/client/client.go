@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -122,15 +123,52 @@ func transportFor(cert *tls.Certificate, anchor *Anchor) *http.Transport {
 	if cert != nil {
 		tlsCfg.Certificates = []tls.Certificate{*cert}
 	}
-	// ML-DSA certificates require 1.3, and 1.3 is the first version to
-	// encrypt the client's certificate rather than send the fingerprint in
-	// it in the clear.
-	tlsCfg.MinVersion = tls.VersionTLS13
+	pinTransport(tlsCfg)
 	if anchor != nil {
 		tlsCfg = anchor.tlsConfig(tlsCfg)
 	}
 	transport.TLSClientConfig = tlsCfg
 	return transport
+}
+
+// pinTransport is the one TLS policy every connection this project makes
+// or takes has: TLS 1.3 and the hybrid post-quantum key exchange, nothing
+// less, nothing to negotiate. ML-DSA certificates need 1.3 anyway, and 1.3
+// is the first version to encrypt the client's certificate rather than
+// send it in the clear; the curve is what keeps a recording of who talked
+// to whom under the same protection as the messages. Every relay is built
+// from this tree, so there is nothing older to be compatible with, and no
+// option relaxes it.
+func pinTransport(cfg *tls.Config) {
+	cfg.MinVersion = tls.VersionTLS13
+	cfg.CurvePreferences = []tls.CurveID{tls.X25519MLKEM768}
+}
+
+// NoPQTransportError is a relay that would not make the pinned handshake:
+// one older than v0.7.0, or one behind a TLS terminator that does not offer
+// X25519MLKEM768 or TLS 1.3. Go's own words for it are an alert, "handshake
+// failure" or "protocol version not supported", and are kept in brackets.
+type NoPQTransportError struct{ Err error }
+
+func (e *NoPQTransportError) Error() string {
+	return "no TLS 1.3 with the post-quantum key exchange; the relay is older than v0.7.0 or behind a TLS terminator that lacks X25519MLKEM768 (" + e.Err.Error() + ")"
+}
+
+func (e *NoPQTransportError) Unwrap() error { return e.Err }
+
+// pinnedHandshakeRefused reports whether err is the far end refusing the
+// pinned handshake: a remote alert of handshake failure (no key exchange in
+// common) or of an unsupported protocol version. Both arrive as a
+// net.OpError whose Op is "remote error" and whose inner error is
+// crypto/tls's unexported alert type, so the alert is read by its text; a
+// certificate that does not verify is a different error and is not this.
+func pinnedHandshakeRefused(err error) bool {
+	var op *net.OpError
+	if !errors.As(err, &op) || op.Op != "remote error" || op.Err == nil {
+		return false
+	}
+	msg := op.Err.Error()
+	return msg == "tls: handshake failure" || msg == "tls: protocol version not supported"
 }
 
 // CloseIdle drops pooled connections, so the next request makes a fresh
@@ -269,6 +307,9 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
+		if pinnedHandshakeRefused(err) {
+			return &NoPQTransportError{Err: err}
+		}
 		return c.diagnoseRefusal(ctx, fmt.Errorf("contacting relay: %w", err))
 	}
 	defer resp.Body.Close()

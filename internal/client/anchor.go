@@ -88,11 +88,17 @@ func FetchTrustAnchor(ctx context.Context, base string) (*x509.Certificate, stri
 		tlsCfg = tlsCfg.Clone()
 	}
 	tlsCfg.InsecureSkipVerify = true // checked against the token, below
+	pinTransport(tlsCfg)
 	transport.TLSClientConfig = tlsCfg
 
 	c := &http.Client{Transport: transport, Timeout: 30 * time.Second}
 	resp, err := c.Do(req)
 	if err != nil {
+		if pinnedHandshakeRefused(err) {
+			// The first thing a new user runs, so the sentence names the
+			// relay by the address they typed.
+			return nil, "", fmt.Errorf("%s: %w", base, &NoPQTransportError{Err: err})
+		}
 		return nil, "", fmt.Errorf("fetching the relay's trust anchor: %w", err)
 	}
 	defer resp.Body.Close()
@@ -127,7 +133,7 @@ func (a *Anchor) tlsConfig(base *tls.Config) *tls.Config {
 	roots := x509.NewCertPool()
 	roots.AddCert(a.Cert)
 	cfg.RootCAs = roots
-	cfg.MinVersion = tls.VersionTLS13
+	pinTransport(cfg)
 	cfg.VerifyConnection = a.verifyConnection
 	return cfg
 }

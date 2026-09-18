@@ -71,12 +71,20 @@ func buildTLS(cfg Config, parts *clientCertParts) (*tls.Config, error) {
 		return nil, nil
 
 	case ModeFiles:
-		out := &tls.Config{MinVersion: tls.VersionTLS12}
+		// TLS 1.3 and the hybrid post-quantum key exchange, on both
+		// branches and with no way to relax it: every client is built from
+		// this tree, and a recording of who talked to whom made today is
+		// then protected by the same hybrid as the messages. A relay run in
+		// mode off behind somebody else's terminator is that terminator's
+		// business, and docs/relay.md says so.
+		out := &tls.Config{
+			MinVersion:       tls.VersionTLS13,
+			CurvePreferences: []tls.CurveID{tls.X25519MLKEM768},
+		}
 		if parts != nil {
 			// The relay mints its own leaf and renews it in process, so the
 			// certificate comes from a function rather than a field.
 			out.GetCertificate = parts.server.GetCertificate
-			out.MinVersion = tls.VersionTLS13
 		} else {
 			cert, err := loadKeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
 			if err != nil {

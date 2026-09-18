@@ -100,6 +100,22 @@ The recipient fingerprint lives in `info`; RFC 9180's key schedule already
 covers it, and a re-addressed envelope simply fails to open. An extra AAD
 construction on top would be a second thing to get wrong for no gain.
 
+**Pin what Go would negotiate.** The client's transport set `MinVersion`
+1.3 and nothing else, the anchor fetch set no minimum at all, and the
+relay's certificate-files branch allowed 1.2; nobody set
+`CurvePreferences`, so Go negotiated, and a peer offering only X25519 got
+X25519 — which the security model then described as a fallback, and an
+outside reader rightly called a downgrade at the transport. Every
+`tls.Config` the project builds now pins `MinVersion` to 1.3 and
+`CurvePreferences` to `X25519MLKEM768` alone, through one function on the
+client side and one literal on the relay's, with no option to relax it:
+every relay is built from this tree, so there is nothing older to be
+compatible with, and a knob would be a downgrade somebody could turn. The
+client turns the refusal into a sentence naming the relay, since Go's is
+"remote error: tls: handshake failure". A setting the library would choose
+for you is a setting you have chosen by omission; write it down, and test
+the refusal from both sides.
+
 ## Ordering of checks
 
 This is where the project's real bugs were. Every one of them was a correct
