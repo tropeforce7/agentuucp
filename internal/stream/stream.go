@@ -208,7 +208,7 @@ func (m *Manifest) Validate() error {
 	if m.V != Version {
 		return fmt.Errorf("%w: unsupported manifest version %d", ErrForm, m.V)
 	}
-	if !validMessageID(m.ID) {
+	if message.ValidID(m.ID) != nil {
 		return fmt.Errorf("%w: id is not 32 lowercase hex characters", ErrForm)
 	}
 	if !identity.ValidFingerprint(m.From) || !identity.ValidFingerprint(m.To) {
@@ -265,10 +265,14 @@ func (m *Manifest) Validate() error {
 	if !utf8.ValidString(m.Body.Text) || !utf8.ValidString(m.Body.Subject) {
 		return fmt.Errorf("%w: body is not valid UTF-8", ErrForm)
 	}
+	// The body is held to the message rules here, since a manifest's is
+	// never opened as an envelope's is: without this the stream path was
+	// a second door for a thread id that is a path.
+	if err := message.ValidHeader(m.Body.Type, m.Body.Thread, m.Body.InReplyTo, m.Body.Subject); err != nil {
+		return fmt.Errorf("%w: %v", ErrForm, err)
+	}
 	return nil
 }
-
-func validMessageID(s string) bool { return len(s) == 32 && isLowerHex(s) }
 
 func isLowerHex(s string) bool {
 	for i := 0; i < len(s); i++ {

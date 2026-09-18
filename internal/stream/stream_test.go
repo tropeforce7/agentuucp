@@ -39,7 +39,7 @@ func source(name string, data []byte) Source {
 }
 
 func body() Body {
-	return Body{Type: "ask", Subject: "a big one", Thread: "t1", Text: "please look"}
+	return Body{Type: "ask", Subject: "a big one", Thread: "0123456789abcdef0123456789abcdef", Text: "please look"}
 }
 
 // build seals a stream and returns its bytes and its manifest.

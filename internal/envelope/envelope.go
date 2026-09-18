@@ -133,7 +133,8 @@ type Inner struct {
 	Channel string `json:"channel,omitempty"`
 }
 
-// NewID returns a fresh random message id: 32 hex characters.
+// NewID returns a fresh random message id: 32 lowercase hex characters,
+// the shape message.ValidID holds every id, thread and in_reply_to to.
 func NewID() (string, error) {
 	buf := make([]byte, messageIDLn)
 	if _, err := rand.Read(buf); err != nil {
@@ -240,6 +241,14 @@ func Open(recipient *identity.Identity, env *Envelope) (*Inner, *identity.Public
 	}
 	if inner.To != selfFP {
 		return nil, nil, fail(ErrNotForUs, "inner record addressed to %s", inner.To)
+	}
+	// The id becomes the record's file name. Refused here, as malformed,
+	// so that a receiver keeps the message under damaged and acknowledges
+	// it: left to the store's own refusal, the fetch failed on it with the
+	// cursor unmoved, and the mailbox was blocked by anyone the relay let
+	// post.
+	if err := message.ValidID(inner.ID); err != nil {
+		return nil, nil, failWith(ErrMalformed, err, "id")
 	}
 	if err := inner.Body.Validate(); err != nil {
 		return nil, nil, failWith(ErrMalformed, err, "body")

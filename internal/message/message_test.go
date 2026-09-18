@@ -13,7 +13,7 @@ func goodBody(t *testing.T) Body {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Body{Type: TypeAsk, Subject: "s", Thread: "t1", Text: "hello", Attachments: []Attachment{a}}
+	return Body{Type: TypeAsk, Subject: "s", Thread: "0123456789abcdef0123456789abcdef", Text: "hello", Attachments: []Attachment{a}}
 }
 
 func TestValidateAccepts(t *testing.T) {
@@ -54,7 +54,7 @@ func TestValidateRejectsBadAttachmentNames(t *testing.T) {
 	sum := sha256.Sum256(data)
 	for _, name := range []string{"", "..", ".", "a/b", "../x", "..\\x", "dir/../x", strings.Repeat("n", 256)} {
 		a := Attachment{Name: name, Media: DefaultMedia, Size: 1, SHA256: hex.EncodeToString(sum[:]), Data: data}
-		b := Body{Type: TypeNote, Thread: "t", Attachments: []Attachment{a}}
+		b := Body{Type: TypeNote, Thread: "0123456789abcdef0123456789abcdef", Attachments: []Attachment{a}}
 		if err := b.Validate(); err == nil {
 			t.Fatalf("accepted attachment name %q", name)
 		}
@@ -77,7 +77,7 @@ func TestValidateRejectsDigestAndSizeMismatch(t *testing.T) {
 
 func TestValidateRejectsDuplicateNames(t *testing.T) {
 	a, _ := NewAttachment("x.txt", []byte("a"))
-	b := Body{Type: TypeNote, Thread: "t", Attachments: []Attachment{a, a}}
+	b := Body{Type: TypeNote, Thread: "0123456789abcdef0123456789abcdef", Attachments: []Attachment{a, a}}
 	if err := b.Validate(); err == nil {
 		t.Fatal("accepted duplicate attachment names")
 	}
@@ -90,5 +90,59 @@ func TestNewAttachmentStripsDirectories(t *testing.T) {
 	}
 	if a.Name != "passwd" {
 		t.Fatalf("name %q", a.Name)
+	}
+}
+
+// A thread id is a message id, and so is in_reply_to: 32 lowercase hex
+// characters, the shape envelope.NewID makes and nothing else. The second
+// adversarial trace sent `--thread "../../outside"` to an expert host, which
+// joined it onto its serve directory and stopped for good; the shape is
+// held here, where every message passes on both sides of the wire.
+func TestValidIDHoldsTheShapeOfAMessageID(t *testing.T) {
+	const good = "0123456789abcdef0123456789abcdef"
+	if err := ValidID(good); err != nil {
+		t.Fatalf("a message id was refused: %v", err)
+	}
+	for _, s := range []string{
+		"",
+		good[:31],
+		good + "0",
+		"0123456789ABCDEF0123456789abcdef",
+		"0123456789abcdef0123456789abcde/",
+		"0123456789abcdef0123456789abcde.",
+		"../../outside",
+		"..",
+		".",
+		"0123456789abcdef0123456789abcde\x00",
+		"0123456789abcdef0123456789abcdé",
+	} {
+		if err := ValidID(s); err == nil {
+			t.Errorf("%q was accepted as a message id", s)
+		}
+	}
+}
+
+func TestValidateHoldsThreadAndInReplyToToTheIDShape(t *testing.T) {
+	for _, thread := range []string{"t1", "../../outside", "0123456789ABCDEF0123456789abcdef"} {
+		b := goodBody(t)
+		b.Thread = thread
+		if err := b.Validate(); err == nil {
+			t.Errorf("thread %q was accepted", thread)
+		} else if !strings.Contains(err.Error(), "thread is not a message id") {
+			t.Errorf("thread %q: %v, want the sentence naming the shape", thread, err)
+		}
+	}
+	b := goodBody(t)
+	b.InReplyTo = "../x"
+	if err := b.Validate(); err == nil || !strings.Contains(err.Error(), "in_reply_to is not a message id") {
+		t.Errorf("in_reply_to ../x: %v", err)
+	}
+	b.InReplyTo = "fedcba9876543210fedcba9876543210"
+	if err := b.Validate(); err != nil {
+		t.Errorf("a reply naming a message id was refused: %v", err)
+	}
+	b.InReplyTo = ""
+	if err := b.Validate(); err != nil {
+		t.Errorf("an empty in_reply_to was refused: %v", err)
 	}
 }

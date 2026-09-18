@@ -55,6 +55,58 @@ func ValidType(t string) bool {
 	return false
 }
 
+// IDLen is the length of a message id: 16 random bytes as hex.
+const IDLen = 32
+
+// ValidID checks that s has the shape of a message id, which is what
+// envelope.NewID makes: exactly 32 bytes, each a lowercase hex digit. A
+// thread id is a message id too, the one that opened the thread, and so is
+// in_reply_to. The shape is a rule rather than a convention because an id
+// becomes a file name on the receiver and a directory name under an
+// expert's home: a signature proves who wrote a value, not that the value
+// is safe. The one predicate for the store, the stream format and the
+// envelope, which each held a copy of it before.
+func ValidID(s string) error {
+	if len(s) != IDLen {
+		return errNotAnID
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return errNotAnID
+		}
+	}
+	return nil
+}
+
+var errNotAnID = errors.New("not a message id (32 lowercase hex characters)")
+
+// ValidHeader applies the rules every message's header meets whether the
+// message travels inline or as a stream's manifest: a known type, a thread
+// id and, when set, an in_reply_to that are message ids, and a subject
+// under the limit. Body.Validate and the stream package's Validate both
+// call it, so what a message may say about itself is one rule.
+func ValidHeader(typ, thread, inReplyTo, subject string) error {
+	if !ValidType(typ) {
+		return fmt.Errorf("message: unknown type %q", typ)
+	}
+	if thread == "" {
+		return errors.New("message: thread is required")
+	}
+	if err := ValidID(thread); err != nil {
+		return fmt.Errorf("message: thread is %w", err)
+	}
+	if inReplyTo != "" {
+		if err := ValidID(inReplyTo); err != nil {
+			return fmt.Errorf("message: in_reply_to is %w", err)
+		}
+	}
+	if len(subject) > maxSubjectBytes {
+		return errors.New("message: subject too long")
+	}
+	return nil
+}
+
 // NewAttachment builds an attachment from a file's base name and contents,
 // filling in size, digest, and a best-effort media type.
 func NewAttachment(name string, data []byte) (Attachment, error) {
@@ -131,14 +183,8 @@ func (a *Attachment) Validate() error {
 // Validate checks the body is well formed before it is sealed or after it is
 // opened. An opened message is untrusted input, so this runs on both sides.
 func (b *Body) Validate() error {
-	if !ValidType(b.Type) {
-		return fmt.Errorf("message: unknown type %q", b.Type)
-	}
-	if b.Thread == "" {
-		return errors.New("message: thread is required")
-	}
-	if len(b.Subject) > maxSubjectBytes {
-		return errors.New("message: subject too long")
+	if err := ValidHeader(b.Type, b.Thread, b.InReplyTo, b.Subject); err != nil {
+		return err
 	}
 	seen := make(map[string]bool, len(b.Attachments))
 	for i := range b.Attachments {

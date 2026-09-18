@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
@@ -46,7 +47,7 @@ func sealAndOpen(t *testing.T, files ...memSource) (map[string][]byte, error) {
 	}
 	sources := sourcesOf(files...)
 	m, err := BuildManifest(from, to.Public(), hex.EncodeToString(bytes.Repeat([]byte{1}, 16)),
-		Body{Type: "ask", Thread: "t1", Subject: "s", Text: "hello"}, sources, MinChunkSize)
+		Body{Type: "ask", Thread: "0123456789abcdef0123456789abcdef", Subject: "s", Text: "hello"}, sources, MinChunkSize)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +138,7 @@ func TestValidateRefusesSizesThatWrap(t *testing.T) {
 	digest := hex.EncodeToString(sha256.New().Sum(nil))
 	base := func() *Manifest {
 		m, err := BuildManifest(from, to.Public(), hex.EncodeToString(bytes.Repeat([]byte{2}, 16)),
-			Body{Type: "ask", Thread: "t1", Subject: "s", Text: "hello"},
+			Body{Type: "ask", Thread: "0123456789abcdef0123456789abcdef", Subject: "s", Text: "hello"},
 			sourcesOf(memSource{"a", []byte("x")}), MinChunkSize)
 		if err != nil {
 			t.Fatal(err)
@@ -196,5 +197,39 @@ func TestValidateRefusesSizesThatWrap(t *testing.T) {
 	pair.Chunks = ChunkCount(MaxPayloadBytes, pair.ChunkSize)
 	if err := pair.Validate(); !errors.Is(err, ErrForm) {
 		t.Errorf("two attachments of the bound each: %v, want ErrForm", err)
+	}
+}
+
+// A manifest's body is never opened as an envelope's is, so the message
+// rules are applied to it here: a known type, a thread and an in_reply_to
+// that are message ids, a subject under the limit. Without this the stream
+// path was a second door for a thread id that is a path: an envelope with
+// `--thread "../../outside"` was refused at Validate while the same message
+// with a large attachment was sealed, sent and handed to an expert host.
+func TestValidateHoldsTheManifestBodyToTheMessageRules(t *testing.T) {
+	from, to := pair(t)
+	build := func(body Body) error {
+		_, err := BuildManifest(from, to.Public(), "0123456789abcdef0123456789abcdef", body,
+			sourcesOf(memSource{"a", []byte("x")}), MinChunkSize)
+		return err
+	}
+	good := Body{Type: "ask", Thread: "0123456789abcdef0123456789abcdef", Subject: "s", Text: "hello"}
+	if err := build(good); err != nil {
+		t.Fatalf("a manifest whose body meets the rules was refused: %v", err)
+	}
+	for _, tc := range []struct {
+		name string
+		body Body
+	}{
+		{"a thread id that is a path", Body{Type: "ask", Thread: "../../outside", Text: "hello"}},
+		{"a short thread id", Body{Type: "ask", Thread: "t1", Text: "hello"}},
+		{"an empty thread", Body{Type: "ask", Text: "hello"}},
+		{"an in_reply_to that is a path", Body{Type: "reply", Thread: good.Thread, InReplyTo: "../x", Text: "hello"}},
+		{"a type nobody knows", Body{Type: "exec", Thread: good.Thread, Text: "hello"}},
+		{"a subject over the limit", Body{Type: "ask", Thread: good.Thread, Subject: strings.Repeat("s", 4097), Text: "hello"}},
+	} {
+		if err := build(tc.body); !errors.Is(err, ErrForm) {
+			t.Errorf("%s: %v, want ErrForm", tc.name, err)
+		}
 	}
 }

@@ -465,13 +465,25 @@ func (r *serveRun) recordBacklog(backlog bool) (int, error) {
 }
 
 // handle is one message, from the worktree to the reply. An error here ends
-// the run: it is this machine's own trouble — a disk, a lock, a key — and
-// not the message's, which is what the ledger's failure count is for.
+// the run: it is this machine's own trouble — a disk, a lock, a key, git
+// failing, the channel's directory gone — and not the message's, which is
+// what the ledger's failure count is for. The one thing of the message's
+// that the paths below are made from is its thread id, and that is the
+// message's: a bad one is its failure, recorded and stepped over, so that
+// nothing a peer can write in a message stops the expert for good.
 func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 	ch := r.channelFor(m)
 	thread := m.Inner.Body.Thread
 	short := shortID(thread)
 
+	// Every message in the spool has been through Validate, which holds a
+	// thread id to the shape of a message id, so this is met only by a
+	// record written by hand; it is checked here all the same, before the
+	// id is joined onto anything.
+	if err := message.ValidID(thread); err != nil {
+		r.failed(m, ch, "its thread id is "+err.Error())
+		return nil
+	}
 	threadDir := filepath.Join(r.root, "threads", thread)
 	channelDir := filepath.Join(r.root, "channels", ch.name)
 	for _, dir := range []string{threadDir, channelDir} {

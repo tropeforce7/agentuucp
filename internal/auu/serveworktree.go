@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/tropeforce7/agentuucp/internal/message"
 )
 
 // The worktrees a handler answers in.
@@ -35,6 +37,11 @@ const baseFile = "base"
 // message serve has handled on the thread, which is when a read-only
 // channel's copy is moved forward.
 func worktreeFor(root string, ch *serveChannel, thread, stateDir string, newThread bool) (path, base string, err error) {
+	// Checked again where the id becomes a path, though handle has refused
+	// a bad one before this: a failure here cannot happen.
+	if err := message.ValidID(thread); err != nil {
+		return "", "", fmt.Errorf("thread id is %v", err)
+	}
 	name := thread
 	if ch.Mode == modeReadOnly {
 		name = ch.name

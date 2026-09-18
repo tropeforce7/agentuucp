@@ -255,6 +255,26 @@ public keys, the subject, thread, message id and time, the text, and any
 attachments. Sign-then-encrypt, so the signature is inside the box: the relay
 can see that somebody posted to Bob, and cannot see that it was you.
 
+The message id, the thread and, on a reply, `in_reply_to` are each a
+message id: 32 lowercase hex characters, the id of the message that opened
+the thread or that is being answered. That is a rule of the format, not a
+convention. A record whose id, thread or `in_reply_to` has any other shape
+is refused when it is opened, kept under `damaged/` as malformed and
+acknowledged, and `auu send --thread` refuses one before anything is
+sealed; a stream's manifest is held to the same rule.
+
+**What a peer names is never a path.** Three things in a message become
+names on the receiver's disk, and each has a rule and a place it is
+checked: the thread id, which becomes a directory under an expert host's
+serve directory, is a message id and is checked when the message is
+opened and again by `auu serve` before it is joined onto anything; a
+channel name, which becomes a directory under the same, is held to the
+directory format's rule and is checked before a message is filed under it;
+an attachment name, which becomes a file, is a base name with no separator
+and no `.` or `..`, checked when a message is opened and, for a stream, when
+its manifest is. A signature proves who wrote a value, not that the value is
+safe.
+
 ### 2.1 The round trip
 
 With keys already swapped, in person or over something you both trust:

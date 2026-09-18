@@ -84,7 +84,7 @@ func TestRoundTripRandom(t *testing.T) {
 		in := message.Body{
 			Type:        message.TypeAsk,
 			Subject:     testutil.Text(r, r.IntN(200)),
-			Thread:      "t",
+			Thread:      "0123456789abcdef0123456789abcdef",
 			Text:        text,
 			Attachments: attachments,
 		}

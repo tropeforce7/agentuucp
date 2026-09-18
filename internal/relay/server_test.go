@@ -206,7 +206,7 @@ func (h *harness) registerKey(id *identity.Identity, key *mldsa.PrivateKey, tok 
 func sealed(t *testing.T, from *identity.Identity, to *identity.Public, text string) []byte {
 	t.Helper()
 	env, _, err := envelope.Seal(from, to, message.Body{
-		Type: message.TypeAsk, Thread: "t1", Subject: "s", Text: text,
+		Type: message.TypeAsk, Thread: "0123456789abcdef0123456789abcdef", Subject: "s", Text: text,
 	})
 	if err != nil {
 		t.Fatal(err)

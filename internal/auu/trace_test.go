@@ -74,7 +74,7 @@ func TestAStreamWhoseManifestOverstatesItsPayloadIsKeptAndAcknowledged(t *testin
 		t.Fatal(err)
 	}
 	m, err := stream.BuildManifest(id, to, messageID,
-		stream.Body{Type: "ask", Thread: "t1", Subject: "the short one", Text: "streamed"},
+		stream.Body{Type: "ask", Thread: "0123456789abcdef0123456789abcdef", Subject: "the short one", Text: "streamed"},
 		sources, stream.DefaultChunkSize)
 	if err != nil {
 		t.Fatal(err)

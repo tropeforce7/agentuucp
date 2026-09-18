@@ -358,6 +358,10 @@ A refused send names what to change, and nothing was queued:
   you; ask them to add you and run `auu allow push`.
 - `X's mailbox on the relay is full; they need to run 'auu rm' to make
   room` — theirs to clear, not something to retry.
+- `--thread "T" is not a message id (32 lowercase hex characters); a thread
+  id is the id of the message that opened it` — a thread is named by the
+  `thread` a `send` or `inbox` reported, never by a name of your own;
+  `--reply-to` is held to the same shape.
 
 Anywhere:
 

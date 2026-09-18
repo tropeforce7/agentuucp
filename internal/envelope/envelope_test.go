@@ -34,7 +34,7 @@ func body(t *testing.T) message.Body {
 	return message.Body{
 		Type:        message.TypeAsk,
 		Subject:     "padding oracle?",
-		Thread:      "thread-1",
+		Thread:      "0123456789abcdef0123456789abcdef",
 		Text:        "Does the relay see this?",
 		Attachments: []message.Attachment{a},
 	}
@@ -233,7 +233,7 @@ func TestUnsupportedVersion(t *testing.T) {
 
 func TestSealRejectsInvalidBody(t *testing.T) {
 	alice, bob := pair(t)
-	if _, _, err := Seal(alice, bob.Public(), message.Body{Type: "exec", Thread: "t"}); err == nil {
+	if _, _, err := Seal(alice, bob.Public(), message.Body{Type: "exec", Thread: "0123456789abcdef0123456789abcdef"}); err == nil {
 		t.Fatal("sealed an invalid body")
 	}
 }
@@ -272,7 +272,7 @@ func TestASubstitutedSenderBundleIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	env, _, err := Seal(alice, bob.Public(), message.Body{
-		Type: message.TypeNote, Thread: "t1", Subject: "s", Text: "hello",
+		Type: message.TypeNote, Thread: "0123456789abcdef0123456789abcdef", Subject: "s", Text: "hello",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -381,6 +381,13 @@ func TestOpenSaysWhyInAWord(t *testing.T) {
 				ID: "0123456789abcdef0123456789abcdef", Body: message.Body{Type: "no such type"}})
 			return b
 		}())), ErrMalformed},
+		{"a thread id that is a path", handSealed(signedBy(alice, func() []byte {
+			bad := body(t)
+			bad.Thread = "../../outside"
+			b, _ := json.Marshal(&Inner{From: alice.Fingerprint(), FromBundle: alice.Public().Bundle(), To: bob.Fingerprint(),
+				ID: "0123456789abcdef0123456789abcdef", Body: bad})
+			return b
+		}())), ErrMalformed},
 	} {
 		_, _, err := Open(bob, tc.env)
 		if !errors.Is(err, ErrOpenFailed) {
@@ -487,5 +494,30 @@ func TestAReceiverFromBeforeChannelsIgnoresTheInnerChannel(t *testing.T) {
 	}
 	if old.ID != inner.ID || old.From != alice.Fingerprint() || old.Body.Subject != inner.Body.Subject {
 		t.Fatalf("an old receiver read %+v", old)
+	}
+}
+
+// The message id becomes the record's file name, and Open is where the
+// receiver learns it. An inner whose id is a path, empty or the wrong
+// length is malformed here: signed by its sender, sealed to us, and still
+// refused, so that the receiver keeps it under damaged and acknowledges
+// it. Before this the store refused to save it and the fetch returned
+// that with the cursor unmoved, which blocked the mailbox at it for
+// anyone the relay let post, a stranger to be quarantined included.
+func TestAnInnerWhoseIDIsNotAnIDIsMalformed(t *testing.T) {
+	alice, bob := pair(t)
+	for _, id := range []string{"", "..", "../../outside", "0123456789abcdef0123456789abcde", strings.Repeat("a", 1<<20)} {
+		innerBytes, err := json.Marshal(&Inner{
+			From: alice.Fingerprint(), FromBundle: alice.Public().Bundle(), To: bob.Fingerprint(),
+			ID: id, Body: body(t),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		plaintext := append(append([]byte{}, mustSign(t, alice, sigInput(bob.Fingerprint(), innerBytes))...), innerBytes...)
+		_, _, err = Open(bob, sealPlaintext(t, bob.Public(), plaintext))
+		if Cause(err) != ErrMalformed {
+			t.Errorf("id of %d bytes %.20q: %v, want malformed", len(id), id, err)
+		}
 	}
 }

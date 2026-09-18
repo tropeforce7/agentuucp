@@ -16,7 +16,7 @@ func TestAttachmentRandom(t *testing.T) {
 		if err != nil {
 			t.Fatalf("seed %d: %d bytes: %v", seed, n, err)
 		}
-		b := Body{Type: TypeAsk, Thread: "t", Text: "x", Attachments: []Attachment{a}}
+		b := Body{Type: TypeAsk, Thread: "0123456789abcdef0123456789abcdef", Text: "x", Attachments: []Attachment{a}}
 		if err := b.Validate(); err != nil {
 			t.Fatalf("seed %d: %d bytes did not validate: %v", seed, n, err)
 		}
@@ -56,7 +56,7 @@ func TestAttachmentRandom(t *testing.T) {
 func TestBodyLimitBoundaries(t *testing.T) {
 	ok := func(b Body) error { return b.Validate() }
 
-	atCap := Body{Type: TypeAsk, Thread: "t", Subject: strings.Repeat("s", maxSubjectBytes), Text: "x"}
+	atCap := Body{Type: TypeAsk, Thread: "0123456789abcdef0123456789abcdef", Subject: strings.Repeat("s", maxSubjectBytes), Text: "x"}
 	if err := ok(atCap); err != nil {
 		t.Fatalf("a subject of exactly %d bytes was refused: %v", maxSubjectBytes, err)
 	}
@@ -73,7 +73,7 @@ func TestBodyLimitBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a name of %d bytes was refused: %v", len(name), err)
 	}
-	b := Body{Type: TypeAsk, Thread: "t", Text: "x", Attachments: []Attachment{a}}
+	b := Body{Type: TypeAsk, Thread: "0123456789abcdef0123456789abcdef", Text: "x", Attachments: []Attachment{a}}
 	if err := ok(b); err != nil {
 		t.Fatalf("a name of exactly %d bytes was refused: %v", maxNameBytes, err)
 	}

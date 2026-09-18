@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/message"
 )
 
 // auu serve ls, and the sweep: what an expert host is holding, and the
@@ -66,7 +69,10 @@ func serveLs(config string, asJSON bool) error {
 		}
 		for _, thread := range threadsOn(led, name) {
 			t := servedThreadJSON{Thread: thread, Turns: led.answered(thread), Last: lastOn(led, thread)}
-			if ch.Mode == modeSideCopy {
+			// A thread the ledger holds under a name that is not a message
+			// id was refused by handle and has no worktree; the name is
+			// not joined onto a path to find out.
+			if ch.Mode == modeSideCopy && message.ValidID(thread) == nil {
 				t.Worktree = existingDir(filepath.Join(root, "worktrees", thread))
 			}
 			row.Threads = append(row.Threads, t)
@@ -86,13 +92,24 @@ func serveLs(config string, asJSON bool) error {
 			continue
 		}
 		for _, t := range row.Threads {
-			fmt.Printf("  %s  %s  last %s\n", shortID(t.Thread), plural(t.Turns, "turn"), stampLocal(t.Last))
+			fmt.Printf("  %s  %s  last %s\n", threadName(t.Thread), plural(t.Turns, "turn"), stampLocal(t.Last))
 			if t.Worktree != "" {
 				fmt.Printf("    %s\n", t.Worktree)
 			}
 		}
 	}
 	return nil
+}
+
+// threadName is a thread id as 'ls' prints it: the short form of an id, and
+// of anything else, which only a record written by hand puts in the ledger,
+// the same twelve bytes quoted, so that they cannot reach the terminal as
+// anything but text.
+func threadName(thread string) string {
+	if message.ValidID(thread) == nil {
+		return shortID(thread)
+	}
+	return strconv.Quote(shortID(thread))
 }
 
 // threadsOn is every thread the ledger holds for a channel, latest first,

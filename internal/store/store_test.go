@@ -245,7 +245,7 @@ func stored(id string, when time.Time) *Stored {
 			ID:   id,
 			From: strings.Repeat("a", 64),
 			To:   strings.Repeat("b", 64),
-			Body: message.Body{Type: message.TypeAsk, Thread: "t", Text: "hi"},
+			Body: message.Body{Type: message.TypeAsk, Thread: "0123456789abcdef0123456789abcdef", Text: "hi"},
 		},
 	}
 }

@@ -198,6 +198,14 @@ with `taskkill /T` — so a session the handler started does not outlive it.
 - And never more than `max_turns` messages on one thread, which is what
   stops two experts pointed at each other from talking for ever.
 
+A thread id is a message id, 32 lowercase hex characters, and serve makes
+the thread's directory and its worktree's path from it. A message whose
+thread id is anything else — a peer's `--thread "../../outside"` — is
+refused as malformed when it is opened, kept under `damaged/` and
+acknowledged, and never reaches serve; a record in the spool with one,
+which only a hand could have written, is that message's failure in the
+ledger and the round goes on to the next.
+
 `serve/ledger.json` in the home is the record of what has been answered, and
 it is the only thing that decides. The mark that a message has been read is
 not: an owner reading their own expert's mail must not silently kill an

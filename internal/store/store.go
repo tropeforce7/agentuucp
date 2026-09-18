@@ -19,6 +19,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/message"
 )
 
 const (
@@ -583,7 +584,7 @@ func (s *Store) Save(box Box, m *Stored) error {
 	if m.Inner == nil || m.Inner.ID == "" {
 		return errors.New("message has no id")
 	}
-	if !validMessageID(m.Inner.ID) {
+	if message.ValidID(m.Inner.ID) != nil {
 		return fmt.Errorf("refusing to store message with malformed id %q", m.Inner.ID)
 	}
 	data, err := json.MarshalIndent(m, "", "  ")
@@ -593,24 +594,11 @@ func (s *Store) Save(box Box, m *Stored) error {
 	return writeFileAtomic(s.msgPath(box, m.Inner.ID), append(data, '\n'), fileMode)
 }
 
-// validMessageID guards the filesystem: message ids arrive inside signed but
-// otherwise untrusted records, and they become file names.
-func validMessageID(id string) bool {
-	if len(id) != 32 {
-		return false
-	}
-	for i := 0; i < len(id); i++ {
-		c := id[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
 // Load reads one message from a spool directory.
 func (s *Store) Load(box Box, id string) (*Stored, error) {
-	if !validMessageID(id) {
+	// Guards the filesystem: an id arrives inside a signed but otherwise
+	// untrusted record, and it becomes a file name.
+	if message.ValidID(id) != nil {
 		return nil, fmt.Errorf("malformed message id %q", id)
 	}
 	data, err := os.ReadFile(s.msgPath(box, id))

@@ -72,6 +72,20 @@ func cmdSend(args []string) error {
 	if *msgType != message.TypeAsk && *msgType != message.TypeNote {
 		return usageErrf("--type must be ask or note")
 	}
+	// Before the editor opens, not after: a thread id is a message id, the
+	// one that opened the thread, and a value of any other shape is
+	// refused everywhere a message is made, since it becomes a directory
+	// name under an expert's home.
+	if *thread != "" {
+		if err := message.ValidID(*thread); err != nil {
+			return usageErrf("--thread %q is %v; a thread id is the id of the message that opened it", *thread, err)
+		}
+	}
+	if *replyTo != "" {
+		if err := message.ValidID(*replyTo); err != nil {
+			return usageErrf("--reply-to %q is %v", *replyTo, err)
+		}
+	}
 	if err := validChannelFlag(*channel); err != nil {
 		return err
 	}
@@ -307,6 +321,13 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 			return sentJSON{}, false, err
 		}
 		body.Thread = tid
+	}
+	// Once here, whoever named it: a reply copies the thread of the message
+	// it answers, and a record written by hand may carry anything. Both
+	// the envelope and the stream refuse it further down; this is the one
+	// sentence for it, before anything is read or sealed.
+	if err := message.ValidHeader(body.Type, body.Thread, body.InReplyTo, body.Subject); err != nil {
+		return sentJSON{}, newThread, usageErrf("%v", err)
 	}
 
 	cfg, err := s.Config()

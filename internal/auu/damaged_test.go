@@ -120,7 +120,7 @@ func TestADamagedMessageIsKeptWithItsCause(t *testing.T) {
 	inner, err := json.Marshal(&envelope.Inner{
 		From: alice.exportFingerprint(), FromBundle: mustBundle(t, alice), To: bobFP,
 		ID:   "0123456789abcdef0123456789abcdef",
-		Body: message.Body{Type: message.TypeNote, Thread: "t", Subject: "forged", Text: "not alice"},
+		Body: message.Body{Type: message.TypeNote, Thread: "0123456789abcdef0123456789abcdef", Subject: "forged", Text: "not alice"},
 	})
 	if err != nil {
 		t.Fatal(err)
