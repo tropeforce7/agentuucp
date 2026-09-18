@@ -171,10 +171,10 @@ func Verify(pub *identity.Public, doc, sig []byte) (*Document, error) {
 }
 
 // Parse reads a document strictly and applies every rule, with no
-// signature. It is for the one document that has none: a list the relay
-// converted from the table it kept before lists were signed, which is
-// honoured as it was until the owner pushes again. Everything else goes
-// through Verify.
+// signature: the half of Verify that comes after the signature has been
+// checked. Nothing that enforces a list calls it on its own — a row with
+// no signature is broken, not parsed — and it is exported for a reader,
+// such as a test, that wants to see what a document says.
 func Parse(doc []byte) (*Document, error) {
 	d, err := decode(doc)
 	if err != nil {

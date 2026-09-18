@@ -161,15 +161,14 @@ it and again on every post, with no cache. A row edited in the relay's
 database therefore refuses every sender rather than admitting one — a
 sender is told what a refused sender is always told, your own listing says
 `broken`, `auu inbox` says so, and your next `auu allow push` is the whole
-repair. A list from before v0.5.0, converted by the relay on upgrade,
-carries no signature and is honoured as it was until you push again;
-`auu inbox` reminds you until you do. That is also the one edit the relay
-does not refuse: a signed row with its signature removed reads as such a
-list and is honoured until its owner pushes. What catches it is the
-owner's own machine, which remembers that it pushed a signed list and says
-so at its next fetch — "missing or unsigned, though you pushed one" — so
-the window is until then. What this does not cover is root on the relay's
-host, who can replace the relay itself, which is where *What
+repair. A row with no signature is broken too: a list converted from
+before v0.5.0 by the relay's upgrade, and a signed row with its signature
+removed, both refuse every sender at once — there is no state in which the
+relay honours a list it cannot verify, so an upgrade from before signed
+lists leaves a restricted mailbox closed until its owner pushes, and `auu
+inbox` tells them so on every fetch. Your own machine also remembers that
+it pushed a signed list, and says so if the relay's row has gone
+altogether. What this does not cover is root on the relay's host, who can replace the relay itself, which is where *What
 is not protected* below draws the line: the signature moves the bar from
 editing one table to replacing the binary.
 
@@ -276,10 +275,9 @@ the rule broken, `409` for a list issued no later than the one it holds,
 and `400 this relay needs a signed allow list; update auu to v0.5.0 or
 later` for a body with the array alone, which stores nothing. The owner
 reads it back with `GET /v1/mailbox/{fp}/allow`: the pair verbatim and
-`state`, one of `signed`, `legacy` (converted from before signed lists,
-unsigned, honoured until pushed again), `none` (never pushed; any
-registered sender may post) and `broken` (no longer verifies; every
-sender refused). The owner's own mailbox listing carries the same word as
+`state`, one of `signed`, `none` (never pushed; any registered sender may
+post) and `broken` (does not verify, a row with no signature included;
+every sender refused). The owner's own mailbox listing carries the same word as
 `allow` on every answer, and a relay from before it omits the field.
 
 A message posted to a channel names it in the clear: `ch` on the outer

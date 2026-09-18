@@ -42,11 +42,12 @@ func (e *AllowlistOlderError) Unwrap() error { return ErrAllowlistOlder }
 // different bytes, is ErrAllowlistOlder. The same bytes at the same instant
 // are the list the relay already holds, and pushing them again is not an
 // error: a machine catching a relay up after an outage must be able to push
-// what it has without first asking what the relay has. A legacy row — one
-// the migration converted, with no signature — is replaced whatever its
-// issue time, since that time is the relay's clock and orders nothing the
-// owner did. It reports whether anything was written; the repeated push is
-// the one success that writes nothing.
+// what it has without first asking what the relay has. An unsigned row —
+// one the migration converted, with no signature, which the relay reads
+// as broken — is replaced whatever its issue time, since that time is the
+// relay's clock and orders nothing the owner did. It reports whether
+// anything was written; the repeated push is the one success that writes
+// nothing.
 func (s *Store) SetAllowlist(fp string, d *allowlist.Document, doc, sig []byte) (stored bool, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -160,18 +161,16 @@ func (s *Store) MayPost(fp, sender string) (bool, error) {
 	return d.Admits(sender), nil
 }
 
-// allowDecision reads a stored list as the relay enforces it: a row with
-// no signature is a legacy list from the migration, parsed strictly and
-// honoured as it was; any other is verified against the mailbox's
-// registered key. A list that fails either way is broken, with no
-// document, and the caller refuses everyone.
+// allowDecision reads a stored list as the relay enforces it: verified
+// against the mailbox's registered key, and broken otherwise, with no
+// document, so the caller refuses everyone. A row with no signature is
+// broken before anything is parsed — the rows the migration from before
+// signed lists wrote, and a signed row somebody blanked the signature of,
+// read the same: there is no compatibility state for authentication data,
+// and anything malformed fails closed until the owner pushes again.
 func allowDecision(bundle, doc, sig []byte) (state string, d *allowlist.Document) {
-	var err error
 	if len(sig) == 0 {
-		if d, err = allowlist.Parse(doc); err != nil {
-			return relayapi.AllowBroken, nil
-		}
-		return relayapi.AllowLegacy, d
+		return relayapi.AllowBroken, nil
 	}
 	pub, err := identity.ParseBundle(bundle)
 	if err != nil {
@@ -187,11 +186,13 @@ func allowDecision(bundle, doc, sig []byte) (state string, d *allowlist.Document
 // allowlists table from its constant, since the transaction that would
 // has not run yet, and writes one row per mailbox that has rows in the old
 // table: a document naming its senders, sorted, without the owner, who is
-// always admitted and may not be listed; no signature, which is what marks
-// the row as legacy; and the migration's own time as issued. It can be
-// interrupted and repeated: the old table is still there until the
-// transaction drops it, and a row already written is written again the
-// same, but for the time.
+// always admitted and may not be listed; no signature, since nobody signed
+// it, which the relay reads as broken until the owner pushes — a mailbox
+// that was restricted refuses every sender after the upgrade rather than
+// admitting anyone on the strength of a row the relay cannot verify; and
+// the migration's own time as issued. It can be interrupted and repeated:
+// the old table is still there until the transaction drops it, and a row
+// already written is written again the same, but for the time.
 func convertAllowlists(s *Store) error {
 	if _, err := s.db.Exec(allowlistsTable); err != nil {
 		return fmt.Errorf("relay: creating allowlists: %w", err)

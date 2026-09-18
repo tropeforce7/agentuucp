@@ -258,10 +258,10 @@ type (
 		QueuedBytes    int64     `json:"queued_bytes"`
 		AllowlistSize  int64     `json:"allowlist_size"`
 		// Allow is the state of the allow list, one of the Allow* words,
-		// or empty for a mailbox that has never pushed one. "legacy" is
-		// the word to look for after an upgrade and "broken" after an
-		// incident: a list that does not verify is an edit on the host,
-		// never something a user did.
+		// or empty for a mailbox that has never pushed one. "broken" is
+		// the word to look for after an incident, and after an upgrade
+		// from before signed lists: a list that does not verify is a row
+		// the relay cannot vouch for, and refuses on.
 		Allow string `json:"allow,omitempty"`
 		// Channels is how many channels the mailbox's directory lists, zero
 		// for a mailbox with none, which has default by that fact rather
@@ -395,19 +395,17 @@ const (
 
 // The states of a mailbox's allow list, as the owner's listing and the
 // administrator's record report it. A relay from before signed lists
-// reports none.
+// reports none. There is no state for a list that merely lacks a
+// signature: authentication data is signed or it is broken.
 const (
 	// AllowSigned is a list the owner signed, which verifies.
 	AllowSigned = "signed"
-	// AllowLegacy is a list converted from the table kept before lists
-	// were signed: honoured as it was, until the owner pushes again.
-	AllowLegacy = "legacy"
 	// AllowNone is a mailbox that has never pushed a list; any registered
 	// sender may post.
 	AllowNone = "none"
-	// AllowBroken is a list that no longer verifies against the mailbox's
-	// key. The relay refuses every post to the mailbox until the owner
-	// pushes again.
+	// AllowBroken is a list that does not verify against the mailbox's
+	// key, a row with no signature included. The relay refuses every post
+	// to the mailbox until the owner pushes again.
 	AllowBroken = "broken"
 )
 

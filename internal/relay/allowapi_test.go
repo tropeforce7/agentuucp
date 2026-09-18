@@ -429,6 +429,33 @@ func TestAnEditedAllowlistRefusesRatherThanAdmits(t *testing.T) {
 		}
 	})
 
+	t.Run("the signature blanked", func(t *testing.T) {
+		// The edit that used to read as a list from before signing: it
+		// is refused at once on the relay, not found later on the
+		// owner's machine.
+		if _, err := h.store.db.Exec(`UPDATE allowlists SET sig = X'' WHERE fp = ?`, fp); err != nil {
+			t.Fatal(err)
+		}
+		h.clock.advance(2 * time.Minute)
+		before := logged()
+		if status, msg := post(alice); status != http.StatusForbidden || msg != refusedSender {
+			t.Fatalf("an admitted sender under a blanked signature: %d %q", status, msg)
+		}
+		if status, msg := post(mallory); status != http.StatusForbidden || msg != refusedSender {
+			t.Fatalf("a stranger under a blanked signature: %d %q", status, msg)
+		}
+		if got := logged() - before; got != 1 {
+			t.Fatalf("%d log lines, want 1", got)
+		}
+		if got := h.listState(bob); got != relayapi.AllowBroken {
+			t.Fatalf("the owner's listing says %q, want broken", got)
+		}
+		push()
+		if status, _ := post(alice); status != http.StatusOK {
+			t.Fatal("alice was refused after the repair")
+		}
+	})
+
 	t.Run("one byte of the signature", func(t *testing.T) {
 		_, sig, _, _, _ := h.store.Allowlist(fp)
 		changed := append([]byte{}, sig...)
@@ -484,10 +511,13 @@ func TestAnEditedAllowlistRefusesRatherThanAdmits(t *testing.T) {
 	})
 }
 
-// A legacy row, as the migration writes it, admits what it names and
-// refuses what it does not; the listing says legacy; a signed push
-// replaces it whatever its issue time.
-func TestALegacyAllowlistIsHonouredUntilPushed(t *testing.T) {
+// A row with no signature — as the migration from before signed lists
+// writes it, or as an intruder who blanked a signature leaves it — is
+// broken: it refuses every sender at once, whoever it names; the listing,
+// the owner's fetch and the administrator's record say broken; and a
+// signed push replaces it whatever its issue time, which is the relay's
+// clock and not the owner's.
+func TestAnUnsignedAllowlistIsBroken(t *testing.T) {
 	h := newHarness(t, Config{})
 	people := ids(t, "alice", "bob", "carol")
 	alice, bob, carol := people[0], people[1], people[2]
@@ -495,47 +525,46 @@ func TestALegacyAllowlistIsHonouredUntilPushed(t *testing.T) {
 		h.register(id)
 	}
 	fp := bob.Fingerprint()
-	legacy, _ := json.Marshal(&allowlist.Document{V: 1, Owner: fp, Issued: time.Now().Add(time.Hour).UTC(), Senders: []string{alice.Fingerprint()}})
+	unsigned, _ := json.Marshal(&allowlist.Document{V: 1, Owner: fp, Issued: time.Now().Add(time.Hour).UTC(), Senders: []string{alice.Fingerprint()}})
 	if _, err := h.store.db.Exec(`INSERT INTO allowlists (fp, doc, sig, issued, count) VALUES (?, ?, X'', ?, 1)`,
-		fp, legacy, time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)); err != nil {
+		fp, unsigned, time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
-	if status, _ := h.do(alice, "POST", "/v1/mailbox/"+fp, sealed(t, alice, bob.Public(), "x"), nil); status != http.StatusOK {
-		t.Fatal("a sender the legacy list names was refused")
+	before := strings.Count(h.logs.String(), "allow list for "+fp+" does not verify")
+	// The sender the document names, and one it does not: both refused,
+	// with the sentence a refused sender always gets.
+	for _, from := range []*identity.Identity{alice, carol} {
+		if status, body := h.do(from, "POST", "/v1/mailbox/"+fp, sealed(t, from, bob.Public(), "x"), nil); status != http.StatusForbidden || errorText(t, body) != refusedSender {
+			t.Fatalf("%s under an unsigned row: %d %s", from.Name, status, body)
+		}
 	}
-	if status, body := h.do(carol, "POST", "/v1/mailbox/"+fp, sealed(t, carol, bob.Public(), "x"), nil); status != http.StatusForbidden || errorText(t, body) != refusedSender {
-		t.Fatalf("a sender the legacy list does not name: %d %s", status, body)
+	if got := strings.Count(h.logs.String(), "allow list for "+fp+" does not verify") - before; got != 1 {
+		t.Fatalf("%d log lines for two refusals inside a minute, want 1", got)
 	}
-	if got := h.listState(bob); got != relayapi.AllowLegacy {
-		t.Fatalf("the listing says %q, want legacy", got)
-	}
-	_, _, resp := h.getAllow(bob, fp)
-	if resp.State != relayapi.AllowLegacy || len(resp.Signature) != 0 || string(resp.Document) != string(legacy) {
-		t.Fatalf("the owner's fetch of a legacy list: %+v", resp)
-	}
-	rec, _ := h.store.MailboxRecord(fp)
-	if rec.Allow != relayapi.AllowLegacy || rec.AllowlistSize != 1 {
-		t.Fatalf("the administrator's record: %+v", rec)
-	}
-	// A legacy row that does not parse is broken, not honoured.
-	if _, err := h.store.db.Exec(`UPDATE allowlists SET doc = ? WHERE fp = ?`, []byte(`{"v":1,"colour":"blue"}`), fp); err != nil {
-		t.Fatal(err)
-	}
-	if status, _ := h.do(alice, "POST", "/v1/mailbox/"+fp, sealed(t, alice, bob.Public(), "x"), nil); status != http.StatusForbidden {
-		t.Fatal("a legacy row that does not parse admitted a sender")
+	// The owner's own post still goes through, before the list is read.
+	if status, _ := h.do(bob, "POST", "/v1/mailbox/"+fp, sealed(t, bob, bob.Public(), "x"), nil); status != http.StatusOK {
+		t.Fatal("the owner's own post was refused under an unsigned row")
 	}
 	if got := h.listState(bob); got != relayapi.AllowBroken {
 		t.Fatalf("the listing says %q, want broken", got)
 	}
-	// A signed push, issued now, replaces the legacy row though the row's
-	// time is an hour ahead: that time was the relay's, not the owner's.
+	_, _, resp := h.getAllow(bob, fp)
+	if resp.State != relayapi.AllowBroken || len(resp.Signature) != 0 || string(resp.Document) != string(unsigned) {
+		t.Fatalf("the owner's fetch of an unsigned row: %+v", resp)
+	}
+	rec, _ := h.store.MailboxRecord(fp)
+	if rec.Allow != relayapi.AllowBroken || rec.AllowlistSize != 1 {
+		t.Fatalf("the administrator's record: %+v", rec)
+	}
+	// A signed push, issued now, replaces the row though the row's time is
+	// an hour ahead: that time was the relay's, not the owner's.
 	if status, body, _ := h.pushAllow(bob, bob, time.Now(), carol.Fingerprint()); status != http.StatusNoContent {
-		t.Fatalf("a signed push over a legacy row: %d %s", status, body)
+		t.Fatalf("a signed push over an unsigned row: %d %s", status, body)
 	}
 	if got := h.listState(bob); got != relayapi.AllowSigned {
 		t.Fatalf("the listing says %q after the push, want signed", got)
 	}
 	if status, _ := h.do(carol, "POST", "/v1/mailbox/"+fp, sealed(t, carol, bob.Public(), "x"), nil); status != http.StatusOK {
-		t.Fatal("the signed list did not replace the legacy one")
+		t.Fatal("the signed list did not replace the unsigned one")
 	}
 }

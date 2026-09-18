@@ -323,12 +323,12 @@ when the constant became the new table they would have built the wrong
 past, so the old DDL is written out as a literal, as every earlier
 schema's is.
 
-**A time the relay wrote orders nothing the owner did.** A legacy allow
+**A time the relay wrote orders nothing the owner did.** An unsigned allow
 list converted by the migration carries the migration's clock as its
 issue time; had the 409 rule applied to it, an owner whose machine clock
 ran behind the relay's could never push over it. A signed document
-replaces a legacy row whatever its time, and the newer-issued rule holds
-only between two documents the owner signed.
+replaces an unsigned row whatever its time, and the newer-issued rule
+holds only between two documents the owner signed.
 
 **Share DDL between the fresh-create path and the migration that introduces a
 table.** Each table is one `const` used by both, so a database created from
@@ -380,12 +380,24 @@ the relay runs until it restarted, which is the edit the signature exists
 to catch. An edited row therefore refuses every sender rather than
 admitting one, and the owner's listing says `broken` until they push
 again. Verifying at store time alone would have proved only that the row
-was once the owner's. The signature does not close the whole gap: a row
-converted from before signing has none, and is honoured so that an upgrade
-locks nobody out, so an editor who blanks a signature and rewrites the
-document is refused by nothing on the relay — what catches that is the
-owner's machine, which remembers it pushed a signed list (`allow_pushed`)
-and says so at its next fetch.
+was once the owner's. A row with no signature is broken too; the next rule
+says why.
+
+**No compatibility state for authentication data: anything malformed
+fails closed.** The first signed-list release read a row with no signature
+as a "legacy" list from before signing and honoured it, so that an upgrade
+would lock nobody out — and so an editor who blanked a signature and
+rewrote the document was refused by nothing on the relay, caught only when
+the owner's own machine, remembering its push, noticed at its next fetch.
+An outside reader called that what it was: a compatibility state for
+authentication data, with a window in it, kept for users who did not
+exist, since no relay outside the project ran before signed lists. Now a
+row with no signature is broken before anything is parsed, refuses every
+sender at once, and is replaced by the owner's next push; the migration
+is unchanged and what it writes is read as broken, which closes a
+restricted mailbox across the upgrade rather than opening it. When the
+question is whether to honour authentication data that cannot be
+verified, the answer is no, and a state that says "not yet" is a hole.
 
 **A credential a program uses on behalf of untrusted input is held by a
 process that input cannot reach, and what the input's process holds is a

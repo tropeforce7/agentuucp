@@ -138,8 +138,8 @@ func TestAllowPushClearAndShow(t *testing.T) {
 
 // The owner is told, once per run and after the messages, what the relay
 // says about their list: nothing for signed and for none with nothing
-// pushed from here; the sentences for legacy, for none or legacy after a
-// push from here, and for broken.
+// pushed from here; the sentences for none after a push from here, and
+// for broken, which an unsigned row is too.
 func TestInboxWarnsAboutTheAllowListState(t *testing.T) {
 	relayURL, st, db, logs := startEditableRelay(t)
 	alice := newUser(t, "alice", relayURL)
@@ -216,36 +216,41 @@ func TestInboxWarnsAboutTheAllowListState(t *testing.T) {
 	}
 	_, warning = inbox()
 	today := time.Now().Format(time.DateOnly)
-	if warning != "auu: your allow list on "+rn+" is missing or unsigned, though you pushed one on "+today+"; run auu allow push and tell the relay's operator\n" {
+	if warning != "auu: your allow list on "+rn+" is missing, though you pushed one on "+today+"; run auu allow push and tell the relay's operator\n" {
 		t.Fatalf("the missing warning:\n%s", warning)
 	}
-	// legacy after a push from here: the same.
-	legacy, _ := json.Marshal(&allowlist.Document{V: 1, Owner: fp, Issued: time.Now().UTC(), Senders: []string{bob.exportFingerprint()}})
+	// An unsigned row, as the migration from before signed lists writes
+	// one, or as a signature blanked on the host leaves one: broken, the
+	// same sentence as any broken row, whether or not this machine had
+	// pushed; and show says broken and exits 1 rather than reading it.
+	unsigned, _ := json.Marshal(&allowlist.Document{V: 1, Owner: fp, Issued: time.Now().UTC(), Senders: []string{bob.exportFingerprint()}})
 	if _, err := db.Exec(`INSERT INTO allowlists (fp, doc, sig, issued, count) VALUES (?, ?, X'', ?, 1)`,
-		fp, legacy, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		fp, unsigned, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
-	_, warning = inbox()
-	if !strings.Contains(warning, "is missing or unsigned, though you pushed one on "+today) {
-		t.Fatalf("the legacy-after-push warning:\n%s", warning)
+	if _, err := bob.tryRun("send", "--to", "alice", "under an unsigned row"); err == nil {
+		t.Fatal("bob reached alice through an unsigned row")
 	}
-	// legacy with nothing pushed from here: predates signing.
+	_, warning = inbox()
+	if warning != "auu: your allow list on "+rn+" does not verify, so nobody can post to you there; run auu allow push, and if you did not change it, tell the relay's operator\n" {
+		t.Fatalf("the unsigned-row warning:\n%s", warning)
+	}
 	alice.run("allow", "clear")
-	if _, err := db.Exec(`UPDATE allowlists SET sig = X'', doc = ? WHERE fp = ?`, legacy, fp); err != nil {
+	if _, err := db.Exec(`UPDATE allowlists SET sig = X'', doc = ? WHERE fp = ?`, unsigned, fp); err != nil {
 		t.Fatal(err)
 	}
 	_, warning = inbox()
-	if warning != "auu: your allow list on "+rn+" predates signing; run auu allow push\n" {
-		t.Fatalf("the legacy warning:\n%s", warning)
+	if !strings.Contains(warning, " does not verify, so nobody can post to you there;") {
+		t.Fatalf("the unsigned-row warning with nothing pushed from here:\n%s", warning)
 	}
-	out = alice.run("allow", "show")
-	if !strings.Contains(out, rn+": legacy, ") || !strings.Contains(out, "  your allow list on "+rn+" predates signing; run auu allow push\n") {
-		t.Fatalf("show of a legacy list:\n%s", out)
+	out, err = alice.tryRun("allow", "show")
+	if err == nil || !strings.Contains(out, rn+": your allow list on "+rn+" does not verify, so nobody can post to you there") {
+		t.Fatalf("show of an unsigned row: %v\n%s", err, out)
 	}
 	// And pushing ends it.
 	alice.run("allow", "push")
 	if _, warning := inbox(); warning != "" {
-		t.Fatalf("a warning after pushing over a legacy list:\n%s", warning)
+		t.Fatalf("a warning after pushing over an unsigned row:\n%s", warning)
 	}
 }
 

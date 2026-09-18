@@ -126,10 +126,11 @@ const (
 	// mailbox's bundle every time the list is enforced and served back to
 	// the owner verbatim, its issue time for refusing an older one, and
 	// how many senders it names, which is for the administrator's listing
-	// and decides nothing. A row whose sig is empty is a list converted
-	// from the table kept before lists were signed, honoured as it was
-	// until the owner pushes again. A mailbox with no row takes mail from
-	// any registered sender.
+	// and decides nothing. A row whose sig is empty — a list converted from
+	// the table kept before lists were signed, or a signed row whose
+	// signature was blanked — is broken, and refuses every sender until
+	// the owner pushes again. A mailbox with no row takes mail from any
+	// registered sender.
 	allowlistsTable = `CREATE TABLE IF NOT EXISTS allowlists (
 	fp     TEXT PRIMARY KEY REFERENCES mailboxes(fp) ON DELETE CASCADE,
 	doc    BLOB NOT NULL,

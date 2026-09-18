@@ -319,7 +319,7 @@ func TestMailboxesAndBlocks(t *testing.T) {
 
 	// The allow list: none until one is pushed, then the count and the
 	// state word, which is what an operator looks for after an upgrade
-	// (legacy) or an incident (broken). Never the senders.
+	// (broken, from a row without a signature) or an incident (broken). Never the senders.
 	if out := f.boss.run("mailboxes", "show", alice.Fingerprint()); !strings.Contains(out, "allowlist:   none\n") {
 		t.Fatalf("mailboxes show with no allow list:\n%s", out)
 	}

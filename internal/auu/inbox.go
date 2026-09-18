@@ -89,7 +89,7 @@ type relayFetch struct {
 	// which 'auu rm' is what removes.
 	Queued int64 `json:"queued"`
 	// Allow is the state of this identity's allow list on the relay, as
-	// the relay said it: signed, legacy, none or broken. Absent from a
+	// the relay said it: signed, none or broken. Absent from a
 	// relay from before signed lists.
 	Allow string `json:"allow,omitempty"`
 	Error string `json:"error,omitempty"`

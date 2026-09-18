@@ -15,7 +15,7 @@ import (
 var allowRows = []matrixRow{
 	{"A01", "push_and_refuse", "bob pushes his list; alice's post is taken and a stranger's refused", a01},
 	{"A02", "edited_on_the_host", "the relay's database is edited to admit the stranger", a02},
-	{"A03", "legacy_after_upgrade", "the relay is started on a database from before signed lists", a03},
+	{"A03", "unsigned_after_upgrade", "the relay is started on a database from before signed lists, and refuses on the rows it converts", a03},
 }
 
 const (
@@ -48,7 +48,7 @@ func a01(t *testing.T) {
 	expectSays(t, bob.auu("allow", "push"), 0, relayName+" will now accept mail for you from 1 peer(s) only")
 	r := bob.auu("allow", "show")
 	expectSays(t, r, 0, relayName+": signed, issued ", ", 1 sender", "  "+state.aliceFP[:16]+"  alice")
-	expectNot(t, r, "legacy", "broken", "does not verify")
+	expectNot(t, r, "broken", "does not verify")
 	// A peer's post is taken, and drained without a word about the list.
 	sendJSON(t, alice, "bob", "--subject", "admitted", "from a peer")
 	r = bob.auu("inbox")
@@ -136,39 +136,42 @@ PRAGMA user_version = 6;`)
 	if log := relayLogSince(m); !strings.Contains(log, "from=6 to=7") {
 		t.Errorf("the migration line does not say from=6 to=7:\n%s", log)
 	}
-	// The legacy list is honoured as it was: alice, whom it names, posts;
-	// a stranger does not.
-	sendJSON(t, alice, "bob", "--subject", "still here", "after the upgrade")
+	// The converted row has no signature and is broken: alice, whom it
+	// names, is refused like a stranger, and the operator sees broken.
+	const broken = "auu: your allow list on " + relayName + " does not verify, so nobody can post to you there; " +
+		"run auu allow push, and if you did not change it, tell the relay's operator"
+	expectSays(t, alice.auu("send", "--to", "bob", "--subject", "still here?", "after the upgrade"), 2, refusedByList)
 	carol := aStranger(t)
 	expectSays(t, carol.auu("send", "--to", "bob", "--subject", "who is this", "from carol"), 2, refusedByList)
 	r := operator.admin("mailboxes", "ls")
-	expectSays(t, r, 0, "1 legacy")
-	// Bob is nagged once per run, after the messages, until he pushes.
+	expectSays(t, r, 0, "1 broken")
+	// Bob is told once per run, after the messages, until he pushes.
 	r = bob.auu("inbox")
-	expectSays(t, r, 0, "fetched 1 new message(s)")
-	stderrIs(t, r, "auu: your allow list on "+relayName+" predates signing; run auu allow push")
+	expectCode(t, r, 0)
+	stderrIs(t, r, broken)
 	r = bob.auu("inbox")
-	stderrIs(t, r, "auu: your allow list on "+relayName+" predates signing; run auu allow push")
+	stderrIs(t, r, broken)
 	r = bob.auu("allow", "show")
-	expectSays(t, r, 0, relayName+": legacy, ", ", 1 sender", "  "+state.aliceFP[:16]+"  alice",
-		"your allow list on "+relayName+" predates signing; run auu allow push")
-	// Alice, whose machine pushed a signed list under this release, is
-	// told the relay has lost it.
+	expectSays(t, r, 1, relayName+": your allow list on "+relayName+" does not verify, so nobody can post to you there")
+	// Alice's list, which names bob, was converted the same way, and her
+	// machine hears the same sentence: a row the relay cannot verify is
+	// broken whoever pushed what before.
 	r = alice.auu("inbox")
 	expectCode(t, r, 0)
-	if !strings.HasPrefix(strings.TrimSpace(r.stderr), "auu: your allow list on "+relayName+" is missing or unsigned, though you pushed one on ") ||
-		!strings.HasSuffix(strings.TrimSpace(r.stderr), "; run auu allow push and tell the relay's operator") {
-		t.Errorf("alice's warning: %q", r.stderr)
-	}
-	// The push ends it.
+	stderrIs(t, r, broken)
+	// The push ends it, and alice is admitted again.
 	expectSays(t, bob.auu("allow", "push"), 0, relayName+" will now accept mail for you from 1 peer(s) only")
 	r = bob.auu("inbox")
 	expectCode(t, r, 0)
 	stderrIs(t, r, "")
+	sendJSON(t, alice, "bob", "--subject", "still here", "after the push")
+	r = bob.auu("inbox")
+	expectSays(t, r, 0, "fetched 1 new message(s)")
+	stderrIs(t, r, "")
 	r = operator.admin("mailboxes", "show", state.bobFP)
 	expectSays(t, r, 0, "allowlist:   1 senders, signed")
-	verdict(t, "ok", "Every list comes across the upgrade as it was, the owner hears about it on every fetch "+
-		"until one push, and a machine that had pushed hears the other sentence.")
+	verdict(t, "ok", "A row the relay cannot verify closes the mailbox rather than opening it, and its owner "+
+		"hears about it on every fetch until one push.")
 }
 
 // carolFP is a stranger's fingerprint, from her own id.

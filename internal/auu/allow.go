@@ -147,10 +147,9 @@ type allowSenderJSON struct {
 
 // allowShow fetches what each relay holds for this identity and verifies
 // it with this identity's own key, never trusting the relay's parse: a
-// pair that does not verify here is broken whatever the relay says, and
-// exits 1. A legacy list, converted by the relay from before lists were
-// signed, has no signature to check and is read as it is, with the sentence
-// that says to push again.
+// pair that does not verify here — a row with no signature included — is
+// broken whatever the relay says, and exits 1. A state word this build
+// does not know is printed as it came, for the day another is added.
 func allowShow(s *store.Store, id *identity.Identity, relays []*store.Relay, asJSON bool) error {
 	var (
 		out    []allowShowJSON
@@ -170,13 +169,6 @@ func allowShow(s *store.Store, id *identity.Identity, relays []*store.Relay, asJ
 		switch {
 		case res.None:
 			one.State = relayapi.AllowNone
-		case len(res.Signature) == 0:
-			// The relay says legacy by handing back no signature; a
-			// legacy document that does not parse is broken.
-			one.State = relayapi.AllowLegacy
-			if d, err = allowlist.Parse(res.Document); err != nil {
-				one.State, d = relayapi.AllowBroken, nil
-			}
 		default:
 			one.State = relayapi.AllowSigned
 			if d, err = allowlist.Verify(id.Public(), res.Document, res.Signature); err != nil {
@@ -222,11 +214,12 @@ func printAllowShow(one allowShowJSON) {
 	case relayapi.AllowBroken:
 		fmt.Printf("%s: %s\n", one.Relay, one.Error)
 		return
-	case relayapi.AllowLegacy:
-		// The time is the relay's: when its upgrade converted the list.
-		fmt.Printf("%s: legacy, converted %s, %s\n", one.Relay, stampLocal(*one.Issued), plural(len(one.Senders), "sender"))
-	default:
+	case relayapi.AllowSigned:
 		fmt.Printf("%s: signed, issued %s, %s\n", one.Relay, stampLocal(*one.Issued), plural(len(one.Senders), "sender"))
+	default:
+		// A word this build does not know, printed as the relay gave it.
+		fmt.Printf("%s: %s\n", one.Relay, one.State)
+		return
 	}
 	if len(one.Senders) == 0 {
 		fmt.Println("  nobody is named, so any registered sender may post")
@@ -238,27 +231,21 @@ func printAllowShow(one allowShowJSON) {
 			fmt.Printf("  %s\n", sender.Fingerprint)
 		}
 	}
-	if one.State == relayapi.AllowLegacy {
-		fmt.Println("  " + allowWarning(one.Relay, one.State, time.Time{}, false))
-	}
 }
 
 // allowWarning is what an owner is told about the state of their list on
 // one relay, or nothing. signed is nothing; none is nothing unless this
-// machine pushed a list there, in which case the relay has lost it; legacy
-// is a list from before signing, to push again, or the same loss when a
-// signed one had been pushed; broken is a list that refuses everyone.
+// machine pushed a list there, in which case the relay has lost it; broken
+// is a list that refuses everyone, a row from before signed lists included.
+// A word this build does not know is nothing to say.
 func allowWarning(relay, state string, pushed time.Time, wasPushed bool) string {
 	switch state {
 	case relayapi.AllowBroken:
 		return fmt.Sprintf("your allow list on %s does not verify, so nobody can post to you there; run %s allow push, and if you did not change it, tell the relay's operator", relay, prog)
-	case relayapi.AllowNone, relayapi.AllowLegacy:
+	case relayapi.AllowNone:
 		if wasPushed {
-			return fmt.Sprintf("your allow list on %s is missing or unsigned, though you pushed one on %s; run %s allow push and tell the relay's operator",
+			return fmt.Sprintf("your allow list on %s is missing, though you pushed one on %s; run %s allow push and tell the relay's operator",
 				relay, pushed.Local().Format(time.DateOnly), prog)
-		}
-		if state == relayapi.AllowLegacy {
-			return fmt.Sprintf("your allow list on %s predates signing; run %s allow push", relay, prog)
 		}
 	}
 	return ""
