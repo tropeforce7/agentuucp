@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
 
@@ -200,7 +202,7 @@ func exitStatus(err error) int {
 // threads' output apart in a journal. Live output is not possible while the
 // output is a file, and the documentation says so.
 func prefixedTo(w *os.File, path, prefix string) {
-	f, err := os.Open(path)
+	f, err := regular.Open(path)
 	if err != nil {
 		return
 	}
@@ -215,7 +217,7 @@ func prefixedTo(w *os.File, path, prefix string) {
 // firstLine is the first line of a file, for the sentence that says why a
 // message was not answered. Empty when there is nothing to say.
 func firstLine(path string) string {
-	f, err := os.Open(path)
+	f, err := regular.Open(path)
 	if err != nil {
 		return ""
 	}
@@ -230,9 +232,35 @@ func firstLine(path string) string {
 	return ""
 }
 
-// createTrunc makes one of the run's files, empty.
-func createTrunc(path string) (*os.File, error) {
-	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+// createNew makes one of the run's files, empty, under a name of the
+// run's own in a thread's directory. A file from an earlier attempt at
+// the same message is removed first, and the create is then exclusive
+// and by the handle: the program never opens what already stood under
+// the name, and whatever the remove could not take — a directory with
+// something in it, a device the platform answers to — is "already
+// exists" or the handle's refusal, never written into.
+func createNew(path string) (*os.File, error) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	return regular.Create(path, 0o600)
+}
+
+// writeNew is createNew with the contents written and the file closed;
+// on any error after the create, what this call made is removed.
+func writeNew(path string, data []byte) error {
+	f, err := createNew(path)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(path)
+	}
+	return err
 }
 
 // runFile names one of a message's files in the thread's directory.

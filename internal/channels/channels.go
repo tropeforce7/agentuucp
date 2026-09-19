@@ -12,6 +12,21 @@
 // A mailbox with no directory has one channel, "default", with no period.
 // Nothing here talks to a relay or reads a file: the rules, the signature and
 // the period are what both sides share.
+//
+// The name rule is also a file-name rule for Windows, since a channel is a
+// directory on an expert host and an attachment (message.ValidAttachmentName
+// shares the pieces) a file on a receiver, and either may be there. The
+// device list in WindowsDevice is not the source of that rule: Windows is,
+// and on Windows the function asks the OS through filepath.Abs, whose
+// GetFullPathNameW rewrites a DOS device name to a \\.\ path. The Windows
+// CI job holds the hand list to the OS in both directions with
+// TestLimitTheDeviceListAgreesWithWindows and logs what filepath.Abs
+// answered for each name; what it answered for CONIN$ and CONOUT$, which
+// CreateFile understands and the resolver may not rewrite, is to be
+// recorded here from that job's first run after this note was written.
+// Until then the list holds them and the test holds them to the OS the
+// other way it can: an exclusive create under a temporary directory must
+// leave no file there.
 package channels
 
 import (
@@ -113,6 +128,15 @@ func ValidName(name string) error {
 	if strings.Contains(name, ":") {
 		return errors.New(`name contains ":"`)
 	}
+	// The other six characters Windows forbids in a file name, and a
+	// trailing dot, which Windows strips so that "bugs." and "bugs" would
+	// be one directory.
+	if i := strings.IndexAny(name, WindowsForbidden); i >= 0 {
+		return fmt.Errorf("name contains %q, which Windows forbids in a file name", name[i])
+	}
+	if strings.HasSuffix(name, ".") && name != "." && name != ".." {
+		return errors.New("name ends with a dot, which Windows strips")
+	}
 	if stem, _, _ := strings.Cut(name, "."); WindowsDevice(stem) {
 		return fmt.Errorf("name begins with %s, a device name on Windows", strings.ToUpper(stem))
 	}
@@ -122,9 +146,22 @@ func ValidName(name string) error {
 	return nil
 }
 
-// WindowsDevice reports whether stem names a device on Windows, under
-// case folding: CON, PRN, AUX, NUL, and COM and LPT followed by one digit
-// 0 to 9 or by one of the superscript digits U+00B9, U+00B2 and U+00B3.
+// WindowsForbidden is the characters Windows forbids in a file name beyond
+// the separators and the colon, which have refusals of their own; a
+// channel name and an attachment name are held to it on every platform,
+// since either may become a file or a directory on Windows.
+const WindowsForbidden = "<>\"|?*"
+
+// WindowsDevice reports whether stem names a device on Windows. On
+// Windows it asks the OS: a name the path resolver rewrites to a \\.\
+// device path is a device, whatever the list below says, and the list is
+// only the fast first answer. On every other platform the list is the
+// rule, since a Unix sender must refuse what a Windows receiver could not
+// extract, and the Windows CI job holds the list to what the OS says
+// (TestLimitTheDeviceListAgreesWithWindows). The list, under case
+// folding and ignoring trailing spaces as the resolver does: CON, PRN,
+// AUX, NUL, CONIN$ and CONOUT$, and COM and LPT followed by one digit 0
+// to 9 or by one of the superscript digits U+00B9, U+00B2 and U+00B3.
 // Microsoft's pages have not agreed on the set: older ones list COM1 to
 // COM9 and LPT1 to LPT9, the current one COM0 to COM9 with the three
 // superscripts, so this is the union, since a name nobody can use on some
@@ -133,6 +170,15 @@ func ValidName(name string) error {
 // a sender cannot know where a message lands; a channel name is refused
 // because it is a directory on an expert host.
 func WindowsDevice(stem string) bool {
+	return listedDevice(stem) || osDevice(stem)
+}
+
+// listedDevice is the hand list.
+func listedDevice(stem string) bool {
+	stem = strings.TrimRight(stem, " ")
+	if strings.EqualFold(stem, "CONIN$") || strings.EqualFold(stem, "CONOUT$") {
+		return true
+	}
 	if len(stem) == 3 {
 		for _, d := range []string{"CON", "PRN", "AUX", "NUL"} {
 			if strings.EqualFold(stem, d) {

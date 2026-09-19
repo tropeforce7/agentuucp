@@ -121,7 +121,8 @@ spells them as one — macOS by default, Windows always — and a message that
 cannot be written there is no use to anyone. For the same reason a name is
 a file name on Windows too: not a device name such as `con`, `nul.txt` or
 `com1.log`, which would open the device rather than a file there, holding
-no colon, which names a drive or a stream there, and
+no colon, which names a drive or a stream there, none of the six other
+characters Windows forbids in a file name (`< > " | ? *`), and
 not ending in a dot or a space, which Windows strips; the refusal names
 the rule and says it holds for every receiver, since a sender cannot know
 where a message lands. Above 64 KiB in all, the
@@ -183,10 +184,11 @@ Times are RFC 3339 with a zone, or a day such as `2026-10-01`, taken as
 midnight where you are. A description is one line: line breaks and tabs in
 what you type are folded to a space. Names are at most 64 bytes, descriptions
 1024, and a directory holds at most 64 channels; a name has no leading or
-trailing space, no `/`, `\` or `:`, no Windows device name as its stem
-(`CON`, `NUL`, `COM1`), and no control or format character, and case
-counts, so `Bugs` and `bugs` are two channels; the three Windows rules are
-there because a name is a directory on an expert host, which may be one.
+trailing space or dot, no `/`, `\` or `:`, none of `< > " | ? *`, no
+Windows device name as its stem (`CON`, `NUL`, `COM1`), and no control or
+format character, and case counts, so `Bugs` and `bugs` are two channels;
+the Windows rules are there because a name is a directory on an expert
+host, which may be one.
 
 The first `create` writes `default` beside the new channel, so creating a
 channel never takes the default away; `auu channel delete default` does,
@@ -258,6 +260,15 @@ auu extract MESSAGE-ID       # save its attachments
 auu rm MESSAGE-ID            # remove it from the relay and from here
 auu reply MESSAGE-ID 'It is missing. Open an issue against home-java.'
 ```
+
+`auu extract` writes each attachment under `--out` (the working directory
+by default) as a new file: a name that already exists there, whatever it
+is, is refused with "already exists; move it or choose another --out
+directory", and nothing is overwritten. The file is made and the spooled
+bytes are read by their handle, not their name: an attachment that turns
+out not to be a regular file — a device the name reaches on this platform,
+a pipe or a link somebody planted in the spool — is refused with a sentence
+saying what was found, and nothing is written.
 
 A thread id works there too. `auu reply THREAD-ID` answers whatever is latest
 on the thread — including your own last message, in which case it is a

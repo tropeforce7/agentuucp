@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/pki"
+	"github.com/tropeforce7/agentuucp/internal/regular"
 )
 
 // anchorFile holds the trust anchor this machine pinned for one relay: the
@@ -53,7 +54,7 @@ func (s *Store) AnchorFor(r *Relay) (*Anchor, error) {
 		}
 		return nil, ErrNoAnchor
 	}
-	raw, err := os.ReadFile(path)
+	raw, err := regular.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, &damagedFile{msg: fmt.Sprintf("%s records a trust anchor for %s but %s is missing; "+
 			"enrol again with a token", relayFile, r.Name, path)}

@@ -22,6 +22,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/lockfile"
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/term"
@@ -769,63 +770,84 @@ func cmdExtract(args []string) error {
 func extractInto(s *store.Store, box store.Box, m *store.Stored, dir string) ([]string, error) {
 	var written []string
 	for _, a := range m.Inner.Body.Attachments {
-		// The name was validated when the message was opened. Take the base
-		// again anyway: this is the step that touches the filesystem.
-		target := filepath.Join(dir, filepath.Base(a.Name))
-		if _, err := os.Stat(target); err == nil {
-			return written, usageErrf("%s already exists; move it or choose another --out directory", target)
-		}
+		// The name was held to its rule when the message was opened and
+		// again when the record was read back; it runs once more here,
+		// before a path exists, since this is the step that touches the
+		// filesystem. An inline attachment's Validate re-checks the
+		// digest at the moment of writing too.
 		if m.Streamed {
-			// A streamed attachment is already a file and may be far larger
-			// than memory, so it is copied rather than loaded.
-			src := filepath.Join(s.AttachmentDir(box, m.Inner.ID), filepath.Base(a.Name))
-			if err := copyStreamed(src, target, a); err != nil {
-				return written, err
+			if err := message.ValidAttachmentName(a.Name); err != nil {
+				return written, fmt.Errorf("refusing to write %q: %w", a.Name, err)
+			}
+			if a.Media == "" {
+				return written, fmt.Errorf("refusing to write %q: empty media type", a.Name)
 			}
 		} else {
-			// Re-check the digest at the moment of writing, not only at open time.
 			check := message.Attachment{Name: a.Name, Media: a.Media, Size: a.Size, SHA256: a.SHA256, Data: a.Data}
 			if err := check.Validate(); err != nil {
 				return written, fmt.Errorf("refusing to write %q: %w", a.Name, err)
 			}
-			if err := os.WriteFile(target, a.Data, 0o600); err != nil {
-				return written, err
-			}
+		}
+		target, err := writeAttachment(s, box, m, a, dir, a.Name)
+		if os.IsExist(err) {
+			return written, usageErrf("%s already exists; move it or choose another --out directory", target)
+		}
+		if err != nil {
+			return written, err
 		}
 		written = append(written, target)
 	}
 	return written, nil
 }
 
-// copyStreamed writes a delivered stream attachment to target without ever
-// holding it in memory. It makes the same four checks Validate makes, with the
-// size and the digest taken as the bytes go past, and puts the file in place
-// only once they agree: a mismatch leaves nothing behind to be mistaken for
-// the real thing.
-func copyStreamed(src, target string, a message.Attachment) error {
-	if err := message.ValidAttachmentName(a.Name); err != nil {
-		return fmt.Errorf("refusing to write %q: %w", a.Name, err)
+// writeAttachment writes one attachment of m under dir as name, which has
+// passed the name rule, and returns the path it made. The create is
+// exclusive and by the handle: whatever already stood under the name — a
+// file, a device, a link — is os.ErrExist, returned as is for the caller
+// to say or to try another name, and a device the platform hands back
+// under the name is refused with nothing written. On any error after the
+// create, what this call made is removed, so a half-written file is not
+// mistaken for the real thing; the name was this call's to make.
+func writeAttachment(s *store.Store, box store.Box, m *store.Stored, a message.Attachment, dir, name string) (string, error) {
+	target := filepath.Join(dir, filepath.Base(name))
+	out, err := regular.Create(target, 0o600)
+	if err != nil {
+		return target, err
 	}
-	if a.Media == "" {
-		return fmt.Errorf("refusing to write %q: empty media type", a.Name)
+	if m.Streamed {
+		// A streamed attachment is already a file and may be far larger
+		// than memory, so it is copied rather than loaded.
+		src := filepath.Join(s.AttachmentDir(box, m.Inner.ID), filepath.Base(a.Name))
+		err = copyStreamed(src, out, a)
+	} else {
+		_, err = out.Write(a.Data)
 	}
-	in, err := os.Open(src)
+	if closeErr := out.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(target)
+		return target, err
+	}
+	return target, nil
+}
+
+// copyStreamed copies a delivered stream attachment from the spool into
+// out, the file extractInto made exclusively, without ever holding it in
+// memory, with the size and the digest taken as the bytes go past: a
+// mismatch is an error, and the caller removes what it made, so nothing
+// is left behind to be mistaken for the real thing. The source is opened
+// by its handle too: the spool is this home's own, but a link or a pipe
+// planted there under the attachment's name is not the attachment.
+func copyStreamed(src string, out *os.File, a message.Attachment) error {
+	in, err := regular.Open(src)
 	if err != nil {
 		return fmt.Errorf("reading %q: %w", a.Name, err)
 	}
 	defer in.Close()
 
-	tmp, err := os.CreateTemp(filepath.Dir(target), ".auu-extract-*")
-	if err != nil {
-		return err
-	}
-	defer func() {
-		tmp.Close()
-		os.Remove(tmp.Name())
-	}()
-
 	h := sha256.New()
-	n, err := io.Copy(io.MultiWriter(tmp, h), in)
+	n, err := io.Copy(io.MultiWriter(out, h), in)
 	if err != nil {
 		return fmt.Errorf("reading %q: %w", a.Name, err)
 	}
@@ -837,10 +859,7 @@ func copyStreamed(src, target string, a message.Attachment) error {
 	if a.SHA256 != hex.EncodeToString(h.Sum(nil)) {
 		return fmt.Errorf("refusing to write %q: sha256 does not match data", a.Name)
 	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), target)
+	return nil
 }
 
 type waitJSON struct {

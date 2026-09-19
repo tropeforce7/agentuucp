@@ -220,6 +220,8 @@ func TestLimitStoredRecordShapes(t *testing.T) {
 		{"digest one short", func(m *Stored) { m.Inner.Body.Attachments[0].SHA256 = strings.Repeat("0", 63) }, "digest is 63 characters, not 64"},
 		{"digest not lowercase hex", func(m *Stored) { m.Inner.Body.Attachments[0].SHA256 = strings.Repeat("G", 64) }, "digest is not lowercase hex"},
 		{"size negative", func(m *Stored) { m.Inner.Body.Attachments[0].Size = -1 }, "size -1 is negative"},
+		{"attachment named by a device", func(m *Stored) { m.Inner.Body.Attachments[0].Name = "CON" }, "CON is a device name on Windows"},
+		{"attachment named with a slash", func(m *Stored) { m.Inner.Body.Attachments[0].Name = "a/b" }, "must not contain a path separator"},
 	} {
 		err := write(t, tc.mutate)
 		if err == nil || !strings.Contains(err.Error(), tc.says) {

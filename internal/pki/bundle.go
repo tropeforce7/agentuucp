@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/regular"
 )
 
 // BundleVersion is the shape a relay understands. A newer one is refused by
@@ -360,7 +362,9 @@ func syncDir(dir string) error {
 		// No directory fsync there; NTFS journals the metadata itself.
 		return nil
 	}
-	d, err := os.Open(dir)
+	// Opened by the handle: what is synced is the directory, and a link
+	// planted under its name is refused rather than followed.
+	d, err := regular.Dir(dir)
 	if err != nil {
 		return err
 	}

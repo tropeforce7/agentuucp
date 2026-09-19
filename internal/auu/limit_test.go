@@ -789,3 +789,45 @@ func TestLimitProxyListenIsAnAddressNotAPath(t *testing.T) {
 		}
 	}
 }
+
+// TestLimitExtractionRunsTheRuleBeforeThePath: a stored record with an
+// attachment named CON, and one named a/b, is refused at Load, since a
+// record read back is held to the name rule's path part; and the same
+// record handed to extractInto in memory is refused by the rule before a
+// path is made: the --out directory is one that does not exist yet, and
+// it is still absent afterwards, since nothing was stat'ed, created or
+// looked for under it, and the sentence names the rule.
+func TestLimitExtractionRunsTheRuleBeforeThePath(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("c", 32)
+	for _, tc := range []struct{ name, says string }{
+		{"CON", "CON is a device name on Windows"},
+		{"a/b", "must not contain a path separator"},
+	} {
+		m := &store.Stored{Inner: &envelope.Inner{
+			ID: id, Time: time.Now().UTC(), From: strings.Repeat("d", 64), To: strings.Repeat("e", 64),
+			Body: message.Body{Type: message.TypeNote, Thread: id, Text: "hi",
+				Attachments: []message.Attachment{{Name: tc.name, Media: "text/plain", Size: 2, SHA256: strings.Repeat("0", 64), Data: []byte("hi")}}},
+		}}
+		if err := s.Save(store.Inbox, m); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Load(store.Inbox, id); err == nil || !strings.Contains(err.Error(), tc.says) {
+			t.Errorf("Load took a record with an attachment named %q: %v", tc.name, err)
+		}
+		out := filepath.Join(t.TempDir(), "not", "yet")
+		written, err := extractInto(s, store.Inbox, m, out)
+		if err == nil || !strings.Contains(err.Error(), tc.says) {
+			t.Errorf("extractInto with %q: %v, %v; want the rule's sentence", tc.name, written, err)
+		}
+		if _, err := os.Stat(filepath.Dir(out)); !os.IsNotExist(err) {
+			t.Errorf("extractInto with %q touched the directory before the rule ran: %v", tc.name, err)
+		}
+		// The next row writes the same id: Remove runs the rule and
+		// refuses this record, so the file goes by its name.
+		os.Remove(filepath.Join(s.Root(), string(store.Inbox), id+".json"))
+	}
+}

@@ -885,6 +885,34 @@ start on one of them. The relay's sweep once failed the whole start on a
 directory somebody had made inside a mailbox, because `os.Remove` of it
 was an error; the reader's rule is the fix, not a broader remove.
 
+A name list is one guard, and a name list is never complete. The other is
+the handle: a device is a device whatever it is called, and so is a named
+pipe, a socket or a directory, and the open file knows. So every file the
+program reads or creates by a name from the network or from a directory
+entry it read back is opened through `internal/regular`, which opens,
+asks the handle for its mode, and refuses anything that is not a regular
+file before a byte moves; a create is exclusive (`O_EXCL`, and
+`O_NOFOLLOW` where the platform has it), so the program never opens
+something that already stood under that name, and there is no rename onto
+a name from outside, since a rename's destination has no handle to ask.
+The file-open ledger says which rows are held to this, and its test fails
+a network row or a directory-entry row that opens by the plain `os` call.
+The proof runs on both kinds of machine: on Windows, `CON` and `nul.txt`
+through the helper and through extraction, asserting no byte written and
+the sentence naming what was found; on Unix, a FIFO, a symlink to a
+device and a directory planted under a valid name, asserting the same,
+with a witness file untouched. An operator's own input file is not held
+to this: a passphrase file from process substitution is a pipe on
+purpose.
+
+A list in the tree is never the source. It is either derived from its
+source when the program is built (the Unicode tables, the library's own
+constants, the wire's constants shared by both ends) or held to its source
+by a test that runs on the platform that owns it, and on that platform the
+source is asked at run time wherever it can be: on Windows the device rule
+asks the OS through `filepath.Abs`, and the hand list is for the other
+platforms, which the Windows job holds to what the OS said.
+
 **The ledger.** `internal/limits/ledger.txt` holds one row per site the
 test finds:
 

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
@@ -290,9 +291,10 @@ func (o *Opened) ToDirectory(r io.Reader, dir string) (err error) {
 
 	if err := o.OpenPayload(r, func(a Attachment) (io.WriteCloser, error) {
 		// The name has already been through ValidAttachmentName in Validate,
-		// so it is a base name; Base is belt and braces.
-		f, err := os.OpenFile(filepath.Join(tmp, filepath.Base(a.Name)),
-			os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		// so it is a base name; Base is belt and braces, and the create is
+		// exclusive and by the handle, so a device the name reaches on
+		// this platform is refused with nothing written.
+		f, err := regular.Create(filepath.Join(tmp, filepath.Base(a.Name)), 0o600)
 		if errors.Is(err, fs.ErrExist) {
 			// Two names Validate told apart are one file on this disk:
 			// case folding it foresaw and refused, but a filesystem may

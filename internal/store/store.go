@@ -20,6 +20,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/regular"
 )
 
 const (
@@ -512,7 +513,7 @@ func (s *Store) IsAuthorized(fp string) bool {
 // passed by as one nobody has joined, and 'auu inbox --relay NAME' is what
 // selects it regardless.
 func readCursor(path, relay string) (int64, error) {
-	data, err := os.ReadFile(path)
+	data, err := regular.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
 	}
@@ -601,7 +602,7 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	if message.ValidID(id) != nil {
 		return nil, fmt.Errorf("malformed message id %q", id)
 	}
-	data, err := os.ReadFile(s.msgPath(box, id))
+	data, err := regular.ReadFile(s.msgPath(box, id))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("no message %s", id)
 	}

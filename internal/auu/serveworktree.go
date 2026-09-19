@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/regular"
 )
 
 // The worktrees a handler answers in.
@@ -69,12 +70,12 @@ func worktreeFor(root string, ch *serveChannel, thread, stateDir string, newThre
 		if err != nil {
 			return "", "", err
 		}
-		if err := os.WriteFile(basePath, []byte(head+"\n"), 0o600); err != nil {
+		if err := writeNew(basePath, []byte(head+"\n")); err != nil {
 			return "", "", err
 		}
 		return path, head, nil
 	}
-	recorded, err := os.ReadFile(basePath)
+	recorded, err := regular.ReadFile(basePath)
 	if err != nil {
 		// The record is gone, which a hand-tidied home can do: the worktree
 		// is where it is, and that is the honest answer.
@@ -82,7 +83,7 @@ func worktreeFor(root string, ch *serveChannel, thread, stateDir string, newThre
 		if err != nil {
 			return "", "", err
 		}
-		return path, head, os.WriteFile(basePath, []byte(head+"\n"), 0o600)
+		return path, head, writeNew(basePath, []byte(head+"\n"))
 	}
 	return path, strings.TrimSpace(string(recorded)), nil
 }
@@ -182,7 +183,7 @@ func patchFor(ch *serveChannel, worktree, base, threadDir, thread string) (strin
 		os.Remove(path)
 		return "", nil
 	}
-	if err := os.WriteFile(path, diff, 0o600); err != nil {
+	if err := writeNew(path, diff); err != nil {
 		return "", err
 	}
 	return path, nil

@@ -12,6 +12,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
 )
@@ -124,7 +125,7 @@ func listPending(s *store.Store) ([]*pending, []string, error) {
 		if e.IsDir() || !strings.HasSuffix(name, ".json") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(outboxDir(s), name))
+		data, err := regular.ReadFile(filepath.Join(outboxDir(s), name))
 		if err != nil {
 			return nil, nil, err
 		}

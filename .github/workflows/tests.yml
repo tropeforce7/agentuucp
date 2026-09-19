@@ -90,11 +90,19 @@ jobs:
       - name: go build ./...
         run: go build ./...
 
+      # internal/regular and internal/channels are here for the tests that
+      # ask Windows itself: the device names through the handle check, the
+      # hand list against the OS's path resolver, the seven forbidden
+      # characters against a create. Their -v output is the record of what
+      # the OS answered, which the two packages' doc.go files cite.
       - name: the agent, the lock file, the store and the key formats
         run: go test -count=1 ./internal/agent/ ./internal/lockfile/ ./internal/store/ ./internal/keyfile/ ./internal/identity/ ./internal/term/
 
+      - name: what Windows says about names, verbosely, for the record
+        run: go test -count=1 -v -run 'TestLimitADeviceIsRefusedByItsHandle|TestLimitTheDeviceListAgreesWithWindows|TestLimitTheForbiddenCharactersAgreeWithWindows|TestARegularFileOpensAndReads|TestADirectoryIsRefusedByItsHandle|TestTheOpenErrorPassesThroughUnwrapped' ./internal/regular/ ./internal/channels/
+
       - name: the agent end to end, and serve, as second processes
-        run: go test -count=1 -run 'Agent|Passphrase|Unlock|Locked|PublicCommandsNeedNoAgent|InitForceRefusesAnEncryptedHome|HalfConvertedHome|SkillsExitCode|Serve' ./internal/auu/
+        run: go test -count=1 -run 'Agent|Passphrase|Unlock|Locked|PublicCommandsNeedNoAgent|InitForceRefusesAnEncryptedHome|HalfConvertedHome|SkillsExitCode|Serve|TestLimitExtractionRunsTheRuleBeforeThePath' ./internal/auu/
 
   race:
     name: race detector

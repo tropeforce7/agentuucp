@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/regular"
 )
 
 // Uploads in progress. A stream arrives in pieces, so the relay holds a
@@ -229,7 +231,9 @@ func (s *Store) AppendUpload(id string, offset int64, r func(w *os.File, limit i
 		return u.Received, nil
 	}
 
-	f, err := os.OpenFile(s.uploadPath(id), os.O_WRONLY|os.O_APPEND, fileMode)
+	// The file is opened by its handle: the directory is the relay's own,
+	// but what stands under an upload's name is not taken on trust.
+	f, err := regular.OpenFile(s.uploadPath(id), os.O_WRONLY|os.O_APPEND, fileMode)
 	if err != nil {
 		return u.Received, s.fault(s.uploadPath(id), err)
 	}
@@ -457,14 +461,14 @@ func (s *Store) MessageKind(toFP string, id int64) (kind string, size int64, err
 
 // OpenMessage returns the stored file, for a caller that will stream it out.
 func (s *Store) OpenMessage(toFP string, id int64) (*os.File, error) {
-	f, err := os.Open(s.messagePath(toFP, id))
+	f, err := regular.Open(s.messagePath(toFP, id))
 	return f, s.fault(s.messagePath(toFP, id), err)
 }
 
 // OpenUploadFile returns an upload's file, for a caller that will read the
 // start of it.
 func (s *Store) OpenUploadFile(id string) (*os.File, error) {
-	f, err := os.Open(s.uploadPath(id))
+	f, err := regular.Open(s.uploadPath(id))
 	return f, s.fault(s.uploadPath(id), err)
 }
 

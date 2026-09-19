@@ -419,6 +419,17 @@ func TestValidateHoldsTheManifestNamesToWindowsToo(t *testing.T) {
 		{"report.txt ", false},
 		{".hidden", true},
 		{"console.txt", true},
+		{"CONIN$", false},
+		{"conout$.txt", false},
+		{"conin", true},
+		{"CON .txt", false},
+		{"a<b.txt", false},
+		{"a>b.txt", false},
+		{"a\"b.txt", false},
+		{"a|b.txt", false},
+		{"a?b.txt", false},
+		{"a*b.txt", false},
+		{"a'b.txt", true},
 	} {
 		_, err := BuildManifest(from, to.Public(), id, Body{Type: "ask", Thread: id, Text: "x"},
 			sourcesOf(memSource{tc.name, []byte("x")}), MinChunkSize)

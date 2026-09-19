@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/keyfile"
+	"github.com/tropeforce7/agentuucp/internal/regular"
 )
 
 // File names in an auu-ca directory. Three key pairs, and a directory of what
@@ -433,7 +434,7 @@ func unexpired(ders [][]byte, now time.Time) ([][]byte, error) {
 
 func (s *Store) relayRecord(host string) (*RelayRecord, error) {
 	path := filepath.Join(s.dir, relaysDir, safeHost(host), relayRecordFile)
-	raw, err := os.ReadFile(path)
+	raw, err := regular.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return &RelayRecord{}, nil
 	}

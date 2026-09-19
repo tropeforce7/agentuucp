@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/regular"
 )
 
 // damaged/ holds what could not be opened.
@@ -104,7 +106,7 @@ func (s *Store) keptMessages() ([]kept, error) {
 			}
 			k := kept{bin: s.path(damagedDir, relay.Name(), e.Name()), size: info.Size(), when: info.ModTime()}
 			var rec DamagedRecord
-			if data, err := os.ReadFile(recordPath(k.bin)); err == nil && json.Unmarshal(data, &rec) == nil && !rec.Received.IsZero() {
+			if data, err := regular.ReadFile(recordPath(k.bin)); err == nil && json.Unmarshal(data, &rec) == nil && !rec.Received.IsZero() {
 				k.when = rec.Received
 			}
 			out = append(out, k)

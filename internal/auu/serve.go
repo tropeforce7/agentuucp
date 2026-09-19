@@ -18,6 +18,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/lockfile"
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
 
@@ -601,21 +602,21 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 	}
 
 	stdinPath := runFile(threadDir, "msg", m.Inner.ID)
-	if err := os.WriteFile(stdinPath, []byte(m.Inner.Body.Text), 0o600); err != nil {
+	if err := writeNew(stdinPath, []byte(m.Inner.Body.Text)); err != nil {
 		return err
 	}
-	stdin, err := os.Open(stdinPath)
+	stdin, err := regular.Open(stdinPath)
 	if err != nil {
 		return err
 	}
 	outPath := runFile(threadDir, "out", m.Inner.ID)
 	errPath := runFile(threadDir, "err", m.Inner.ID)
-	stdout, err := createTrunc(outPath)
+	stdout, err := createNew(outPath)
 	if err != nil {
 		stdin.Close()
 		return err
 	}
-	stderr, err := createTrunc(errPath)
+	stderr, err := createNew(errPath)
 	if err != nil {
 		stdin.Close()
 		stdout.Close()
@@ -692,7 +693,7 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 // runOne runs a hook: no standard input, its two streams in one file, and
 // that file printed prefixed afterwards.
 func (r *serveRun) runOne(ctx context.Context, line, outPath string, env []string, stdin *os.File, ch *serveChannel, facts runFacts, short string) (programRun, error) {
-	f, err := createTrunc(outPath)
+	f, err := createNew(outPath)
 	if err != nil {
 		return programRun{}, err
 	}
@@ -831,7 +832,7 @@ func said(run programRun, path string) string {
 // time. A carriage return on its own is left for the rule, which fails
 // the round with its sentence, recorded as that message's failure.
 func output(path string) (string, bool) {
-	data, err := os.ReadFile(path)
+	data, err := regular.ReadFile(path)
 	if err != nil {
 		return "", false
 	}

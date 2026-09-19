@@ -215,9 +215,9 @@ internal/auu/watch.go messageEvent int Size int64 = output
 internal/auu/watch_cmds.go cmdWatch int fs.Duration("interval") = >= 5s shown by TestLimitWaitAndWatchFlags
 internal/auu/watch_cmds.go cmdWatch int fs.Duration("timeout") = >= 0s shown by TestLimitWaitAndWatchFlags
 internal/channels/channels.go Directory int V int = [1, 1] shown by TestLimitDirectoryV
-internal/channels/channels.go WindowsDevice string stem[3:] = local: len(stem) >= 4 by the check before
-internal/channels/channels.go WindowsDevice string stem[:3] #2 = local: len(stem) >= 4 by the check before
-internal/channels/channels.go WindowsDevice string stem[:3] = local: len(stem) >= 4 by the check before
+internal/channels/channels.go listedDevice string stem[3:] = local: len(stem) >= 4 by the check before
+internal/channels/channels.go listedDevice string stem[:3] #2 = local: len(stem) >= 4 by the check before
+internal/channels/channels.go listedDevice string stem[:3] = local: len(stem) >= 4 by the check before
 internal/client/client.go retryAfter int strconv.ParseInt(raw) = [0, 86400] shown by TestLimitRetryAfter
 internal/client/shape.go (*Client).parseOffset int strconv.ParseInt(raw) = >= 0 shown by TestLimitUploadOffsetAnswer
 internal/clientca/csr.go cleanLabel string s[:len(s) - size] = local: size from DecodeLastRuneInString of s

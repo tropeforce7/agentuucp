@@ -13,6 +13,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/token"
 )
 
@@ -134,7 +135,7 @@ func (s *Store) warnSkippedRelay(name string, err error) {
 
 func (s *Store) readRelay(name string) (*Relay, error) {
 	path := filepath.Join(s.relayDir(name), relayFile)
-	data, err := os.ReadFile(path)
+	data, err := regular.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}

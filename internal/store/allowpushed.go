@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/regular"
 )
 
 // allowPushedFile records, beside a relay's cursor, when this machine last
@@ -20,7 +22,7 @@ const allowPushedFile = "allow_pushed"
 // relay, and found false when it never has, or has cleared it since.
 func (s *Store) AllowPushed(r *Relay) (pushed time.Time, found bool, err error) {
 	path := s.relayPath(r, allowPushedFile)
-	data, err := os.ReadFile(path)
+	data, err := regular.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return time.Time{}, false, nil
 	}

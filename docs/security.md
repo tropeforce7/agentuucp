@@ -335,7 +335,8 @@ ending in a dot or a space, since the receiver may be on Windows and a
 sender cannot know; checked when a message is opened and, for a stream,
 when its manifest is, and passed through `filepath.Base` again at the
 write, and its name holds no colon, which names a drive or a stream on
-Windows; a *channel name*
+Windows, and none of the six other characters Windows forbids in a file
+name; a *channel name*
 becomes a directory under an expert host's serve directory, and is held to
 the directory format's rule — no separator of either kind, no colon, no
 Windows device stem — at the relay for every post, at every push of
@@ -365,7 +366,15 @@ with no row, so a ninth component would be found before it was a
 finding. A path in a configuration file that is not absolute is
 relative to the file's directory, never to the directory the program was
 started from, so that the same file means the same thing under systemd
-and from a shell.
+and from a shell. And a name list is one guard, never complete on its own:
+every file the program reads or creates by a name from the network, or
+from a directory entry it read back, is opened through `internal/regular`,
+which asks the open handle what it is and refuses a device, a named pipe,
+a socket, a directory or a symbolic link under any name before a byte
+moves; a create is exclusive, so nothing that already stood under the name
+is opened, and no such name is a rename's destination. On Windows the
+device rule asks the OS itself, and the Windows CI job holds the hand
+list, which is the rule everywhere else, to what the OS says.
 
 ### 2.1 The round trip
 

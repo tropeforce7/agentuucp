@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/tropeforce7/agentuucp/internal/regular"
 )
 
 // leftBehindFile records the messages this machine removed from its own
@@ -30,7 +32,7 @@ func (s *Store) LeftBehind(relayName string) ([]int64, error) {
 		return nil, err
 	}
 	path := filepath.Join(s.relayDir(relayName), leftBehindFile)
-	data, err := os.ReadFile(path)
+	data, err := regular.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}

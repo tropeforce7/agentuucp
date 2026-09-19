@@ -284,6 +284,17 @@ func windowsNameRows() []windowsNameRow {
 		{"report.txt ", false},
 		{".hidden", true},
 		{"console.txt", true},
+		{"CONIN$", false},
+		{"conout$.txt", false},
+		{"conin", true},
+		{"CON .txt", false},
+		{"a<b.txt", false},
+		{"a>b.txt", false},
+		{"a\"b.txt", false},
+		{"a|b.txt", false},
+		{"a?b.txt", false},
+		{"a*b.txt", false},
+		{"a'b.txt", true},
 		{"prn", false},
 		{"PRN.dat", false},
 		{"report.txt", true},
@@ -312,5 +323,19 @@ func TestInvalidUTF8OnTheWireIsReplacedNotRefused(t *testing.T) {
 	}
 	if b.Subject != "a\ufffdb" || b.Attachments[0].Name != "n\ufffdm" {
 		t.Fatalf("subject %q name %q: expected U+FFFD where 0xff was", b.Subject, b.Attachments[0].Name)
+	}
+}
+
+// TestTheWindowsCharactersAreRefusedInNamesAlone: the seven characters
+// Windows forbids in a file name are a rule for an attachment's name and
+// not for a subject or a text, which are prose.
+func TestTheWindowsCharactersAreRefusedInNamesAlone(t *testing.T) {
+	for _, prose := range []string{"what's new?", `say "hi"`, "a | b", "<b>", "2 * 3", "a: b"} {
+		if err := ValidSubject(prose); err != nil {
+			t.Errorf("ValidSubject refused %q: %v", prose, err)
+		}
+		if err := ValidText(prose); err != nil {
+			t.Errorf("ValidText refused %q: %v", prose, err)
+		}
 	}
 }

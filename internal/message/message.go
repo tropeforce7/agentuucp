@@ -138,11 +138,34 @@ func mediaTypeFor(name string) string {
 }
 
 // ValidAttachmentName checks a name is a safe base name: something that can
-// become a file in a directory of the receiver's choosing and nothing else.
+// become a file in a directory of the receiver's choosing and nothing else,
+// and something a terminal can show.
 //
 // It is separate from Validate because a streamed attachment's name arrives
 // in a manifest, long before its data, and must be judged on its own.
 func ValidAttachmentName(name string) error {
+	if err := validAttachmentPath(name); err != nil {
+		return err
+	}
+	// The set a channel name may not hold either: a name is printed in a
+	// column by 'auu read', and an escape sequence or a bidi override in
+	// it would drive the terminal rather than be shown.
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("attachment %q: name is not valid UTF-8", name)
+	}
+	if r, what := channels.ForbiddenRune(name); what != "" {
+		return fmt.Errorf("attachment %q: name contains %U, a %s", name, r, what)
+	}
+	return nil
+}
+
+// validAttachmentPath is the part of the name rule that is about the
+// filesystem: what the name would do as a path. ValidShape holds a record
+// read back to this part alone, so that a record from before a rule, or
+// written by hand, with an escape sequence in a name is still listed and
+// shown, escaped, as its subject and text are; ValidAttachmentName is the
+// whole rule, at every door and at the write.
+func validAttachmentPath(name string) error {
 	if name == "" {
 		return errors.New("attachment: empty name")
 	}
@@ -153,24 +176,20 @@ func ValidAttachmentName(name string) error {
 		return fmt.Errorf("attachment %q: name must not contain a path separator", name)
 	}
 	// A colon names a drive or an alternate data stream on Windows, so
-	// C:x written under a directory there is not a file in it.
+	// C:x written under a directory there is not a file in it, and the
+	// other six characters Windows forbids in a file name are refused
+	// with it, since the receiver may be there and a sender cannot know.
 	if strings.Contains(name, ":") {
 		return fmt.Errorf("attachment %q: name must not contain a colon, which names a drive or a stream on Windows", name)
+	}
+	if i := strings.IndexAny(name, channels.WindowsForbidden); i >= 0 {
+		return fmt.Errorf("attachment %q: name must not contain %q, which Windows forbids in a file name, so the name is refused for every receiver", name, name[i])
 	}
 	if name == "." || name == ".." {
 		return fmt.Errorf("attachment %q: invalid name", name)
 	}
 	if strings.ContainsRune(name, 0) {
 		return fmt.Errorf("attachment %q: name contains a null byte", name)
-	}
-	// The set a channel name may not hold either: a name is printed in a
-	// column by 'auu read', and an escape sequence or a bidi override in
-	// it would drive the terminal rather than be shown.
-	if !utf8.ValidString(name) {
-		return fmt.Errorf("attachment %q: name is not valid UTF-8", name)
-	}
-	if r, what := channels.ForbiddenRune(name); what != "" {
-		return fmt.Errorf("attachment %q: name contains %U, a %s", name, r, what)
 	}
 	// A file name on Windows too, since the receiver may be there and a
 	// sender cannot know where a message lands: a stem that is a device
@@ -287,6 +306,14 @@ func (b *Body) ValidShape() error {
 	}
 	for i := range b.Attachments {
 		a := &b.Attachments[i]
+		// The name becomes a file under --out at extract; a record read
+		// back is held to the path part of the name rule as one received
+		// is to the whole, so a record written by hand or before the rule
+		// is refused here and never joined onto a path. The character
+		// part stays the escaper's, as it is for a subject and a text.
+		if err := validAttachmentPath(a.Name); err != nil {
+			return fmt.Errorf("attachment %d: %v", i, err)
+		}
 		if err := ValidDigest(a.SHA256); err != nil {
 			return fmt.Errorf("attachment %d: %v", i, err)
 		}

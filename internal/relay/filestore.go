@@ -12,6 +12,8 @@ import (
 	"runtime"
 	"strconv"
 	"syscall"
+
+	"github.com/tropeforce7/agentuucp/internal/regular"
 )
 
 // Message bodies live one to a file, under a directory beside the database.
@@ -110,7 +112,9 @@ func fsyncDir(path string) error {
 	if runtime.GOOS == "windows" {
 		return nil
 	}
-	d, err := os.Open(path)
+	// Opened by the handle: what is synced is the directory, and a link
+	// planted under its name is refused rather than followed.
+	d, err := regular.Dir(path)
 	if err != nil {
 		return err
 	}
@@ -121,7 +125,7 @@ func fsyncDir(path string) error {
 // readMessage returns a stored envelope. A missing file is reported as such so
 // callers can tell it from a read that failed for another reason.
 func (s *Store) readMessage(fp string, id int64) ([]byte, error) {
-	raw, err := os.ReadFile(s.messagePath(fp, id))
+	raw, err := regular.ReadFile(s.messagePath(fp, id))
 	return raw, s.fault(s.messagePath(fp, id), err)
 }
 
