@@ -403,6 +403,20 @@ A refused send names what to change, and nothing was queued:
   was under the cap; a `413` means another client, or an indented
   document. `431 Request Header Fields Too Large` is the relay's 32 KiB
   header cap, which nothing `auu` sends approaches.
+- `the directory is N bytes as sent, over the relay's cap of 1048576;
+  nothing was sent` (or `the allow list is ...`) — `auu` holds the two
+  signed documents to the relay's cap before sending; what it signs
+  itself always fits, so this is a document another tool indented.
+- `the relay stopped taking the upload: no byte was read for 60 seconds`
+  on a send, or `the relay stopped sending the stream: no byte arrived for
+  60 seconds` on a fetch — the link went quiet for the relay's stall
+  window; a stream has no other clock, and the next attempt asks the relay
+  where its copy ends (`auu send --resume`), the next fetch resumes the
+  download by range.
+- `malformed answer from the relay at URL: in the health answer, max_bytes
+  is not the relay's max_bytes (...)` — a relay from before this version,
+  which does not say its max_bytes; `auu` sizes a listing page by it and
+  refuses a relay that cannot say. Its operator updates the relay.
 
 Anywhere:
 

@@ -275,6 +275,7 @@ internal/relayapi/relayapi.go AdminStatusResponse int QueuedMessages int64 = >= 
 internal/relayapi/relayapi.go AdminStatusResponse int TokenMaxAgeSecs int64 = [0, 3153600000] shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go ChannelsResponse int Queued map[string]int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go HealthResponse int MLDSA int = one of 0, 44, 65, 87 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go HealthResponse int MaxBytes int64 = [1, 1073741824] shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int MailboxMaxBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int MailboxMaxMessages int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int MaxInflight int64 = >= 0 shown by TestLimitRelayAnswerIntegers

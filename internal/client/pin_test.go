@@ -32,7 +32,7 @@ func relayOffering(t *testing.T, bundle *pki.Loaded, alter func(*tls.Config)) *h
 			_, _ = w.Write([]byte(`{"anchor":""}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"ok":true}`))
+		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216}`))
 	}))
 	again.TLS = &tls.Config{Certificates: leaf}
 	alter(again.TLS)
@@ -136,7 +136,7 @@ func TestNeitherEndAcceptsLessThanTheHybridOverTLS13(t *testing.T) {
 			leaf := srv.TLS.Certificates
 			again := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				seen = *r.TLS
-				_, _ = w.Write([]byte(`{"ok":true}`))
+				_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216}`))
 			}))
 			again.TLS = &tls.Config{Certificates: leaf}
 			c.alter(again.TLS)
@@ -227,7 +227,7 @@ func TestThePinHoldsWithNoCertificateAndNoAnchor(t *testing.T) {
 	var seen tls.ConnectionState
 	again := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = *r.TLS
-		_, _ = w.Write([]byte(`{"ok":true}`))
+		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216}`))
 	}))
 	again.StartTLS()
 	defer again.Close()

@@ -84,6 +84,10 @@ func newTestClient(t *testing.T, rec *recorder) (*Client, *[]time.Duration) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The relay's max_bytes as if learned from its health answer, so a
+	// scripted listing is not preceded by an unscripted health request;
+	// the learning itself is TestAListingIsHeldToTheRelaysPage.
+	c.maxBytes = relayapi.DefaultMaxBytes
 	var slept []time.Duration
 	c.sleep = func(ctx context.Context, d time.Duration) error {
 		slept = append(slept, d)
@@ -121,7 +125,7 @@ func TestRetriesRateLimitThenSucceeds(t *testing.T) {
 func TestRetriesServiceUnavailable(t *testing.T) {
 	rec := &recorder{replies: []reply{
 		{status: http.StatusServiceUnavailable, retryAfter: "1", body: relayapi.ErrorResponse{Error: "relay is busy"}},
-		{status: http.StatusOK, body: relayapi.HealthResponse{OK: true}},
+		{status: http.StatusOK, body: relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes}},
 	}}
 	c, slept := newTestClient(t, rec)
 	if err := c.Health(t.Context()); err != nil {
@@ -444,6 +448,7 @@ func TestARelayThatAnswersAfterTheHoldIsNotATransportError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	c.maxBytes = relayapi.DefaultMaxBytes // as if learned; the fake parses wait on every request
 	if c.http.Timeout <= relayapi.MaxWait {
 		t.Fatalf("the client's per-request timeout is %v, which does not outlive a hold of %v", c.http.Timeout, relayapi.MaxWait)
 	}
@@ -476,9 +481,13 @@ func TestTheClientSignsOnlyWhatTheRelayVerifies(t *testing.T) {
 		t.Fatal(err)
 	}
 	fp := id.Fingerprint()
+	// One reply per request in order: health, health again for MLDSA (a
+	// key answer stood here once and passed only because a health answer
+	// decoded loosely; max_bytes is held to its range now), the key, the
+	// listing, the post, and the registration appended below.
 	rec := &recorder{replies: []reply{
-		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65}},
-		{status: 200, body: relayapi.KeysResponse{Bundle: id.Public().Bundle(), Name: "peer"}},
+		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65, MaxBytes: relayapi.DefaultMaxBytes}},
+		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65, MaxBytes: relayapi.DefaultMaxBytes}},
 		{status: 200, body: relayapi.KeysResponse{Bundle: id.Public().Bundle(), Name: "peer"}},
 		{status: 200, body: relayapi.ListResponse{}},
 		{status: 200, body: relayapi.PostResponse{ID: 1}},
@@ -621,6 +630,11 @@ func fakeRelay(t *testing.T, answers map[string]any) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, ok := answers[r.URL.Path]
+		if !ok && r.URL.Path == "/v1/health" {
+			// A listing asks the relay's max_bytes first; a fake that was
+			// not asked to say otherwise answers the default.
+			body, ok = relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes}, true
+		}
 		if !ok {
 			http.NotFound(w, r)
 			return

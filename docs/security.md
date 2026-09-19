@@ -407,6 +407,24 @@ in-flight `503` alike: the standard library would otherwise read up to
 connection it meant to keep, and wait for a body that never came — which
 is what a refusal that leaves the body unread must not do.
 
+The client holds the same bounds from its side. Its transports offer
+http/1.1 alone by ALPN and never attempt h2; a response's headers are
+capped at the same 32 KiB, and a relay whose answer runs past it is
+refused as a malformed answer; a JSON answer is read under twice the
+default `max_bytes`, and a listing page — the one answer that grows with
+the relay's setting — under twice the relay's own `max_bytes`, which the
+relay says in its health answer and the client learns once; the relay's
+page follows the same figure, so the two agree, and a relay that does not
+say its `max_bytes` is refused by name. A directory or an allow list is
+held to the 1 MiB cap before a byte is sent. The stream routes run on a
+client with no whole-exchange timeout — a two-minute one, under the
+one-request wire, meant a stream needing more than about four minutes on
+the link could never be placed — and a stall rule of the relay's sixty
+seconds on both bodies: an upload the relay stops taking, and a download
+the relay stops sending, are cut with a sentence naming the stall, and
+the next attempt or the next range picks up from where the relay's copy
+ends.
+
 ### 2.1 The round trip
 
 With keys already swapped, in person or over something you both trust:

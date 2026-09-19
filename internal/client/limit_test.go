@@ -133,9 +133,21 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 	}
 	mldsa := []shape{
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.MLDSA = int(n) }), callStatus},
-		{"/v1/health", func(n int64) any { return relayapi.HealthResponse{OK: true, MLDSA: int(n)} },
+		{"/v1/health", func(n int64) any {
+			return relayapi.HealthResponse{OK: true, MLDSA: int(n), MaxBytes: relayapi.DefaultMaxBytes}
+		},
 			func(c *Client) error { _, err := c.MLDSA(context.Background()); return err }},
-		{"/v1/health", func(n int64) any { return relayapi.HealthResponse{OK: true, MLDSA: int(n)} },
+		{"/v1/health", func(n int64) any {
+			return relayapi.HealthResponse{OK: true, MLDSA: int(n), MaxBytes: relayapi.DefaultMaxBytes}
+		},
+			func(c *Client) error { return c.Health(context.Background()) }},
+	}
+	// The health answer's max_bytes: what a listing page follows, held to
+	// [1, MaxBytesCeiling]; zero is a relay from before the field, refused
+	// by name. Read by Health here, and by the first listing, which sizes
+	// what the client will hold of a page by it (TestAListingIsHeldToTheRelaysPage).
+	maxBytes := []shape{
+		{"/v1/health", func(n int64) any { return relayapi.HealthResponse{OK: true, MaxBytes: n} },
 			func(c *Client) error { return c.Health(context.Background()) }},
 	}
 
@@ -187,6 +199,16 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 				refused(t, sh, n)
 			}
 			for _, n := range []int64{0, relayapi.MaxDurationSeconds} {
+				taken(t, sh, n)
+			}
+		})
+	}
+	for i, sh := range maxBytes {
+		t.Run("max_bytes "+strconv.Itoa(i), func(t *testing.T) {
+			for _, n := range []int64{0, -1, math.MinInt64, relayapi.MaxBytesCeiling + 1, math.MaxInt64} {
+				refused(t, sh, n)
+			}
+			for _, n := range []int64{1, relayapi.MaxBytesCeiling} {
 				taken(t, sh, n)
 			}
 		})

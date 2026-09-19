@@ -40,6 +40,7 @@ func (c *Client) malformed(answer, field, want string) error {
 }
 
 const (
+	wantMaxBytes    = "the relay's max_bytes (from 1 to 1073741824; a relay from before this field sends none)"
 	wantFingerprint = "a fingerprint (64 lowercase hex characters)"
 	wantSerial      = "a certificate serial"
 	wantTokenID     = "a token id (32 lowercase hex characters)"
@@ -124,6 +125,12 @@ func (c *Client) checkStatus(st *relayapi.AdminStatusResponse) error {
 func (c *Client) checkHealth(h *relayapi.HealthResponse) error {
 	if !validMLDSA(h.MLDSA) {
 		return c.malformed("the health answer", "mldsa", wantMLDSA)
+	}
+	// max_bytes is what the client sizes a listing page to; a relay's own
+	// is positive and under the ceiling, and a health answer without it
+	// is a relay from before the field.
+	if h.MaxBytes < 1 || h.MaxBytes > relayapi.MaxBytesCeiling {
+		return c.malformed("the health answer", "max_bytes", wantMaxBytes)
 	}
 	return nil
 }

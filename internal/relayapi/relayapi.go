@@ -187,6 +187,12 @@ type (
 	}
 	HealthResponse struct {
 		OK bool `json:"ok"`
+		// MaxBytes is the relay's max_bytes: the largest envelope it takes
+		// and the budget a listing page follows, so a client can size what
+		// it will hold of a page to the relay it talks to rather than to
+		// the ceiling. Always sent; a health answer without it is a relay
+		// from before this field, refused by name.
+		MaxBytes int64 `json:"max_bytes"`
 		// MLDSA is the parameter set — 44, 65 or 87 — the relay requires of
 		// a client's certificate key, so a machine can generate the right
 		// one before it enrols. Absent when the relay issues no

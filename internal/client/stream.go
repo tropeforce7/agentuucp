@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"sync/atomic"
+	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
@@ -48,18 +50,24 @@ func (c *Client) OpenStream(ctx context.Context, toFP, channel string, size int6
 // gigabyte costs a gigabyte of reading and not of memory. The signature
 // covers an empty body, since the payload cannot be held to be signed.
 func (c *Client) PutStream(ctx context.Context, upload string, offset int64, body io.Reader, length int64) (int64, error) {
-	req, err := c.signedRequest(ctx, "PUT", "/v1/uploads/"+upload, nil)
+	// The stall rule: the transport reads the body as it writes the wire,
+	// so a relay that stops taking bytes is a body nobody reads; when no
+	// byte is read for the window the request's context is cancelled and
+	// the attempt ends as a cut, which the sender's loop treats as one.
+	watch := c.watchStall(ctx, "the relay stopped taking the upload: no byte was read for")
+	defer watch.stop()
+	req, err := c.signedRequest(watch.ctx, "PUT", "/v1/uploads/"+upload, nil)
 	if err != nil {
 		return 0, err
 	}
-	req.Body = io.NopCloser(body)
+	req.Body = io.NopCloser(&stallReader{r: body, watch: watch})
 	req.ContentLength = length
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set(relayapi.UploadOffsetHeader, strconv.FormatInt(offset, 10))
 
-	resp, err := c.http.Do(req)
+	resp, err := c.stream.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("contacting relay: %w", err)
+		return 0, watch.wrap(fmt.Errorf("contacting relay: %w", err))
 	}
 	defer resp.Body.Close()
 	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
@@ -111,8 +119,14 @@ func (c *Client) AbortStream(ctx context.Context, upload string) error {
 // gigabyte arrives as a gigabyte of reading, not of memory.
 func (c *Client) Blob(ctx context.Context, fp string, id int64, from, to int64) (io.ReadCloser, int64, error) {
 	path := "/v1/mailbox/" + fp + "/" + strconv.FormatInt(id, 10) + "/blob"
-	req, err := c.signedRequest(ctx, "GET", path, nil)
+	// The stall rule on the response: the body handed back reads under
+	// the watch, and no byte arriving for the window cancels the request
+	// so the next Read ends as a cut, which the resuming reader reopens
+	// from where it stood. Closing the body ends the watch.
+	watch := c.watchStall(ctx, "the relay stopped sending the stream: no byte arrived for")
+	req, err := c.signedRequest(watch.ctx, "GET", path, nil)
 	if err != nil {
+		watch.stop()
 		return nil, 0, err
 	}
 	if from > 0 || to >= 0 {
@@ -122,9 +136,10 @@ func (c *Client) Blob(ctx context.Context, fp string, id int64, from, to int64) 
 		}
 		req.Header.Set("Range", "bytes="+spec)
 	}
-	resp, err := c.http.Do(req)
+	resp, err := c.stream.Do(req)
 	if err != nil {
-		return nil, 0, fmt.Errorf("contacting relay: %w", err)
+		watch.stop()
+		return nil, 0, watch.wrap(fmt.Errorf("contacting relay: %w", err))
 	}
 	// A refusal for now is worth waiting out, exactly as on any other route.
 	for attempt := 0; attempt < maxRetries && retryable(resp.StatusCode); attempt++ {
@@ -134,24 +149,116 @@ func (c *Client) Blob(ctx context.Context, fp string, id int64, from, to int64) 
 		if err := c.sleep(ctx, wait); err != nil {
 			break
 		}
-		retry, buildErr := c.signedRequest(ctx, "GET", path, nil)
+		retry, buildErr := c.signedRequest(watch.ctx, "GET", path, nil)
 		if buildErr != nil {
+			watch.stop()
 			return nil, 0, buildErr
 		}
 		retry.Header = req.Header.Clone()
 		if err := relayapi.SignRequest(c.id, retry, nil); err != nil {
+			watch.stop()
 			return nil, 0, err
 		}
-		if resp, err = c.http.Do(retry); err != nil {
-			return nil, 0, fmt.Errorf("contacting relay: %w", err)
+		watch.reset()
+		if resp, err = c.stream.Do(retry); err != nil {
+			watch.stop()
+			return nil, 0, watch.wrap(fmt.Errorf("contacting relay: %w", err))
 		}
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		defer resp.Body.Close()
+		defer watch.stop()
 		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 		return nil, 0, httpError(resp, payload)
 	}
-	return resp.Body, resp.ContentLength, nil
+	return &stallBody{ReadCloser: resp.Body, watch: watch}, resp.ContentLength, nil
+}
+
+// stallWatch is the stream rule's clock for one request: a timer of the
+// window, moved on by every delivering read, that cancels the request's
+// context when it runs out, and the sentence the cut is then given.
+type stallWatch struct {
+	ctx     context.Context
+	cancel  context.CancelFunc
+	timer   *time.Timer
+	window  time.Duration
+	prefix  string
+	stalled atomic.Bool
+}
+
+// watchStall starts a watch over ctx: the timer runs from here.
+func (c *Client) watchStall(ctx context.Context, prefix string) *stallWatch {
+	w := &stallWatch{window: c.stall, prefix: prefix}
+	w.ctx, w.cancel = context.WithCancel(ctx)
+	w.timer = time.AfterFunc(w.window, func() {
+		w.stalled.Store(true)
+		w.cancel()
+	})
+	return w
+}
+
+// reset moves the window on: a byte was delivered.
+func (w *stallWatch) reset() { w.timer.Reset(w.window) }
+
+// stop ends the watch; the request's context is released with it.
+func (w *stallWatch) stop() {
+	w.timer.Stop()
+	w.cancel()
+}
+
+// wrap turns an error that ended a stalled request into the stall's own
+// sentence, the window in whole seconds, wrapped as the transport failure
+// it is; any other error is returned as it came.
+func (w *stallWatch) wrap(err error) error {
+	if err == nil || !w.stalled.Load() {
+		return err
+	}
+	return fmt.Errorf("%s %d seconds: %w", w.prefix, int64(w.window/time.Second), err)
+}
+
+// stallReader is a request body under the watch: every delivering read
+// moves the window on, and the end of the body ends the watch — from
+// there the transport is waiting for the relay's answer, which its
+// ResponseHeaderTimeout bounds, and the relay's own stall deadline ends a
+// relay that took the body and says nothing. The watch sees the relay
+// through the transport's reads of the body: the transport reads as it
+// writes the wire, so a relay that stops taking bytes fills the socket's
+// buffers, the writes block, and the reads stop.
+type stallReader struct {
+	r     io.Reader
+	watch *stallWatch
+}
+
+func (s *stallReader) Read(p []byte) (int, error) {
+	n, err := s.r.Read(p)
+	if n > 0 {
+		s.watch.reset()
+	}
+	if errors.Is(err, io.EOF) {
+		s.watch.timer.Stop()
+	}
+	return n, err
+}
+
+// stallBody is a response body under the watch: every delivering read
+// moves the window on, a read that ends by the watch is given the stall's
+// sentence, and Close ends the watch.
+type stallBody struct {
+	io.ReadCloser
+	watch *stallWatch
+}
+
+func (s *stallBody) Read(p []byte) (int, error) {
+	n, err := s.ReadCloser.Read(p)
+	if n > 0 {
+		s.watch.reset()
+	}
+	return n, s.watch.wrap(err)
+}
+
+func (s *stallBody) Close() error {
+	s.watch.stop()
+	return s.ReadCloser.Close()
 }
 
 // signedRequest builds a request signed over the given body bytes. The stream

@@ -195,7 +195,9 @@ func (s *Server) listing(w http.ResponseWriter, r *http.Request, fp string, afte
 // than the watcher said. found reports whether there is anything to
 // answer with rather than hold for.
 func (s *Server) look(fp string, after int64, limit int, stubs bool, peers map[string]time.Time) (resp relayapi.ListResponse, found bool, err error) {
-	listing, err := s.store.Listing(fp, after, limit, stubs)
+	// A page follows max_bytes: as many envelopes as fit the budget, and
+	// one at least, so a client sized to the relay's max_bytes holds it.
+	listing, err := s.store.ListingWithin(fp, after, limit, stubs, s.cfg.MaxBytes)
 	if err != nil {
 		return resp, false, err
 	}

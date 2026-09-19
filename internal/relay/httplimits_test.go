@@ -426,3 +426,131 @@ func TestLimitABlobReaderThatStopsIsCutInsideTheWindow(t *testing.T) {
 		}
 	})
 }
+
+// TestLimitAListingPageFollowsMaxBytes: a page of a listing had no bound in
+// bytes — up to MaxListLimit envelopes of up to max_bytes each, which a
+// client sized to hold a page cannot hold, and a mailbox nobody could list
+// is one nobody could acknowledge. Now the relay ends a page before the
+// envelope that would take its inline bytes past max_bytes, and always
+// carries one, so a page is at most max_bytes plus one envelope plus its
+// framing, and the rows the budget left off are the next page's. With
+// max_bytes 16 KiB and five envelopes of about 10 KiB each (a sealed
+// envelope carries about 4.3 KiB of keys and signature before its text),
+// every page holds one and the five come over five pages in order, queued
+// saying five the whole way; two small envelopes that fit the budget
+// together come as one page; an envelope near the budget's whole size
+// comes alone, and behind the two small ones it is the next page; and a
+// stubs listing, which carries no body, lists them all at once.
+func TestLimitAListingPageFollowsMaxBytes(t *testing.T) {
+	const maxBytes = 16 << 10
+	h := newHarness(t, Config{MaxBytes: maxBytes})
+	people := ids(t, "alice", "bob")
+	alice, bob := people[0], people[1]
+	h.register(alice)
+	h.register(bob)
+	post := func(t *testing.T, text string) int64 {
+		t.Helper()
+		status, body := h.do(alice, "POST", "/v1/mailbox/"+bob.Fingerprint(), sealed(t, alice, bob.Public(), text), nil)
+		if status != http.StatusOK {
+			t.Fatalf("post: %d %s", status, body)
+		}
+		var resp relayapi.PostResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp.ID
+	}
+	page := func(t *testing.T, after int64, query string) relayapi.ListResponse {
+		t.Helper()
+		status, body := h.do(bob, "GET", fmt.Sprintf("/v1/mailbox/%s?after=%d&limit=200%s", bob.Fingerprint(), after, query), nil, nil)
+		if status != http.StatusOK {
+			t.Fatalf("list after %d: %d %s", after, status, body)
+		}
+		var list relayapi.ListResponse
+		if err := json.Unmarshal(body, &list); err != nil {
+			t.Fatal(err)
+		}
+		return list
+	}
+	inline := func(l relayapi.ListResponse) int {
+		n := 0
+		for _, m := range l.Messages {
+			n += len(m.Envelope)
+		}
+		return n
+	}
+
+	// Five of about 10 KiB: one a page.
+	var ids []int64
+	for i := 0; i < 5; i++ {
+		ids = append(ids, post(t, strings.Repeat("x", 5000)))
+	}
+	var after int64
+	for i := 0; i < 5; i++ {
+		l := page(t, after, "")
+		if len(l.Messages) != 1 || l.Messages[0].ID != ids[i] || l.Queued != 5 {
+			t.Fatalf("page %d: %d messages (first %d), queued %d; want the one message %d and queued 5", i, len(l.Messages), l.Messages[0].ID, l.Queued, ids[i])
+		}
+		if n := inline(l); n <= maxBytes/2 || n > maxBytes {
+			t.Fatalf("page %d carries %d inline bytes; want one envelope of about 10 KiB", i, n)
+		}
+		after = l.Messages[0].ID
+	}
+	if l := page(t, after, ""); len(l.Messages) != 0 || l.Queued != 5 {
+		t.Fatalf("after the five: %d messages, queued %d; want none and 5", len(l.Messages), l.Queued)
+	}
+	// Stubs carry no body and are not budgeted.
+	if l := page(t, 0, "&stubs=1"); len(l.Messages) != 5 {
+		t.Fatalf("a stubs listing: %d messages, want all 5", len(l.Messages))
+	}
+	for _, id := range ids {
+		if status, body := h.do(bob, "DELETE", fmt.Sprintf("/v1/mailbox/%s/%d", bob.Fingerprint(), id), nil, nil); status/100 != 2 {
+			t.Fatalf("delete %d: %d %s", id, status, body)
+		}
+	}
+
+	// Two small ones together, then one of the budget's whole size alone.
+	small1, small2 := post(t, "a"), post(t, "b")
+	l := page(t, 0, "")
+	if len(l.Messages) != 2 || l.Messages[0].ID != small1 || l.Messages[1].ID != small2 {
+		t.Fatalf("two small envelopes: %d messages; want both on one page", len(l.Messages))
+	}
+	big := post(t, strings.Repeat("y", 8500))
+	if n := len(sealed(t, alice, bob.Public(), strings.Repeat("y", 8500))); n > maxBytes {
+		t.Fatalf("the test's large envelope is %d bytes, over max_bytes", n)
+	}
+	l = page(t, small2, "")
+	if len(l.Messages) != 1 || l.Messages[0].ID != big || len(l.Messages[0].Envelope) <= 8500 {
+		t.Fatalf("an envelope near the budget: %d messages, first %d of %d bytes; want it alone", len(l.Messages), l.Messages[0].ID, len(l.Messages[0].Envelope))
+	}
+	// And listed with the small ones before it: the page ends before it.
+	l = page(t, 0, "")
+	if len(l.Messages) != 2 {
+		t.Fatalf("the small ones with the large behind: %d messages on the page; want the two small and the large on the next", len(l.Messages))
+	}
+}
+
+// TestTheHealthAnswerCarriesMaxBytes: the health answer says the relay's
+// max_bytes, always, so a client can size what it holds of a listing page
+// to the relay it talks to; it is the relay's own figure, the operator's
+// setting or the default.
+func TestTheHealthAnswerCarriesMaxBytes(t *testing.T) {
+	for _, maxBytes := range []int64{0, 4096} {
+		h := newHarness(t, Config{MaxBytes: maxBytes})
+		status, body := h.do(nil, "GET", "/v1/health", nil, nil)
+		if status != http.StatusOK {
+			t.Fatalf("health: %d %s", status, body)
+		}
+		var resp relayapi.HealthResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			t.Fatal(err)
+		}
+		want := maxBytes
+		if want == 0 {
+			want = relayapi.DefaultMaxBytes
+		}
+		if resp.MaxBytes != want || !strings.Contains(string(body), `"max_bytes":`) {
+			t.Fatalf("with max_bytes %d the health answer says %d (%s); want %d, always present", maxBytes, resp.MaxBytes, body, want)
+		}
+	}
+}

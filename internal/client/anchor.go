@@ -90,6 +90,7 @@ func FetchTrustAnchor(ctx context.Context, base string) (*x509.Certificate, stri
 	tlsCfg.InsecureSkipVerify = true // checked against the token, below
 	pinTransport(tlsCfg)
 	transport.TLSClientConfig = tlsCfg
+	boundTransport(transport)
 
 	c := &http.Client{Transport: transport, Timeout: 30 * time.Second}
 	resp, err := c.Do(req)

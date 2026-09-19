@@ -48,7 +48,12 @@ func (f *v5Relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/mailbox/"), "/")
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v1/health":
-		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		// The fake stands for a relay from before signed lists, stubs and
+		// held listings, which is what its tests are about; it carries
+		// max_bytes, which this client requires of every relay it talks
+		// to since PLAN-HTTP, since a relay without it is refused by name
+		// before anything else — TestARelayWithoutMaxBytesIsRefusedByName.
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "max_bytes": 16777216})
 	case r.Method == http.MethodPost && r.URL.Path == "/v1/register":
 		json.NewEncoder(w).Encode(map[string]any{"fp": strings.Fields(r.Header.Get("X-CCX-Auth"))[1]})
 	case r.Method == http.MethodPost && mailbox && len(parts) == 1:
@@ -259,5 +264,24 @@ func TestANewClientStillSendsTheArrayForAnOldRelay(t *testing.T) {
 	warning := captureStderr(t, func() { fetched = alice.run("inbox") })
 	if warning != "" {
 		t.Fatalf("a fetch from an old relay drew a warning:\n%s\n%s", warning, fetched)
+	}
+}
+
+// TestARelayWithoutMaxBytesIsRefusedByName: a relay whose health answer
+// carries no max_bytes is one from before the field, and the client
+// refuses it at the first request that reads health — registration —
+// naming the field, since a listing page is sized by it and nothing else
+// can say how much of a page to hold.
+func TestARelayWithoutMaxBytesIsRefusedByName(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+	defer srv.Close()
+	alice := &user{t: t, home: t.TempDir()}
+	alice.run("init", "--name", "alice", "--relay", srv.URL)
+	_, err := alice.tryRun("register")
+	if err == nil || !strings.Contains(err.Error(), "max_bytes is not the relay's max_bytes") {
+		t.Fatalf("register against a relay from before max_bytes: %v; want the refusal naming the field", err)
 	}
 }

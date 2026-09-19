@@ -138,7 +138,15 @@ spot, and `auu send --resume` finishes what a failed command left: it asks
 the relay by an attempt from zero, resumes once from the partial the relay
 kept when it kept one (an attempt past the relay's threshold, within sixty
 seconds), and otherwise opens anew for the same sealed bytes. Nothing about
-the command changes.
+the command changes. An attempt has no clock but the link's: the upload
+runs for as long as bytes keep moving, and is cut only when the relay
+takes none for sixty seconds — the relay's own stall window — with the
+sentence `the relay stopped taking the upload: no byte was read for 60
+seconds`, after which the next attempt asks where the relay's copy ends.
+The download of a stream on the receiving side runs under the same rule,
+`the relay stopped sending the stream: no byte arrived for 60 seconds`,
+and resumes by range from where it stood. Every other request to the
+relay is answered within two minutes or fails.
 
 A note to yourself needs no peer at all:
 
@@ -222,7 +230,13 @@ each other: every edit first asks each relay what it holds, and a relay
 holding a directory issued later than this machine's stops the edit with
 `work holds a directory issued T, newer than this machine's; run 'auu
 channel pull --relay work' to take it first` — `pull` takes that directory
-into the local file, and the edit goes through after.
+into the local file, and the edit goes through after. A directory or an
+allow list is held to 1 MiB as it is sent, the relay's cap on the two
+routes; a full directory of 64 channels at every limit is about 565 KB on
+the wire and a full allow list about 157 KB, so what `auu` signs always
+fits, and a document that does not (`the directory is N bytes as sent,
+over the relay's cap of 1048576; nothing was sent`) is one another tool
+indented.
 
 Sending to a channel is `--channel NAME` on `send` and on `reply`; without
 it a message goes to the recipient's `default`, and a reply goes to the
@@ -305,6 +319,14 @@ A reply carries the thread's subject unless you give it one of its own, with
 still the thread. `auu read` then prints the thread's subject and the
 reply's own indented beneath it, and `--json` adds `thread_subject` beside
 `subject`, which is always the message's own.
+
+A fetch reads the mailbox in pages of up to 200 messages, and a page is
+also bounded in bytes by the relay: it carries envelopes until the next
+would take it past the relay's `max_bytes`, one at least, so a page is
+never more than `max_bytes` plus one envelope. `auu` learns the relay's
+`max_bytes` from its health answer the first time it lists and holds a
+page to twice that; a relay that does not say its `max_bytes` is one from
+before this version and is refused by name.
 
 Mail from a sender who is not on your peer list is held back:
 

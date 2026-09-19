@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/clientca"
@@ -42,6 +43,24 @@ type Client struct {
 	base string
 	id   *identity.Identity
 	http *http.Client
+	// stream is the client the stream routes use, the PUT of an attempt
+	// and the GET of a blob: the same transport and no whole-exchange
+	// timeout, since a stream's length is the transfer's, and a stall rule
+	// in its place — no byte read from the request body or arriving on
+	// the response body for stall cancels the request. Under the
+	// one-request wire a first attempt the client cut at two minutes was
+	// kept by the relay only if it had reached max_bytes, so a stream
+	// needing more than about four minutes on the link could never be
+	// placed.
+	stream *http.Client
+	// stall is the stream rule's window, relayapi.ResumeWindow, the
+	// relay's own stall deadline; tests set it short.
+	stall time.Duration
+	// maxBytes is the relay's max_bytes as its health answer said it,
+	// fetched once on the first listing and kept: what a listing page is
+	// sized to, and so what the client will hold of one. Zero until then.
+	maxBytes int64
+	mu       sync.Mutex
 	// transport is the one carrying the client certificate, kept so a
 	// renewal can drop the connections using the old one.
 	transport *http.Transport
@@ -91,6 +110,8 @@ func NewWithAnchor(base string, id *identity.Identity, cert *tls.Certificate, an
 		base:      strings.TrimSuffix(base, "/"),
 		id:        id,
 		http:      httpClient,
+		stream:    &http.Client{Transport: transport},
+		stall:     relayapi.ResumeWindow,
 		transport: transport,
 		sleep:     sleep,
 	}
@@ -131,7 +152,39 @@ func transportFor(cert *tls.Certificate, anchor *Anchor) *http.Transport {
 		tlsCfg = anchor.tlsConfig(tlsCfg)
 	}
 	transport.TLSClientConfig = tlsCfg
+	boundTransport(transport)
 	return transport
+}
+
+// boundTransport is what every transport this package makes has beyond
+// its TLS pins: one protocol and two caps. HTTP/1.1 alone — the clone of
+// http.DefaultTransport carried ForceAttemptHTTP2, so every deployed
+// exchange was HTTP/2 while every test in the tree ran HTTP/1.1; the
+// relay offers http/1.1 alone now and the client asks for nothing else,
+// so the wire's properties hold under the one protocol both ends run. A
+// response's headers are capped at relayapi.MaxHeaderBytes, the relay's
+// own cap on a request's, and refused by the transport over it; and a
+// relay that takes the request whole and then says nothing is waited on
+// for relayapi.MaxWait plus thirty seconds, the longest a listing is held
+// for a watcher plus room for the answer — the plan's thirty seconds
+// alone would have cut every held listing. The stream routes' bodies are
+// bounded by the stall rule, not by this.
+func boundTransport(t *http.Transport) {
+	t.ForceAttemptHTTP2 = false
+	t.TLSClientConfig.NextProtos = []string{"http/1.1"}
+	t.MaxResponseHeaderBytes = relayapi.MaxHeaderBytes
+	t.ResponseHeaderTimeout = relayapi.MaxWait + 30*time.Second
+}
+
+// responseHeadersTooLarge recognises the transport's refusal of a response
+// whose headers exceed MaxResponseHeaderBytes. net/http has no sentinel
+// for it: the transport's readLoop returns fmt.Errorf("net/http: server
+// response headers exceeded %d bytes; aborted") (Go 1.27, transport.go),
+// so the text is matched, as pinnedHandshakeRefused matches the TLS
+// alerts, and a change in net/http's wording is found by
+// TestLimitResponseHeadersAreCapped.
+func responseHeadersTooLarge(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "net/http: server response headers exceeded")
 }
 
 // pinTransport is the one TLS policy every connection this project makes
@@ -281,6 +334,14 @@ func retryWait(e *HTTPError) time.Duration {
 // Every attempt is signed afresh: the signature covers a nonce the relay spends
 // once, so a replayed request would be refused as a replay.
 func (c *Client) do(ctx context.Context, method, path string, payload any, out any, headers map[string]string) error {
+	return c.doWithin(ctx, method, path, payload, out, headers, relayapi.DefaultMaxBytes*2)
+}
+
+// doWithin is do with the most of the answer's body the client will hold:
+// every JSON answer but a listing page is small and reads under twice the
+// default max_bytes as it always did; a listing page follows the relay's
+// max_bytes and reads under listingCap.
+func (c *Client) doWithin(ctx context.Context, method, path string, payload any, out any, headers map[string]string, hold int64) error {
 	var body []byte
 	if payload != nil {
 		var err error
@@ -291,7 +352,7 @@ func (c *Client) do(ctx context.Context, method, path string, payload any, out a
 		}
 	}
 	for attempt := 0; ; attempt++ {
-		err := c.attempt(ctx, method, path, body, out, headers)
+		err := c.attempt(ctx, method, path, body, out, headers, hold)
 		var httpErr *HTTPError
 		if !errors.As(err, &httpErr) || !retryable(httpErr.Status) || attempt >= maxRetries {
 			return err
@@ -306,6 +367,30 @@ func (c *Client) do(ctx context.Context, method, path string, payload any, out a
 			return err
 		}
 	}
+}
+
+// listingCap is the most the client holds of a listing page: twice the
+// relay's max_bytes plus the framing allowance. The relay ends a page
+// before an envelope that would take it past max_bytes, always with one
+// at least, so a page is at most max_bytes plus one envelope plus its
+// framing, and this holds it for the relay the client talks to rather
+// than for the ceiling, which is a gigabyte the client should never
+// allocate. The relay's figure comes from its health answer, fetched once
+// per Client on the first listing and kept.
+func (c *Client) listingCap(ctx context.Context) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.maxBytes == 0 {
+		var resp relayapi.HealthResponse
+		if err := c.do(ctx, "GET", "/v1/health", nil, &resp, nil); err != nil {
+			return 0, fmt.Errorf("asking the relay's max_bytes before a listing: %w", err)
+		}
+		if err := c.checkHealth(&resp); err != nil {
+			return 0, err
+		}
+		c.maxBytes = resp.MaxBytes
+	}
+	return 2*c.maxBytes + relayapi.FramingAllowance, nil
 }
 
 // verifiedRoute says whether the relay verifies a signature on this
@@ -328,7 +413,7 @@ func verifiedRoute(method, path string) bool {
 }
 
 // attempt is one request, signed where the relay verifies a signature.
-func (c *Client) attempt(ctx context.Context, method, path string, body []byte, out any, headers map[string]string) error {
+func (c *Client) attempt(ctx context.Context, method, path string, body []byte, out any, headers map[string]string, hold int64) error {
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -349,14 +434,22 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 		if pinnedHandshakeRefused(err) {
 			return &NoPQTransportError{Err: err}
 		}
+		if responseHeadersTooLarge(err) {
+			return c.malformed("the answer", "the headers", fmt.Sprintf("under %d bytes", relayapi.MaxHeaderBytes))
+		}
 		return c.diagnoseRefusal(ctx, fmt.Errorf("contacting relay: %w", err))
 	}
 	defer resp.Body.Close()
 
-	// Cap the response: a hostile relay does not get to exhaust our memory.
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, relayapi.DefaultMaxBytes*2))
+	// Cap the response: a hostile relay does not get to exhaust our memory,
+	// and an answer over what this route holds is refused by name rather
+	// than read short and failed as JSON.
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, hold+1))
 	if err != nil {
 		return fmt.Errorf("reading relay response: %w", err)
+	}
+	if int64(len(respBody)) > hold {
+		return c.malformed("the answer", "the body", fmt.Sprintf("under %d bytes, the most this route holds", hold))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return httpError(resp, respBody)
@@ -509,8 +602,30 @@ func (c *Client) FetchKey(ctx context.Context, fp string) (*identity.Public, err
 // against this identity's registered key and answers 409 when it holds a
 // directory issued no earlier, which comes back as an HTTPError.
 func (c *Client) SetDirectory(ctx context.Context, doc, sig []byte) error {
-	return c.do(ctx, "PUT", "/v1/mailbox/"+c.id.Fingerprint()+"/channels",
-		relayapi.ChannelsRequest{Document: doc, Signature: sig}, nil, nil)
+	body, err := documentBody("the directory", relayapi.ChannelsRequest{Document: doc, Signature: sig})
+	if err != nil {
+		return err
+	}
+	return c.do(ctx, "PUT", "/v1/mailbox/"+c.id.Fingerprint()+"/channels", body, nil, nil)
+}
+
+// documentBody marshals one of the two owner-signed documents' requests
+// and holds it to relayapi.MaxDocumentBytes, the relay's cap on the
+// route, before a byte goes on the wire: a document over it is refused
+// here with the bytes and the cap in the sentence rather than 413 by the
+// relay after the upload. The cap holds either document at every
+// maximum as this client marshals it; what runs over it is whitespace
+// inside the signed document, which is the signer's encoder's.
+func documentBody(what string, req any) ([]byte, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > relayapi.MaxDocumentBytes {
+		return nil, fmt.Errorf("%s is %d bytes as sent, over the relay's cap of %d; nothing was sent",
+			what, len(body), relayapi.MaxDocumentBytes)
+	}
+	return body, nil
 }
 
 // DirectoryResult is a mailbox's channel directory as the relay serves it:
@@ -557,8 +672,11 @@ func (c *Client) SetAllowlist(ctx context.Context, senders []string, doc, sig []
 	if senders == nil {
 		senders = []string{}
 	}
-	return c.do(ctx, "PUT", "/v1/mailbox/"+c.id.Fingerprint()+"/allow",
-		relayapi.AllowRequest{Allow: senders, Document: doc, Signature: sig}, nil, nil)
+	body, err := documentBody("the allow list", relayapi.AllowRequest{Allow: senders, Document: doc, Signature: sig})
+	if err != nil {
+		return err
+	}
+	return c.do(ctx, "PUT", "/v1/mailbox/"+c.id.Fingerprint()+"/allow", body, nil, nil)
 }
 
 // AllowlistResult is this mailbox's allow list as the relay serves it: the
@@ -729,7 +847,11 @@ func (c *Client) ListWait(ctx context.Context, req ListRequest) (Listing, error)
 		path += "&peers=" + strings.Join(entries, ",")
 	}
 	var resp relayapi.ListResponse
-	if err := c.do(ctx, "GET", path, nil, &resp, nil); err != nil {
+	hold, err := c.listingCap(ctx)
+	if err != nil {
+		return Listing{}, err
+	}
+	if err := c.doWithin(ctx, "GET", path, nil, &resp, nil, hold); err != nil {
 		return Listing{}, err
 	}
 	if err := c.checkListing(&resp); err != nil {

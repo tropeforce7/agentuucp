@@ -936,6 +936,18 @@ func (s *Store) List(toFP string, after int64, limit int) ([]Row, error) {
 // which of the messages it kept are still queued, which is what stubs is
 // for, and it is why stubs does not stat either.
 func (s *Store) Listing(toFP string, after int64, limit int, stubs bool) (Listing, error) {
+	return s.ListingWithin(toFP, after, limit, stubs, 0)
+}
+
+// ListingWithin is Listing under a byte budget: inline envelopes are added
+// to the page while the next would take the page past budget, and always
+// at least one, so a page is at most the budget plus one envelope plus
+// its framing, and the rows the budget left off are the next page's. A
+// page had no bound in bytes before: up to MaxListLimit envelopes of up
+// to max_bytes each, which is a page a client cannot hold, and a mailbox
+// nobody could list is one nobody could acknowledge. Zero is no budget.
+// Stubs carry no body and are not counted.
+func (s *Store) ListingWithin(toFP string, after int64, limit int, stubs bool, budget int64) (Listing, error) {
 	var l Listing
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -987,6 +999,7 @@ func (s *Store) Listing(toFP string, after int64, limit int, stubs bool) (Listin
 	}
 
 	out := make([]Row, 0, len(listed))
+	var inline int64
 	for _, st := range listed {
 		row := Row{ID: st.id, Received: st.received, Size: st.size, Kind: st.kind, Channel: st.channel}
 		// A stream is fetched from its own endpoint: it may be larger than
@@ -1000,6 +1013,12 @@ func (s *Store) Listing(toFP string, after int64, limit int, stubs bool) (Listin
 			if err != nil {
 				return l, err
 			}
+			// The budget: the page ends before an envelope that would
+			// take it past, unless the page is still empty.
+			if budget > 0 && len(out) > 0 && inline+int64(len(body)) > budget {
+				break
+			}
+			inline += int64(len(body))
 			row.Envelope = body
 		}
 		out = append(out, row)

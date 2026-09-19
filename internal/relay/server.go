@@ -480,7 +480,7 @@ const hintCompact = "send the document compact, without indentation"
 func (s *Server) postCap() int64 { return s.cfg.MaxBytes + relayapi.FramingAllowance }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	resp := relayapi.HealthResponse{OK: true}
+	resp := relayapi.HealthResponse{OK: true, MaxBytes: s.cfg.MaxBytes}
 	if s.clientCerts() {
 		resp.MLDSA = clientca.ParameterNumber(s.cfg.ClientCerts.Issuer.Parameters())
 	}
