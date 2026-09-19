@@ -86,8 +86,17 @@ reach. The relay refuses to start instead, naming both hosts and the
 `auu-ca relay` command that issues a bundle for the right one; names are
 compared without regard to case, addresses as addresses.
 
-Use `--print-config` to see exactly what the relay resolved. Its output is
-valid input for `--config`.
+A path in the settings file — `db`, `messages_dir`, `admin.authorized_file`,
+`tls.cert_file`, `tls.key_file`, `tls.bundle` — that is not absolute is
+relative to the directory the settings file is in, not to the directory the
+relay was started from: `"db": "relay.db"` in `/etc/auu/relay.json` is
+`/etc/auu/relay.db` whether systemd or a shell started the relay, and so is
+the default when the file names no `db` at all: `relay.db` and `messages`
+beside the settings. A path given as a flag is the shell's, relative to
+the working directory as any flag is.
+
+Use `--print-config` to see exactly what the relay resolved, paths
+included. Its output is valid input for `--config`.
 
 ### 1.1 Where the mail lives
 

@@ -31,18 +31,26 @@ import (
 // test walks every component that becomes part of a path somewhere: a
 // fingerprint in a URL, an upload id, a token id, an attachment name, a
 // channel name, a relay host, a message id and a thread id. Each row names
-// the rule and the point it runs at, and is fed `..`, `../x`, `a/b`, `.`,
-// the empty string and a NUL. When a new place turns something from the
-// network into a path, add its row here first, before the code; a rule that
-// is not in this table is a rule somebody will forget. security.md's
-// paragraph on paths lists the same components in the same order.
+// the rule and the point it runs at, and is fed the limit guide's
+// traversal set: `..`, `../x`, `x/../../y`, `a/b`, an absolute path, a
+// backslash form, a drive letter, a Windows device name, a NUL, the empty
+// string, `.`, and a name longer than a filesystem allows. When a new
+// place turns something from the network into a path, add its row here
+// first, before the code; a rule that is not in this table is a rule
+// somebody will forget. security.md's paragraph on paths lists the same
+// components in the same order, and the file-open ledger's network rows
+// at the wire name this test.
 //
 // The second adversarial trace found the thread id missing from the list:
 // an admitted peer's `--thread "../../outside"` was joined onto an expert
 // host's serve directory.
-func TestNothingTheNetworkNamesIsAPath(t *testing.T) {
-	values := []string{"..", "../x", "a/b", ".", "", "\x00"}
-	names := map[string]string{"..": "dot-dot", "../x": "dot-dot-slash", "a/b": "a-slash-b", ".": "dot", "": "empty", "\x00": "NUL"}
+func TestLimitNothingTheNetworkNamesIsAPath(t *testing.T) {
+	long := strings.Repeat("a", 300)
+	values := []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", long}
+	names := map[string]string{"..": "dot-dot", "../x": "dot-dot-slash", "x/../../y": "x-dot-dot-dot-dot-y", "a/b": "a-slash-b",
+		"/etc/passwd": "an absolute path", `..\x`: "a backslash form", `C:\x`: "a drive letter", "C:x": "a drive-relative name",
+		"CON": "a Windows device name", "com1.txt": "a Windows device name with an extension", "\x00": "NUL", "": "empty", ".": "dot",
+		long: "300 bytes"}
 
 	alice, err := identity.Generate("alice")
 	if err != nil {

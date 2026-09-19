@@ -120,7 +120,8 @@ refused before anything leaves, because the receiver may be on a disk that
 spells them as one — macOS by default, Windows always — and a message that
 cannot be written there is no use to anyone. For the same reason a name is
 a file name on Windows too: not a device name such as `con`, `nul.txt` or
-`com1.log`, which would open the device rather than a file there, and
+`com1.log`, which would open the device rather than a file there, holding
+no colon, which names a drive or a stream there, and
 not ending in a dot or a space, which Windows strips; the refusal names
 the rule and says it holds for every receiver, since a sender cannot know
 where a message lands. Above 64 KiB in all, the
@@ -182,8 +183,10 @@ Times are RFC 3339 with a zone, or a day such as `2026-10-01`, taken as
 midnight where you are. A description is one line: line breaks and tabs in
 what you type are folded to a space. Names are at most 64 bytes, descriptions
 1024, and a directory holds at most 64 channels; a name has no leading or
-trailing space, no `/`, and no control or format character, and case counts,
-so `Bugs` and `bugs` are two channels.
+trailing space, no `/`, `\` or `:`, no Windows device name as its stem
+(`CON`, `NUL`, `COM1`), and no control or format character, and case
+counts, so `Bugs` and `bugs` are two channels; the three Windows rules are
+there because a name is a directory on an expert host, which may be one.
 
 The first `create` writes `default` beside the new channel, so creating a
 channel never takes the default away; `auu channel delete default` does,

@@ -178,7 +178,10 @@ func (r *serveRun) sweep() error {
 	}
 	now := time.Now()
 	for _, e := range entries {
-		if !e.IsDir() {
+		// An entry serve made is a directory named by a thread id; anything
+		// else under threads/ is not serve's to let go of, and its name is
+		// never joined onto the worktrees directory.
+		if !e.IsDir() || message.ValidID(e.Name()) != nil {
 			continue
 		}
 		thread := e.Name()

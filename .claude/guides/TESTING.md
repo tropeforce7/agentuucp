@@ -852,14 +852,38 @@ finding, and the fix is the rule, not a length check at the slice.
 provenance is not `local` (network, operator, derived from either, and any
 value read from a configuration file) names, after `shown by`, the limit
 test that drives the traversal set through the rule at that point: `..`,
-`../x`, `x/../../y`, an absolute path, a backslash form, a drive letter, a
-Windows device name, a NUL byte, the empty string, `.`, and a name longer
-than the filesystem allows. The assertion is one of two: the operation
-refuses with its sentence, or the path it resolves stays under the
-directory it was meant for (`filepath.Rel` from the base has no `..`
-element). An operator's absolute path is the operator's choice and its row
-says so; a value the operator gives that is joined under a directory is
-held to the same rule as one from the network.
+`../x`, `x/../../y`, `a/b`, an absolute path, a backslash form, a drive
+letter, a drive-relative name, a Windows device name with and without an
+extension, a NUL byte, the empty string, `.`, and a name longer than the
+filesystem allows. The assertion is one of two: the operation refuses
+with its sentence, or the path it resolves stays under the directory it
+was meant for (`filepath.Rel` from the base has no `..` element); and in
+either case a witness file outside the directory is still there and
+nothing new is beside it. An operator's path comes in three forms and the
+row says which. A whole path used as given, a flag or a file named on
+the command line, is `operator's absolute path` and names no test, since
+nothing is joined onto it. A value from a configuration file is resolved
+against that file's directory, never against the working directory the
+program was started in — the third review found the relay's `db`,
+`messages_dir` and `admin.authorized_file` and serve's channel `dir`,
+`key_file` and `control` all relative to wherever the process happened to
+start, so that a unit file and a shell gave the same settings two
+meanings — and its row says the base and names the test that shows a
+relative value land beside the file and an absolute one kept
+(`TestLimitConfigPathsResolveAgainstTheirFile`). A name the operator
+chose that is joined under a directory, a relay name under `relays/`, is
+held to the same rule as one from the network, and its row names the rule,
+the point and the test. A directory entry is a path too: a reader that
+lists a directory it owns and joins each entry back onto it holds the
+entry to a rule of its own — a message id, a relay name, a file and not a
+directory — and its test plants strays that break the rule (a file where
+a directory is expected, a directory named `CON` or `..x` or by a name
+one short of an id, a directory with a file in it where only files
+belong) and shows the reader skip or list them by name, read what the
+program wrote, remove nothing that is not its own, and never fail the
+start on one of them. The relay's sweep once failed the whole start on a
+directory somebody had made inside a mailbox, because `os.Remove` of it
+was an error; the reader's rule is the fix, not a broader remove.
 
 **The ledger.** `internal/limits/ledger.txt` holds one row per site the
 test finds:

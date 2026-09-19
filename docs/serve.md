@@ -54,6 +54,15 @@ One machine can be an expert for several projects: one channel each.
 `proxy` is the key-holding proxy, one section for the whole file, and is
 its own section below; a file without it hands the handler no key at all.
 
+A path in the file that is not absolute — a channel's `dir`, the proxy's
+`key_file` or `control`, and the same two in the split proxy's own file —
+is relative to the directory the file is in, not to wherever `auu serve`
+was started from: `"dir": "src/jostle"` in `/home/expert/.auu/serve.json`
+is `/home/expert/.auu/src/jostle`. `exec`, `before` and `after` are
+command lines the shell runs, and the shell resolves them as it always
+does, with the worktree as the working directory. `auu serve check`
+prints every path as it resolved it.
+
 Unknown fields are refused by name: a misspelled one that silently did
 nothing would be a channel nobody was serving. `auu serve check` reads the
 file, checks every directory and program it names, and prints what it would

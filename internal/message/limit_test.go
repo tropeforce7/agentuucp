@@ -72,3 +72,36 @@ func TestLimitAttachmentDigest(t *testing.T) {
 		t.Errorf("the digest as written: %v", err)
 	}
 }
+
+// TestLimitNamesAreNotPathsAtValidate: a thread id and a reply id name a
+// directory under an expert host's serve directory and an attachment
+// name a file on the receiver; Body.Validate runs message.ValidID and
+// ValidAttachmentName on each, so a value from the limit guide's
+// traversal set — `..`, `../x`, `x/../../y`, `a/b`, an absolute path, a
+// backslash form, a drive letter, a Windows device name, a NUL, the empty
+// string, `.`, and a 300-byte name — is refused at the door.
+func TestLimitNamesAreNotPathsAtValidate(t *testing.T) {
+	set := []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", strings.Repeat("a", 300)}
+	for _, v := range set {
+		b := goodBody(t)
+		b.Thread = v
+		if err := b.Validate(); err == nil {
+			t.Errorf("thread %q was accepted", v)
+		}
+		if v != "" {
+			b = goodBody(t)
+			b.InReplyTo = v
+			if err := b.Validate(); err == nil {
+				t.Errorf("in_reply_to %q was accepted", v)
+			}
+		}
+		b = goodBody(t)
+		b.Attachments[0].Name = v
+		if err := b.Validate(); err == nil {
+			t.Errorf("attachment name %q was accepted", v)
+		}
+		if err := ValidAttachmentName(v); err == nil {
+			t.Errorf("ValidAttachmentName took %q", v)
+		}
+	}
+}

@@ -75,6 +75,10 @@ func loadProxyFile(path string) (*proxyFile, error) {
 		return nil, usageErrf("%s: v is %d; this %s understands version 1", path, f.V, prog)
 	}
 	f.fill()
+	// A relative path in the file is relative to the file, not to the
+	// working directory the proxy's account was started in.
+	f.KeyFile = resolveAgainst(filepath.Dir(path), f.KeyFile)
+	f.Control = resolveAgainst(filepath.Dir(path), f.Control)
 	perr := func(format string, a ...any) error {
 		return usageErrf("%s: %s", path, fmt.Sprintf(format, a...))
 	}

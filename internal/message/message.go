@@ -152,6 +152,11 @@ func ValidAttachmentName(name string) error {
 	if strings.ContainsAny(name, "/\\") {
 		return fmt.Errorf("attachment %q: name must not contain a path separator", name)
 	}
+	// A colon names a drive or an alternate data stream on Windows, so
+	// C:x written under a directory there is not a file in it.
+	if strings.Contains(name, ":") {
+		return fmt.Errorf("attachment %q: name must not contain a colon, which names a drive or a stream on Windows", name)
+	}
 	if name == "." || name == ".." {
 		return fmt.Errorf("attachment %q: invalid name", name)
 	}
@@ -175,41 +180,13 @@ func ValidAttachmentName(name string) error {
 	// as malformed), and a trailing dot or space is stripped by the
 	// filesystem, so report.txt. and report.txt are one file and collide
 	// the way case does.
-	if stem, _, _ := strings.Cut(name, "."); isWindowsDevice(stem) {
+	if stem, _, _ := strings.Cut(name, "."); channels.WindowsDevice(stem) {
 		return fmt.Errorf("attachment %q: %s is a device name on Windows, so the name is refused for every receiver", name, strings.ToUpper(stem))
 	}
 	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
 		return fmt.Errorf("attachment %q: name ends in a dot or a space, which Windows strips, so the name is refused for every receiver", name)
 	}
 	return nil
-}
-
-// isWindowsDevice reports whether stem names a device on Windows, under
-// case folding: CON, PRN, AUX, NUL, and COM and LPT followed by one digit
-// 0 to 9 or by one of the superscript digits U+00B9, U+00B2 and U+00B3.
-// Microsoft's pages have not agreed on the set: older ones list COM1 to
-// COM9 and LPT1 to LPT9, the current one COM0 to COM9 with the three
-// superscripts, so this is the union, since a name nobody can use on some
-// Windows is a name nobody needs. COM10 is not a device on any of them.
-func isWindowsDevice(stem string) bool {
-	if len(stem) == 3 {
-		for _, d := range []string{"CON", "PRN", "AUX", "NUL"} {
-			if strings.EqualFold(stem, d) {
-				return true
-			}
-		}
-		return false
-	}
-	if len(stem) < 4 || !(strings.EqualFold(stem[:3], "COM") || strings.EqualFold(stem[:3], "LPT")) {
-		return false
-	}
-	switch rest := stem[3:]; {
-	case len(rest) == 1 && rest[0] >= '0' && rest[0] <= '9':
-		return true
-	case rest == "\u00b9" || rest == "\u00b2" || rest == "\u00b3":
-		return true
-	}
-	return false
 }
 
 // ValidSubject applies the rules for a subject: valid UTF-8, at most 4096

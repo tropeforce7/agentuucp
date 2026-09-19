@@ -99,7 +99,7 @@ person making the change, before anyone else sees it.
 
 4. **Run the enforcement tests**, whatever the change:
 
-       go test ./internal/fileopens ./internal/sqlshape ./internal/limits ./internal/auu -run 'TestEveryFileOpenHasItsProvenanceInTheLedger|TestEveryQueryIsAConstant|TestEveryIntegerFromOutsideHasItsLimitTest|TestNothingTheNetworkNamesIsAPath'
+       go test ./internal/fileopens ./internal/sqlshape ./internal/limits ./internal/auu -run 'TestEveryFileOpenHasItsProvenanceInTheLedger|TestEveryQueryIsAConstant|TestEveryIntegerFromOutsideHasItsLimitTest|TestLimitNothingTheNetworkNamesIsAPath'
 
    and `make vet test build`. `make limits` runs every limit test on its
    own. Record the result.

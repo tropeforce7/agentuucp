@@ -361,6 +361,13 @@ func Load(path string) (Config, string, error) {
 		return cfg, "", fmt.Errorf("%s: trailing data after the JSON object", path)
 	}
 
+	// A relative path in the file is relative to the file, not to the
+	// working directory: a relay under systemd starts in a directory
+	// nobody chose, and "relay.db" beside its settings is what a person
+	// who wrote it meant. A flag keeps the working directory, as a path
+	// typed at a shell does.
+	cfg.resolveAgainst(filepath.Dir(path))
+
 	// Nothing in the file is secret today, but it decides who may administer
 	// the relay, so a file anyone can write is worth a word.
 	var warning string
@@ -369,6 +376,17 @@ func Load(path string) (Config, string, error) {
 			"who administers this relay; consider chmod 644 on it", path, info.Mode().Perm())
 	}
 	return cfg, warning, nil
+}
+
+// resolveAgainst makes every path setting the file gave absolute against
+// dir, the file's own directory; an absolute one and an empty one are
+// left as they are. The credential name is not a path and is not here.
+func (c *Config) resolveAgainst(dir string) {
+	for _, p := range []*string{&c.DB, &c.MessagesDir, &c.Admin.AuthorizedFile, &c.TLS.CertFile, &c.TLS.KeyFile, &c.TLS.Bundle} {
+		if *p != "" && !filepath.IsAbs(*p) {
+			*p = filepath.Join(dir, *p)
+		}
+	}
 }
 
 // utf8BOM is the byte order mark as UTF-8 encodes it.

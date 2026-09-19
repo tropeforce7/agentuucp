@@ -367,3 +367,91 @@ func TestLimitFingerprintsOneShortOnTheWire(t *testing.T) {
 		t.Errorf("an auth fingerprint one short: %d; want 401", resp.StatusCode)
 	}
 }
+
+// TestLimitMessageDirectoryEntries: the sweep and the mailbox count read
+// the relay's own message directory by its entries, each one segment
+// joined under the directory it was listed from. A stray at any level —
+// a file beside the shards, a directory named by a Windows device or a
+// dot-dot form, a file in a shard, a directory with a file in it inside a
+// mailbox — is skipped, not removed and not a reason to fail the start;
+// a file in a mailbox whose name is not an id is the orphan the sweep
+// removes; the message's own file survives; and nothing outside the
+// message directory is touched.
+func TestLimitMessageDirectoryEntries(t *testing.T) {
+	people := ids(t, "alice", "bob")
+	alice, bob := people[0], people[1]
+	scratch := t.TempDir()
+	dir := filepath.Join(scratch, "messages")
+	witness := filepath.Join(scratch, "witness")
+	if err := os.WriteFile(witness, []byte("keep me\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := OpenStore(filepath.Join(scratch, "relay.db"), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []*identity.Identity{alice, bob} {
+		if err := s.Register(id.Fingerprint(), id.Public().Bundle(), id.Name, RegisterOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	id, err := s.Put(bob.Fingerprint(), "default", sealed(t, alice, bob.Public(), "x"), Quotas{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := s.messagePath(bob.Fingerprint(), id)
+	box := filepath.Dir(real)
+	s.Close()
+	dirs := []string{filepath.Join(dir, "CON"), filepath.Join(dir, "..x"), filepath.Join(dir, "a b", "c"), filepath.Join(box, "junk"), filepath.Join(s.tmpDir(), "held")}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := []string{filepath.Join(dir, "stray"), filepath.Join(filepath.Dir(box), "stray"), filepath.Join(box, "junk", "inside"), filepath.Join(s.tmpDir(), "held", "inside")}
+	for _, f := range files {
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orphan := filepath.Join(box, "notanid")
+	if err := os.WriteFile(orphan, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err = OpenStore(filepath.Join(scratch, "relay.db"), dir)
+	if err != nil {
+		t.Fatalf("the start failed on a stray entry: %v", err)
+	}
+	defer s.Close()
+	if got := s.Swept(); got.Orphans != 1 || got.Temp != 0 || got.Missing != 0 {
+		t.Errorf("swept %+v; want one orphan and nothing else", got)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Errorf("the orphan survived the sweep")
+	}
+	if _, err := os.Stat(real); err != nil {
+		t.Errorf("the message's own file did not survive: %v", err)
+	}
+	for _, p := range append(dirs, files...) {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("the sweep touched %q, which is not the relay's: %v", p, err)
+		}
+	}
+	if held, err := s.mailboxesHoldingFiles(); err != nil || held != 1 {
+		t.Errorf("mailboxes holding files: %d, %v; want one, the stray directories counted as none", held, err)
+	}
+	entries, err := os.ReadDir(scratch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		switch e.Name() {
+		case "messages", "witness", "relay.db", "relay.db-wal", "relay.db-shm", "relay.db-journal":
+		default:
+			t.Errorf("%q appeared beside the message directory", e.Name())
+		}
+	}
+	if _, err := os.Stat(witness); err != nil {
+		t.Errorf("the witness beside the message directory is gone: %v", err)
+	}
+}

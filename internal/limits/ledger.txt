@@ -215,6 +215,9 @@ internal/auu/watch.go messageEvent int Size int64 = output
 internal/auu/watch_cmds.go cmdWatch int fs.Duration("interval") = >= 5s shown by TestLimitWaitAndWatchFlags
 internal/auu/watch_cmds.go cmdWatch int fs.Duration("timeout") = >= 0s shown by TestLimitWaitAndWatchFlags
 internal/channels/channels.go Directory int V int = [1, 1] shown by TestLimitDirectoryV
+internal/channels/channels.go WindowsDevice string stem[3:] = local: len(stem) >= 4 by the check before
+internal/channels/channels.go WindowsDevice string stem[:3] #2 = local: len(stem) >= 4 by the check before
+internal/channels/channels.go WindowsDevice string stem[:3] = local: len(stem) >= 4 by the check before
 internal/client/client.go retryAfter int strconv.ParseInt(raw) = [0, 86400] shown by TestLimitRetryAfter
 internal/client/shape.go (*Client).parseOffset int strconv.ParseInt(raw) = >= 0 shown by TestLimitUploadOffsetAnswer
 internal/clientca/csr.go cleanLabel string s[:len(s) - size] = local: size from DecodeLastRuneInString of s
@@ -238,9 +241,6 @@ internal/kit/elf.go whatElse string bin[:4] = local: len(bin) >= 4 by the check 
 internal/kit/kit.go listenPort int strconv.Atoi(portText) = [1, 65535] shown by TestLimitListenPort
 internal/message/message.go Attachment int Size int64 = >= 0 shown by TestLimitAttachmentSize
 internal/message/message.go DistinctAttachmentNames string names[:i] = local: i is an index of names from range
-internal/message/message.go isWindowsDevice string stem[3:] = local: len(stem) >= 4 by the check before
-internal/message/message.go isWindowsDevice string stem[:3] #2 = local: len(stem) >= 4 by the check before
-internal/message/message.go isWindowsDevice string stem[:3] = local: len(stem) >= 4 by the check before
 internal/pki/bundle.go Bundle int V int = [1, 1] shown by TestLimitBundleV
 internal/pki/pki.go splitLabels string h[start:i] = local: start and i walk len(h) from 0
 internal/relay/adminapi.go shortFP string v[:16] = local: ValidFingerprint checked in shortFP, the line before

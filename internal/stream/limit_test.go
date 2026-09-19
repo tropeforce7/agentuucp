@@ -152,3 +152,35 @@ func TestLimitManifestLength(t *testing.T) {
 		t.Errorf("a header one byte short: %v; want ErrTruncated", err)
 	}
 }
+
+// TestLimitNamesAreNotPathsAtManifestValidate: a manifest's id, its
+// thread and its attachment names become a record's file, a thread
+// directory and files on the receiver; Manifest.Validate runs
+// message.ValidID and ValidAttachmentName on each, so a value from the
+// limit guide's traversal set is refused as ErrForm before anything is
+// opened.
+func TestLimitNamesAreNotPathsAtManifestValidate(t *testing.T) {
+	from, to := pair(t)
+	set := []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", strings.Repeat("a", 300)}
+	fresh := func() *Manifest {
+		_, m := build(t, from, to, MinChunkSize, map[string][]byte{"a.bin": []byte("hello")})
+		return m
+	}
+	for _, v := range set {
+		m := fresh()
+		m.ID = v
+		if err := m.Validate(); !errors.Is(err, ErrForm) {
+			t.Errorf("id %q: %v; want ErrForm", v, err)
+		}
+		m = fresh()
+		m.Body.Thread = v
+		if err := m.Validate(); !errors.Is(err, ErrForm) {
+			t.Errorf("thread %q: %v; want ErrForm", v, err)
+		}
+		m = fresh()
+		m.Attachments[0].Name = v
+		if err := m.Validate(); !errors.Is(err, ErrForm) {
+			t.Errorf("attachment name %q: %v; want ErrForm", v, err)
+		}
+	}
+}

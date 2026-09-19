@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"math"
@@ -297,4 +298,243 @@ func TestLimitCertRecordSerial(t *testing.T) {
 	if _, err := s.CertFor(r); err != nil {
 		t.Errorf("a serial as written: %v", err)
 	}
+}
+
+// traversalSet is the limit guide's set for a value that becomes part of
+// a path: `..`, `../x`, `x/../../y`, `a/b`, an absolute path, a backslash
+// form, a drive letter, a Windows device name, a NUL, the empty string,
+// `.`, and a name longer than a filesystem allows.
+func traversalSet() []string {
+	return []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", strings.Repeat("a", 300)}
+}
+
+// outsideUntouched fails the test when anything appeared outside the
+// home: the scratch directory beside it holds one witness file and
+// nothing else.
+func outsideUntouched(t *testing.T, outside, witness string, what string) {
+	t.Helper()
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(witness) {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("%s reached outside the home: %v", what, names)
+	}
+	if _, err := os.Stat(witness); err != nil {
+		t.Errorf("%s removed the witness outside the home: %v", what, err)
+	}
+}
+
+// TestLimitMessageIDIsNotAPathAtTheStoresEdges: a message id names the
+// record's file, and every edge of the store that takes one runs
+// message.ValidID before the join: Save, Load, Remove, and the damaged
+// box's DamagedPath and KeepDamaged through the relay's number. Each is
+// fed the traversal set and refuses it, and nothing appears outside the
+// home.
+func TestLimitMessageIDIsNotAPathAtTheStoresEdges(t *testing.T) {
+	s, outside, witness := reviewHome(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, v := range traversalSet() {
+		if err := s.Save(Inbox, stored(v, now)); err == nil {
+			t.Errorf("Save took the id %q", v)
+		}
+		if _, err := s.Load(Inbox, v); err == nil {
+			t.Errorf("Load took the id %q", v)
+		}
+		if err := s.Remove(Inbox, v); err == nil {
+			t.Errorf("Remove took the id %q", v)
+		}
+	}
+	outsideUntouched(t, outside, witness, "an id from the traversal set")
+	for _, box := range []Box{Inbox, Sent, Quarantine} {
+		if entries, _ := os.ReadDir(s.path(string(box))); len(entries) != 0 {
+			t.Errorf("%s holds %d entries after ids from the traversal set", box, len(entries))
+		}
+	}
+}
+
+// TestLimitRelayNameIsNotAPath: a relay name is a directory under the
+// home, and ValidRelayName runs at AddRelay, at RenameRelay, and at the
+// store's own edges that take a name — SetLeftBehind, LeftBehind,
+// DamagedPath, KeepDamaged and CertKey — before the join. Each is fed the
+// traversal set and refuses it, and nothing appears outside the home.
+func TestLimitRelayNameIsNotAPath(t *testing.T) {
+	s, outside, witness := reviewHome(t)
+	r, err := s.AddRelay("work", "https://relay.example:9443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range traversalSet() {
+		if v == "" {
+			// An empty name at AddRelay is "derive one from the host".
+			continue
+		}
+		if _, err := s.AddRelay(v, "https://other.example:9443"); err == nil {
+			t.Errorf("AddRelay took the name %q", v)
+		}
+		if err := s.RenameRelay(r.Name, v); err == nil {
+			t.Errorf("RenameRelay took the name %q", v)
+		}
+		if err := s.SetLeftBehind(v, []int64{1}); err == nil {
+			t.Errorf("SetLeftBehind took the name %q", v)
+		}
+		if _, err := s.LeftBehind(v); err == nil {
+			t.Errorf("LeftBehind took the name %q", v)
+		}
+		if _, err := s.DamagedPath(v, 1); err == nil {
+			t.Errorf("DamagedPath took the name %q", v)
+		}
+		if kept, _, err := s.KeepDamaged(DamagedRecord{RelayID: 1, Relay: v, Received: time.Now(), Cause: "review"}, []byte("x")); err == nil || kept {
+			t.Errorf("KeepDamaged took the name %q (kept=%v, err=%v)", v, kept, err)
+		}
+		if _, err := s.CertKey(v); err == nil {
+			t.Errorf("CertKey took the name %q", v)
+		}
+		// And the name read back from this home's own config.
+		if err := s.SaveConfig(Config{DefaultRelay: v}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.DefaultRelay(); err == nil || !strings.Contains(err.Error(), "not a relay name") {
+			t.Errorf("DefaultRelay took the name %q from the config: %v", v, err)
+		}
+	}
+	outsideUntouched(t, outside, witness, "a relay name from the traversal set")
+	entries, err := os.ReadDir(s.path(relaysDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "work" {
+		t.Errorf("relays/ holds %d entries after names from the traversal set", len(entries))
+	}
+}
+
+// TestLimitDamagedDirectoryEntries: the damaged box is read back by
+// keptMessages, which joins each entry's name onto the directory; an
+// entry that is not a kept message's pair of files — a stray directory,
+// a record with no bytes, a name that is no relay's — is listed for
+// eviction by its name or skipped, and nothing outside the directory is
+// touched.
+func TestLimitDamagedDirectoryEntries(t *testing.T) {
+	s, outside, witness := reviewHome(t)
+	restore := DamagedBudget
+	DamagedBudget = 1000
+	t.Cleanup(func() { DamagedBudget = restore })
+	if kept, _, err := s.KeepDamaged(DamagedRecord{RelayID: 7, Relay: "work", Received: time.Now(), Cause: "review"}, []byte("bytes")); err != nil || !kept {
+		t.Fatal(err)
+	}
+	dir := s.path(damagedDir)
+	// Stray entries beside the relay's directory and inside it.
+	for _, name := range []string{"stray.txt", "..x", "CON"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "work", name+".bin"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "work", "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	have, err := s.keptMessages()
+	if err != nil {
+		t.Fatalf("keptMessages over stray entries: %v", err)
+	}
+	for _, k := range have {
+		if rel, err := filepath.Rel(dir, k.bin); err != nil || strings.HasPrefix(rel, "..") {
+			t.Errorf("a kept entry outside the damaged box: %s", k.bin)
+		}
+	}
+	// A second keep, over budget, evicts by the entries' own paths and
+	// stays inside the box.
+	if _, _, err := s.KeepDamaged(DamagedRecord{RelayID: 8, Relay: "work", Received: time.Now(), Cause: "review"}, bytes.Repeat([]byte{1}, 990)); err != nil {
+		t.Fatal(err)
+	}
+	outsideUntouched(t, outside, witness, "the damaged box's reader")
+}
+
+// TestLimitDefaultRelayNameFromURL: the name the store derives from a
+// relay's host when none is given is made of the characters the name rule
+// allows, so a host from the traversal set, an IPv6 literal or a long one
+// yields a name that is one segment under relays/ and never a path.
+func TestLimitDefaultRelayNameFromURL(t *testing.T) {
+	s, outside, witness := reviewHome(t)
+	for _, host := range []string{"..", "x/../../y", "[::1]", "CON", "com1.example", strings.Repeat("a", 300), "a.b-c_d"} {
+		r, err := s.AddRelay("", "https://"+host+":9443")
+		if err != nil {
+			if strings.Contains(err.Error(), "--name") || strings.Contains(err.Error(), "not a URL") || strings.Contains(err.Error(), "invalid") {
+				continue
+			}
+			t.Errorf("host %q: %v", host, err)
+			continue
+		}
+		if err := ValidRelayName(r.Name); err != nil {
+			t.Errorf("host %q got the name %q, which is not a relay name: %v", host, r.Name, err)
+		}
+		if rel, err := filepath.Rel(s.path(relaysDir), s.RelayDir(r)); err != nil || strings.Contains(rel, "..") || strings.ContainsAny(rel, `/\`) {
+			t.Errorf("host %q: the relay directory %q is not one segment under relays/", host, s.RelayDir(r))
+		}
+	}
+	outsideUntouched(t, outside, witness, "a relay name derived from a host")
+}
+
+// TestLimitRelaysDirectoryEntries: Relays reads relays/ by its entries and
+// joins each onto the directory to read its record; an entry that is not
+// a directory, or is a directory this store could not have made — one
+// ValidRelayName refuses, a Windows device, a dot-dot form, a name with a
+// space — is skipped without being joined and said once on stderr by its
+// path, one with no record is a half-finished add and skipped as before,
+// the relay this store wrote is listed, and nothing outside the home is
+// touched.
+func TestLimitRelaysDirectoryEntries(t *testing.T) {
+	s, outside, witness := reviewHome(t)
+	if _, err := s.AddRelay("work", "https://relay.example:9443"); err != nil {
+		t.Fatal(err)
+	}
+	dir := s.path(relaysDir)
+	for _, name := range []string{"CON", "..x", "a b", strings.Repeat("a", 200), "half"} {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"CON", "..x"} {
+		if err := os.WriteFile(filepath.Join(dir, name, relayFile), []byte(`{"url":"https://x"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "stray"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var relays []*Relay
+	stderr := captureStderr(t, func() {
+		var err error
+		if relays, err = s.Relays(); err != nil {
+			t.Fatalf("Relays failed on a stray entry: %v", err)
+		}
+	})
+	if len(relays) != 1 || relays[0].Name != "work" {
+		var names []string
+		for _, r := range relays {
+			names = append(names, r.Name)
+		}
+		t.Errorf("Relays listed %v; want work alone", names)
+	}
+	// Each directory that is not a relay name is said once, by its path,
+	// so that a person who can see it in the directory is told why it is
+	// not in the listing; the half-finished add and the file are not.
+	for _, name := range []string{"CON", "..x", "a b", strings.Repeat("a", 200)} {
+		if !strings.Contains(stderr, "warning: "+filepath.Join(dir, name)+" is not a relay directory (") {
+			t.Errorf("no warning names %q:\n%s", name, stderr)
+		}
+	}
+	if strings.Contains(stderr, "half") || strings.Contains(stderr, "stray") {
+		t.Errorf("the warning speaks of an entry the rule takes:\n%s", stderr)
+	}
+	if again := captureStderr(t, func() { s.Relays() }); again != "" {
+		t.Errorf("the second listing warned again:\n%s", again)
+	}
+	outsideUntouched(t, outside, witness, "an entry of relays/")
 }

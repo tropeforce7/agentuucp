@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/token"
 )
@@ -66,6 +67,11 @@ func ValidRelayName(name string) error {
 		return fmt.Errorf("relay name %q: letters, digits, '.', '_' and '-' only, "+
 			"beginning with a letter or digit, and never \"self\"", name)
 	}
+	// The name is a directory under the home, which may be on Windows,
+	// where a name whose stem is a device opens the device.
+	if stem, _, _ := strings.Cut(name, "."); channels.WindowsDevice(stem) {
+		return fmt.Errorf("relay name %q begins with %s, a device name on Windows, where it could not be a directory", name, strings.ToUpper(stem))
+	}
 	return nil
 }
 
@@ -92,6 +98,15 @@ func (s *Store) Relays() ([]*Relay, error) {
 		if !e.IsDir() {
 			continue
 		}
+		// The directory is the name, and this store made every directory
+		// here under ValidRelayName; one it refuses is not a relay this
+		// store wrote, and is not joined onto a path to find out what it
+		// is. It is said once, since a relay a person can see in the
+		// directory and not in the listing is otherwise a mystery.
+		if err := ValidRelayName(e.Name()); err != nil {
+			s.warnSkippedRelay(e.Name(), err)
+			continue
+		}
 		r, err := s.readRelay(e.Name())
 		if errors.Is(err, os.ErrNotExist) {
 			// A directory with no record in it is a half-finished 'relay
@@ -105,6 +120,16 @@ func (s *Store) Relays() ([]*Relay, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// warnSkippedRelay says once per process that a directory under relays/ is
+// not named as a relay and is not listed, with what to do about it.
+func (s *Store) warnSkippedRelay(name string, err error) {
+	path := s.relayDir(name)
+	if _, already := warnedSpool.LoadOrStore(path, true); already {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "warning: %s is not a relay directory (%v) and is not listed; rename it to a relay name, or remove it\n", path, err)
 }
 
 func (s *Store) readRelay(name string) (*Relay, error) {
@@ -440,6 +465,13 @@ func (s *Store) DefaultRelay() (*Relay, error) {
 	}
 	if cfg.DefaultRelay == "" {
 		return nil, ErrNoDefaultRelay
+	}
+	// The name is read back from this home's own config, and is a path
+	// only once the rule that every relay name was written under has run
+	// on it again here.
+	if err := ValidRelayName(cfg.DefaultRelay); err != nil {
+		return nil, damaged(s.path(configFile), fmt.Sprintf("names a default relay that is not a relay name (%v)", err), nil,
+			"set it again with 'auu relay default NAME'")
 	}
 	r, err := s.readRelay(cfg.DefaultRelay)
 	if errors.Is(err, os.ErrNotExist) {

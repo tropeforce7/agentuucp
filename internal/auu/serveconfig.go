@@ -103,12 +103,16 @@ func loadServeConfig(path string) (*serveConfig, error) {
 	if len(cfg.Channels) == 0 {
 		return nil, usageErrf("%s: no channels; a serve file that serves nothing is a mistake, not a setting", path)
 	}
+	// A relative path in the file is relative to the file, not to the
+	// working directory a wrapper or a supervisor started serve in.
+	base := filepath.Dir(path)
 	for _, name := range cfg.names() {
 		ch := cfg.Channels[name]
 		ch.name = name
 		if ch.Mode == "" {
 			ch.Mode = modeReadOnly
 		}
+		ch.Dir = resolveAgainst(base, ch.Dir)
 		if ch.MaxTurns == 0 {
 			ch.MaxTurns = defaultMaxTurns
 		}
@@ -126,8 +130,20 @@ func loadServeConfig(path string) (*serveConfig, error) {
 	}
 	if cfg.Proxy != nil {
 		cfg.Proxy.fill()
+		cfg.Proxy.KeyFile = resolveAgainst(base, cfg.Proxy.KeyFile)
+		cfg.Proxy.Control = resolveAgainst(base, cfg.Proxy.Control)
 	}
 	return cfg, nil
+}
+
+// resolveAgainst is a path setting from a file made absolute against the
+// file's own directory; an absolute one, an empty one, and one that is
+// only whitespace (which check refuses) are left as they are.
+func resolveAgainst(base, value string) string {
+	if strings.TrimSpace(value) == "" || filepath.IsAbs(value) {
+		return value
+	}
+	return filepath.Join(base, value)
 }
 
 // duration parses one of the file's durations, or gives the default.

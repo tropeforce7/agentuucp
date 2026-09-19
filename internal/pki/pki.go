@@ -34,7 +34,10 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"strings"
 	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/channels"
 )
 
 // Lifetimes. A private PKI has no CA policy forcing ninety days on it, and
@@ -325,6 +328,13 @@ func validDNSName(h string) error {
 	}
 	if len(h) > 253 {
 		return fmt.Errorf("pki: host %q is %d characters, over 253", h, len(h))
+	}
+	// The host names the authority's record directory for the relay, and
+	// the authority may keep its records on Windows, where a name whose
+	// first label is a device opens the device: CON.example.com is the
+	// console there, whatever follows the dot.
+	if first, _, _ := strings.Cut(h, "."); channels.WindowsDevice(first) {
+		return fmt.Errorf("pki: host %q begins with %s, a device name on Windows, where the authority's record of it could not be a directory", h, strings.ToUpper(first))
 	}
 	for _, label := range splitLabels(h) {
 		if label == "" {

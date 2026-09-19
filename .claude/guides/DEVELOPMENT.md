@@ -294,10 +294,16 @@ every `exec.Command` whose arguments are paths, is a row in the file-open
 ledger (`internal/fileopens/ledger.txt`), keyed by file, enclosing
 function, callee and the argument as written, and each row says where the
 path came from: *local*, made by the program from a directory it chose
-and names it wrote; *operator*, a config value, a flag, a relay name or
-an argument the person running it typed; *derived*, made from something
-the program read back from its own files or environment — an entry of a
-directory it owns, a record it wrote, `os.Executable`; or *network*, a
+and names it wrote; *operator*, in one of three forms — a whole path used
+as given, a flag or a file named on the command line; a value from a
+configuration file, which resolves against that file's directory and
+never against the working directory, said with its base; or a name the
+person chose that is joined under a directory, a relay name under
+`relays/`, said with its rule and the point it runs; *derived*, made from
+something the program read back from its own files or environment — an
+entry of a directory it owns, held to the reader's own rule before it is
+joined back, a record it wrote with the rule at the read, `os.Executable`
+and the runtime directory as the environment's own; or *network*, a
 component a peer or a relay sent, with the rule that ran on it and the
 point where it ran, the rule a function in the tree or, for a number the
 JSON decoder held to a number, the standard-library function that writes
@@ -306,10 +312,20 @@ the rule that made it a name ran at open and at save. Where a path has
 components of several kinds the row names the least trusted, and a
 helper's row the least trusted of its callers'. The store's exported
 edges run the rule again at the call — `Load`, `Save`, `Remove`,
-`DamagedPath`, `SetLeftBehind` — since a caller's slip must not walk a
-path out of the home. A test walks the tree for those calls and fails on
-a call with no row, a row with no call, a key twice, rows out of order,
-and a network row naming a rule that does not exist. So a
+`DamagedPath`, `SetLeftBehind`, `DefaultRelay` on the name from its own
+config, `Relays` on each entry — since a caller's slip must not walk a
+path out of the home. Every row that is not *local* names, after `shown
+by`, the limit test that drives the traversal set through its rule, or
+says why nothing is joined (the operator's whole path, the environment's
+own). A test walks the tree for those calls and fails on a call with no
+row, a row with no call, a key twice, rows out of order, a network row
+naming a rule that does not exist, and a row that is not local and names
+no test. The third review found the configuration values the second
+form covers — the relay's `db` and `messages_dir`, serve's `dir`,
+`key_file` and `control` — resolved against wherever the process had
+started, so a settings file meant two things under a unit and a shell;
+resolution against the file is the rule, and the docs say so where the
+file is described. So a
 new file operation is refused by CI until its path's provenance is
 written down, and a path from the network cannot reach the disk without
 naming the check that made it a name and not a path. The previous rule

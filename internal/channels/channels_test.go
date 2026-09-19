@@ -151,7 +151,11 @@ func TestANameIsCheckedAtEveryEdge(t *testing.T) {
 		{"dot dot", "..", `name is ".."`},
 		{"dot dot dot", "...", ""},
 		{"a leading dot", ".bugs", ""},
-		{"a backslash", `bug\reports`, ""},
+		{"a backslash", `bug\reports`, `name contains "\"`},
+		{"a colon", "C:reports", `name contains ":"`},
+		{"a device name", "con.reports", "name begins with CON, a device name on Windows"},
+		{"a device name alone", "lpt1", "name begins with LPT1, a device name on Windows"},
+		{"a device name inside", "console", ""},
 		{"non-Latin", "エラー報告", ""},
 		{"an emoji", "🐛", ""},
 	}

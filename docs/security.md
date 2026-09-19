@@ -334,9 +334,11 @@ device name (`CON`, `NUL`, `COM1`, with any extension or none) and not
 ending in a dot or a space, since the receiver may be on Windows and a
 sender cannot know; checked when a message is opened and, for a stream,
 when its manifest is, and passed through `filepath.Base` again at the
-write; a *channel name*
+write, and its name holds no colon, which names a drive or a stream on
+Windows; a *channel name*
 becomes a directory under an expert host's serve directory, and is held to
-the directory format's rule at the relay for every post, at every push of
+the directory format's rule — no separator of either kind, no colon, no
+Windows device stem — at the relay for every post, at every push of
 a directory, and at the client's `--channel`; a *relay host* names the
 authority's record of the relay, and `auu-ca` holds it to the shape of a
 DNS name or an address before any record is filed; a *message id* names
@@ -344,15 +346,26 @@ the record's file, and is a message id at open, in a manifest and at the
 store; a *thread id* names a directory and a worktree under an expert
 host's serve directory, and is a message id at open, in a manifest, and
 checked again by `auu serve` before it is joined onto anything. One test
-walks every one of them with `..`, `../x`, `a/b`, `.`, the empty string
-and a NUL, and a new place that turns something from the network into a
-path gets its row there first. Behind that table is a ledger,
-`internal/fileopens/ledger.txt`, with one row for every call in the tree
-that opens, makes, removes, renames, lists or runs something by a path,
-saying whether the path is the program's own, the operator's, derived
-from something the program read back, or from the network with the rule
-and the point that check it; its test parses the tree and fails on a call
-with no row, so a ninth component would be found before it was a finding.
+walks every one of them with `..`, `../x`, `x/../../y`, `a/b`, an
+absolute path, a backslash form, a drive letter, a drive-relative name,
+a Windows device name with and without an extension, a NUL, the empty
+string, `.` and a 300-byte name, and a new place that turns something
+from the network into a path gets its row there first. Behind that table
+is a ledger, `internal/fileopens/ledger.txt`, with one row for every call
+in the tree that opens, makes, removes, renames, lists or runs something
+by a path, saying whether the path is the program's own, the operator's
+(a whole path used as given, a value from a configuration file with the
+directory it resolves against, or a name joined under a directory with
+its rule), derived from something the program read back (an entry of a
+directory it owns, held to the reader's rule), or from the network with
+the rule and the point that check it; every row that is not the
+program's own names the test that drives that set through its rule, or
+says why nothing is joined; its test parses the tree and fails on a call
+with no row, so a ninth component would be found before it was a
+finding. A path in a configuration file that is not absolute is
+relative to the file's directory, never to the directory the program was
+started from, so that the same file means the same thing under systemd
+and from a shell.
 
 ### 2.1 The round trip
 

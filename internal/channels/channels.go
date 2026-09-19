@@ -104,10 +104,53 @@ func ValidName(name string) error {
 	if strings.Contains(name, "/") {
 		return errors.New(`name contains "/"`)
 	}
+	// A name is a directory under an expert host's serve directory, and
+	// the host may be on Windows: a backslash is a separator there, a
+	// colon names a drive or a stream, and a device stem opens the device.
+	if strings.Contains(name, `\`) {
+		return errors.New(`name contains "\"`)
+	}
+	if strings.Contains(name, ":") {
+		return errors.New(`name contains ":"`)
+	}
+	if stem, _, _ := strings.Cut(name, "."); WindowsDevice(stem) {
+		return fmt.Errorf("name begins with %s, a device name on Windows", strings.ToUpper(stem))
+	}
 	if name == "." || name == ".." {
 		return fmt.Errorf("name is %q", name)
 	}
 	return nil
+}
+
+// WindowsDevice reports whether stem names a device on Windows, under
+// case folding: CON, PRN, AUX, NUL, and COM and LPT followed by one digit
+// 0 to 9 or by one of the superscript digits U+00B9, U+00B2 and U+00B3.
+// Microsoft's pages have not agreed on the set: older ones list COM1 to
+// COM9 and LPT1 to LPT9, the current one COM0 to COM9 with the three
+// superscripts, so this is the union, since a name nobody can use on some
+// Windows is a name nobody needs. COM10 is not a device on any of them.
+// A file name is refused for every receiver when its stem is one, since
+// a sender cannot know where a message lands; a channel name is refused
+// because it is a directory on an expert host.
+func WindowsDevice(stem string) bool {
+	if len(stem) == 3 {
+		for _, d := range []string{"CON", "PRN", "AUX", "NUL"} {
+			if strings.EqualFold(stem, d) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(stem) < 4 || !(strings.EqualFold(stem[:3], "COM") || strings.EqualFold(stem[:3], "LPT")) {
+		return false
+	}
+	switch rest := stem[3:]; {
+	case len(rest) == 1 && rest[0] >= '0' && rest[0] <= '9':
+		return true
+	case rest == "\u00b9" || rest == "\u00b2" || rest == "\u00b3":
+		return true
+	}
+	return false
 }
 
 // ValidDescription applies the rules for a description: valid UTF-8, at most

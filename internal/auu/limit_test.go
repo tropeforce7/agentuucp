@@ -2,15 +2,19 @@ package auu
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/envelope"
+	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
 )
@@ -437,5 +441,351 @@ func TestLimitAnchorArgsOneShort(t *testing.T) {
 	}
 	if gate.lists.Load() != 0 {
 		t.Errorf("%d listings were made for anchors refused for their shape", gate.lists.Load())
+	}
+}
+
+// TestLimitServeAndProxyPathsResolveAgainstTheirFile: a relative path in
+// serve.json — a channel's dir, the proxy's key_file and control — or in
+// proxy.json — key_file and control — is resolved against the file's own
+// directory, never the working directory a wrapper started the command
+// in; an absolute one is left as it is.
+func TestLimitServeAndProxyPathsResolveAgainstTheirFile(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not on the PATH")
+	}
+	fileDir := t.TempDir()
+	elsewhere := t.TempDir()
+	t.Chdir(elsewhere)
+	// A checkout beside the file, named relatively.
+	repo := filepath.Join(fileDir, "checkout")
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", repo, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	key := filepath.Join(fileDir, "key")
+	if err := os.WriteFile(key, []byte("k\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	abs := filepath.Join(t.TempDir(), "control.sock")
+	serve := filepath.Join(fileDir, "serve.json")
+	if err := os.WriteFile(serve, []byte(`{"v":1,"channels":{"work":{"dir":"checkout","exec":"cat"}},"proxy":{"key_file":"key","control":`+strconv.Quote(abs)+`}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadServeConfig(serve)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Channels["work"].Dir; got != repo {
+		t.Errorf("dir resolved to %q, want %q", got, repo)
+	}
+	if got := cfg.Proxy.KeyFile; got != key {
+		t.Errorf("proxy key_file resolved to %q, want %q", got, key)
+	}
+	if got := cfg.Proxy.Control; got != abs {
+		t.Errorf("proxy control, absolute, became %q", got)
+	}
+	// key_file and control are one or the other; the resolution of each is
+	// what is shown here, and check is run over a file with the key alone.
+	if err := os.WriteFile(serve, []byte(`{"v":1,"channels":{"work":{"dir":"checkout","exec":"cat"}},"proxy":{"key_file":"key"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if only, err := loadServeConfig(serve); err != nil {
+		t.Fatal(err)
+	} else if err := only.check(); err != nil {
+		t.Errorf("the file checked from another directory: %v", err)
+	}
+	for _, got := range []string{cfg.Channels["work"].Dir, cfg.Proxy.KeyFile} {
+		if rel, err := filepath.Rel(elsewhere, got); err == nil && !strings.HasPrefix(rel, "..") {
+			t.Errorf("%q resolved under the working directory", got)
+		}
+	}
+
+	proxy := filepath.Join(fileDir, "proxy.json")
+	if err := os.WriteFile(proxy, []byte(`{"v":1,"key_file":"key","control":"run/control.sock"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := loadProxyFile(proxy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.KeyFile != key {
+		t.Errorf("proxy.json key_file resolved to %q, want %q", f.KeyFile, key)
+	}
+	if want := filepath.Join(fileDir, "run", "control.sock"); f.Control != want {
+		t.Errorf("proxy.json control resolved to %q, want %q", f.Control, want)
+	}
+}
+
+// pathSet is the limit guide's traversal set, as the store's tests have it.
+func pathSet() []string {
+	return []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", strings.Repeat("a", 300)}
+}
+
+// TestLimitThreadIDIsNotAPathAtServe: a thread id names a directory and a
+// worktree under the serve directory, and worktreeFor runs message.ValidID
+// before the join, as handle does before it; threadName quotes one that
+// is not an id rather than print it as a path. Each is fed the traversal
+// set, worktreeFor refuses it, and nothing appears beside the serve
+// directory.
+func TestLimitThreadIDIsNotAPathAtServe(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not on the PATH")
+	}
+	scratch := t.TempDir()
+	root := filepath.Join(scratch, "serve")
+	repo := filepath.Join(scratch, "repo")
+	if err := os.MkdirAll(repo, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", repo, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	ch := &serveChannel{name: "c", Dir: repo, Exec: "cat", Mode: modeSideCopy}
+	for _, v := range pathSet() {
+		if _, _, err := worktreeFor(root, ch, v, filepath.Join(root, "state"), true); err == nil || !strings.Contains(err.Error(), "not a message id") {
+			t.Errorf("worktreeFor took the thread id %q: %v", v, err)
+		}
+		if name := threadName(v); !strings.HasPrefix(name, `"`) {
+			t.Errorf("threadName printed %q as a thread: %q", v, name)
+		}
+	}
+	entries, err := os.ReadDir(scratch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "serve" && e.Name() != "repo" {
+			t.Errorf("a thread id from the traversal set made %q beside the serve directory", e.Name())
+		}
+	}
+	if _, err := os.Stat(root); err == nil {
+		if under, _ := os.ReadDir(root); len(under) != 0 {
+			t.Errorf("a refused thread id left %d entries under the serve directory", len(under))
+		}
+	}
+}
+
+// TestLimitAttachmentNameIsNotAPathAtExtract: an attachment's name becomes
+// a file under the directory extract was given, through
+// ValidAttachmentName at Validate and filepath.Base at the write; a record
+// carrying a name from the traversal set is refused at the write, and
+// nothing appears outside the directory.
+func TestLimitAttachmentNameIsNotAPathAtExtract(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scratch := t.TempDir()
+	out := filepath.Join(scratch, "out")
+	if err := os.MkdirAll(out, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range pathSet() {
+		m := &store.Stored{Inner: &envelope.Inner{
+			ID: strings.Repeat("a", 32), Time: time.Now(),
+			Body: message.Body{Type: message.TypeNote, Thread: strings.Repeat("a", 32), Text: "hi",
+				Attachments: []message.Attachment{{Name: v, Media: "text/plain", Size: 2, SHA256: strings.Repeat("0", 64), Data: []byte("hi")}}},
+		}}
+		written, err := extractInto(s, store.Inbox, m, out)
+		if err == nil {
+			t.Errorf("extractInto took the name %q and wrote %v", v, written)
+		}
+		for _, w := range written {
+			if rel, err := filepath.Rel(out, w); err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+				t.Errorf("extractInto wrote %q outside %s for the name %q", w, out, v)
+			}
+		}
+	}
+	entries, err := os.ReadDir(scratch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "out" {
+		t.Errorf("extract reached beside its directory: %v", entries)
+	}
+	if under, _ := os.ReadDir(out); len(under) != 0 {
+		t.Errorf("a refused name left %d entries in the directory", len(under))
+	}
+}
+
+// TestLimitThreadsDirectoryEntries: the sweep reads the threads directory
+// back and lets go of what has gone idle by each entry's name; an entry
+// that is not a thread id — a file, a stray directory, a name with a
+// separator's cousin in it — is not serve's, is never joined onto the
+// worktrees directory, and survives the sweep.
+func TestLimitThreadsDirectoryEntries(t *testing.T) {
+	alice, bob := newExpert(t, modeSideCopy)
+	sent := alice.ask(t, "jostle", "a question", "the first")
+	bob.serve(t)
+	threads := filepath.Join(bob.home, "serve", "threads")
+	strays := []string{"stray", "..x", "CON", strings.Repeat("b", 31)}
+	for _, name := range strays {
+		if err := os.MkdirAll(filepath.Join(threads, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(threads, "a-file"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bob.row.ThreadTTL = "1ms"
+	bob.write(t)
+	time.Sleep(5 * time.Millisecond)
+	stderr := captureStderr(t, func() { bob.serve(t) })
+	if !strings.Contains(stderr, "thread "+shortID(sent.Thread)+" has been idle") {
+		t.Fatalf("the sweep did not let go of the real thread:\n%s", stderr)
+	}
+	for _, name := range append(strays, "a-file") {
+		if _, err := os.Stat(filepath.Join(threads, name)); err != nil {
+			t.Errorf("the sweep touched %q, which is not a thread: %v", name, err)
+		}
+		if strings.Contains(stderr, name) {
+			t.Errorf("the sweep spoke of %q, which is not a thread:\n%s", name, stderr)
+		}
+	}
+	if entries, _ := os.ReadDir(filepath.Join(bob.home, "serve", "worktrees")); len(entries) != 0 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("worktrees holds %v after the sweep", names)
+	}
+}
+
+// TestLimitOutboxDirectoryEntries: listPending reads the outbox by its
+// entries and joins each onto the directory; a directory, a file that is
+// not a record, and a record whose id is not its file's name or not a
+// message id — a Windows device, a dot-dot form — are skipped or listed
+// as broken by the name alone, the record this program wrote is read,
+// and nothing beside the home is touched.
+func TestLimitOutboxDirectoryEntries(t *testing.T) {
+	scratch := t.TempDir()
+	witness := filepath.Join(scratch, "witness")
+	if err := os.WriteFile(witness, []byte("keep me\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(filepath.Join(scratch, "home"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := outboxDir(s)
+	if err := os.MkdirAll(filepath.Join(dir, "x.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	good := strings.Repeat("b", 32)
+	record := func(name, id string) {
+		t.Helper()
+		data, err := json.Marshal(pending{MessageID: id, To: strings.Repeat("c", 64), Started: time.Now(), ChunkSize: stream.DefaultChunkSize})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record(good+".json", good)
+	if err := os.WriteFile(streamPath(s, good), []byte("sealed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	record("CON.json", "CON")
+	record("com1.json", "../x")
+	record(strings.Repeat("a", 32)+".json", "..")
+	if err := os.WriteFile(filepath.Join(dir, "stray.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	waiting, broken, err := listPending(s)
+	if err != nil {
+		t.Fatalf("listPending failed on a stray entry: %v", err)
+	}
+	if len(waiting) != 1 || waiting[0].MessageID != good {
+		t.Errorf("waiting %d; want the one record this program wrote", len(waiting))
+	}
+	sort.Strings(broken)
+	if want := []string{"CON", strings.Repeat("a", 32), "com1"}; strings.Join(broken, ",") != strings.Join(want, ",") {
+		t.Errorf("broken %q; want %q, each by its file's name", broken, want)
+	}
+	entries, err := os.ReadDir(scratch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("an outbox entry reached beside the home: %v", names)
+	}
+	if _, err := os.Stat(witness); err != nil {
+		t.Errorf("the witness beside the home is gone: %v", err)
+	}
+}
+
+// TestLimitThreadIDIsNotAPathAtServeLs: serve ls prints the threads the
+// ledger holds and joins one onto the worktrees directory to say whether
+// its worktree is there; a ledger written by hand with threads from the
+// traversal set lists each quoted, with no worktree, and makes nothing.
+func TestLimitThreadIDIsNotAPathAtServeLs(t *testing.T) {
+	_, bob := newExpert(t, modeSideCopy)
+	root := filepath.Join(bob.home, "serve")
+	led, err := loadLedger(filepath.Join(root, ledgerFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := pathSet()
+	for i, v := range set {
+		led.Messages[fmt.Sprintf("%032x", i)] = &ledgerEntry{Thread: v, Channel: "jostle", Handled: time.Now()}
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := led.save(); err != nil {
+		t.Fatal(err)
+	}
+	var out serveLsJSON
+	if err := json.Unmarshal([]byte(bob.run("serve", "ls", "--json")), &out); err != nil {
+		t.Fatal(err)
+	}
+	listed := 0
+	for _, ch := range out.Channels {
+		for _, th := range ch.Threads {
+			listed++
+			if th.Worktree != "" {
+				t.Errorf("thread %q was joined onto the worktrees directory: %q", th.Thread, th.Worktree)
+			}
+		}
+	}
+	if listed != len(set) {
+		t.Errorf("listed %d threads; want %d", listed, len(set))
+	}
+	text := bob.run("serve", "ls")
+	for _, v := range set {
+		if v == "" || v == "." || v == ".." {
+			continue
+		}
+		if strings.Contains(text, "  "+shortID(v)+"  ") {
+			t.Errorf("serve ls printed %q as a thread, not quoted:\n%s", v, text)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(bob.home, "serve", "worktrees")); err == nil {
+		t.Errorf("serve ls made the worktrees directory")
+	}
+}
+
+// TestLimitProxyListenIsAnAddressNotAPath: the proxy's listen is a
+// loopback host:port, held by the proxy config's check; a value from the
+// traversal set is refused as not host:port or not loopback, and the
+// proxy is never started on it.
+func TestLimitProxyListenIsAnAddressNotAPath(t *testing.T) {
+	for _, v := range pathSet() {
+		if v == "" {
+			// Empty is the default, 127.0.0.1:0.
+			continue
+		}
+		p := &proxyConfig{Listen: v, KeyFile: "key"}
+		p.fill()
+		if err := p.check(&serveConfig{path: "serve.json"}); err == nil {
+			t.Errorf("listen %q was taken", v)
+		}
 	}
 }

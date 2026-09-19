@@ -143,7 +143,8 @@ func TestUntypedFlagDoesNotOverrideFile(t *testing.T) {
 	if cfg.Listen != ":8443" {
 		t.Fatalf("listen %q: the --listen default overwrote the file", cfg.Listen)
 	}
-	if cfg.DB != "from-file.db" {
+	// A relative path in the file is resolved against the file's directory.
+	if cfg.DB != filepath.Join(filepath.Dir(file), "from-file.db") {
 		t.Fatalf("db %q: the --db default overwrote the file", cfg.DB)
 	}
 	if cfg.MaxBytes != 4096 {
@@ -158,7 +159,7 @@ func TestUntypedFlagDoesNotOverrideFile(t *testing.T) {
 	if cfg.Listen != ":9999" {
 		t.Fatalf("listen %q: typed flag did not win", cfg.Listen)
 	}
-	if cfg.DB != "from-file.db" {
+	if cfg.DB != filepath.Join(filepath.Dir(file), "from-file.db") {
 		t.Fatalf("db %q: an unrelated typed flag disturbed the file value", cfg.DB)
 	}
 }

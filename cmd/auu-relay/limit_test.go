@@ -2,6 +2,8 @@ package main
 
 import (
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -166,5 +168,84 @@ func TestLimitDurationSettings(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestLimitConfigPathsResolveAgainstTheirFile: a relative path in the
+// relay's settings file — db, messages_dir, admin.authorized_file,
+// tls.cert_file, tls.key_file, tls.bundle — is resolved against the
+// file's own directory, never the working directory a supervisor started
+// the relay in; an absolute one and an empty one are left as they are,
+// and a flag keeps the working directory as a path typed at a shell does.
+func TestLimitConfigPathsResolveAgainstTheirFile(t *testing.T) {
+	fileDir := t.TempDir()
+	elsewhere := t.TempDir()
+	t.Chdir(elsewhere)
+	file := filepath.Join(fileDir, "relay.json")
+	if err := os.WriteFile(file, []byte(`{"tls": {"mode": "off"}, "db": "relay.db", "messages_dir": "bodies", "admin": {"authorized_file": "admins"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The administrators' file is looked for where the setting resolves
+	// to: beside the settings, not in the working directory.
+	if err := os.WriteFile(filepath.Join(fileDir, "admins"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := resolveBare(t, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, got, want string }{
+		{"db", cfg.DB, filepath.Join(fileDir, "relay.db")},
+		{"messages_dir", cfg.MessagesDir, filepath.Join(fileDir, "bodies")},
+		{"admin.authorized_file", cfg.Admin.AuthorizedFile, filepath.Join(fileDir, "admins")},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s resolved to %q, want %q", tc.name, tc.got, tc.want)
+		}
+		if rel, err := filepath.Rel(elsewhere, tc.got); err == nil && !strings.HasPrefix(rel, "..") {
+			t.Errorf("%s resolved under the working directory: %q", tc.name, tc.got)
+		}
+	}
+	// TLS files, when the mode wants them, and an absolute path kept.
+	abs := filepath.Join(t.TempDir(), "elsewhere.db")
+	if err := os.WriteFile(file, []byte(`{"tls": {"mode": "files", "cert_file": "certs/relay.pem", "key_file": "certs/relay.key", "bundle": "bundle.json"}, "db": `+strconv.Quote(abs)+`}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err = Load(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ name, got, want string }{
+		{"tls.cert_file", cfg.TLS.CertFile, filepath.Join(fileDir, "certs", "relay.pem")},
+		{"tls.key_file", cfg.TLS.KeyFile, filepath.Join(fileDir, "certs", "relay.key")},
+		{"tls.bundle", cfg.TLS.Bundle, filepath.Join(fileDir, "bundle.json")},
+		{"db, absolute", cfg.DB, abs},
+		{"messages_dir, empty", cfg.MessagesDir, ""},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s resolved to %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+	// The defaults are settings the file left out, and land beside the
+	// file too: a relay under a unit with a file that names no db keeps
+	// its database beside its settings, not in the unit's working
+	// directory.
+	if err := os.WriteFile(file, []byte(`{"tls": {"mode": "off"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = resolveBare(t, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DB != filepath.Join(fileDir, "relay.db") || cfg.MessagesDir != filepath.Join(fileDir, "messages") {
+		t.Errorf("with db and messages_dir left out: db %q, messages_dir %q; want both beside the file", cfg.DB, cfg.MessagesDir)
+	}
+	// A flag is the shell's: relative to the working directory.
+	cfg, err = resolve(t, "", "--db", "flag.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DB != "flag.db" {
+		t.Errorf("--db flag.db became %q; a flag keeps the working directory", cfg.DB)
 	}
 }

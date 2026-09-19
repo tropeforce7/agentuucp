@@ -216,6 +216,11 @@ func (s *Store) sweep() (SweepResult, error) {
 		return res, err
 	}
 	for _, e := range entries {
+		// The relay writes files here and nothing else; a directory is
+		// somebody's and is left where it is rather than failing the start.
+		if e.IsDir() {
+			continue
+		}
 		if err := os.Remove(filepath.Join(s.tmpDir(), e.Name())); err != nil {
 			return res, err
 		}
@@ -269,6 +274,12 @@ func (s *Store) sweep() (SweepResult, error) {
 				return res, err
 			}
 			for _, f := range files {
+				// A mailbox holds body files and nothing else; a directory
+				// in one is somebody's, and is neither a message nor an
+				// orphan to remove.
+				if f.IsDir() {
+					continue
+				}
 				// A body file is named by its id's digits and nothing else:
 				// a name that parses to the same number another way, "+7"
 				// or "007", is not that message's file and is an orphan.

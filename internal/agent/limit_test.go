@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math"
 	"net"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -134,5 +135,27 @@ func TestLimitFrameLength(t *testing.T) {
 	_, err := readFrame(bytes.NewReader(frame(MaxFrame, []byte("short"))))
 	if !errors.Is(err, ErrFrame) || !strings.Contains(err.Error(), "EOF") {
 		t.Errorf("a frame declared at the bound and cut short: %v", err)
+	}
+}
+
+// TestLimitSocketPathStaysUnderTheRuntimeDirectory: the agent's socket
+// is named under the runtime directory the environment gives, by a hash
+// of the home and nothing else, so whatever the home's path is — one
+// with dots, one with a device stem, a long one — the socket path is one
+// segment under that directory, shown by filepath.Rel.
+func TestLimitSocketPathStaysUnderTheRuntimeDirectory(t *testing.T) {
+	dir := runtimeDirFor(t)
+	base := filepath.Join(dir, runtimeSubdir)
+	for _, home := range []string{t.TempDir(), filepath.Join(t.TempDir(), "..", "x"), filepath.Join(t.TempDir(), "CON"), filepath.Join(t.TempDir(), strings.Repeat("a", 200))} {
+		p, err := PathsFor(home)
+		if err != nil {
+			t.Fatalf("home %q: %v", home, err)
+		}
+		for _, path := range []string{p.Socket, p.Lock, p.Log} {
+			rel, err := filepath.Rel(base, path)
+			if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) || strings.ContainsAny(rel, `/\`) {
+				t.Errorf("home %q: %q is not one segment under the runtime directory %q (rel %q)", home, path, base, rel)
+			}
+		}
 	}
 }

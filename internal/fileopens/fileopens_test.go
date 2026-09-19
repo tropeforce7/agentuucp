@@ -60,8 +60,29 @@ type site struct {
 
 // row is one ledger line.
 type row struct {
-	key, provenance string
-	line            int
+	key, provenance, test string
+	line                  int
+}
+
+// shownFloor is how many rows named a test when the ledger was written;
+// a count under it means rows lost their tests, not that the tree shrank.
+const shownFloor = 153
+
+// absolutePath is the operator form for a whole path used as given, alone
+// or followed by a comma and a note, and environmentsPath the ending of
+// the derived form for the environment's and the OS's own paths; neither
+// names a test, since nothing is joined.
+const (
+	absolutePath     = "operator's absolute path"
+	environmentsPath = "the environment's own path"
+)
+
+// usedAsGiven reports whether a provenance is one of the two forms that
+// name no test: the operator's whole path, or a derived row that is the
+// environment's own; a network row cannot borrow the phrase.
+func usedAsGiven(prov string) bool {
+	return prov == absolutePath || strings.HasPrefix(prov, absolutePath+", ") ||
+		(strings.HasPrefix(prov, "derived: ") && strings.HasSuffix(prov, ", "+environmentsPath))
 }
 
 // TestEveryFileOpenHasItsProvenanceInTheLedger is the ledger against the
@@ -78,6 +99,16 @@ func TestEveryFileOpenHasItsProvenanceInTheLedger(t *testing.T) {
 	}
 	for _, p := range problems {
 		t.Error(p)
+	}
+	rows, _ := parseLedger(string(ledger))
+	shown := 0
+	for _, r := range rows {
+		if r.test != "" {
+			shown++
+		}
+	}
+	if shown < shownFloor {
+		t.Errorf("%d rows name a test; the ledger was written with %d, so rows have lost theirs", shown, shownFloor)
 	}
 }
 
@@ -103,7 +134,8 @@ func (b *Box) Take(name string) error {
 }
 
 // TestALedgerRefusesARuleThatIsNotInTheTree plants a network row whose
-// rule is not a function anywhere, and a row for a site that is gone.
+// rule is not a function anywhere, which names no test either, and a row
+// for a site that is gone.
 func TestALedgerRefusesARuleThatIsNotInTheTree(t *testing.T) {
 	root := plantModule(t, `package planted
 
@@ -119,6 +151,7 @@ func take(name string) error {
 	problems, _ := check(root, ledger)
 	sort.Strings(problems)
 	want := []string{
+		"ledger.txt:1: internal/planted/planted.go take os.ReadFile(name) is network and names no test; a row that is not local names the TestLimit that drives the traversal set through its rule, or says \"operator's absolute path\", or for the environment's own path says so",
 		"ledger.txt:1: the rule planted.ValidName is not a function declared in the tree; a network row names the function that checks the path",
 		"ledger.txt:2: internal/planted/planted.go take os.Stat(name) has no call site in the tree; remove the row",
 	}
@@ -132,7 +165,7 @@ func take(name string) error {
 	}
 	// A key twice, and rows out of order.
 	ledger = "internal/planted/planted.go take os.ReadFile(name) = local\n" +
-		"internal/planted/planted.go take os.ReadFile(name) = operator\n"
+		"internal/planted/planted.go take os.ReadFile(name) = " + absolutePath + "\n"
 	problems, _ = check(root, ledger)
 	if len(problems) != 1 || !strings.Contains(problems[0], "written twice") {
 		t.Errorf("a key twice: %q", problems)
@@ -145,6 +178,80 @@ func take(name string) error {
 	}
 	if !found {
 		t.Errorf("rows out of order: %q", problems)
+	}
+}
+
+// TestALedgerHoldsEveryRowThatIsNotLocalToATest plants one call and
+// writes its row every way the shown-by column can go wrong: operator
+// alone, a derived row with no test, a local row with a test, a whole
+// path with a test, a test that is not a TestLimit, one no file declares,
+// and one two packages declare; then the ways it is right: local, the
+// operator's whole path with and without a note, the environment's own,
+// and a derived row naming the one test the planted tree declares.
+func TestALedgerHoldsEveryRowThatIsNotLocalToATest(t *testing.T) {
+	root := plantModule(t, `package planted
+
+import "os"
+
+func take(name string) error {
+	_, err := os.ReadFile(name)
+	return err
+}
+`)
+	testFile := "package planted\n\nimport \"testing\"\n\nfunc TestLimitPlanted(t *testing.T) {}\nfunc TestPlanted(t *testing.T) {}\n"
+	if err := os.WriteFile(filepath.Join(root, "internal", "planted", "planted_test.go"), []byte(testFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A second package declaring the same test name.
+	other := filepath.Join(root, "internal", "other")
+	if err := os.MkdirAll(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, "other_test.go"), []byte("package other\n\nimport \"testing\"\n\nfunc TestLimitTwice(t *testing.T) {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "internal", "planted", "twice_test.go"), []byte("package planted\n\nimport \"testing\"\n\nfunc TestLimitTwice(t *testing.T) {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key := "internal/planted/planted.go take os.ReadFile(name)"
+	wrong := []struct{ prov, want string }{
+		{"operator", "says operator alone"},
+		{"derived: an entry of its own directory", "names no test"},
+		{"operator: a name, planted.take at take", "names no test"},
+		{"local shown by TestLimitPlanted", "is local and names a test"},
+		{absolutePath + " shown by TestLimitPlanted", "is used as given and names a test"},
+		{absolutePath + ", --out as given shown by TestLimitPlanted", "is used as given and names a test"},
+		{"derived: this program's own path from os.Executable, " + environmentsPath + " shown by TestLimitPlanted", "is used as given and names a test"},
+		{"derived: an entry shown by TestPlanted", "does not start with TestLimit"},
+		{"derived: an entry shown by TestLimitNowhere", "which no _test.go file in the tree declares"},
+		{"derived: an entry shown by TestLimitTwice", "which 2 packages declare"},
+		{"derived: an entry shown by TestLimitPlanted and TestLimitTwice", "is not one test"},
+		{"network: a name, take at take, " + environmentsPath, "names no test"},
+		{"operator: a name, take at take, " + environmentsPath, "names no test"},
+	}
+	for _, tc := range wrong {
+		problems, _ := check(root, key+" = "+tc.prov+"\n")
+		found := false
+		for _, p := range problems {
+			found = found || strings.Contains(p, tc.want)
+		}
+		if !found {
+			t.Errorf("%q: problems %q, want one saying %q", tc.prov, problems, tc.want)
+		}
+	}
+	right := []string{
+		"local",
+		absolutePath,
+		absolutePath + ", --out as the record holds it",
+		"derived: this program's own path from os.Executable, " + environmentsPath,
+		"derived: an entry of its own directory shown by TestLimitPlanted",
+		"operator: a name, planted.take at take shown by TestLimitPlanted",
+		"network: a name, take at take shown by TestLimitPlanted",
+	}
+	for _, prov := range right {
+		if problems, _ := check(root, key+" = "+prov+"\n"); len(problems) != 0 {
+			t.Errorf("%q: problems %q, want none", prov, problems)
+		}
 	}
 }
 
@@ -183,6 +290,7 @@ func check(root, ledger string) (problems []string, sites []site) {
 		})
 	}
 
+	tests := limitTests(root)
 	rows, rowProblems := parseLedger(ledger)
 	problems = append(problems, rowProblems...)
 	have := map[string]bool{}
@@ -196,6 +304,27 @@ func check(root, ledger string) (problems []string, sites []site) {
 			if !declared(funcs, rule) {
 				problems = append(problems, fmt.Sprintf("ledger.txt:%d: the rule %s is not a function declared in the tree; a network row names the function that checks the path", r.line, rule))
 			}
+		}
+		// Every row that is not local names the limit test that drives
+		// the traversal set through its rule, or says why nothing is
+		// joined: a whole path the operator gave, or the environment's own.
+		switch {
+		case r.provenance == "local":
+			if r.test != "" {
+				problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s is local and names a test; a local path has no rule to show", r.line, r.key))
+			}
+		case usedAsGiven(r.provenance):
+			if r.test != "" {
+				problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s is used as given and names a test; nothing is joined, so there is nothing to show", r.line, r.key))
+			}
+		case r.test == "":
+			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s is %s and names no test; a row that is not local names the TestLimit that drives the traversal set through its rule, or says %q, or for the environment's own path says so", r.line, r.key, kindOf(r.provenance), absolutePath))
+		case !strings.HasPrefix(r.test, "TestLimit"):
+			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s names %s, which does not start with TestLimit", r.line, r.key, r.test))
+		case tests[r.test] == 0:
+			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s names %s, which no _test.go file in the tree declares", r.line, r.key, r.test))
+		case tests[r.test] > 1:
+			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s names %s, which %d packages declare; give it a name of its own", r.line, r.key, r.test, tests[r.test]))
 		}
 	}
 	keys := make([]string, 0, len(byKey))
@@ -303,12 +432,19 @@ func parseLedger(ledger string) (rows []row, problems []string) {
 			problems = append(problems, fmt.Sprintf("ledger.txt:%d: not a row: a row is \"<key> = <provenance>\"", n))
 			continue
 		}
-		key, prov := line[:at], line[at+3:]
+		key, rest := line[:at], line[at+3:]
+		prov, test, _ := strings.Cut(rest, " shown by ")
+		if strings.ContainsAny(test, " \t") {
+			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s names %q, which is not one test", n, key, test))
+			continue
+		}
 		switch {
-		case prov == "local", prov == "operator", strings.HasPrefix(prov, "operator: "),
+		case prov == "local", usedAsGiven(prov), strings.HasPrefix(prov, "operator: "),
 			strings.HasPrefix(prov, "derived: "), strings.HasPrefix(prov, "network: "):
+		case prov == "operator":
+			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says operator alone; an operator row is one of %q, \"operator: <setting> in <file>, resolved against <base>\" or \"operator: <name>, <rule> at <point>\"", n, key, absolutePath))
 		default:
-			problems = append(problems, fmt.Sprintf("ledger.txt:%d: provenance %q is none of local, operator, derived: ..., network: <component>, <rule> at <point>", n, prov))
+			problems = append(problems, fmt.Sprintf("ledger.txt:%d: provenance %q is none of local, %s, operator: ..., derived: ..., network: <component>, <rule> at <point>", n, prov, absolutePath))
 		}
 		if first, dup := seen[key]; dup {
 			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s is written twice (first at line %d)", n, key, first))
@@ -316,12 +452,43 @@ func parseLedger(ledger string) (rows []row, problems []string) {
 		}
 		seen[key] = n
 		keys = append(keys, key)
-		rows = append(rows, row{key: key, provenance: prov, line: n})
+		rows = append(rows, row{key: key, provenance: prov, test: test, line: n})
 	}
 	if !sort.StringsAreSorted(keys) {
 		problems = append(problems, "ledger.txt: rows are sorted by key, and these are not")
 	}
 	return rows, problems
+}
+
+// kindOf is the word a sentence uses for a row's provenance.
+func kindOf(prov string) string {
+	kind, _, _ := strings.Cut(prov, ":")
+	return kind
+}
+
+// limitTests counts, by name, every Test function declared in a _test.go
+// file under the tree, for a row's test to be held to.
+func limitTests(root string) map[string]int {
+	out := map[string]int{}
+	fset := token.NewFileSet()
+	for _, top := range []string{"internal", "cmd"} {
+		filepath.WalkDir(filepath.Join(root, top), func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			f, err := parser.ParseFile(fset, path, nil, 0)
+			if err != nil {
+				return nil
+			}
+			for _, decl := range f.Decls {
+				if fd, ok := decl.(*ast.FuncDecl); ok && fd.Recv == nil && strings.HasPrefix(fd.Name.Name, "Test") {
+					out[fd.Name.Name]++
+				}
+			}
+			return nil
+		})
+	}
+	return out
 }
 
 // ruleOf is the rule a network row names: the last comma-separated part
