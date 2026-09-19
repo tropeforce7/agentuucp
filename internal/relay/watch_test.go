@@ -414,7 +414,7 @@ func TestAThirdHoldFromOneIdentityIsAnsweredAtOnce(t *testing.T) {
 // wait above the ceiling is clamped, not refused, and the ceiling is
 // proved with a short one rather than by waiting a minute. Bad forms are
 // 400 by the sentence, and zero is no hold.
-func TestAWaitAboveTheCeilingIsClamped(t *testing.T) {
+func TestLimitWaitAboveTheCeilingIsServedAtIt(t *testing.T) {
 	h := newHarness(t, Config{})
 	alice := ids(t, "alice")[0]
 	h.register(alice)

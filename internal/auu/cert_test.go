@@ -792,7 +792,7 @@ func TestRenewalDoesNotWarnWhenTheRelayHasExpired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveCertFor(r, &store.CertRecord{Relay: r.URL, Serial: "aaa",
+	if err := s.SaveCertFor(r, &store.CertRecord{Relay: r.URL, Serial: strings.Repeat("a", 32),
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour)}); err != nil {
 		t.Fatal(err)
 	}

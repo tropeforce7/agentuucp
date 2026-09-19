@@ -305,3 +305,65 @@ func TestLimitSweepFileNames(t *testing.T) {
 		t.Errorf("the message's own file did not survive: %v", err)
 	}
 }
+
+// TestLimitWaitParameter: the wait a listing asks for, read from the query
+// as text: a negative, the text one past the type's maximum, a bare
+// number, "inf", a unit alone, a digit outside ASCII and a fraction with
+// no unit are each 400 "bad wait parameter"; zero, a plus sign and an
+// empty value (absent) are taken. Above the ceiling it is served at the
+// ceiling, which TestLimitWaitAboveTheCeilingIsServedAtIt shows.
+func TestLimitWaitParameter(t *testing.T) {
+	h := newHarness(t, Config{})
+	alice := ids(t, "alice")[0]
+	h.register(alice)
+	box := "/v1/mailbox/" + alice.Fingerprint()
+	for _, wait := range []string{"-1s", "-9223372036854775808ns", "9223372036854775808ns", "1", "inf", "s", "\u0661s", "1.5", "x"} {
+		status, body := h.do(alice, "GET", box+"?wait="+wait, nil, nil)
+		if status != http.StatusBadRequest || !strings.Contains(errorText(t, body), "bad wait parameter") {
+			t.Errorf("wait=%q: %d %s; want 400", wait, status, body)
+		}
+	}
+	for _, wait := range []string{"0s", "%2B1ms", "", "1ms"} {
+		status, body := h.do(alice, "GET", box+"?wait="+wait, nil, nil)
+		if status != http.StatusOK {
+			t.Errorf("wait=%q: %d %s; want 200", wait, status, body)
+		}
+	}
+}
+
+// TestLimitFingerprintsOneShortOnTheWire: the fingerprint in a mailbox
+// path is held at authedWithCert and the caller's in the auth header at
+// ParseAuth, before the relay makes a directory of the first two
+// characters or logs the first sixteen; one character short is 400 for
+// the path and 401 for the header, and no mailbox directory is made.
+func TestLimitFingerprintsOneShortOnTheWire(t *testing.T) {
+	h := newHarness(t, Config{})
+	alice := ids(t, "alice")[0]
+	h.register(alice)
+	short := strings.Repeat("a", 63)
+	status, body := h.do(alice, "POST", "/v1/mailbox/"+short, sealed(t, alice, alice.Public(), "x"), nil)
+	if status != http.StatusBadRequest || !strings.Contains(errorText(t, body), "bad mailbox fingerprint") {
+		t.Errorf("a path fingerprint one short: %d %s; want 400", status, body)
+	}
+	if _, err := os.Stat(filepath.Join(h.messagesDir(), short[:2])); err == nil {
+		t.Errorf("a directory was made for a fingerprint one short")
+	}
+	// The auth header, with a fingerprint one short in place of alice's.
+	req, err := http.NewRequest("GET", h.srv.URL+"/v1/mailbox/"+alice.Fingerprint(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := relayapi.SignRequest(alice, req, nil); err != nil {
+		t.Fatal(err)
+	}
+	auth := req.Header.Get(relayapi.AuthHeader)
+	req.Header.Set(relayapi.AuthHeader, strings.Replace(auth, alice.Fingerprint(), short, 1))
+	resp, err := h.srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("an auth fingerprint one short: %d; want 401", resp.StatusCode)
+	}
+}

@@ -294,7 +294,7 @@ func certList(args []string) error {
 		} else if time.Now().After(cert.NotAfter) {
 			state = "expired " + cert.NotAfter.Local().Format("2006-01-02")
 		}
-		fmt.Printf("%s %s  %-20s  %s\n", mark, cert.Serial[:16], trim(identity.PrintableText(cert.Label), 20), state)
+		fmt.Printf("%s %s  %-20s  %s\n", mark, cert.Serial[:16], truncate(identity.PrintableText(cert.Label), 20), state)
 	}
 	fmt.Printf("\n* is this machine\n")
 	return nil
@@ -420,12 +420,4 @@ func keyParams(rec *store.CertRecord) int {
 func fingerprintOf(der []byte) string {
 	sum := sha256.Sum256(der)
 	return hex.EncodeToString(sum[:])
-}
-
-// trim shortens a label for a column.
-func trim(s string, n int) string {
-	if n <= 1 {
-		return truncate(s, n+1)[:n]
-	}
-	return truncate(s, n)
 }

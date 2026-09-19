@@ -89,3 +89,23 @@ func TestLimitClaimsIntegers(t *testing.T) {
 		}
 	})
 }
+
+// TestLimitAnchorClaimOneShort: a token's anchor claim is 64 hex
+// characters or absent, held at Validate before enrol prints its first
+// sixteen; one character short, one long, and uppercase are each refused.
+func TestLimitAnchorClaimOneShort(t *testing.T) {
+	now := time.Date(2026, 9, 19, 12, 0, 0, 0, time.UTC)
+	id := admin(t)
+	for _, bad := range []string{strings.Repeat("a", 63), strings.Repeat("a", 65), strings.Repeat("A", 64)} {
+		c := base(now)
+		c.ID, c.Issuer, c.Anchor = strings.Repeat("7", 32), id.Fingerprint(), bad
+		if err := c.Validate(); !errors.Is(err, ErrForm) || !strings.Contains(err.Error(), "anchor must be 64 lowercase hex characters") {
+			t.Errorf("anchor %q: %v; want ErrForm naming the shape", bad, err)
+		}
+	}
+	c := base(now)
+	c.ID, c.Issuer, c.Anchor = strings.Repeat("7", 32), id.Fingerprint(), strings.Repeat("a", 64)
+	if err := c.Validate(); err != nil {
+		t.Errorf("an anchor as written: %v", err)
+	}
+}

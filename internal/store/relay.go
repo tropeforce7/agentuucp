@@ -121,6 +121,14 @@ func (s *Store) readRelay(name string) (*Relay, error) {
 	// The directory is the name. A record that says otherwise would send
 	// every read for one relay at another relay's files.
 	r.Name = name
+	// The two hashes are what SPKI writes, 64 lowercase hex characters,
+	// or absent; a print shows their first sixteen.
+	for _, h := range []struct{ name, value string }{{"trust_anchor_spki", r.TrustAnchorSPKI}, {"server_int_spki", r.ServerIntSPKI}} {
+		if h.value != "" && !identity.ValidFingerprint(h.value) {
+			return nil, damaged(path, fmt.Sprintf("has a %s that is not a hash", h.name), nil, fmt.Sprintf(
+				"enrol again with a token, or remove the relay with 'auu relay rm %s' and add it again", name))
+		}
+	}
 	return &r, nil
 }
 

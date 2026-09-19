@@ -390,7 +390,7 @@ func TestMessageIDPrefixBoundary(t *testing.T) {
 	const minIDPrefix = 4
 	s := newStore(t)
 	id := "0123456789abcdef0123456789abcdef"
-	if err := s.Save(Inbox, &Stored{Inner: &envelope.Inner{ID: id}}); err != nil {
+	if err := s.Save(Inbox, stored(id, time.Now())); err != nil {
 		t.Fatal(err)
 	}
 	for _, n := range []int{minIDPrefix, minIDPrefix + 1, 32} {

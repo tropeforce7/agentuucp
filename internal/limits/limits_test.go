@@ -34,7 +34,7 @@ import (
 
 // floor is what the sweep that wrote the ledger found. A walk that finds
 // fewer is not reaching the tree.
-const floor = 144
+const floor = 285
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.
@@ -50,11 +50,22 @@ var flagMethods = map[string]bool{
 // zero is a sentinel the range does not otherwise hold.
 var ranges = regexp.MustCompile(`^(0 or )?(\[-?\d+[a-z]*, -?\d+[a-z]*\]|>= -?\d+[a-z]*|> -?\d+[a-z]*|<= -?\d+[a-z]*|< -?\d+[a-z]*|one of -?\d+(, -?\d+)+|open|output)$`)
 
-// site is one place an integer from outside enters.
+// localRule is the form of a string row that names the rule which fixed
+// the operand's length and the point it ran: "local: ValidFingerprint at
+// checkMailbox". Such a row names a test as well, one per rule and shared
+// by every slice the rule guards, which feeds the operand one byte short
+// at the rule's point. A local row of any other form is the operand's
+// own arithmetic, "local: len(s)-1 of s", and names no function and no
+// test.
+var localRule = regexp.MustCompile(`^local: ([A-Za-z_][A-Za-z0-9_.]*) at (\S.*)$`)
+
+// site is one place a value from outside enters: an integer, or a string
+// cut by a slice expression.
 type site struct {
 	key      string // <file> <enclosing> <kind> <as written>
+	kind     string // int or string
 	pos      token.Position
-	typeName string // for a field, the struct's type by full path; "" for a call
+	typeName string // for a field, the struct's type by full path; "" otherwise
 }
 
 // row is one ledger line.
@@ -98,15 +109,26 @@ type Shape struct {
 func parse(s string) (int64, error) { return strconv.ParseInt(s, 10, 64) }
 
 func flags(fs *flag.FlagSet) *int { return fs.Int("n", 1, "a number") }
+
+func short(fp string) string { return fp[:16] }
+
+func tail(xs []int, n int) []int { return xs[n:] }
+
+func rest(b []byte, n int) []byte { return b[n:] }
+
+func fixed(xs []string) []string { return xs[:2] }
 `)
 	problems, sites := check(t, root, "")
-	if len(sites) != 3 {
-		t.Fatalf("found %d sites, want 3: %+v", len(sites), sites)
+	if len(sites) != 6 {
+		t.Fatalf("found %d sites, want 6: %+v", len(sites), sites)
 	}
 	want := []string{
 		"internal/planted/planted.go Shape int Size int64 has no row in ledger.txt; add one saying the range the code holds it to, or open, and the TestLimit test that shows it",
 		"internal/planted/planted.go flags int fs.Int(\"n\") has no row in ledger.txt; add one saying the range the code holds it to, or open, and the TestLimit test that shows it",
 		"internal/planted/planted.go parse int strconv.ParseInt(s) has no row in ledger.txt; add one saying the range the code holds it to, or open, and the TestLimit test that shows it",
+		"internal/planted/planted.go rest string b[n:] has no row in ledger.txt; add one naming the rule that fixed the operand's length and the point it ran, or the operand's own arithmetic, as local:, or the TestLimit test that cuts it short",
+		"internal/planted/planted.go short string fp[:16] has no row in ledger.txt; add one naming the rule that fixed the operand's length and the point it ran, or the operand's own arithmetic, as local:, or the TestLimit test that cuts it short",
+		"internal/planted/planted.go tail string xs[n:] has no row in ledger.txt; add one naming the rule that fixed the operand's length and the point it ran, or the operand's own arithmetic, as local:, or the TestLimit test that cuts it short",
 	}
 	if strings.Join(problems, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("problems:\n%s\nwant:\n%s", strings.Join(problems, "\n"), strings.Join(want, "\n"))
@@ -156,6 +178,10 @@ func local(b []byte) (int, error) {
 	err := json.Unmarshal(b, &i)
 	return i.M, err
 }
+
+func short(fp string) string { return fp[:16] }
+
+func valid(fp string) bool { return len(fp) == 64 }
 `)
 	if err := os.WriteFile(filepath.Join(root, "internal", "planted", "planted_test.go"), []byte(`package planted
 
@@ -174,9 +200,15 @@ func TestShapeSize(t *testing.T) {}
 		"internal/planted/planted.go View int Count int = sometimes shown by TestLimitShape",
 		"internal/planted/planted.go probe.struct int N int = output",
 		"internal/planted/planted.go local.inner int M int = output",
+		"internal/planted/planted.go short string fp[:16] = local: nowhere at valid shown by TestLimitShape",
+		"internal/planted/planted.go short string fp[:16] = local: valid at short",
+		"internal/planted/planted.go short string fp[:16] = local: len(fp) is 64 shown by TestLimitShape",
+		"internal/planted/planted.go short string fp[:16] = a cut",
+		"internal/planted/planted.go short string fp[:16] = local: valid at short shown by TestLimitShape",
 	}, "\n")
 	problems, _ := check(t, root, ledger)
 	want := []string{
+		"ledger.txt:11: internal/planted/planted.go short string fp[:16] has no \"shown by\"",
 		"ledger.txt:1: internal/planted/planted.go Shape int Size int64 says output, but planted.Shape is decoded: it is reached from json.Unmarshal at internal/planted/planted.go read through planted.Wrap; give the row a range and a test",
 		"ledger.txt:2: internal/planted/planted.go View int Count int names TestLimitNowhere, which no _test.go file in the tree declares",
 		"ledger.txt:3: internal/planted/planted.go Gone int Size int64 has no site in the tree; remove the row",
@@ -186,6 +218,12 @@ func TestShapeSize(t *testing.T) {}
 		"ledger.txt:5: internal/planted/planted.go View int Count int has the range \"sometimes\", which is not [lo, hi], >= n, > n, <= n, < n, one of a, b, open or output, with 0 or in front where zero is a sentinel",
 		"ledger.txt:6: internal/planted/planted.go probe.struct int N int says output, but struct{N int \"json:\\\"n\\\"\"} is decoded: it is reached from json.Unmarshal at internal/planted/planted.go probe; give the row a range and a test",
 		"ledger.txt:7: internal/planted/planted.go local.inner int M int says output, but planted.inner is decoded: it is reached from json.Unmarshal at internal/planted/planted.go local; give the row a range and a test",
+		"ledger.txt:8: internal/planted/planted.go short string fp[:16] names the rule nowhere, which is not a function in the tree",
+		"ledger.txt:9: internal/planted/planted.go short string fp[:16] is written twice",
+		"ledger.txt:9: internal/planted/planted.go short string fp[:16] names the rule valid and no test; the rule's test feeds the operand one byte short at short",
+		"ledger.txt:10: internal/planted/planted.go short string fp[:16] is written twice",
+		"ledger.txt:10: internal/planted/planted.go short string fp[:16] is the operand's own arithmetic and names a test; a rule's row names one, this one does not",
+		"ledger.txt:12: internal/planted/planted.go short string fp[:16] is written twice",
 	}
 	if strings.Join(problems, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("problems:\n%s\nwant:\n%s", strings.Join(problems, "\n"), strings.Join(want, "\n"))
@@ -239,6 +277,7 @@ func check(t *testing.T, root, ledger string) (problems []string, sites []site) 
 	}
 	problems = append(problems, tree.problems...)
 
+	funcs := tree.functions()
 	rows, rowProblems := parseLedger(ledger)
 	problems = append(problems, rowProblems...)
 	seen := map[string]bool{}
@@ -252,7 +291,31 @@ func check(t *testing.T, root, ledger string) (problems []string, sites []site) 
 			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s is written twice", r.line, r.key))
 		}
 		seen[r.key] = true
-		if !ranges.MatchString(r.rng) {
+		if s.kind == "string" {
+			// A string row is local by the operand's own arithmetic and
+			// names no test; or local by a rule, held to the tree, and
+			// names the rule's test; or names the test that cuts it short.
+			if strings.HasPrefix(r.rng, "local:") {
+				m := localRule.FindStringSubmatch(r.rng)
+				if m == nil {
+					if r.test != "" {
+						problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s is the operand's own arithmetic and names a test; a rule's row names one, this one does not", r.line, r.key))
+					}
+					continue
+				}
+				if !funcs[m[1]] {
+					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s names the rule %s, which is not a function in the tree", r.line, r.key, m[1]))
+					continue
+				}
+				if r.test == "" {
+					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s names the rule %s and no test; the rule's test feeds the operand one byte short at %s", r.line, r.key, m[1], m[2]))
+					continue
+				}
+			} else if r.test == "" {
+				problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s is a cut with no local reason and no test", r.line, r.key))
+				continue
+			}
+		} else if !ranges.MatchString(r.rng) {
 			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s has the range %q, which is not [lo, hi], >= n, > n, <= n, < n, one of a, b, open or output, with 0 or in front where zero is a sentinel", r.line, r.key, r.rng))
 			continue
 		}
@@ -278,11 +341,32 @@ func check(t *testing.T, root, ledger string) (problems []string, sites []site) 
 	}
 	sort.Slice(sites, func(i, j int) bool { return sites[i].key < sites[j].key })
 	for _, s := range sites {
-		if !seen[s.key] {
-			problems = append(problems, fmt.Sprintf("%s has no row in ledger.txt; add one saying the range the code holds it to, or open, and the TestLimit test that shows it", s.key))
+		if seen[s.key] {
+			continue
 		}
+		if s.kind == "string" {
+			problems = append(problems, fmt.Sprintf("%s has no row in ledger.txt; add one naming the rule that fixed the operand's length and the point it ran, or the operand's own arithmetic, as local:, or the TestLimit test that cuts it short", s.key))
+			continue
+		}
+		problems = append(problems, fmt.Sprintf("%s has no row in ledger.txt; add one saying the range the code holds it to, or open, and the TestLimit test that shows it", s.key))
 	}
 	return problems, sites
+}
+
+// functions is every function and method declared in the non-test tree,
+// by bare name, for a local row's rule to be held to.
+func (tr *tree) functions() map[string]bool {
+	out := map[string]bool{}
+	for _, p := range tr.pkgs {
+		for _, f := range p.files {
+			for _, decl := range f.Decls {
+				if fd, ok := decl.(*ast.FuncDecl); ok {
+					out[fd.Name.Name] = true
+				}
+			}
+		}
+	}
+	return out
 }
 
 // pkg is one type-checked package of the tree.
@@ -454,12 +538,15 @@ func (tr *tree) sites() []site {
 						}
 					}
 					for _, fl := range x.Fields.List {
-						if !integerType(p.info.TypeOf(fl.Type)) {
+						// An integer field, or a map or slice whose values are
+						// integers, which the decoder fills with numbers all the same.
+						if !integerType(p.info.TypeOf(fl.Type)) && !integerElems(p.info.TypeOf(fl.Type)) {
 							continue
 						}
 						for _, name := range fl.Names {
 							out = append(out, site{
 								key:      fmt.Sprintf("%s %s int %s %s", rel, enclosing, name.Name, types.ExprString(fl.Type)),
+								kind:     "int",
 								pos:      tr.fset.Position(name.Pos()),
 								typeName: typeName,
 							})
@@ -472,10 +559,28 @@ func (tr *tree) sites() []site {
 							enclosing = funcName(fd)
 						}
 						out = append(out, site{
-							key: fmt.Sprintf("%s %s int %s", rel, enclosing, text),
-							pos: tr.fset.Position(x.Pos()),
+							key:  fmt.Sprintf("%s %s int %s", rel, enclosing, text),
+							kind: "int",
+							pos:  tr.fset.Position(x.Pos()),
 						})
 					}
+				case *ast.SliceExpr:
+					// A slice expression on a string or a byte slice, whatever
+					// its bound: the second trace's panic was a constant [:16] on
+					// a two-byte fingerprint. On another slice, one with a bound
+					// that is not a constant.
+					if !tr.stringCut(p, x) {
+						return true
+					}
+					enclosing := "a package-level declaration"
+					if fd := enclosingFunc(stack); fd != nil {
+						enclosing = funcName(fd)
+					}
+					out = append(out, site{
+						key:  fmt.Sprintf("%s %s string %s", rel, enclosing, types.ExprString(x)),
+						kind: "string",
+						pos:  tr.fset.Position(x.Pos()),
+					})
 				}
 				return true
 			})
@@ -514,6 +619,54 @@ func declaring(stack []ast.Node, st *ast.StructType) *ast.TypeSpec {
 	return nil
 }
 
+// stringCut says whether a slice expression is a site: any slice of a
+// string or a byte slice, or a slice of anything else with a bound that
+// is not a constant. An array is not a slice: its bounds are checked at
+// compile time.
+func (tr *tree) stringCut(p *pkg, se *ast.SliceExpr) bool {
+	t := p.info.TypeOf(se.X)
+	if t == nil {
+		return false
+	}
+	switch u := types.Unalias(t).Underlying().(type) {
+	case *types.Basic:
+		return u.Info()&types.IsString != 0
+	case *types.Slice:
+		if b, ok := types.Unalias(u.Elem()).Underlying().(*types.Basic); ok && b.Kind() == types.Uint8 {
+			return true
+		}
+	default:
+		return false
+	}
+	for _, ix := range []ast.Expr{se.Low, se.High, se.Max} {
+		if ix == nil {
+			continue
+		}
+		if tv, ok := p.info.Types[ix]; !ok || tv.Value == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// integerElems is a map or a slice whose values are integers, a byte
+// slice excepted: []byte is a string of bytes, not a list of numbers.
+func integerElems(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	switch u := types.Unalias(t).Underlying().(type) {
+	case *types.Map:
+		return integerType(u.Elem())
+	case *types.Slice:
+		if b, ok := types.Unalias(u.Elem()).Underlying().(*types.Basic); ok && b.Kind() == types.Uint8 {
+			return false
+		}
+		return integerType(u.Elem())
+	}
+	return false
+}
+
 // integerCall says whether a call is one of the integer sites, and how
 // the ledger writes it: the callee and its first argument.
 func (tr *tree) integerCall(p *pkg, call *ast.CallExpr) (string, bool) {
@@ -534,6 +687,8 @@ func (tr *tree) integerCall(p *pkg, call *ast.CallExpr) (string, bool) {
 		switch fn.Pkg().Path() {
 		case "strconv":
 			is = fn.Name() == "Atoi" || strings.HasPrefix(fn.Name(), "Parse")
+		case "time":
+			is = fn.Name() == "ParseDuration"
 		case "encoding/binary":
 			// binary.BigEndian.Uint32 is a method on ByteOrder; a Put* is a write.
 			is = strings.HasPrefix(fn.Name(), "Uint") || fn.Name() == "Read"
@@ -784,7 +939,7 @@ func parseLedger(ledger string) (rows []row, problems []string) {
 			continue
 		}
 		rng, test, has := strings.Cut(rest, " shown by ")
-		if !has && rng != "output" {
+		if !has && rng != "output" && !strings.HasPrefix(rng, "local:") {
 			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s has no \"shown by\"", n, key))
 			continue
 		}

@@ -50,7 +50,7 @@ func plainHome(t *testing.T) (*Store, *identity.Identity, *Relay, *mldsa.Private
 	}
 	cert := selfSigned(t, key)
 	rec := &CertRecord{
-		Relay: r.URL, Serial: "01", Label: "laptop",
+		Relay: r.URL, Serial: strings.Repeat("0", 31) + "1", Label: "laptop",
 		Key:       string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})),
 		Cert:      string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert})),
 		NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour),

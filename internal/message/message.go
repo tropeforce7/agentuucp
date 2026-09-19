@@ -275,6 +275,51 @@ func DistinctAttachmentNames(names []string) error {
 	return nil
 }
 
+// ValidDigest is the shape of a SHA-256 written in hex: 64 lowercase hex
+// characters, which is what NewAttachment writes and what a slice of the
+// first sixteen relies on.
+func ValidDigest(s string) error {
+	if len(s) != 64 {
+		return fmt.Errorf("digest is %d characters, not 64", len(s))
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return errors.New("digest is not lowercase hex")
+		}
+	}
+	return nil
+}
+
+// ValidShape is the part of Validate a print or a path relies on and
+// that reads no data: the ids, the thread's and the reply's, and each
+// attachment's digest and size. A record read back from the store is held
+// to it at Load, so that a print that slices an id or a digest meets the
+// shape it expects without hashing every attachment on every listing;
+// Validate, at Open, has already hashed them once. The free text, the
+// subject, the text and the names, is not held here: a record from before
+// a rule, or written by hand, is still shown, and the terminal escaper is
+// what stands between its words and the screen.
+func (b *Body) ValidShape() error {
+	if err := ValidID(b.Thread); err != nil {
+		return fmt.Errorf("thread is %v", err)
+	}
+	if b.InReplyTo != "" {
+		if err := ValidID(b.InReplyTo); err != nil {
+			return fmt.Errorf("in_reply_to is %v", err)
+		}
+	}
+	for i := range b.Attachments {
+		a := &b.Attachments[i]
+		if err := ValidDigest(a.SHA256); err != nil {
+			return fmt.Errorf("attachment %d: %v", i, err)
+		}
+		if a.Size < 0 {
+			return fmt.Errorf("attachment %d: size %d is negative", i, a.Size)
+		}
+	}
+	return nil
+}
+
 // Validate checks an attachment's name is a safe base name and that the digest
 // and size describe the data actually carried.
 func (a *Attachment) Validate() error {
@@ -284,8 +329,15 @@ func (a *Attachment) Validate() error {
 	if a.Size != int64(len(a.Data)) {
 		return fmt.Errorf("attachment %q: size %d does not match %d bytes of data", a.Name, a.Size, len(a.Data))
 	}
+	// The digest's shape first, then its value: what Open accepts here is
+	// exactly what Load holds a record to, so a digest written in
+	// uppercase is refused at the door rather than stored and then found
+	// unreadable, which a sender could otherwise do to a mailbox.
+	if err := ValidDigest(a.SHA256); err != nil {
+		return fmt.Errorf("attachment %q: %v", a.Name, err)
+	}
 	sum := sha256.Sum256(a.Data)
-	if !strings.EqualFold(a.SHA256, hex.EncodeToString(sum[:])) {
+	if a.SHA256 != hex.EncodeToString(sum[:]) {
 		return fmt.Errorf("attachment %q: sha256 does not match data", a.Name)
 	}
 	if a.Media == "" {

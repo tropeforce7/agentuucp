@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/message"
 )
 
 // TestLimitStoredRelayID: a message record's relay id is the relay's
@@ -173,5 +175,126 @@ func TestLimitCursor(t *testing.T) {
 		if err != nil || n != tc.want {
 			t.Errorf("%q: %d %v; want %d", tc.text, n, err, tc.want)
 		}
+	}
+}
+
+// TestLimitStoredRecordShapes: a message record read back is held at Load
+// to the shapes a print slices: its id, its thread and its reply are
+// message ids, its from and to are fingerprints, and each attachment's
+// digest is 64 hex characters; each one character short is refused
+// naming what it is, and the record as written loads.
+func TestLimitStoredRecordShapes(t *testing.T) {
+	s := newStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	id := strings.Repeat("1", 32)
+	write := func(t *testing.T, mutate func(m *Stored)) error {
+		t.Helper()
+		m := stored(id, now)
+		m.Inner.Body.InReplyTo = strings.Repeat("2", 32)
+		m.Inner.Body.Attachments = []message.Attachment{{Name: "a.txt", Media: "text/plain", Size: 1, SHA256: strings.Repeat("0", 64), Data: []byte("x")}}
+		mutate(m)
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(s.msgPath(Inbox, id)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(s.msgPath(Inbox, id), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.Load(Inbox, id)
+		return err
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(m *Stored)
+		says   string
+	}{
+		{"id one short", func(m *Stored) { m.Inner.ID = id[:31] }, "the record's message id"},
+		{"from one short", func(m *Stored) { m.Inner.From = m.Inner.From[:63] }, "from or to is not a fingerprint"},
+		{"to one short", func(m *Stored) { m.Inner.To = m.Inner.To[:63] }, "from or to is not a fingerprint"},
+		{"thread one short", func(m *Stored) { m.Inner.Body.Thread = m.Inner.Body.Thread[:31] }, "thread is not a message id"},
+		{"reply one short", func(m *Stored) { m.Inner.Body.InReplyTo = m.Inner.Body.InReplyTo[:31] }, "in_reply_to is not a message id"},
+		{"digest one short", func(m *Stored) { m.Inner.Body.Attachments[0].SHA256 = strings.Repeat("0", 63) }, "digest is 63 characters, not 64"},
+		{"digest not lowercase hex", func(m *Stored) { m.Inner.Body.Attachments[0].SHA256 = strings.Repeat("G", 64) }, "digest is not lowercase hex"},
+		{"size negative", func(m *Stored) { m.Inner.Body.Attachments[0].Size = -1 }, "size -1 is negative"},
+	} {
+		err := write(t, tc.mutate)
+		if err == nil || !strings.Contains(err.Error(), tc.says) {
+			t.Errorf("%s: %v; want %q", tc.name, err, tc.says)
+		}
+	}
+	if err := write(t, func(m *Stored) {}); err != nil {
+		t.Errorf("the record as written: %v", err)
+	}
+}
+
+// TestLimitRelayRecordHashes: a relay record's two hashes, the pinned
+// anchor's and the last signing intermediate's, are 64 hex characters or
+// absent, held at readRelay before a print slices sixteen; one character
+// short is a damaged file naming the hash.
+func TestLimitRelayRecordHashes(t *testing.T) {
+	s := newStore(t)
+	r, err := s.AddRelay("work", "https://relay.example:9443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"trust_anchor_spki", "server_int_spki"} {
+		for _, v := range []string{strings.Repeat("a", 63), strings.Repeat("a", 65), strings.Repeat("A", 64)} {
+			r.TrustAnchorSPKI, r.ServerIntSPKI = "", ""
+			if key == "trust_anchor_spki" {
+				r.TrustAnchorSPKI = v
+			} else {
+				r.ServerIntSPKI = v
+			}
+			if err := s.SaveRelay(r); err != nil {
+				t.Fatal(err)
+			}
+			_, err := s.Relay("work")
+			if !errors.Is(err, ErrDamaged) || !strings.Contains(err.Error(), "has a "+key+" that is not a hash") {
+				t.Errorf("%s %q: %v; want ErrDamaged naming it", key, v, err)
+			}
+		}
+	}
+	r.TrustAnchorSPKI, r.ServerIntSPKI = strings.Repeat("a", 64), strings.Repeat("b", 64)
+	if err := s.SaveRelay(r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Relay("work"); err != nil {
+		t.Errorf("both hashes as written: %v", err)
+	}
+	r.TrustAnchorSPKI, r.ServerIntSPKI = "", ""
+	if err := s.SaveRelay(r); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Relay("work"); err != nil {
+		t.Errorf("both hashes absent: %v", err)
+	}
+}
+
+// TestLimitCertRecordSerial: a certificate record's serial is a
+// certificate serial, held at CertFor before a print slices sixteen; one
+// character short, one long, and uppercase are each a damaged file.
+func TestLimitCertRecordSerial(t *testing.T) {
+	s := newStore(t)
+	r, err := s.AddRelay("work", "https://relay.example:9443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, serial := range []string{strings.Repeat("a", 31), strings.Repeat("a", 33), strings.Repeat("A", 32), ""} {
+		if err := s.SaveCertFor(r, &CertRecord{Relay: r.URL, Serial: serial}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := s.CertFor(r)
+		if err == nil || !strings.Contains(err.Error(), "its serial is not a certificate serial") {
+			t.Errorf("serial %q: %v; want the damaged file naming the serial", serial, err)
+		}
+	}
+	if err := s.SaveCertFor(r, &CertRecord{Relay: r.URL, Serial: strings.Repeat("a", 32)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CertFor(r); err != nil {
+		t.Errorf("a serial as written: %v", err)
 	}
 }

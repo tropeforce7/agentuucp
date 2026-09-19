@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,7 +55,7 @@ func oldHome(t *testing.T, root, relayURL string, anchor *x509.Certificate) (anc
 	t.Helper()
 	anchorPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: anchor.Raw})
 	certJSON, err := json.MarshalIndent(&CertRecord{
-		Relay: relayURL, Serial: "abc123", Label: "laptop",
+		Relay: relayURL, Serial: "abc123" + strings.Repeat("0", 26), Label: "laptop",
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(300 * 24 * time.Hour),
 	}, "", "  ")
 	if err != nil {
@@ -464,10 +465,10 @@ func TestPerRelayStateDoesNotLeak(t *testing.T) {
 	}
 
 	// A certificate on the other and none on the first.
-	if err := s.SaveCertFor(personal, &CertRecord{Relay: personal.URL, Serial: "bbb", Label: "laptop"}); err != nil {
+	if err := s.SaveCertFor(personal, &CertRecord{Relay: personal.URL, Serial: strings.Repeat("b", 32), Label: "laptop"}); err != nil {
 		t.Fatal(err)
 	}
-	if rec, err := s.CertFor(personal); err != nil || rec.Serial != "bbb" {
+	if rec, err := s.CertFor(personal); err != nil || rec.Serial != strings.Repeat("b", 32) {
 		t.Fatalf("personal's certificate: %v %v", rec, err)
 	}
 	if _, err := s.CertFor(work); !errors.Is(err, ErrNoCert) {
@@ -506,14 +507,15 @@ func TestPerRelayStateDoesNotLeak(t *testing.T) {
 
 	// And the ratchet: what one relay's authority did says nothing about
 	// another's.
-	if err := s.SeenIntermediateFor(work, "deadbeef", time.Unix(1000, 0).UTC()); err != nil {
+	spki := strings.Repeat("deadbeef", 8)
+	if err := s.SeenIntermediateFor(work, spki, time.Unix(1000, 0).UTC()); err != nil {
 		t.Fatal(err)
 	}
 	reloaded, err := s.Relay("work")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.ServerIntSPKI != "deadbeef" {
+	if reloaded.ServerIntSPKI != spki {
 		t.Errorf("work's ratchet is %q", reloaded.ServerIntSPKI)
 	}
 	if other, _ := s.Relay("personal"); other.ServerIntSPKI != "" {
@@ -590,7 +592,7 @@ func TestForgettingAnIdentityKeepsTheRelayAndItsAnchor(t *testing.T) {
 	if err := s.SaveAnchorFor(r, anchor); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveCertFor(r, &CertRecord{Relay: r.URL, Serial: "aaa"}); err != nil {
+	if err := s.SaveCertFor(r, &CertRecord{Relay: r.URL, Serial: strings.Repeat("a", 32)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetCursorFor(r, 12); err != nil {

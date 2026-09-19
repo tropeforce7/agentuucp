@@ -618,6 +618,18 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	if m.RelayID < 0 {
 		return nil, fmt.Errorf("the record's relay id %d is negative", m.RelayID)
 	}
+	// The record was written after Open ran every rule; a record that
+	// says otherwise was not written by this program, and every print
+	// that slices its id, its sender or a digest expects the shape.
+	if err := message.ValidID(m.Inner.ID); err != nil {
+		return nil, fmt.Errorf("the record's message id: %v", err)
+	}
+	if !identity.ValidFingerprint(m.Inner.From) || !identity.ValidFingerprint(m.Inner.To) {
+		return nil, errors.New("the record's from or to is not a fingerprint")
+	}
+	if err := m.Inner.Body.ValidShape(); err != nil {
+		return nil, fmt.Errorf("the record's message: %v", err)
+	}
 	return &m, nil
 }
 

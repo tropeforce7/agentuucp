@@ -146,6 +146,17 @@ func (c *Client) checkListing(page *relayapi.ListResponse) error {
 	return nil
 }
 
+// checkDirectory is a directory answer: how many messages are queued
+// under each channel, each zero or more.
+func (c *Client) checkDirectory(resp *relayapi.ChannelsResponse) error {
+	for name, n := range resp.Queued {
+		if n < 0 {
+			return c.malformed("the directory answer", "queued["+identity.Printable(name)+"]", wantCount)
+		}
+	}
+	return nil
+}
+
 // checkID is the id a relay gives a message it accepted, from a post or
 // a completed stream.
 func (c *Client) checkID(answer string, id int64) error {

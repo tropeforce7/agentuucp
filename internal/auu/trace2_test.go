@@ -2,6 +2,7 @@ package auu
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -154,12 +155,16 @@ func TestSendRefusesAThreadIDThatIsNotAMessageID(t *testing.T) {
 	alice.run("send", "--to", "bob", "--thread", "fedcba9876543210fedcba9876543210", "hello")
 }
 
-// A record in the spool with a thread id of the wrong shape can only have
-// been written by hand, since every message that arrives has been through
-// Validate; serve still checks before the id is joined onto anything, and
-// it is that message's failure, written in the ledger and stepped over,
-// never the run's: the message behind it is answered in the same round.
-func TestServeRecordsABadThreadIDAgainstTheMessageAndGoesOn(t *testing.T) {
+// TestARecordWhoseThreadIDIsAPathIsRefusedBeforeServeSeesIt: the second
+// trace found serve joining a thread id onto a path; handle refuses one
+// that is not a message id, and so does worktreeFor. Since the limit
+// ledger, a record whose thread is a path is refused a step earlier, at
+// store.Load, as a record this program could not have written: serve
+// never sees it, the round it would have failed is clean, nothing is
+// joined onto a path, and serve ls has nothing to print raw. handle's
+// and worktreeFor's own refusals stay as the guards behind Load's, and
+// each is reached directly here, since nothing else reaches them now.
+func TestARecordWhoseThreadIDIsAPathIsRefusedBeforeServeSeesIt(t *testing.T) {
 	alice, bob := newExpert(t, modeSideCopy)
 	outside := filepath.Join(bob.home, "outside")
 	s, err := store.Open(bob.home)
@@ -180,37 +185,62 @@ func TestServeRecordsABadThreadIDAgainstTheMessageAndGoesOn(t *testing.T) {
 	if err := s.Save(store.Inbox, crafted); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.Load(store.Inbox, crafted.Inner.ID); err == nil || !strings.Contains(err.Error(), "thread is not a message id") {
+		t.Fatalf("Load took a record whose thread is a path: %v", err)
+	}
 	sent := alice.ask(t, "jostle", "after it", "please look")
 
 	out, err := bob.tryRun("serve", "--once", "--json")
-	var exit *exitError
-	if !errors.As(err, &exit) || exit.code != exitUsage {
-		t.Fatalf("a round with one failure ended %v, want the usage exit that says so\n%s", err, out)
+	if err != nil {
+		t.Fatalf("a round with one unreadable record ended %v, want a clean round\n%s", err, out)
 	}
 	var report roundJSON
 	if err := json.Unmarshal([]byte(out), &report); err != nil {
 		t.Fatal(err)
 	}
-	if len(report.Failed) != 1 || report.Failed[0].ID != crafted.Inner.ID {
-		t.Fatalf("failed: %+v, want the crafted message", report.Failed)
+	if len(report.Failed) != 0 {
+		t.Fatalf("failed: %+v, want none: the crafted record is refused before serve sees it", report.Failed)
 	}
 	if len(report.Answered) != 1 || report.Answered[0].ID != sent.ID {
 		t.Fatalf("answered: %+v, want the ask behind it", report.Answered)
 	}
-	if entry := bob.ledgerOf(t).Messages[crafted.Inner.ID]; entry == nil || entry.Failures != 1 {
-		t.Fatalf("the ledger has %+v for the crafted message, want one failure", entry)
+	if entry := bob.ledgerOf(t).Messages[crafted.Inner.ID]; entry != nil {
+		t.Fatalf("the ledger has %+v for the crafted message, want nothing", entry)
 	}
 	if _, statErr := os.Stat(outside); statErr == nil {
 		t.Errorf("the thread id was joined onto a path: %s exists", outside)
 	}
-	// serve ls neither joins the name onto a path nor prints it raw.
-	ls := bob.run("serve", "ls")
-	if strings.Contains(ls, "../../outside") || !strings.Contains(ls, `"../../outsid"  0 turns`) {
-		t.Errorf("serve ls printed the thread id raw or not at all:\n%s", ls)
+	if ls := bob.run("serve", "ls"); strings.Contains(ls, "outside") {
+		t.Errorf("serve ls printed a thread id serve never saw:\n%s", ls)
 	}
-	// And worktreeFor refuses it on its own, though handle never lets it
-	// this far.
-	if _, _, err := worktreeFor(filepath.Join(bob.home, "serve"), bob.row, "../../outside",
+	// handle's own check, reached directly since Load no longer lets such
+	// a record this far: the message built in memory and handed to a run,
+	// which fails it with the sentence, writes the failure to the ledger,
+	// and joins nothing onto a path.
+	cfg, err := loadServeConfig(bob.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(bob.home, "serve")
+	led, err := loadLedger(filepath.Join(root, ledgerFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &serveRun{s: s, cfg: cfg, led: led, root: root}
+	if err := run.handle(context.Background(), crafted); err != nil {
+		t.Fatalf("handle returned %v; want the message failed and nil", err)
+	}
+	if len(run.out.Failed) != 1 || run.out.Failed[0].ID != crafted.Inner.ID {
+		t.Errorf("handle failed %+v, want the crafted message", run.out.Failed)
+	}
+	if entry := led.Messages[crafted.Inner.ID]; entry == nil || entry.Failures != 1 {
+		t.Errorf("the ledger has %+v for the crafted message after handle, want one failure", entry)
+	}
+	if _, statErr := os.Stat(outside); statErr == nil {
+		t.Errorf("handle joined the thread id onto a path: %s exists", outside)
+	}
+	// And worktreeFor refuses it on its own, the guard behind handle's.
+	if _, _, err := worktreeFor(root, bob.row, "../../outside",
 		t.TempDir(), true); err == nil || !strings.Contains(err.Error(), "not a message id") {
 		t.Errorf("worktreeFor took a thread id that is a path: %v", err)
 	}

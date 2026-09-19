@@ -113,6 +113,9 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 				_, err := c.OpenStream(context.Background(), bob.Fingerprint(), "", 5000)
 				return err
 			}},
+		{"/v1/mailbox/" + fp + "/channels", func(n int64) any {
+			return relayapi.ChannelsResponse{Document: []byte("{}"), Signature: []byte("s"), Queued: map[string]int64{"default": n}}
+		}, func(c *Client) error { _, err := c.Directory(context.Background(), fp); return err }},
 	}
 	ids := []shape{
 		{"/v1/mailbox/" + fp, listing(func(l *relayapi.ListResponse, n int64) { l.Messages[0].ID = n }), callList},
@@ -294,6 +297,62 @@ func TestLimitRetryAfter(t *testing.T) {
 		h.Set("Retry-After", tc.raw)
 		if got := retryAfter(h); got != tc.want {
 			t.Errorf("Retry-After %q: %s, want %s", tc.raw, got, tc.want)
+		}
+	}
+}
+
+// TestLimitAnswerShapesOneShort: every fingerprint, serial and token id
+// in a relay's answer is held to its shape in shape.go before a command
+// slices its first sixteen or twelve characters; one character short of
+// the shape is a malformed answer naming the field, and nothing of the
+// answer is returned.
+func TestLimitAnswerShapesOneShort(t *testing.T) {
+	alice, err := identity.Generate("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := alice.Fingerprint()
+	shortFP := strings.Repeat("a", 63)
+	shortSerial := strings.Repeat("0", 31)
+	shortToken := strings.Repeat("7", 31)
+	for _, tc := range []struct {
+		path, field string
+		answer      any
+		call        func(c *Client) error
+	}{
+		{"/v1/admin/status", "ca_fingerprint", relayapi.AdminStatusResponse{CAFingerprint: shortFP},
+			func(c *Client) error { _, err := c.AdminStatus(context.Background()); return err }},
+		{"/v1/admin/mailboxes", "fp", relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{{FP: shortFP}}},
+			func(c *Client) error { _, err := c.AdminMailboxes(context.Background(), "", 0); return err }},
+		{"/v1/admin/mailboxes", "next", relayapi.MailboxListResponse{Next: shortFP},
+			func(c *Client) error { _, err := c.AdminMailboxes(context.Background(), "", 0); return err }},
+		{"/v1/admin/mailboxes/" + fp, "fp", relayapi.MailboxRecord{FP: shortFP},
+			func(c *Client) error { _, err := c.AdminMailbox(context.Background(), fp); return err }},
+		{"/v1/admin/blocks", "fp", relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{{FP: shortFP, ByFP: fp}}},
+			func(c *Client) error { _, err := c.AdminBlocks(context.Background()); return err }},
+		{"/v1/admin/blocks", "by_fp", relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{{FP: fp, ByFP: shortFP}}},
+			func(c *Client) error { _, err := c.AdminBlocks(context.Background()); return err }},
+		{"/v1/admin/tokens", "id", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: shortToken, Issuer: fp, Use: token.UseRegister, State: relayapi.TokenLive}}},
+			func(c *Client) error { _, err := c.AdminTokens(context.Background(), false); return err }},
+		{"/v1/admin/tokens", "issuer", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: strings.Repeat("7", 32), Issuer: shortFP, Use: token.UseRegister, State: relayapi.TokenLive}}},
+			func(c *Client) error { _, err := c.AdminTokens(context.Background(), false); return err }},
+		{"/v1/admin/tokens", "subject", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: strings.Repeat("7", 32), Issuer: fp, Subject: shortFP, Use: token.UseRegister, State: relayapi.TokenLive}}},
+			func(c *Client) error { _, err := c.AdminTokens(context.Background(), false); return err }},
+		{"/v1/admin/certs", "serial", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: shortSerial, FP: fp}}},
+			func(c *Client) error { _, err := c.AdminCerts(context.Background(), "", false); return err }},
+		{"/v1/admin/certs", "fp", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: strings.Repeat("0", 32), FP: shortFP}}},
+			func(c *Client) error { _, err := c.AdminCerts(context.Background(), "", false); return err }},
+		{"/v1/mailbox/" + fp + "/certs", "serial", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: shortSerial}}},
+			func(c *Client) error { _, err := c.Certs(context.Background()); return err }},
+	} {
+		srv := fakeRelay(t, map[string]any{tc.path: tc.answer})
+		c, err := New(srv.URL, alice, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = tc.call(c)
+		if !errors.Is(err, ErrMalformedAnswer) || !strings.Contains(err.Error(), tc.field+" is not") {
+			t.Errorf("%s with %s one short: %v; want ErrMalformedAnswer naming the field", tc.path, tc.field, err)
 		}
 	}
 }

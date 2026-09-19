@@ -16,7 +16,7 @@ func twoBoxed(t *testing.T, id *identity.Identity, msgID string) *Stored {
 	return &Stored{
 		Inner: &envelope.Inner{
 			ID: msgID, From: id.Fingerprint(), FromBundle: id.Public().Bundle(), To: id.Fingerprint(),
-			Body: message.Body{Type: message.TypeAsk, Thread: strings.Repeat("t", 32), Text: "x"},
+			Body: message.Body{Type: message.TypeAsk, Thread: strings.Repeat("7", 32), Text: "x"},
 		},
 	}
 }

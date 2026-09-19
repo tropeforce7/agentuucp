@@ -832,7 +832,9 @@ func copyStreamed(src, target string, a message.Attachment) error {
 	if n != a.Size {
 		return fmt.Errorf("refusing to write %q: size %d does not match %d bytes of data", a.Name, a.Size, n)
 	}
-	if !strings.EqualFold(a.SHA256, hex.EncodeToString(h.Sum(nil))) {
+	// The record's digest is lowercase hex by the rule at Load; the data
+	// is held to it exactly, as Validate holds an inline attachment.
+	if a.SHA256 != hex.EncodeToString(h.Sum(nil)) {
 		return fmt.Errorf("refusing to write %q: sha256 does not match data", a.Name)
 	}
 	if err := tmp.Close(); err != nil {

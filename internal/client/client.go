@@ -540,6 +540,9 @@ func (c *Client) Directory(ctx context.Context, fp string) (*DirectoryResult, er
 	if err != nil {
 		return nil, err
 	}
+	if err := c.checkDirectory(&resp); err != nil {
+		return nil, err
+	}
 	return &DirectoryResult{Document: resp.Document, Signature: resp.Signature, Queued: resp.Queued}, nil
 }
 

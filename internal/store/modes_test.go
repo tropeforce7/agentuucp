@@ -37,7 +37,7 @@ func TestPermissiveKeyFilesAreRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := plain.SaveCertFor(r, &CertRecord{Relay: r.URL, Serial: "aaa"}); err != nil {
+	if err := plain.SaveCertFor(r, &CertRecord{Relay: r.URL, Serial: strings.Repeat("a", 32)}); err != nil {
 		t.Fatal(err)
 	}
 	encrypted := newStore(t)

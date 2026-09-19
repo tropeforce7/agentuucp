@@ -122,3 +122,49 @@ func TestLimitRelaySettings(t *testing.T) {
 		}
 	})
 }
+
+// TestLimitDurationSettings: the three durations the relay's file carries
+// as text, read by time.ParseDuration. client_certs.lifetime is within
+// [an hour, ten years]; upload_ttl and admin.token_max_age are more than
+// nothing. One under and one over a bound, zero, a negative, the text one
+// past the type's maximum, a bare number, "inf", a unit alone and a digit
+// outside ASCII are each refused naming the setting; the bounds, a plus
+// sign and an empty setting (the default) are taken.
+func TestLimitDurationSettings(t *testing.T) {
+	file := func(key, value string) string {
+		switch key {
+		case "client_certs.lifetime":
+			return writeFile(t, `{"client_certs": {"mode": "off", "lifetime": "`+value+`"}}`)
+		case "admin.token_max_age":
+			return writeFile(t, `{"admin": {"token_max_age": "`+value+`"}}`)
+		}
+		return writeFile(t, `{"`+key+`": "`+value+`"}`)
+	}
+	forms := []string{"9223372037s", "1", "inf", "s", "-1h", "\u0661h", "1.5", "1h "}
+	t.Run("client_certs.lifetime", func(t *testing.T) {
+		for _, v := range append([]string{"59m59s", "87601h", "0s", "-1s"}, forms...) {
+			if _, err := resolve(t, file("client_certs.lifetime", v)); err == nil || !strings.Contains(err.Error(), "client_certs.lifetime") {
+				t.Errorf("lifetime %q: %v; want the refusal naming it", v, err)
+			}
+		}
+		for _, v := range []string{"1h", "+1h", "87600h", ""} {
+			if _, err := resolve(t, file("client_certs.lifetime", v)); err != nil {
+				t.Errorf("lifetime %q: %v; want it taken", v, err)
+			}
+		}
+	})
+	for _, key := range []string{"upload_ttl", "admin.token_max_age"} {
+		t.Run(key, func(t *testing.T) {
+			for _, v := range append([]string{"0s", "-1s", "-9223372036854775808ns"}, forms...) {
+				if _, err := resolve(t, file(key, v)); err == nil || !strings.Contains(err.Error(), key) {
+					t.Errorf("%s %q: %v; want the refusal naming it", key, v, err)
+				}
+			}
+			for _, v := range []string{"1ns", "+1s", "9223372036854775807ns", ""} {
+				if _, err := resolve(t, file(key, v)); err != nil {
+					t.Errorf("%s %q: %v; want it taken", key, v, err)
+				}
+			}
+		})
+	}
+}

@@ -9,8 +9,12 @@
 #
 #   <file> <enclosing function or struct> <kind> <site as written> = <range> shown by <TestLimit...>
 #
-# where the kind is int for this file, the site is the field with its
-# type, or the callee with its first argument, and the range is one of
+# where the kind is int or string. An int site is a field of integer,
+# duration or integer-valued map or slice type in a struct with a json
+# tag, wherever the struct is declared; a strconv.Atoi or Parse*; a
+# time.ParseDuration; a binary.*.Uint* read; a FlagSet's integer or
+# duration method. It is written as the field with its type, or the
+# callee with its first argument, and its range is one of
 #
 #   [lo, hi]       a closed interval, in the field's unit
 #   >= n, > n      a floor, <= n, < n a ceiling; a duration's bound
@@ -23,17 +27,55 @@
 #   output         a struct the program writes and never decodes, which
 #                  the test proves; no test is named
 #
-# The sweep that wrote this file found 144 sites; that is the floor in
+# A string site is a slice expression on a string or a byte slice,
+# whatever its bound (the second trace's panic was a constant [:16] on a
+# two-byte fingerprint), or on another slice with a bound that is not a
+# constant. It is written as the expression, and says one of
+#
+#   local: <Rule> at <point> shown by <TestLimit...>
+#                  the rule that fixed the operand's length and the
+#                  point it ran; the rule is a function in the tree, and
+#                  the test, one per rule and shared, feeds the operand
+#                  one byte short at that point
+#   local: <why>   the operand's own arithmetic: a length the code
+#                  checked, an index a loop or Index gave, a rune
+#                  boundary; names no test
+#   <why> shown by <TestLimit...>
+#                  a cut with no rule upstream, shown by its own test
+#
+# The sweep that wrote this file found 285 sites; that is the floor in
 # the test.
 
+cmd/auu-admin/commands.go blockAdd string fp[:16] #2 = local: ValidFingerprint at oneFingerprint shown by TestLimitFingerprintAndSerialArgsOneShort
+cmd/auu-admin/commands.go blockAdd string fp[:16] = local: ValidFingerprint at oneFingerprint shown by TestLimitFingerprintAndSerialArgsOneShort
+cmd/auu-admin/commands.go blockRemove string fp[:16] = local: ValidFingerprint at oneFingerprint shown by TestLimitFingerprintAndSerialArgsOneShort
+cmd/auu-admin/commands.go blocksList string b.ByFP[:16] = local: ValidFingerprint at checkBlocks shown by TestLimitAnswerShapesOneShort
+cmd/auu-admin/commands.go blocksList string b.FP[:16] = local: ValidFingerprint at checkBlocks shown by TestLimitAnswerShapesOneShort
+cmd/auu-admin/commands.go certsList string cert.FP[:16] = local: ValidFingerprint at checkCerts shown by TestLimitAnswerShapesOneShort
+cmd/auu-admin/commands.go certsList string cert.Serial[:16] = local: ValidSerial at checkCerts shown by TestLimitAnswerShapesOneShort
+cmd/auu-admin/commands.go certsRevoke string serial[:16] #2 = local: ValidSerial at certsRevoke shown by TestLimitFingerprintAndSerialArgsOneShort
+cmd/auu-admin/commands.go certsRevoke string serial[:16] = local: ValidSerial at certsRevoke shown by TestLimitFingerprintAndSerialArgsOneShort
+cmd/auu-admin/commands.go cmdStatus string st.CAFingerprint[:16] = local: ValidFingerprint at checkStatus shown by TestLimitAnswerShapesOneShort
+cmd/auu-admin/commands.go mailboxRemove string fp[:16] #2 = local: ValidFingerprint at oneFingerprint shown by TestLimitFingerprintAndSerialArgsOneShort
+cmd/auu-admin/commands.go mailboxRemove string fp[:16] = local: ValidFingerprint at oneFingerprint shown by TestLimitFingerprintAndSerialArgsOneShort
+cmd/auu-admin/commands.go mailboxRemove string m.FP[:16] #2 = local: ValidFingerprint at checkMailbox shown by TestLimitAnswerShapesOneShort
+cmd/auu-admin/commands.go mailboxRemove string m.FP[:16] = local: ValidFingerprint at checkMailbox shown by TestLimitAnswerShapesOneShort
 cmd/auu-admin/commands.go mailboxesList int fs.Int("limit") = > 0 shown by TestLimitAdminFlags
+cmd/auu-admin/commands.go mailboxesList string m.FP[:16] = local: ValidFingerprint at checkMailboxes shown by TestLimitAnswerShapesOneShort
 cmd/auu-admin/commands.go tokenIssue int fs.Duration("expires") = >= 1s shown by TestLimitAdminFlags
 cmd/auu-admin/commands.go tokenIssue int fs.Int("uses") = [1, 1000] shown by TestLimitAdminFlags
+cmd/auu-admin/commands.go tokenList string t.ID[:12] = local: ValidID at checkToken shown by TestLimitAnswerShapesOneShort
+cmd/auu-admin/commands.go tokenList string t.Subject[:8] = local: ValidFingerprint at checkToken shown by TestLimitAnswerShapesOneShort
+cmd/auu-admin/commands.go truncate string s[:i] = local: i is a rune boundary of s from range
+cmd/auu-ca/kit.go adminLines string a[1:] = local: a has the prefix "@" by HasPrefix
 cmd/auu-ca/kit.go cmdKit int fs.Int("years") = > 0 shown by TestLimitYearsFlag
 cmd/auu-ca/main.go cmdInit int fs.Int("mldsa") = one of 44, 65, 87 shown by TestLimitMLDSAFlag
 cmd/auu-ca/main.go cmdRelay int fs.Int("years") = > 0 shown by TestLimitYearsFlag
 cmd/auu-ca/main.go cmdShow.relayOut int Retired int = output
 cmd/auu-ca/main.go cmdShow.struct int MLDSA int = output
+cmd/auu-relay/config.go (ClientCertsConfig).ParsedLifetime int time.ParseDuration(c.Lifetime) = [1h, 87600h] shown by TestLimitDurationSettings
+cmd/auu-relay/config.go (Config).ParsedUploadTTL int time.ParseDuration(c.UploadTTL) = > 0s shown by TestLimitDurationSettings
+cmd/auu-relay/config.go (Config).TokenMaxAge int time.ParseDuration(c.Admin.TokenMaxAge) = > 0s shown by TestLimitDurationSettings
 cmd/auu-relay/config.go Config int MaxBytes int64 = [1, 1073741824] shown by TestLimitMaxBytesBoundaries
 cmd/auu-relay/config.go Config int MaxStreamBytes int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MailboxMaxBytes int64 = >= 0 shown by TestLimitRelaySettings
@@ -47,6 +89,7 @@ cmd/auu-relay/config.go LimitsConfig int RegistrationsPerHour int64 = >= 0 shown
 cmd/auu-relay/config.go LimitsConfig int RelayMaxBytes int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int RequestsPerMinute int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int UnauthenticatedPerMinute int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/main.go logClientCerts string parts.loaded.AnchorSPKI[:16] = local: equal to SPKI of the anchor, checked at load
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.limitPostBytes) = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.limitPosts) = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.limitRegistrations) = >= 0 shown by TestLimitRelaySettings
@@ -63,31 +106,91 @@ cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.relayMaxBytes) = >= 0 sho
 internal/agent/proto.go readFrame int binary.BigEndian.Uint32(prefix[:]) = [1, 1048576] shown by TestLimitFrameLength
 internal/agent/proto.go request int Params int = one of 44, 65, 87 shown by TestLimitGenerateParams
 internal/agent/proto.go request int TTL int64 = [0, 31536000] shown by TestLimitUnlockTTL
+internal/agent/scope.go isReceiveRequest string path[1:] = local: path[0] is "/" by the check before
+internal/agent/scope.go shapeMatches string shape[1:] = local: shape is one of the constant shapes, each beginning "/"
+internal/agent/socket.go homeID string hex.EncodeToString(sum[:])[:idLen] = local: hex of a sha256 sum, 64 characters
 internal/allowlist/allowlist.go Document int V int = [1, 1] shown by TestLimitDocumentV
 internal/auu/agent_cmds.go cmdUnlock int fs.Duration("ttl") = >= 0 shown by TestLimitWaitAndWatchFlags
+internal/auu/allow.go issuedFrom string msg[i + len(mark):len(msg) - 1] = local: i from LastIndex of mark in msg, checked >= 0, and msg ends in ")" by HasSuffix
+internal/auu/allow.go printAllowShow string sender.Fingerprint[:identity.ShortIDLen] = local: ValidFingerprint at Validate shown by TestLimitSenderOneShort
+internal/auu/anchor.go anchorPin string hash[:16] = local: ValidFingerprint at anchorPin shown by TestLimitAnchorArgsOneShort
+internal/auu/anchor.go anchorStatus string out.ServerIntermediate[:16] = local: ValidFingerprint at readRelay shown by TestLimitRelayRecordHashes
+internal/auu/cert.go certList string cert.Serial[:16] = local: ValidSerial at checkCerts shown by TestLimitAnswerShapesOneShort
+internal/auu/cert.go certRenew string rec.Serial[:16] = local: FormatSerial writes 32 hex characters, in saveIssued
+internal/auu/cert.go certStatus string fp[:16] = local: caFingerprint writes a fingerprint or nothing, checked != ""
 internal/auu/cert.go certStatusOutput int MLDSA int = output
+internal/auu/cert.go machineLabel string host[:i] = local: i from IndexByte of "." in host, checked > 0
+internal/auu/channel_cmds.go relayChannelsJSON int Queued map[string]int64 = output
+internal/auu/completion.go messages string m.Inner.From[:12] = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
+internal/auu/completion.go shorten string all[i].value[:12] = local: len(all[i].value) == 32 by the check before
+internal/auu/compose.go composeTemplate string original.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/compose.go readComposed string lines[:len(lines) - 1] = local: len(lines)-1 of lines, after a check that the last is empty
+internal/auu/compose.go splitSubject string body[1:] = local: body has the prefix "\n" by HasPrefix
+internal/auu/compose.go stripComments string lines[:len(lines) - 1] = local: len(lines)-1 of lines, after a check that the last is empty
+internal/auu/enrol.go fetchAnchor string got[:16] = local: SPKI writes 64 hex characters
+internal/auu/enrol.go fetchAnchor string want[:16] = local: isAnchor at Validate shown by TestLimitAnchorClaimOneShort
+internal/auu/identity_cmds.go cmdInit string (*anchor)[:16] = local: ValidFingerprint at cmdInit shown by TestLimitAnchorArgsOneShort
 internal/auu/identity_cmds.go idJSON int PQCategory int = output
 internal/auu/identity_cmds.go idJSON int SuiteID int = output
 internal/auu/identity_cmds.go peerJSON int PQCategory int = output
 internal/auu/identity_cmds.go peerJSON int SuiteID int = output
+internal/auu/identity_cmds.go truncate string s[:i] = local: i is a rune boundary of s from range
 internal/auu/inbox.go attachmentJSON int Size int64 = output
+internal/auu/inbox.go bodyGone string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/inbox.go cmdExtract string m.Inner.ID[:12] #2 = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/inbox.go cmdExtract string m.Inner.ID[:12] #3 = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/inbox.go cmdExtract string m.Inner.ID[:12] #4 = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/inbox.go cmdExtract string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/inbox.go cmdQuarantine string m.Inner.From[:16] = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
+internal/auu/inbox.go cmdQuarantine string m.Inner.ID[:12] #2 = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/inbox.go cmdQuarantine string m.Inner.ID[:12] #3 = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/inbox.go cmdQuarantine string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/inbox.go cmdQuarantine string pub.Fingerprint()[:16] = local: Fingerprint writes 64 hex characters
 internal/auu/inbox.go cmdWait int fs.Duration("interval") = >= 5s shown by TestLimitWaitAndWatchFlags
 internal/auu/inbox.go cmdWait int fs.Duration("timeout") = > 0s shown by TestLimitWaitAndWatchFlags
 internal/auu/inbox.go fetchResult int Delivered int = output
+internal/auu/inbox.go fetchResult int Gone map[string]int = output
 internal/auu/inbox.go fetchResult int Kept int = output
 internal/auu/inbox.go fetchResult int Quarantined int = output
 internal/auu/inbox.go fetchResult int Unreadable int = output
+internal/auu/inbox.go printInboxLine string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/inbox.go printMessage string a.SHA256[:16] = local: ValidDigest at Load shown by TestLimitStoredRecordShapes
+internal/auu/inbox.go printMessage string m.Inner.From[:16] = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
+internal/auu/inbox.go printMessage string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/inbox.go promptName string fp[:16] = local: fp is Fingerprint of the sender key at cmdQuarantine, 64 hex characters
+internal/auu/inbox.go promptName string fp[:8] = local: fp is Fingerprint of the sender key at cmdQuarantine, 64 hex characters
 internal/auu/inbox.go relayFetch int Queued int64 = output
+internal/auu/lookup.go knownAs string fp[:identity.ShortIDLen] = local: equal to Fingerprint of the resolved key, checked at knownAs
 internal/auu/lookup.go lookupJSON int PQCategory int = output
 internal/auu/lookup.go lookupJSON int SuiteID int = output
 internal/auu/outbox.go pending int Bytes int64 = >= 0 shown by TestLimitPendingRecordIntegers
 internal/auu/outbox.go pending int ChunkSize int = [4096, 16777216] shown by TestLimitPendingRecordIntegers
 internal/auu/outbox.go pending int Chunks int64 = >= 0 shown by TestLimitPendingRecordIntegers
 internal/auu/outbox.go pending int MaxRequest int64 = >= 0 shown by TestLimitPendingRecordIntegers
+internal/auu/relay.go relayAdd string (*anchor)[:16] = local: ValidFingerprint at relayAdd shown by TestLimitAnchorArgsOneShort
+internal/auu/relay.go relayFlags string r.Anchor[:8] = local: ValidFingerprint at readRelay shown by TestLimitRelayRecordHashes
+internal/auu/relay.go relayRemove string r.TrustAnchorSPKI[:16] = local: ValidFingerprint at readRelay shown by TestLimitRelayRecordHashes
+internal/auu/relay.go relayShow string out.CertSerial[:16] = local: ValidSerial at CertFor shown by TestLimitCertRecordSerial
+internal/auu/relay.go relayShow string out.ServerIntermediate[:16] = local: ValidFingerprint at readRelay shown by TestLimitRelayRecordHashes
+internal/auu/rm.go cmdRm string m.Inner.ID[:12] #2 = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/rm.go cmdRm string m.Inner.ID[:12] #3 = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/rm.go cmdRm string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/send.go cmdReply string original.Inner.Body.Thread[:12] #2 = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/send.go cmdReply string original.Inner.Body.Thread[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/send.go cmdReply string original.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/send.go cmdReply string otherFP[:16] = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
 internal/auu/send.go sentJSON int Bytes int = output
 internal/auu/send.go sentJSON int ChunkSize int = output
 internal/auu/send.go sentJSON int Chunks int64 = output
 internal/auu/send.go sentJSON int RelayID int64 = output
+internal/auu/sendchannel.go localTime string sentence[:i + 1] = local: i from LastIndexByte of " " in sentence, checked >= 0
+internal/auu/sendchannel.go localTime string sentence[i + 1:] = local: i from LastIndexByte of " " in sentence, checked >= 0
+internal/auu/sendchannel.go noSuchChannel string recipient.Fingerprint()[:16] = local: Fingerprint writes 64 hex characters
+internal/auu/serve.go (*serveRun).send string m.Inner.From[:16] = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
+internal/auu/serve.go shortID string id[:12] = local: len(id) > 12 by the check before
+internal/auu/serveconfig.go (*serveConfig).check string names[:i] = local: i is an index of names from range
+internal/auu/serveconfig.go duration int time.ParseDuration(text) = > 0s shown by TestLimitServeChannelIntegers
+internal/auu/serveconfig.go plainList string words[:len(words) - 1] = local: len(words)-1 of words, checked non-empty
 internal/auu/serveconfig.go serveChannel int MaxTurns int = 0 or >= 1 shown by TestLimitServeChannelIntegers
 internal/auu/serveconfig.go serveChannel int Retries int = >= 0 shown by TestLimitServeChannelIntegers
 internal/auu/serveconfig.go serveChannel int threadTTL time.Duration = > 0s shown by TestLimitServeChannelIntegers
@@ -96,8 +199,17 @@ internal/auu/serveconfig.go serveConfig int V int = [1, 1] shown by TestLimitSer
 internal/auu/serveledger.go ledger int V int = [1, 1] shown by TestLimitServeLedgerIntegers
 internal/auu/serveledger.go ledgerEntry int Failures int = >= 0 shown by TestLimitServeLedgerIntegers
 internal/auu/servels.go servedThreadJSON int Turns int = output
+internal/auu/serveproxy.go (*keyProxy).revoke string p.revoked[len(p.revoked) - revokedRemembered:] = local: len(p.revoked) > revokedRemembered by the check before
+internal/auu/serveproxy.go proxyConfig int AllowUIDs []int = >= 0 shown by TestLimitProxyAllowUIDs
+internal/auu/serveproxy.go tokenTag string tag[:i] = local: i is a rune boundary of tag from range
+internal/auu/serveproxycontrol.go (*controlSource).mint string rest[strings.LastIndex(rest, "/") + 1:] = local: LastIndex+1 of rest is within [0, len(rest)]
 internal/auu/serveproxycontrol.go parseGid int strconv.Atoi(text) = >= 0 shown by TestLimitGroupID
 internal/auu/serveproxycontrol.go proxyFile int V int = [1, 1] shown by TestLimitProxyFileV
+internal/auu/stream.go (*pending).label string p.To[:12] = local: ValidFingerprint at listPending shown by TestLimitPendingRecordShapes
+internal/auu/stream.go resumeStreams string p.MessageID[:12] #2 = local: ValidID at listPending shown by TestLimitPendingRecordShapes
+internal/auu/stream.go resumeStreams string p.MessageID[:12] #3 = local: ValidID at listPending shown by TestLimitPendingRecordShapes
+internal/auu/stream.go resumeStreams string p.MessageID[:12] = local: ValidID at listPending shown by TestLimitPendingRecordShapes
+internal/auu/streamrecv.go readBlobRange string buf[:n] = local: n from ReadFull into buf, at most len(buf)
 internal/auu/watch.go messageEvent int ID int64 = output
 internal/auu/watch.go messageEvent int Size int64 = output
 internal/auu/watch_cmds.go cmdWatch int fs.Duration("interval") = >= 5s shown by TestLimitWaitAndWatchFlags
@@ -105,18 +217,46 @@ internal/auu/watch_cmds.go cmdWatch int fs.Duration("timeout") = >= 0s shown by 
 internal/channels/channels.go Directory int V int = [1, 1] shown by TestLimitDirectoryV
 internal/client/client.go retryAfter int strconv.ParseInt(raw) = [0, 86400] shown by TestLimitRetryAfter
 internal/client/shape.go (*Client).parseOffset int strconv.ParseInt(raw) = >= 0 shown by TestLimitUploadOffsetAnswer
+internal/clientca/csr.go cleanLabel string s[:len(s) - size] = local: size from DecodeLastRuneInString of s
 internal/envelope/envelope.go Envelope int V int = [1, 1] shown by TestLimitEnvelopeV
+internal/envelope/envelope.go Open string plaintext[:sigLen] = local: len(plaintext) >= sigLen by the check before
+internal/envelope/envelope.go Open string plaintext[sigLen:] = local: len(plaintext) >= sigLen by the check before
+internal/identity/identity.go (*Public).Short string p.fp[:16] = local: Fingerprint writes 64 hex characters
+internal/identity/identity.go ParseBundle string b[1:] = local: suiteForWire at ParseBundle shown by TestLimitBundleOneShort
+internal/identity/identity.go ParseBundle string body[:suite.SignPublicSize] = local: suiteForWire at ParseBundle shown by TestLimitBundleOneShort
+internal/identity/identity.go ParseBundle string body[suite.SignPublicSize:] = local: suiteForWire at ParseBundle shown by TestLimitBundleOneShort
+internal/identity/identity.go ParseExportLine string trimmed[:i] = local: i from IndexAny in trimmed, checked >= 0
+internal/identity/identity.go ParseExportLine string trimmed[len(exportPrefix) + len(exportSep):] = local: trimmed has the prefix by HasPrefix
+internal/identity/identity.go Printable string q[1:len(q) - 1] = local: q from strconv.Quote begins and ends with a quote
+internal/identity/identity.go printable string q[1:len(q) - 1] = local: q from strconv.QuoteRune begins and ends with a quote
+internal/identity/identity.go printable string s[i:] = local: i is a rune boundary of s from DecodeRuneInString
+internal/identity/identity.go printable string s[i:i + size] = local: i and size from DecodeRuneInString of s
+internal/identity/remote.go SplitKEMPublic string pub[:mlkem.EncapsulationKeySize768] = local: len(pub) == KEMPublicKeySize by the check before
+internal/identity/remote.go SplitKEMPublic string pub[mlkem.EncapsulationKeySize768:] = local: len(pub) == KEMPublicKeySize by the check before
 internal/keyfile/keyfile.go parseHeaders int strconv.Atoi(h[f.name]) = > 0 shown by TestLimitHeaderNumbers
+internal/kit/elf.go whatElse string bin[:4] = local: len(bin) >= 4 by the check before
 internal/kit/kit.go listenPort int strconv.Atoi(portText) = [1, 65535] shown by TestLimitListenPort
 internal/message/message.go Attachment int Size int64 = >= 0 shown by TestLimitAttachmentSize
+internal/message/message.go DistinctAttachmentNames string names[:i] = local: i is an index of names from range
+internal/message/message.go isWindowsDevice string stem[3:] = local: len(stem) >= 4 by the check before
+internal/message/message.go isWindowsDevice string stem[:3] #2 = local: len(stem) >= 4 by the check before
+internal/message/message.go isWindowsDevice string stem[:3] = local: len(stem) >= 4 by the check before
 internal/pki/bundle.go Bundle int V int = [1, 1] shown by TestLimitBundleV
+internal/pki/pki.go splitLabels string h[start:i] = local: start and i walk len(h) from 0
+internal/relay/adminapi.go shortFP string v[:16] = local: ValidFingerprint checked in shortFP, the line before
+internal/relay/filestore.go (*Store).mailboxDir string fp[:2] = local: ValidFingerprint at authedWithCert shown by TestLimitFingerprintsOneShortOnTheWire
+internal/relay/filestore.go (*Store).removeMailboxFiles string fp[:2] = local: ValidFingerprint at authedWithCert shown by TestLimitFingerprintsOneShortOnTheWire
 internal/relay/filestore.go (*Store).sweep int strconv.ParseInt(f.Name()) = open shown by TestLimitSweepFileNames
 internal/relay/server.go (*Server).handleDelete int strconv.ParseInt(r.PathValue("id")) = > 0 shown by TestLimitMessageIDInPath
 internal/relay/server.go intParam int strconv.ParseInt(raw) = >= 0 shown by TestLimitListingParameters
+internal/relay/server.go truncateForLog string s[:maxLoggedPath] = local: len(s) > maxLoggedPath by the check before
+internal/relay/server.go verified string fp[:16] = local: ValidFingerprint at ParseAuth shown by TestLimitFingerprintsOneShortOnTheWire
 internal/relay/streamapi.go (*Server).checkStreamShape int binary.BigEndian.Uint32(header[stream.EncSize:]) = [82, 1048576] shown by TestLimitManifestChunkLength
+internal/relay/streamapi.go (*Server).checkStreamShape string header[stream.EncSize:] = local: header is HeaderSize bytes by make and ReadFull
 internal/relay/streamapi.go (*Server).handleAppendStream int strconv.ParseInt(r.Header.Get(relayapi.UploadOffsetHeader)) = >= 0 shown by TestLimitUploadOffset
 internal/relay/streamapi.go (*Server).handleBlob int strconv.ParseInt(r.PathValue("id")) = > 0 shown by TestLimitMessageIDInPath
 internal/relay/watch.go (*Server).watchParams int strconv.ParseInt(issued) = open shown by TestLimitWatchIssued
+internal/relay/watch.go (*Server).watchParams int time.ParseDuration(raw) = >= 0s shown by TestLimitWaitParameter
 internal/relayapi/relayapi.go AdminStatusResponse int Administrators int = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go AdminStatusResponse int Blocks int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go AdminStatusResponse int CertLifetimeSecs int64 = [0, 3153600000] shown by TestLimitRelayAnswerIntegers
@@ -128,6 +268,7 @@ internal/relayapi/relayapi.go AdminStatusResponse int MaxBytes int64 = >= 0 show
 internal/relayapi/relayapi.go AdminStatusResponse int QueuedBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go AdminStatusResponse int QueuedMessages int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go AdminStatusResponse int TokenMaxAgeSecs int64 = [0, 3153600000] shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go ChannelsResponse int Queued map[string]int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go CompleteStreamResponse int ID int64 = > 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go HealthResponse int MLDSA int = one of 0, 44, 65, 87 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int MailboxMaxBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
@@ -154,14 +295,33 @@ internal/relayapi/relayapi.go StoredMessage int ID int64 = > 0 shown by TestLimi
 internal/relayapi/relayapi.go StoredMessage int Size int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go TokenRecord int Uses int = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go TokenRecord int UsesLeft int = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/store/allowpushed.go (*Store).AllowPushed string text[:40] = local: len(text) > 40 by the check before
+internal/store/anchor.go (*Store).AnchorFor string got[:16] = local: SPKI writes 64 hex characters
+internal/store/anchor.go (*Store).AnchorFor string r.TrustAnchorSPKI[:16] = local: ValidFingerprint at readRelay shown by TestLimitRelayRecordHashes
 internal/store/channelsettings.go ChannelSettings int V int = [1, 1] shown by TestLimitChannelSettingsV
 internal/store/damagedbox.go DamagedRecord int RelayID int64 = >= 0 shown by TestLimitDamagedRelayID
+internal/store/damagedbox.go recordPath string binPath[:len(binPath) - len(".bin")] = local: binPath ends in ".bin" from DamagedPath
 internal/store/leftbehind.go (*Store).LeftBehind int strconv.ParseInt(text) = > 0 shown by TestLimitLeftBehindIDs
+internal/store/relay.go relayNameBase string base[:room] = local: len(base) > room by the check before, and base is ASCII by construction
+internal/store/store.go (*Store).Find string d[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/store/store.go (*Store).FindThread string t[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/store/store.go Config int ChunkSize int = 0 or [4096, 16777216] shown by TestLimitStreamSettings
 internal/store/store.go Config int StreamThreshold int64 = 0 or >= 4096 shown by TestLimitStreamSettings
 internal/store/store.go Stored int RelayID int64 = >= 0 shown by TestLimitStoredRelayID
 internal/store/store.go readCursor int strconv.ParseInt(text) = >= 0 shown by TestLimitCursor
+internal/store/store.go readCursor string text[:40] = local: len(text) > 40 by the check before
+internal/stream/open.go (*Opened).OpenPayload string plain[:take] #2 = local: take is at most len(plain) by the check before
+internal/stream/open.go (*Opened).OpenPayload string plain[:take] = local: take is at most len(plain) by the check before
+internal/stream/open.go (*Opened).OpenPayload string plain[take:] = local: take is at most len(plain) by the check before
+internal/stream/open.go (*Opened).OpenPayload string sealed[:n + TagSize] #2 = local: n is at most ChunkSize and sealed is ChunkSize+TagSize by make
+internal/stream/open.go (*Opened).OpenPayload string sealed[:n + TagSize] = local: n is at most ChunkSize and sealed is ChunkSize+TagSize by make
 internal/stream/open.go ManifestLength int binary.BigEndian.Uint32(header[EncSize:HeaderSize]) = [82, 1048576] shown by TestLimitManifestLength
+internal/stream/open.go ManifestLength string header[EncSize:HeaderSize] = local: len(header) >= HeaderSize by the check before
+internal/stream/open.go OpenManifest string header[:EncSize] = local: len(header) >= HeaderSize by ManifestLength before
+internal/stream/open.go OpenManifest string plaintext[:SigSize] = local: len(plaintext) >= SigSize by the check before
+internal/stream/open.go OpenManifest string plaintext[SigSize:] = local: len(plaintext) >= SigSize by the check before
+internal/stream/seal.go sealPayload string buf[:n] #2 = local: n from a Read into buf, at most len(buf)
+internal/stream/seal.go sealPayload string buf[:n] = local: n from a Read into buf, at most len(buf)
 internal/stream/stream.go Attachment int Size int64 = [0, 4611686018427387904] shown by TestLimitManifestIntegers
 internal/stream/stream.go Manifest int ChunkSize int = [4096, 16777216] shown by TestLimitManifestIntegers
 internal/stream/stream.go Manifest int Chunks int64 = > 0 shown by TestLimitManifestIntegers
@@ -170,3 +330,4 @@ internal/stream/stream.go Manifest int V int = [1, 1] shown by TestLimitManifest
 internal/token/token.go Claims int NotAfter int64 = > 0 shown by TestLimitClaimsIntegers
 internal/token/token.go Claims int NotBefore int64 = > 0 shown by TestLimitClaimsIntegers
 internal/token/token.go Claims int Uses int = [1, 1000] shown by TestLimitClaimsIntegers
+internal/token/token.go short string s[:16] = local: len(s) > 16 by the check before

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/agent"
+	"github.com/tropeforce7/agentuucp/internal/clientca"
 	"github.com/tropeforce7/agentuucp/internal/keyfile"
 	"github.com/tropeforce7/agentuucp/internal/token"
 )
@@ -161,6 +162,9 @@ func (s *Store) CertFor(r *Relay) (*CertRecord, error) {
 	var c CertRecord
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, certDamaged(path, r.Name, err)
+	}
+	if !clientca.ValidSerial(c.Serial) {
+		return nil, certDamaged(path, r.Name, errors.New("its serial is not a certificate serial"))
 	}
 	if !sameRelay(c.Relay, r.URL) {
 		// Not "none": treating it as absent made the relay's refusal of a

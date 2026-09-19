@@ -22,3 +22,22 @@ func TestLimitDocumentV(t *testing.T) {
 		t.Errorf("v 1: %v", err)
 	}
 }
+
+// TestLimitSenderOneShort: every sender on a list is a fingerprint, held
+// at Validate before a print slices its first characters; one character
+// short is refused naming the sender.
+func TestLimitSenderOneShort(t *testing.T) {
+	id := owner(t)
+	for _, bad := range []string{strings.Repeat("a", 63), strings.Repeat("a", 65), strings.Repeat("A", 64), ""} {
+		d := base(id)
+		d.Senders = []string{bad}
+		if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "is not a fingerprint") {
+			t.Errorf("sender %q: %v; want the refusal", bad, err)
+		}
+	}
+	d := base(id)
+	d.Owner = strings.Repeat("a", 63)
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "owner is not a fingerprint") {
+		t.Errorf("owner one short: %v; want the refusal", err)
+	}
+}

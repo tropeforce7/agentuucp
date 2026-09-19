@@ -832,14 +832,21 @@ returning an error, and its callers change to carry it; that is the point
 of the test, not a departure to note. `0` is fed on its own because empty
 and absent are different things (see "Empty means something").
 
-**A string under a range.** Every slice of a string or a byte slice whose
-bound is not a constant, every offset taken from a length field, every
-`Index` followed by a cut. The test feeds the empty string, a string one
-byte shorter than the range needs, a bound one past each end, an end
-before its start, a bound that came from a negative number, and a
-multi-byte rune straddling the cut, and asserts the error at each. A panic
-is a failing test, and so is a slice that succeeds on a string that was
-too short.
+**A string under a range.** Every slice of a string or a byte slice,
+whatever its bound: the second trace's panic was a constant `[:16]` on a
+two-byte fingerprint from a listing, and the rule that made it safe was
+upstream and unnamed until a row named it. Every offset taken from a
+length field, every `Index` followed by a cut. For a cut with no rule
+upstream, the test feeds the empty string, a string one byte shorter
+than the range needs, a bound one past each end, an end before its start,
+a bound that came from a negative number, and a multi-byte rune
+straddling the cut, and asserts the error at each. For a cut whose
+operand a rule fixed the length of, the test is the rule's, one per rule
+and shared by every cut it guards: it feeds the operand one byte short at
+the rule's point and asserts the rule refuses it before any slice runs.
+A panic is a failing test, and so is a slice that succeeds on a string
+that was too short. A slice whose operand has no rule upstream is the
+finding, and the fix is the rule, not a length check at the slice.
 
 **A path from outside.** Every row of the file-open ledger whose
 provenance is not `local` (network, operator, derived from either, and any
@@ -859,28 +866,40 @@ test finds:
 
     <file> <enclosing function> <kind> <site as written> = <range or open> shown by <TestLimit...>
 
-The sites are: a field of integer or duration type in a struct with a
-`json` tag, exported or not, wherever the struct is declared — at package
-level, inside a function (`cmdShow.relayOut`), or as a literal's
-anonymous type (`cmdShow.struct`); a call to `strconv.Atoi` or
-`strconv.Parse*`; a `binary.*.Uint*` read (a `Put*` is a write, and is
-not a site); an integer or duration flag, which in this tree is always a
-`*flag.FlagSet` method; a slice expression with a bound that is not a
-constant. The range is `[lo, hi]`, a floor or a ceiling (`>= 0`, `> 0`,
-`<= n`), a set (`one of 44, 65, 87`), or `open`; a duration's bound
-carries its unit (`>= 5s`), and `0 or` in front says zero is a sentinel
-the range does not otherwise hold, the default or unlimited. A struct
-the program only writes and never decodes says `= output` and names no
-test, and the walk proves the claim: it finds every argument of
-`json.Unmarshal` and `Decoder.Decode` in the tree, directly or through a
-helper whose `any` parameter reaches one, and every type reachable from
-one through fields, slices, maps and pointers, and a field of any such
-type cannot be `output`. An unexported field that is filled by parsing a
-string carries the range the parse enforces and names the parse's test.
+The sites are: a field of integer or duration type, or of a map or
+slice whose values are integers (a byte slice excepted), in a struct
+with a `json` tag, exported or not, wherever the struct is declared — at
+package level, inside a function (`cmdShow.relayOut`), or as a literal's
+anonymous type (`cmdShow.struct`); a call to `strconv.Atoi`,
+`strconv.Parse*` or `time.ParseDuration`; a `binary.*.Uint*` read (a
+`Put*` is a write, and is not a site); an integer or duration flag,
+which in this tree is always a `*flag.FlagSet` method; a slice
+expression on a string or a byte slice, whatever its bound, and on any
+other slice with a bound that is not a constant (an array's bounds are
+checked at compile time). The range is `[lo, hi]`, a floor or a ceiling
+(`>= 0`, `> 0`, `<= n`), a set (`one of 44, 65, 87`), or `open`; a
+duration's bound carries its unit (`>= 5s`), and `0 or` in front says
+zero is a sentinel the range does not otherwise hold, the default or
+unlimited. A duration read from text is fed the integer forms and the
+duration forms that bite: no unit, a negative, an overflow
+(`9223372037s`), `inf`, empty, a unit alone. A struct the program only
+writes and never decodes says `= output` and names no test, and the walk
+proves the claim: it finds every argument of `json.Unmarshal` and
+`Decoder.Decode` in the tree, directly or through a helper whose `any`
+parameter reaches one, and every type reachable from one through fields,
+slices, maps and pointers, and a field of any such type cannot be
+`output`. An unexported field that is filled by parsing a string carries
+the range the parse enforces and names the parse's test.
 `internal/testutil` is imported by tests only and is skipped, and the
-walk checks that nothing outside a test imports it. A slice whose bound
-is local arithmetic (the length of the thing it slices, a constant offset
-into a value already checked) says so in place of a test: `local: <why>`.
+walk checks that nothing outside a test imports it. A slice's row says
+one of two things in place of a range. `local: <Rule> at <point> shown
+by <TestLimit...>` names the rule that fixed the operand's length and
+the point it ran (`local: ValidFingerprint at checkMailbox`); the walk
+holds the rule to the tree, the function must exist, and the row names
+the rule's test, one per rule, shared. `local: <why>` of any other form
+is the operand's own arithmetic (`local: len(s)-1 of s`, a length the
+code checked, an index a loop or `Index` gave, a rune boundary), and
+names no function and no test.
 The test holds the file to the tree the way the file-open ledger does: no
 site without a row, no row without a site, no test named that does not
 exist, and a floor on the count, so that a walk that finds nothing is

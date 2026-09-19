@@ -38,7 +38,7 @@ func TestDamagedFilesAreNamed(t *testing.T) {
 		if err := s.SaveAnchorFor(r, testAnchor(t, "work")); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.SaveCertFor(r, &CertRecord{Relay: r.URL, Serial: "aaa"}); err != nil {
+		if err := s.SaveCertFor(r, &CertRecord{Relay: r.URL, Serial: strings.Repeat("a", 32)}); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.SetCursorFor(r, 12); err != nil {
@@ -308,7 +308,7 @@ func TestACertificateForAnotherRelayIsNamed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SaveCertFor(r, &CertRecord{Relay: "https://other.example:9443", Serial: "aaa"}); err != nil {
+	if err := s.SaveCertFor(r, &CertRecord{Relay: "https://other.example:9443", Serial: strings.Repeat("a", 32)}); err != nil {
 		t.Fatal(err)
 	}
 	_, err = s.CertFor(r)
@@ -324,7 +324,7 @@ func TestACertificateForAnotherRelayIsNamed(t *testing.T) {
 		t.Fatalf("want ErrCertForAnotherRelay and ErrDamaged and not ErrNoCert: %v", err)
 	}
 	// Its own relay's URL, in any of the forms sameRelay accepts, passes.
-	if err := s.SaveCertFor(r, &CertRecord{Relay: "https://work.example:9443/", Serial: "aaa"}); err != nil {
+	if err := s.SaveCertFor(r, &CertRecord{Relay: "https://work.example:9443/", Serial: strings.Repeat("a", 32)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CertFor(r); err != nil {

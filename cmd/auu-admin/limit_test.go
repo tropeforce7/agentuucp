@@ -1,7 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -70,4 +73,39 @@ func TestLimitAdminFlags(t *testing.T) {
 			taken(t, "token", "issue", "--note", "x", "--expires", v)
 		}
 	})
+}
+
+// TestLimitFingerprintAndSerialArgsOneShort: every fingerprint an admin
+// command takes as an argument goes through oneFingerprint, and the serial
+// certs revoke takes through ValidSerial, before the command prints its
+// first sixteen characters; one character short of the shape is a usage
+// error naming the shape, and no request is made.
+func TestLimitFingerprintAndSerialArgsOneShort(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, "{}")
+	}))
+	t.Cleanup(srv.Close)
+	p := newPersona(t, "boss", srv.URL)
+	short := strings.Repeat("a", 63)
+	for _, args := range [][]string{
+		{"blocks", "add", short, "--reason", "x", "--yes"},
+		{"blocks", "rm", short},
+		{"mailboxes", "rm", short, "--yes"},
+		{"mailboxes", "purge", short, "--yes"},
+		{"mailboxes", "show", short},
+	} {
+		_, err := p.tryRun(args...)
+		if err == nil || !strings.Contains(err.Error(), "is not a fingerprint; give all 64 characters") {
+			t.Errorf("%v: %v; want the usage error naming the shape", args, err)
+		}
+	}
+	if _, err := p.tryRun("certs", "revoke", strings.Repeat("a", 31), "--yes"); err == nil || !strings.Contains(err.Error(), "serial") {
+		t.Errorf("certs revoke with a serial one short: %v; want the usage error naming the shape", err)
+	}
+	if requests != 0 {
+		t.Errorf("%d requests were made for arguments refused for their shape", requests)
+	}
 }

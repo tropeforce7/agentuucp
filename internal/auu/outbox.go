@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
@@ -136,6 +137,12 @@ func listPending(s *store.Store) ([]*pending, []string, error) {
 		// would point the upload at somebody else's bytes.
 		if p.MessageID != strings.TrimSuffix(name, ".json") {
 			broken = append(broken, strings.TrimSuffix(name, ".json"))
+			continue
+		}
+		// The id and the recipient are what the sender wrote, an id and
+		// a fingerprint; a label shows the first twelve of each.
+		if message.ValidID(p.MessageID) != nil || !identity.ValidFingerprint(p.To) {
+			broken = append(broken, p.MessageID)
 			continue
 		}
 		// The numbers are the sender's own from when the upload began; a

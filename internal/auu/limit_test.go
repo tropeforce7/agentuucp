@@ -169,6 +169,7 @@ func TestLimitPendingRecordIntegers(t *testing.T) {
 	write := func(t *testing.T, p pending) {
 		t.Helper()
 		p.MessageID = id
+		p.To = strings.Repeat("c", 64)
 		p.Started = time.Now()
 		data, err := json.Marshal(p)
 		if err != nil {
@@ -336,5 +337,105 @@ func TestLimitGroupID(t *testing.T) {
 		if got, err := parseGid(tc.text); err != nil || got != tc.want {
 			t.Errorf("%q: %d %v; want %d", tc.text, got, err, tc.want)
 		}
+	}
+}
+
+// TestLimitProxyAllowUIDs: the uids a proxy file allows are zero or more:
+// a negative and the type's minimum are refused naming the uid; zero and
+// the type's maximum are taken.
+func TestLimitProxyAllowUIDs(t *testing.T) {
+	write := func(t *testing.T, uids string) (*proxyFile, error) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "proxy.json")
+		key := filepath.Join(t.TempDir(), "key")
+		if err := os.WriteFile(key, []byte("k"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(`{"v":1,"key_file":"`+jsonPath(key)+`","control":"/tmp/x","allow_uids":[`+uids+`]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return loadProxyFile(path)
+	}
+	for _, uids := range []string{"-1", strconv.Itoa(math.MinInt), "1000, -1"} {
+		if _, err := write(t, uids); err == nil || !strings.Contains(err.Error(), "which is not a uid") {
+			t.Errorf("allow_uids [%s]: %v; want the refusal naming the uid", uids, err)
+		}
+	}
+	for _, uids := range []string{"0", strconv.Itoa(math.MaxInt), "1000, 1001"} {
+		if _, err := write(t, uids); err != nil {
+			t.Errorf("allow_uids [%s]: %v; want it taken", uids, err)
+		}
+	}
+}
+
+// TestLimitPendingRecordShapes: an outbox record's id and recipient are a
+// message id and a fingerprint, held at listPending before a label slices
+// twelve of each; one character short is a broken record.
+func TestLimitPendingRecordShapes(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outboxDir(s), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(t *testing.T, id, to string) {
+		t.Helper()
+		if err := os.WriteFile(streamPath(s, id), []byte("sealed"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		p := pending{MessageID: id, To: to, Started: time.Now(), ChunkSize: stream.DefaultChunkSize}
+		data, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(pendingPath(s, id), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	shortID, fullID := strings.Repeat("b", 31), strings.Repeat("b", 32)
+	write(t, shortID, strings.Repeat("c", 64))
+	if waiting, broken, err := listPending(s); err != nil || len(waiting) != 0 || len(broken) != 1 || broken[0] != shortID {
+		t.Errorf("an id one short: waiting %d, broken %v, %v; want the record broken", len(waiting), broken, err)
+	}
+	os.Remove(pendingPath(s, shortID))
+	os.Remove(streamPath(s, shortID))
+	write(t, fullID, strings.Repeat("c", 63))
+	if waiting, broken, err := listPending(s); err != nil || len(waiting) != 0 || len(broken) != 1 || broken[0] != fullID {
+		t.Errorf("a recipient one short: waiting %d, broken %v, %v; want the record broken", len(waiting), broken, err)
+	}
+	write(t, fullID, strings.Repeat("c", 64))
+	if waiting, broken, err := listPending(s); err != nil || len(waiting) != 1 || len(broken) != 0 {
+		t.Errorf("as written: waiting %d, broken %v, %v; want the record read", len(waiting), broken, err)
+	}
+}
+
+// TestLimitAnchorArgsOneShort: the anchor hash auu init, auu relay add and
+// auu anchor pin take is a fingerprint's shape, held before the command
+// prints its first sixteen characters; one character short is a usage
+// error naming the shape, and no relay is asked.
+func TestLimitAnchorArgsOneShort(t *testing.T) {
+	relayURL, gate := startGatedRelay(t)
+	alice := newUser(t, "alice", relayURL)
+	gate.lists.Store(0)
+	short := strings.Repeat("a", 63)
+	for _, args := range [][]string{
+		{"relay", "add", relayURL, "--name", "other", "--anchor", short},
+		{"anchor", "pin", short},
+	} {
+		_, err := alice.tryRun(args...)
+		var e *exitError
+		if !asExit(err, &e) || e.code != exitUsage || !strings.Contains(err.Error(), "64 lowercase hex characters") {
+			t.Errorf("%v: %v; want a usage error naming the shape", args, err)
+		}
+	}
+	fresh := &user{t: t, home: t.TempDir()}
+	_, err := fresh.tryRun("init", "--name", "carol", "--relay", relayURL, "--anchor", short)
+	var e *exitError
+	if !asExit(err, &e) || e.code != exitUsage || !strings.Contains(err.Error(), "64 lowercase hex characters") {
+		t.Errorf("init --anchor one short: %v; want a usage error naming the shape", err)
+	}
+	if gate.lists.Load() != 0 {
+		t.Errorf("%d listings were made for anchors refused for their shape", gate.lists.Load())
 	}
 }

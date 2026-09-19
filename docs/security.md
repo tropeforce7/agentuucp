@@ -94,11 +94,19 @@ byte count, so an answer with a two-byte fingerprint or a negative queue
 is refused whole as malformed, naming the field and the relay, rather
 than sliced by a command that expected sixty-four characters or seeked to
 by one that expected an offset. Every integer that enters the program
-from outside — a field in a JSON shape, a number parsed from text, a
-length read from four bytes, a flag — has a row in `internal/limits/ledger.txt`
-saying the range the code holds it to and the test that takes it to the
-edge and one step past; the test beside the ledger walks the tree and
-fails on a site with no row.
+from outside — a field in a JSON shape, a number or a duration parsed
+from text, a length read from four bytes, a flag — and every slice of a
+string or a byte slice has a row in `internal/limits/ledger.txt`: for an
+integer, the range the code holds it to and the test that takes it to the
+edge and one step past; for a slice, the rule that fixed the operand's
+length and the point it ran, with the test that feeds the operand one
+byte short there, or the operand's own arithmetic. The test beside the
+ledger walks the tree and fails on a site with no row. A record read
+back from the home is held to the shapes a print slices at the point it
+is read — a message's ids, fingerprints and digests at `Load`, a relay's
+pinned hashes, a certificate's serial, an outbox record's id and
+recipient — so a file this program could not have written is refused
+with the file named rather than cut.
 
 **What protects a large message.** The same HPKE ciphersuite, in its stateful
 multi-shot mode: one context for the whole stream, one sealed chunk at a time.
