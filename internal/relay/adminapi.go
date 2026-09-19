@@ -25,10 +25,10 @@ func (s *Server) adminAuthed(fn func(w http.ResponseWriter, r *http.Request, bod
 			s.fail(w, http.StatusForbidden, errNoAdmins.Error())
 			return
 		}
-		body, ok := s.readBody(w, r)
-		if !ok {
-			return
-		}
+		// The header and the administrator before the body, the one order
+		// every authenticated route keeps; the signature after it. A
+		// refusal before the body closes the connection behind it.
+		unread(w, r)
 		auth, err := relayapi.ParseAuth(r.Header.Get(relayapi.AuthHeader))
 		if err != nil {
 			s.authFailed(w, r, errUnauthorized)
@@ -41,6 +41,11 @@ func (s *Server) adminAuthed(fn func(w http.ResponseWriter, r *http.Request, bod
 			s.authFailed(w, r, errUnauthorized)
 			return
 		}
+		body, ok := s.readBody(w, r, relayapi.FramingAllowance, "")
+		if !ok {
+			return
+		}
+		w.Header().Del("Connection")
 		if err := s.checkSignature(auth, pub, r, body); err != nil {
 			s.authFailed(w, r, err)
 			return

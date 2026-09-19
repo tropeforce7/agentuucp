@@ -520,7 +520,7 @@ func TestInflightCap(t *testing.T) {
 	// fails: the stalled request goes unanswered, holding the slot, and the
 	// prober gets through anyway.
 	for attempt := range 8 {
-		st := stallPost(t, h, alice.Fingerprint())
+		st := stallPost(t, h, alice, 1<<20)
 		status, body, header, lost := st.holdsTheSlot(t, h, keys)
 		if lost {
 			st.close()

@@ -172,16 +172,16 @@ func NewServer(store *Store, cfg Config) *Server {
 	s.route("POST /v1/register", s.handleRegister)
 	s.route("GET /v1/keys/{fp}", s.handleKeys)
 	s.route("GET "+trustAnchorPath, s.handleTrustAnchor)
-	s.route("PUT /v1/mailbox/{fp}/allow", s.authed(s.handleSetAllow))
+	s.route("PUT /v1/mailbox/{fp}/allow", s.authedBody(relayapi.MaxDocumentBytes, hintCompact, s.handleSetAllow))
 	s.route("GET /v1/mailbox/{fp}/allow", s.authed(s.handleGetAllow))
-	s.route("PUT /v1/mailbox/{fp}/channels", s.authed(s.handleSetChannels))
+	s.route("PUT /v1/mailbox/{fp}/channels", s.authedBody(relayapi.MaxDocumentBytes, hintCompact, s.handleSetChannels))
 	s.route("GET /v1/mailbox/{fp}/channels", s.authed(s.handleGetChannels))
-	s.route("POST /v1/mailbox/{fp}", s.authed(s.handlePost))
+	s.route("POST /v1/mailbox/{fp}", s.authedBody(s.postCap(), "", s.handlePost))
 	s.route("GET /v1/mailbox/{fp}", s.authed(s.handleList))
 	s.route("DELETE /v1/mailbox/{fp}/{id}", s.authed(s.handleDelete))
 
-	s.route("POST /v1/mailbox/{fp}/certs", s.authedWithCert(s.handleIssueCert))
-	s.route("GET /v1/mailbox/{fp}/certs", s.authedWithCert(s.handleListCerts))
+	s.route("POST /v1/mailbox/{fp}/certs", s.authedWithCert(relayapi.FramingAllowance, "", s.handleIssueCert))
+	s.route("GET /v1/mailbox/{fp}/certs", s.authedWithCert(relayapi.FramingAllowance, "", s.handleListCerts))
 
 	s.route("POST /v1/mailbox/{fp}/streams", s.authed(s.handleOpenStream))
 	s.route("GET /v1/mailbox/{fp}/{id}/blob", s.authed(s.handleBlob))
@@ -243,7 +243,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if !s.acquire() {
 		// Nothing has been read or looked up yet, which is the point: the cap
-		// exists to stop slow callers from occupying the process.
+		// exists to stop slow callers from occupying the process. The
+		// connection closes behind the answer, as after every refusal
+		// before the body: net/http would otherwise read up to 256 KiB
+		// of a body the handler never asked for before writing the 503,
+		// and wait for it if it never came.
+		rec.Header().Set("Connection", "close")
 		rec.Header().Set("Retry-After", "1")
 		rec.limit = limitInflight
 		s.fail(rec, http.StatusServiceUnavailable, "relay is busy")
@@ -409,15 +414,31 @@ func (s *Server) rateLimited(w http.ResponseWriter, which string, retryAfter tim
 	s.fail(w, http.StatusTooManyRequests, "rate limited: "+which+detail)
 }
 
-// readBody drains the request under a hard ceiling, so an oversize post cannot
-// consume memory before it is rejected.
-func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
-	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBytes+relayapi.FramingAllowance)
+// readBody drains the request under the route's cap, so an oversize body
+// cannot consume memory before it is rejected. A body that declares itself
+// over the cap is refused before a byte of it is read, with the connection
+// closed behind the answer as refuseUnread has it; one that arrives without
+// a length, or lies about it, is cut by MaxBytesReader at the same cap.
+// The 413 names the cap in bytes, and hint, when given, says what to do
+// about it.
+//
+// The caps are per route and are the wire's constants: the post route
+// takes max_bytes plus relayapi.FramingAllowance, the two owner-signed
+// documents relayapi.MaxDocumentBytes, and every other body route
+// relayapi.FramingAllowance alone. The stream PUT never comes here: its
+// body is judged by Content-Length against the size the open declared
+// and streamed to disk, in handlePutStream.
+func (s *Server) readBody(w http.ResponseWriter, r *http.Request, limit int64, hint string) ([]byte, bool) {
+	if r.ContentLength > limit {
+		s.refuseUnread(w, http.StatusRequestEntityTooLarge, tooLarge(limit, hint))
+		return nil, false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			s.fail(w, http.StatusRequestEntityTooLarge, "request body too large")
+			s.fail(w, http.StatusRequestEntityTooLarge, tooLarge(limit, hint))
 			return nil, false
 		}
 		s.fail(w, http.StatusBadRequest, "could not read request body")
@@ -425,6 +446,38 @@ func (s *Server) readBody(w http.ResponseWriter, r *http.Request) ([]byte, bool)
 	}
 	return body, true
 }
+
+// unread marks the answer to a request whose body the handler has not
+// read and will not: the connection closes behind it. Without this net/http,
+// keeping the connection for the next request, reads up to 256 KiB of the
+// body before it writes the answer and waits for a body that never comes;
+// a caller refused before the body cannot expect the connection back. A
+// request that declares no body has nothing to leave unread, and keeps
+// its connection. A handler that goes on to read the body removes the
+// mark.
+func unread(w http.ResponseWriter, r *http.Request) {
+	if r.ContentLength != 0 {
+		w.Header().Set("Connection", "close")
+	}
+}
+
+// tooLarge is the 413's sentence: the cap in bytes, and the hint after it.
+func tooLarge(limit int64, hint string) string {
+	msg := fmt.Sprintf("%s: at most %d bytes", relayapi.MsgBodyTooLarge, limit)
+	if hint != "" {
+		msg += "; " + hint
+	}
+	return msg
+}
+
+// hintCompact is the hint on a document refused for its size: the cap
+// leaves room above the documents' own maxima for whitespace, so one that
+// is refused was indented past it.
+const hintCompact = "send the document compact, without indentation"
+
+// postCap is the post route's body cap: an envelope of max_bytes with the
+// framing allowance for its JSON and base64.
+func (s *Server) postCap() int64 { return s.cfg.MaxBytes + relayapi.FramingAllowance }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp := relayapi.HealthResponse{OK: true}
@@ -495,28 +548,46 @@ func (s *Server) chargeIdentity(w http.ResponseWriter, fp string) bool {
 // authed wraps a handler that requires a registered caller. The wrapped handler
 // receives the verified caller fingerprint and the already-read body.
 func (s *Server) authed(fn func(w http.ResponseWriter, r *http.Request, body []byte, callerFP string)) http.HandlerFunc {
-	return s.authedWithCert(func(w http.ResponseWriter, r *http.Request, body []byte, callerFP string, _ *CertRow) {
+	return s.authedBody(relayapi.FramingAllowance, "", fn)
+}
+
+// authedBody is authed with the route's body cap and the hint its 413
+// carries: the post route and the two documents have caps of their own.
+func (s *Server) authedBody(limit int64, hint string, fn func(w http.ResponseWriter, r *http.Request, body []byte, callerFP string)) http.HandlerFunc {
+	return s.authedWithCert(limit, hint, func(w http.ResponseWriter, r *http.Request, body []byte, callerFP string, _ *CertRow) {
 		fn(w, r, body, callerFP)
 	})
 }
 
 // authedWithCert is authed for the handlers that need to know which
 // certificate the request arrived on.
-func (s *Server) authedWithCert(fn func(w http.ResponseWriter, r *http.Request, body []byte, callerFP string, cert *CertRow)) http.HandlerFunc {
+//
+// The order is one order on every authenticated route: the certificate,
+// the auth header parsed, the identity it names looked up, then the body
+// under the route's cap, then the signature over it. Everything that can
+// be judged without the body is judged before it, so a caller the relay
+// would refuse anyway — no honoured certificate, a header that will not
+// parse, a fingerprint no mailbox has — is refused without the relay
+// accepting what they wanted to send, which is most of what the cap and
+// the credential buy. The signature cannot come first: it is over the
+// body, so the body must be read to check it. A stranger with a valid
+// certificate therefore costs one mailbox lookup before the body rather
+// than after it, the same read earlier, bounded by the in-flight cap as
+// it was.
+func (s *Server) authedWithCert(limit int64, hint string, fn func(w http.ResponseWriter, r *http.Request, body []byte, callerFP string, cert *CertRow)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fp := r.PathValue("fp")
 		if !identity.ValidFingerprint(fp) {
 			s.fail(w, http.StatusBadRequest, "bad mailbox fingerprint")
 			return
 		}
-		// Before the body is read: a caller without a certificate this relay
-		// honours is refused without the relay accepting what they wanted to
-		// send, which is most of what a transport credential buys.
+		// Every refusal from here to the body closes the connection behind
+		// its answer, as readBody's own does: net/http reads up to 256 KiB
+		// of an unread body before it writes a response on a connection it
+		// will keep, and waits for a body that never comes, so a refusal
+		// meant to leave the body unread must not keep the connection.
+		unread(w, r)
 		cert, ok := s.clientCert(w, r)
-		if !ok {
-			return
-		}
-		body, ok := s.readBody(w, r)
 		if !ok {
 			return
 		}
@@ -537,6 +608,12 @@ func (s *Server) authedWithCert(fn func(w http.ResponseWriter, r *http.Request, 
 			s.authFailed(w, r, errUnauthorized)
 			return
 		}
+		body, ok := s.readBody(w, r, limit, hint)
+		if !ok {
+			return
+		}
+		// The body is read: the connection may be kept after the answer.
+		w.Header().Del("Connection")
 		// A well-formed but wrong signature is verified before it is charged,
 		// deliberately. Charging first would let a neighbour behind the same
 		// address empty the bucket and lock a legitimate user out of
@@ -576,10 +653,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.rateLimited(w, limitRegistrations, retry, "")
 		return
 	}
-	body, ok := s.readBody(w, r)
-	if !ok {
-		return
-	}
+	// The header before the body, as on every route; there is no identity
+	// to look up, since the key that signs is the one being registered.
+	// A refusal before the body closes the connection behind it.
+	unread(w, r)
 	auth, err := relayapi.ParseAuth(r.Header.Get(relayapi.AuthHeader))
 	if err != nil {
 		s.fail(w, http.StatusUnauthorized, "unauthorized")
@@ -591,6 +668,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusBadRequest, relayapi.MsgTokenInHeader)
 		return
 	}
+	body, ok := s.readBody(w, r, relayapi.FramingAllowance, "")
+	if !ok {
+		return
+	}
+	w.Header().Del("Connection")
 	var req relayapi.RegisterRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		s.fail(w, http.StatusBadRequest, "malformed register request")

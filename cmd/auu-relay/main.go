@@ -324,12 +324,26 @@ func DefaultTimeouts() Timeouts {
 }
 
 // newHTTPServer builds the relay's listener. Extracted from run so that the
-// timeouts, which are a security property and not a detail, can be tested.
+// timeouts and the caps, which are a security property and not a detail,
+// can be tested.
+//
+// The request line and headers together are capped at
+// relayapi.MaxHeaderBytes, which net/http enforces before any handler
+// runs, answering 431; the largest header the protocol carries is the
+// auth header at relayapi.MaxAuthHeader bytes. HTTP/2 is off: the empty
+// TLSNextProto map keeps ServeTLS from installing the h2 handler, and the
+// TLS config offers http/1.1 alone by ALPN, so a client offering h2 is
+// answered over HTTP/1.1. One protocol is one set of header, body and
+// connection semantics — the drain of an unread body, Connection: close
+// on a refusal, a stall deadline on the connection — and the relay's
+// tests prove those on HTTP/1.1, which is now what is deployed.
 func newHTTPServer(addr string, h http.Handler, tlsCfg *tls.Config, t Timeouts) *http.Server {
 	return &http.Server{
 		Addr:              addr,
 		Handler:           h,
 		TLSConfig:         tlsCfg,
+		MaxHeaderBytes:    relayapi.MaxHeaderBytes,
+		TLSNextProto:      map[string]func(*http.Server, *tls.Conn, http.Handler){},
 		ReadHeaderTimeout: t.ReadHeader,
 		ReadTimeout:       t.Read,
 		WriteTimeout:      t.Write,

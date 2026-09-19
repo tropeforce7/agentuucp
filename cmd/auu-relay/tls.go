@@ -80,6 +80,8 @@ func buildTLS(cfg Config, parts *clientCertParts) (*tls.Config, error) {
 		out := &tls.Config{
 			MinVersion:       tls.VersionTLS13,
 			CurvePreferences: []tls.CurveID{tls.X25519MLKEM768},
+			// HTTP/1.1 alone by ALPN; newHTTPServer says why h2 is off.
+			NextProtos: []string{"http/1.1"},
 		}
 		if parts != nil {
 			// The relay mints its own leaf and renews it in process, so the

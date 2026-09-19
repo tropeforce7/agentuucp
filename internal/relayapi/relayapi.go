@@ -46,6 +46,17 @@ const (
 
 	nonceBytes = 16
 
+	// MaxAuthHeader is the longest a ccx-auth-v1 header can be: the
+	// version, a fingerprint, a timestamp, a nonce and a signature, and
+	// the four spaces between them. Each field has one shape — 64 hex
+	// characters, at most 20 digits for an int64 with its sign, 16 nonce
+	// bytes and a 64-byte Ed25519 signature in standard base64 — so a
+	// header longer than their sum cannot be one, and ParseAuth refuses
+	// it before it splits a field. A later auth version with another
+	// signature is its own shape with its own constant; this one is
+	// 2 + 1 + 64 + 1 + 20 + 1 + 24 + 1 + 88 = 202.
+	MaxAuthHeader = len(authVersion) + 1 + 64 + 1 + 20 + 1 + (nonceBytes+2)/3*4 + 1 + (64+2)/3*4
+
 	// Client certificate modes. There is no "optional": a mode that issued
 	// and checked certificates but still admitted requests without one would
 	// be a migration aid, and there is nothing to migrate.
@@ -443,8 +454,50 @@ const (
 )
 
 // FramingAllowance is the slack above a relay's max_bytes granted to JSON
-// framing and base64 expansion when reading a request body.
+// framing and base64 expansion when reading a request body. It is also the
+// whole body cap on every route that carries a small JSON request — a
+// registration, a certificate request, an admin token, a stream's open —
+// none of which reaches a tenth of it.
 const FramingAllowance = 1 << 16
+
+// MaxDocumentBytes caps the request body of the two owner-signed
+// documents, the allow list and the channel directory, at
+// PUT /v1/mailbox/{fp}/allow and PUT /v1/mailbox/{fp}/channels; the client
+// holds a request to it before the PUT and the relay refuses one over it
+// before a byte of the body is read. It is sized to the documents' own
+// maxima and not the other way round. The worst case is a directory:
+// MaxChannels entries of a name and a description at their caps with
+// every byte a six-byte JSON escape, which is the most any encoder does to
+// one byte (\u003c for <, which the description rule admits and
+// encoding/json writes that way; a name refuses < and takes &, written
+// \u0026), the two times and the framing of an entry, plus the document's
+// own version, owner and issued:
+//
+//	64 × (6×1024 + 6×64 + 2×22 + ~80) + ~200 ≈ 423,679 bytes, measured
+//
+// and the request carries that document base64-encoded beside its
+// signature, 4/3 of it plus the envelope: 565,026 bytes measured. An allow
+// list is the smaller, MaxAllowlist fingerprints listed twice in the
+// request, once plain and once inside the signed document: a document of
+// 67,126 bytes and a request of 156,632. The cap is the round number
+// above the larger, the room being for whitespace inside the signed
+// document — it is whatever bytes the signer's encoder produced, and the
+// signature covers them, so another client may indent it — while the
+// envelope around it is this protocol's own; a document indented past the
+// cap is told to send it compact.
+const MaxDocumentBytes = 1 << 20
+
+// MaxHeaderBytes caps a request's line and headers together on the relay
+// and the proxy, and a response's headers at the client. The largest
+// header this protocol carries is the auth header at MaxAuthHeader bytes,
+// so the cap leaves two orders of magnitude for a later auth version and
+// for whatever a proxy in front of a client adds; net/http answers 431
+// before any handler for a request over it.
+const MaxHeaderBytes = 32 << 10
+
+// MsgBodyTooLarge begins the 413 for a body over its route's cap; the
+// sentence names the cap in bytes.
+const MsgBodyTooLarge = "request body larger than this route takes"
 
 // MaxBytesCeiling is the largest max_bytes a relay will accept. Beyond it,
 // max_bytes plus FramingAllowance overflows int64 and http.MaxBytesReader,
@@ -610,6 +663,11 @@ func SignRequest(id *identity.Identity, req *http.Request, body []byte) error {
 
 // ParseAuth reads an auth header without checking anything cryptographic.
 func ParseAuth(header string) (*Auth, error) {
+	if len(header) > MaxAuthHeader {
+		// Longer than the five fields and four spaces can be: not a
+		// header of this shape, refused before a field is cut from it.
+		return nil, errors.New("auth header longer than its shape allows")
+	}
 	fields := strings.Fields(header)
 	if len(fields) != 5 {
 		return nil, errors.New("malformed auth header")

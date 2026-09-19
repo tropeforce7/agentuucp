@@ -159,7 +159,11 @@ and returns to it next time. Bytes that stop coming end inside the window
 too: an attempt runs under a stall deadline of sixty seconds that every
 delivering read moves on, so a transfer of any length finishes while bytes
 keep arriving and a stalled one is cut and judged as an attempt that stopped
-short. The server's five-minute read timeout stands on every other route.
+short, and the download of a placed stream is served under the same
+deadline turned round, moved by every write that delivers bytes, so a slow
+reader is served to the end and a reader that stops is cut inside the
+window. The server's five-minute read and write timeouts stand on every
+other route.
 
 **At the shipped defaults a 2 GB file is refused**, and deliberately so: a
 sender's whole `post_bytes_per_hour` budget is 256 MiB and one recipient's
@@ -268,6 +272,33 @@ Three replies say the relay is refusing rather than failing:
 
 `GET /v1/health` is exempt from all of it, so monitoring does not flap while
 the relay is under attack.
+
+The HTTP layer has bounds of its own, none of them settings:
+
+| bound | value | what it does |
+|---|---|---|
+| request line and headers | 32 KiB | over it the answer is `431`, written by Go's `net/http` before the relay sees the request (it reads the block through a 4 KiB buffer, so the cut lands at 36 KiB); the largest header the protocol carries, the request signature, is about 200 bytes, and the relay refuses an auth header longer than its five fields can be before it reads one |
+| body of a post | `max_bytes` + 64 KiB | the envelope with its JSON and base64 framing |
+| body of an allow list or a channel directory | 1 MiB | the two owner-signed documents, sized to their own maxima on the wire — a full directory of 64 channels at every cap is 565,026 bytes as the client sends it — with the room above for a signer that indents; over it the answer is `413` naming the bytes and saying to send the document compact |
+| body of every other request | 64 KiB | a registration, a certificate request, an admin token, a stream's open; none reaches a tenth of it |
+| the stream `PUT` | the size the open declared | its `Content-Length` must equal what is left of that size, judged before a byte is read |
+| timeouts | headers 15 s, body 5 min, response 5 min, idle 2 min | the stream routes move their own deadlines as above |
+
+A body that declares itself over its cap is refused `413` before a byte of
+it is read, the sentence naming the cap in bytes; one that arrives without
+a length is cut at the cap. On every authenticated route the relay checks
+what it can before the body — the client certificate, that the auth header
+parses, that the identity it names has a mailbox — and reads the body only
+then, so a stranger's sixteen megabytes are refused unread; the signature,
+which is over the body, is checked after it. Every refusal before the body
+— that `413`, a `401` for a header that will not parse or an identity no
+mailbox has, a `503` from the in-flight cap — closes the connection behind
+its answer: Go's `net/http` would otherwise read up to 256 KiB of the
+unread body before answering on a connection it meant to keep, and wait
+for a body that never came. The relay speaks HTTP/1.1 alone: HTTP/2
+is off on the listener and not offered by ALPN, so a client that offers
+`h2` is answered over HTTP/1.1, and every property of the wire above holds
+under the one protocol the relay's tests run.
 
 The access log records one line per request. In the default `full` mode that
 line names the verified caller and the request path, which together are who is

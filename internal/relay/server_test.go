@@ -104,7 +104,11 @@ func newHarness(t *testing.T, cfg Config) *harness {
 		cfg.Now = clock.Now
 	}
 	server := NewServer(store, cfg)
-	srv := httptest.NewServer(server)
+	srv := httptest.NewUnstartedServer(server)
+	// The header cap auu-relay's listener sets, so a test here meets the
+	// same 431 net/http answers in deployment.
+	srv.Config.MaxHeaderBytes = relayapi.MaxHeaderBytes
+	srv.Start()
 	// Close wakes what the relay holds before the listener waits for it,
 	// as auu-relay does: a test that leaves a listing held would otherwise
 	// wait out the hold here.

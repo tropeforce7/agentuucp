@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -506,5 +508,121 @@ func TestServeCheckSaysTheProxyLineAndRefusesBadSections(t *testing.T) {
 	bob.write(t)
 	if out := bob.run("serve", "check"); strings.Contains(out, "proxy") {
 		t.Fatalf("serve check mentions a proxy that is not configured:\n%s", out)
+	}
+}
+
+// rawProxyRequest is one request to the proxy written by hand: the request
+// line, Host, Connection: close, the headers given, a Content-Length of
+// declared when it is not negative, and sent bytes of the body — none for
+// a body declared and never sent. The answer is read under a deadline.
+func rawProxyRequest(t *testing.T, addr, method, path string, headers map[string]string, declared int64, sent []byte) (int, string, bool) {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var wire strings.Builder
+	fmt.Fprintf(&wire, "%s %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n", method, path, addr)
+	if declared >= 0 {
+		fmt.Fprintf(&wire, "Content-Length: %d\r\n", declared)
+	}
+	for k, v := range headers {
+		fmt.Fprintf(&wire, "%s: %s\r\n", k, v)
+	}
+	wire.WriteString("\r\n")
+	wire.Write(sent)
+	if _, err := io.WriteString(conn, wire.String()); err != nil {
+		t.Fatal(err)
+	}
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("reading the answer to a hand-written %s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	return resp.StatusCode, strings.TrimSpace(string(out)), resp.Close
+}
+
+// TestLimitTheProxyCapsHeadersAndBodies: the proxy's listener carries the
+// relay's header cap and a request body cap of its own, the upstream's
+// documented request size limit. A header block over
+// relayapi.MaxHeaderBytes plus net/http's 4096 bytes of read-ahead is 431
+// from net/http before the proxy sees it; a body declared one byte over
+// proxyMaxRequestBytes and never sent is 413 before a byte, naming the
+// bytes, the connection closed behind the answer and nothing reaching
+// upstream; one without a length that runs past the cap is cut at the cap
+// on its way upstream and answered 413 too, upstream seeing at most the
+// cap's worth of it; a body at the cap is passed on whole. The log names
+// each refusal.
+func TestLimitTheProxyCapsHeadersAndBodies(t *testing.T) {
+	up := newUpstream(t)
+	p, logs := proxyFor(t, up)
+	token, base, err := p.mint("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := strings.TrimPrefix(p.base, "http://")
+	path := "/" + token + "/v1/messages"
+
+	const slop = 4096
+	frame := len("POST  HTTP/1.1\r\nHost: \r\nConnection: close\r\nContent-Length: 0\r\nX-Junk: \r\n\r\n") + len(path) + len(addr)
+	for _, tc := range []struct {
+		name  string
+		total int
+		want  int
+	}{
+		{"a block at the cap plus net/http's slop", relayapi.MaxHeaderBytes + slop, http.StatusOK},
+		{"one byte over", relayapi.MaxHeaderBytes + slop + 1, http.StatusRequestHeaderFieldsTooLarge},
+	} {
+		status, body, _ := rawProxyRequest(t, addr, "POST", path,
+			map[string]string{"X-Junk": strings.Repeat("j", tc.total-frame)}, 0, nil)
+		if status != tc.want {
+			t.Fatalf("%s, a header block of %d bytes: %d %.120s; want %d", tc.name, tc.total, status, body, tc.want)
+		}
+	}
+	before := len(up.requests())
+
+	status, body, closed := rawProxyRequest(t, addr, "POST", path, nil, proxyMaxRequestBytes+1, nil)
+	if status != http.StatusRequestEntityTooLarge || !strings.Contains(body, fmt.Sprintf("at most %d bytes", proxyMaxRequestBytes)) || !closed {
+		t.Fatalf("a body one byte over the cap, unsent: %d %q closed=%v; want 413 naming the bytes with the connection closed", status, body, closed)
+	}
+	waitForLog(t, logs, fmt.Sprintf("body of %d bytes over the cap of %d", proxyMaxRequestBytes+1, proxyMaxRequestBytes))
+	if len(up.requests()) != before {
+		t.Fatal("the refused body reached upstream")
+	}
+
+	// Without a length, past the cap: cut on the way upstream.
+	over := proxyMaxRequestBytes + 1
+	chunked := fmt.Sprintf("%x\r\n", over) + strings.Repeat("x", int(over)) + "\r\n0\r\n\r\n"
+	status, body, _ = rawProxyRequest(t, addr, "POST", path, map[string]string{"Transfer-Encoding": "chunked"}, -1, []byte(chunked))
+	if status != http.StatusRequestEntityTooLarge || !strings.Contains(body, fmt.Sprintf("at most %d bytes", proxyMaxRequestBytes)) {
+		t.Fatalf("a chunked body over the cap: %d %q; want 413 naming the bytes", status, body)
+	}
+	waitForLog(t, logs, fmt.Sprintf("body over %d bytes, refused", proxyMaxRequestBytes))
+	// A body without a length is forwarded as it arrives, so upstream may
+	// have seen the request begin; what it saw ends at the cap, never past
+	// it — the cut is on the way through.
+	for _, r := range up.requests()[before:] {
+		if len(r.body) > int(proxyMaxRequestBytes) {
+			t.Fatalf("upstream saw %d bytes of a chunked body, over the cap of %d", len(r.body), proxyMaxRequestBytes)
+		}
+	}
+
+	// At the cap: passed on whole, every byte of it.
+	atCap := strings.Repeat("y", int(proxyMaxRequestBytes))
+	status, body = call(t, "POST", base+"/v1/messages", atCap, map[string]string{"x-api-key": token})
+	if status != http.StatusOK || body != `{"seen":true}` {
+		t.Fatalf("a body at the cap: %d %.80s; want it passed on", status, body)
+	}
+	whole := false
+	for _, r := range up.requests() {
+		if r.body == atCap {
+			whole = true
+		}
+	}
+	if !whole {
+		t.Fatalf("upstream did not see the body at the cap whole")
 	}
 }

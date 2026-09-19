@@ -379,6 +379,34 @@ is opened, and no such name is a rename's destination. On Windows the
 device rule asks the OS itself, and the Windows CI job holds the hand
 list, which is the rule everywhere else, to what the OS says.
 
+**The HTTP layer has bounds of its own**, and they are not settings. The
+relay speaks HTTP/1.1 alone: HTTP/2 is off on the listener and not offered
+by ALPN, so a client offering `h2` is answered over HTTP/1.1, and every
+property below — the refusal before the body, the drain, `Connection:
+close` behind a refusal, the stall deadline on the connection — holds
+under the one protocol the relay's tests run rather than a second one with
+its own stream, reset and header semantics. The request line and headers
+together are capped at 32 KiB, answered `431` by the standard library
+before the relay sees the request; the largest header the protocol
+carries, the request signature, is Ed25519 and about 200 bytes, and the
+relay refuses an auth header longer than its five fields can be before it
+cuts a field from it. Every body is read under the cap of its route — a
+post at `max_bytes` plus 64 KiB of framing, an allow list or a channel
+directory at 1 MiB, sized to the documents' own maxima on the wire, and
+every other request at 64 KiB — and a body that declares itself over the
+cap is refused `413` before a byte of it is read, the sentence naming the
+cap; the stream `PUT` is bounded by the size its open declared. On every
+authenticated route the order is the certificate, the auth header parsed,
+the identity it names looked up, then the body, then the signature:
+everything that can be judged without the body is judged before it, so a
+stranger's sixteen megabytes are refused unread, and the signature comes
+after the body because it is over the body. Every refusal before the body
+closes the connection behind its answer, the `413`, the `401` and the
+in-flight `503` alike: the standard library would otherwise read up to
+256 KiB of the body the handler declined before writing the answer on a
+connection it meant to keep, and wait for a body that never came — which
+is what a refusal that leaves the body unread must not do.
+
 ### 2.1 The round trip
 
 With keys already swapped, in person or over something you both trust:
@@ -585,10 +613,14 @@ relay's own stall deadline on the connection, sixty seconds by default and
 moved on by every read that delivers bytes, so a transfer of any length
 finishes while bytes keep arriving and a stalled one is cut and judged by the
 rule above, its answer written under a fresh deadline of its own for anyone
-still listening. The server's five-minute read timeout stands on every other
-route. A refusal before the body is read closes the connection; the standard
-library still drains up to 256 KiB of a body it did not read before closing,
-which is the one cost a refused attempt has.
+still listening. The download of a placed stream is served under the same
+deadline turned round, moved by every write that delivers bytes, so a reader
+that stops is cut inside the window and a slow one is served to the end
+rather than cut by the server's five-minute write timeout every five minutes
+and left to ask by `Range`. The server's five-minute read and write timeouts
+stand on every other route. A refusal before the body is read closes the
+connection; the standard library still drains up to 256 KiB of a body it
+did not read before closing, which is the one cost a refused attempt has.
 
 An interrupted upload resumes: the sealed copy stays in `outbox/` and
 `auu send --resume` carries on from the byte the relay says it has. That is

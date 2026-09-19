@@ -393,6 +393,16 @@ A refused send names what to change, and nothing was queued:
 - `"X" is not a token id (32 lowercase hex characters); list them with:
   auu-admin token ls --all` — `auu-admin token revoke` takes the id as
   `token ls` prints it, whole; nothing was sent to the relay.
+- `request body larger than this route takes: at most N bytes` (a `413`),
+  with `; send the document compact, without indentation` on `allow push`
+  or `channel push` — the relay reads every body under its route's cap
+  and refuses one over it before reading a byte: an envelope is bounded by
+  the relay's `max_bytes` plus 64 KiB, a signed allow list or channel
+  directory by 1 MiB (room enough for the largest either can be, as `auu`
+  sends it), and any other request by 64 KiB. From `auu` itself the body
+  was under the cap; a `413` means another client, or an indented
+  document. `431 Request Header Fields Too Large` is the relay's 32 KiB
+  header cap, which nothing `auu` sends approaches.
 
 Anywhere:
 

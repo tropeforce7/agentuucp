@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 // The key-holding proxy.
@@ -67,7 +68,43 @@ const (
 
 	defaultProxyListen   = "127.0.0.1:0"
 	defaultProxyUpstream = "https://api.anthropic.com"
+
+	// proxyMaxRequestBytes caps a request body through the proxy. The body
+	// is the handler's whole conversation as JSON, which can legitimately
+	// be large, so the cap is the size the upstream itself takes: the
+	// Claude API's request size limit for the Messages and Token Counting
+	// endpoints is 32 MB (platform.claude.com/docs/en/api/overview, under
+	// "Request size limits"), answered 413 request_too_large past it. The
+	// cap is 32 MiB, above the API's figure by the difference between the
+	// two units, so a body the upstream would take is never refused here on
+	// the margin; one over it is refused before a byte, with a sentence
+	// naming the bytes, and a body that arrives without a length is cut at
+	// the same cap. A loopback body from this host's own handler is still a
+	// body from outside the process, and a bound is written down.
+	proxyMaxRequestBytes int64 = 32 << 20
 )
+
+// ProxyTimeouts bounds how long one connection may occupy the proxy. Three
+// of the four are the relay's: the request line and headers within ten
+// seconds, the request body within five minutes (the conversation as JSON,
+// megabytes at most, read in seconds across loopback), an idle connection
+// kept two minutes. There is no write timeout, deliberately: net/http's
+// runs from the request header to the end of the response, and the
+// response is the model's answer, silent until it is ready on a call that
+// does not stream and minutes long either way — a five-minute bound would
+// cut a long answer and a per-write stall deadline would cut a silent one.
+// The bound on the response is Claude Code's own client timeout across
+// the loopback. The request line and headers are capped at
+// relayapi.MaxHeaderBytes as the relay's are.
+type ProxyTimeouts struct {
+	ReadHeader, Read, Write, Idle time.Duration
+}
+
+// DefaultProxyTimeouts is what the proxy runs with; cmd/auu-relay's test
+// holds the shared three to the relay's defaults.
+func DefaultProxyTimeouts() ProxyTimeouts {
+	return ProxyTimeouts{ReadHeader: 10 * time.Second, Read: 5 * time.Minute, Write: 0, Idle: 2 * time.Minute}
+}
 
 // proxyConfig is the proxy section of serve.json.
 type proxyConfig struct {
@@ -238,12 +275,29 @@ func startKeyProxy(cfg *proxyConfig, key string, logf func(string, ...any)) (*ke
 			// minutes, and Claude Code has timeouts of its own.
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			// A body without a length that ran past the cap fails the
+			// upstream write with MaxBytesReader's error: the caller's
+			// fault, said as such, not the upstream's.
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				http.Error(w, proxyTooLarge(), http.StatusRequestEntityTooLarge)
+				p.logf("proxy: %s body over %d bytes, refused", r.Method, proxyMaxRequestBytes)
+				return
+			}
 			http.Error(w, "the proxy could not reach its upstream; the operator's log says why", http.StatusBadGateway)
 			p.logf("proxy: upstream %s: %v", p.upstream.Host, err)
 		},
 		ErrorLog: nil,
 	}
-	p.srv = &http.Server{Handler: p, ReadHeaderTimeout: 10 * time.Second}
+	t := DefaultProxyTimeouts()
+	p.srv = &http.Server{
+		Handler:           p,
+		MaxHeaderBytes:    relayapi.MaxHeaderBytes,
+		ReadHeaderTimeout: t.ReadHeader,
+		ReadTimeout:       t.Read,
+		WriteTimeout:      t.Write,
+		IdleTimeout:       t.Idle,
+	}
 	go p.srv.Serve(ln)
 	return p, nil
 }
@@ -334,13 +388,28 @@ func (p *keyProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		refuse(st)
 		return
 	}
+	// The body under its cap: one that declares itself over it is refused
+	// before a byte is read, and one without a length is cut at the cap
+	// on its way upstream.
+	if r.ContentLength > proxyMaxRequestBytes {
+		w.Header().Set("Connection", "close")
+		http.Error(w, proxyTooLarge(), http.StatusRequestEntityTooLarge)
+		p.logf("proxy: %s %s %s refused: body of %d bytes over the cap of %d", tokenTag(token), r.Method, identity.PrintableText("/"+rest), r.ContentLength, proxyMaxRequestBytes)
+		return
+	}
 	out := r.Clone(r.Context())
 	out.URL.Path = "/" + rest
 	out.URL.RawPath = ""
+	out.Body = http.MaxBytesReader(w, r.Body, proxyMaxRequestBytes)
 	cw := &countingWriter{ResponseWriter: w}
 	p.rp.ServeHTTP(cw, out)
 	p.logf("proxy: %s %s %s %d in %d out %d %s", tokenTag(token), r.Method, identity.PrintableText("/"+rest), cw.status,
 		max(r.ContentLength, 0), cw.written, time.Since(start).Round(time.Millisecond))
+}
+
+// proxyTooLarge is the 413's sentence: the cap in bytes.
+func proxyTooLarge() string {
+	return fmt.Sprintf("request body larger than the proxy passes on: at most %d bytes, the upstream's own request size limit", proxyMaxRequestBytes)
 }
 
 // looksLikeToken says whether a path element has a token's shape: the 43

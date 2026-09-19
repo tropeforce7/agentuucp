@@ -286,11 +286,15 @@ func TestTheUploadLockIsHeldNoLongerThanTheAttempt(t *testing.T) {
 // mailbox. Now identity.ValidName, the export line's rule, is applied at
 // registration and refused 400 with the rule's own sentence; a valid name
 // is taken as before, and no name at all — nothing to print — is allowed.
+// The megabyte the trace used is met since PLAN-HTTP by the route's body
+// cap first, 413 before a byte of it is read, so the rule is shown on a
+// name under the cap and over its own bound, and the megabyte stays as
+// the cap's case.
 func TestRegisterHoldsTheNameToTheExportLinesRule(t *testing.T) {
 	h := newHarness(t, Config{})
 	for _, tc := range []struct{ what, name string }{
 		{"a terminal escape and a newline", "bob\x1b[2K\x1b[1;31mowned\nccx2.evil"},
-		{"a megabyte", strings.Repeat("n", 1<<20)},
+		{"thirty-two kilobytes, under the body cap", strings.Repeat("n", 32<<10)},
 	} {
 		id := ids(t, "x")[0]
 		if identity.ValidName(tc.name) == nil {
@@ -314,6 +318,12 @@ func TestRegisterHoldsTheNameToTheExportLinesRule(t *testing.T) {
 		if keys.Name == tc.name {
 			t.Errorf("%s: the relay serves the name back verbatim from /v1/keys (%d bytes)", tc.what, len(keys.Name))
 		}
+	}
+	// The megabyte: the route's cap now, 413 naming it, before the rule.
+	id := ids(t, "x")[0]
+	status, body := h.do(id, "POST", "/v1/register", h.registerBody(id, strings.Repeat("n", 1<<20), ""), nil)
+	if status != http.StatusRequestEntityTooLarge || !strings.Contains(string(body), fmt.Sprintf("at most %d bytes", relayapi.FramingAllowance)) {
+		t.Errorf("a megabyte: register answered %d, want 413 naming the cap: %.120s", status, body)
 	}
 	// A valid name, and none: taken.
 	for _, name := range []string{"bob", "bob.laptop_2-x", ""} {

@@ -8,9 +8,12 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
-// stalled is a request parked inside a handler: it declares a large body and
+// stalled is a request parked inside a handler: it declares a body and
 // sends only part of it, so readBody blocks and the in-flight slot stays held
 // until the connection is closed.
 //
@@ -20,6 +23,15 @@ import (
 // about whether the server has dispatched the handler; here the bytes on the
 // wire are the test's own, and the server's answer, if any, arrives on a
 // socket the test is watching.
+//
+// Since PLAN-HTTP a request is parked in readBody only when everything the
+// relay judges before the body has passed: it carries a registered
+// identity's auth header, since the header is parsed and the identity
+// looked up before the body, and it declares a body under the route's cap,
+// since one declared over it is refused unread. The stalled request used to
+// carry no header and declare a gigabyte; either is now answered before a
+// byte, which is the property those two rules bought, and a stall must be
+// an honest request that stops.
 type stalled struct {
 	conn net.Conn
 	// answered goes true if the relay replies, which means this request was
@@ -27,14 +39,21 @@ type stalled struct {
 	answered atomic.Bool
 }
 
-func stallPost(t *testing.T, h *harness, fp string) *stalled {
+func stallPost(t *testing.T, h *harness, id *identity.Identity, declared int64) *stalled {
 	t.Helper()
+	signed, err := http.NewRequest("POST", h.srv.URL+"/v1/mailbox/"+id.Fingerprint(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := relayapi.SignRequest(id, signed, nil); err != nil {
+		t.Fatal(err)
+	}
 	conn, err := net.DialTimeout("tcp", strings.TrimPrefix(h.srv.URL, "http://"), 10*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	req := fmt.Sprintf("POST /v1/mailbox/%s HTTP/1.1\r\nHost: x\r\n"+
-		"Content-Length: 1073741824\r\n\r\n0123456789", fp)
+	req := fmt.Sprintf("POST /v1/mailbox/%s HTTP/1.1\r\nHost: x\r\n%s: %s\r\n"+
+		"Content-Length: %d\r\n\r\n0123456789", id.Fingerprint(), relayapi.AuthHeader, signed.Header.Get(relayapi.AuthHeader), declared)
 	if _, err := conn.Write([]byte(req)); err != nil {
 		conn.Close()
 		t.Fatal(err)

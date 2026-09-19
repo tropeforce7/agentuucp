@@ -173,14 +173,17 @@ func TestDeclaredButUnsentBodyIsBoundedByTheInflightCap(t *testing.T) {
 	h.register(alice)
 	keys := "/v1/keys/" + alice.Fingerprint()
 
-	// A caller that declares a large body and then dribbles it holds a
-	// handler, and with it an in-flight slot, until a timeout fires. The
-	// timeouts are the server's, tested in cmd/auu-relay; what the relay
-	// itself guarantees is that the damage is bounded by max_inflight and that
-	// health keeps answering. This is the slowloris shape, and it is the
-	// reason the cap exists.
+	// A caller that declares a body under the route's cap and then dribbles
+	// it holds a handler, and with it an in-flight slot, until a timeout
+	// fires. The timeouts are the server's, tested in cmd/auu-relay; what
+	// the relay itself guarantees is that the damage is bounded by
+	// max_inflight and that health keeps answering. This is the slowloris
+	// shape, and it is the reason the cap exists. (A body declared over the
+	// cap, or a request with no registered identity behind it, no longer
+	// reaches the read at all: TestLimitBodyCapsPerRoute and
+	// TestTheAuthHeaderIsReadBeforeTheBody.)
 	for attempt := range 8 {
-		st := stallPost(t, h, alice.Fingerprint())
+		st := stallPost(t, h, alice, 4000)
 		status, _, _, lost := st.holdsTheSlot(t, h, keys)
 		st.close()
 		if lost {

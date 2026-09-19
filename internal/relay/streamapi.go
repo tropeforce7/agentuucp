@@ -267,6 +267,9 @@ func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerF
 	// five-minute write deadline, set when the headers were read, would
 	// otherwise fail the 201 of a transfer longer than that after the
 	// message was placed.
+	// The body is read from here: the connection may be kept after the
+	// answer, and the refusals below that leave it unread say so again.
+	w.Header().Del("Connection")
 	rc := http.NewResponseController(w)
 	stall := s.stallTimeout()
 	extend := func() {
@@ -362,6 +365,25 @@ func (d *deadlineReader) Read(p []byte) (int, error) {
 	}
 	return n, err
 }
+
+// deadlineWriter is a response whose every delivering write moves the
+// stall deadline on: deadlineReader's twin, for the blob GET.
+type deadlineWriter struct {
+	http.ResponseWriter
+	extend func()
+}
+
+func (d *deadlineWriter) Write(p []byte) (int, error) {
+	n, err := d.ResponseWriter.Write(p)
+	if n > 0 {
+		d.extend()
+	}
+	return n, err
+}
+
+// Unwrap lets http.NewResponseController reach the connection through
+// the wrapper, as statusRecorder's does.
+func (d *deadlineWriter) Unwrap() http.ResponseWriter { return d.ResponseWriter }
 
 // checkStreamShape applies to a stream's first bytes the whole of what the
 // relay can say about it, holding no key and opening no chunk: the
@@ -462,9 +484,20 @@ func (s *Server) handleBlob(w http.ResponseWriter, r *http.Request, body []byte,
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
+	// The write deadline is the PUT's read deadline turned round: the
+	// relay's own, now + the stall timeout, moved by every write that
+	// delivers bytes, so a blob of any size is served while the reader
+	// keeps taking it and a reader that stops is cut inside the window.
+	// The server's five-minute write timeout, set when the headers were
+	// read, would otherwise cut a large blob on a slow link every five
+	// minutes and leave the client to resume by Range each time.
+	rc := http.NewResponseController(w)
+	stall := s.stallTimeout()
+	extend := func() { rc.SetWriteDeadline(time.Now().Add(stall)) }
+	extend()
 	// ServeContent does Range and If-Range, and streams the file rather than
-	// reading it.
-	http.ServeContent(w, r, "", info.ModTime(), f)
+	// reading it; it reaches the connection through the wrapper's Unwrap.
+	http.ServeContent(&deadlineWriter{ResponseWriter: w, extend: extend}, r, "", info.ModTime(), f)
 }
 
 // uploadAuthed is authed for the upload routes, whose path carries no
@@ -476,7 +509,10 @@ func (s *Server) uploadAuthed(fn func(w http.ResponseWriter, r *http.Request, ca
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Nothing of the body has been read at this point, which is the
 		// point: a caller without a certificate does not get to stream
-		// sixteen megabytes into the relay before being refused.
+		// sixteen megabytes into the relay before being refused. Every
+		// refusal here is before the body, so the connection closes
+		// behind it; the handler removes the mark when it reads the body.
+		unread(w, r)
 		fp, ok := s.verifyCaller(w, r, nil)
 		if !ok {
 			return

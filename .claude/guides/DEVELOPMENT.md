@@ -165,6 +165,32 @@ cannot have come from a working client, so it is the cheapest possible
 rejection. There is a test that closes the store and then sends such a
 request; any database read would surface as a 500.
 
+**Everything that can be judged without the body is judged before it,
+and the signature after it.** On every authenticated route the order is
+the certificate, the auth header parsed, the identity it names looked up,
+then the body under the route's cap, then the signature over it. Until
+PLAN-HTTP the body was read before the header was parsed, so a stranger
+with a valid certificate and a fingerprint no mailbox had could have
+sixteen megabytes accepted and buffered before the relay found nothing
+to check them against. The signature cannot come first: it is over the
+body, so the body must be read to check it; that is the one check that
+belongs after the body, and the reason the body is read at all before
+the caller is known to be who they say. The cost of the new order is a
+mailbox lookup for a stranger before the body instead of after it — the
+same read, earlier, bounded by the in-flight cap as it was. The test
+declares sixteen megabytes under an unknown fingerprint, sends none of
+them, and is answered. And a refusal before the body closes the
+connection behind its answer, every one of them — the `413`, the `401`,
+the in-flight `503` — because `net/http`, before it writes a response on
+a connection it will keep, reads up to 256 KiB of a body the handler did
+not, and waits for one that never comes: the first cut of this order
+left the in-flight cap's test flaking, a stalled request that lost the
+race for the slot getting its `503` only when the test closed the
+connection, since the server was waiting for the 3990 bytes it would
+never send before writing it. `unread` is the mark, set at the top of
+every authenticated route and taken off once the body is read; a
+request that declares no body keeps its connection.
+
 **Reveal nothing about the token table until the token's signature has
 passed.** At enrolment the order is: parse, issuer in the admin set, signature,
 use, audience, time window, subject, and only then the database. A failed
@@ -778,6 +804,33 @@ rather than being refused.
 
 **Health is exempt from every limit.** Monitoring that flaps during an attack
 tells the operator nothing.
+
+**The HTTP layer's bounds are written down, and there is one protocol.**
+The maintainer asked how the relay limits a header and a body, and the answer was
+that Go's defaults did: a megabyte of headers, a body cap of `max_bytes`
+plus the framing allowance on every route including the ones whose
+requests fit in a kilobyte, and HTTP/2 offered by ALPN on the listener
+while the client, having cloned `http.DefaultTransport`, forced it — so
+every deployed exchange ran over a protocol no test in the tree ran,
+`httptest` speaking HTTP/1.1 unless told otherwise. Now the request line
+and headers are capped at `relayapi.MaxHeaderBytes`, which `net/http`
+answers `431` before any handler (through 4 KiB of its own read-ahead, so
+the cut lands at the cap plus 4096, and the test says so); an auth header
+is held to `relayapi.MaxAuthHeader`, the length its five fields can
+reach, before a field is cut from it; every body is read under its
+route's cap, `readBody` taking the cap as an argument — the post route at
+`max_bytes` plus `FramingAllowance`, the two owner-signed documents at
+`MaxDocumentBytes`, sized to their maxima as the client marshals them
+(the document is base64 inside the envelope, so 4/3 of it, measured and
+written in the constant's comment), and every other body route at
+`FramingAllowance` alone — with a body that declares itself over the cap
+refused `413` before a byte, naming the cap; and HTTP/2 is off on the
+relay's listener, `TLSNextProto` an empty map and `NextProtos` http/1.1
+alone, so the drain, `Connection: close` and the stall deadline are
+proven under the protocol that is deployed. A cap is the plainest bound
+there is: name it as a constant, refuse before the body where the body
+declares itself, and test the edge and one past it from a raw connection
+that sends the headers and nothing more.
 
 **Every byte from the network is escaped before a terminal sees it, and the
 relay's sentences are from the network.** `identity.Printable`'s comment

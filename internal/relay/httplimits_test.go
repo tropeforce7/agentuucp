@@ -1,0 +1,428 @@
+package relay
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/allowlist"
+	"github.com/tropeforce7/agentuucp/internal/channels"
+	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
+)
+
+// rawRequest is one request written by hand on a connection of the test's
+// own: the request line, Host, the headers given, a Content-Length of
+// declared when it is not negative, and then sent bytes of the body — none,
+// for a request that declares a body it never sends. The request asks to
+// keep the connection, as the client's does, so that a refusal before the
+// body is shown to close it on the relay's own decision: net/http reads up
+// to 256 KiB of an unread body before answering on a connection it will
+// keep, and waits for a body that never comes. The answer is read from the
+// same connection under a deadline, so a relay that waited on the body
+// rather than answering fails the test in bounded time rather than
+// hanging it. When from is not nil the request is signed by it over sent,
+// as the client would sign.
+func (h *harness) rawRequest(from *identity.Identity, method, path string, headers map[string]string,
+	declared int64, sent []byte) (int, []byte, http.Header) {
+	h.t.Helper()
+	req, err := http.NewRequest(method, h.srv.URL+path, nil)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	if from != nil {
+		if err := relayapi.SignRequest(from, req, sent); err != nil {
+			h.t.Fatal(err)
+		}
+	}
+	conn, err := net.Dial("tcp", strings.TrimPrefix(h.srv.URL, "http://"))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer conn.Close()
+	var wire bytes.Buffer
+	fmt.Fprintf(&wire, "%s %s HTTP/1.1\r\nHost: %s\r\n", method, req.URL.RequestURI(), req.Host)
+	if declared >= 0 {
+		fmt.Fprintf(&wire, "Content-Length: %d\r\n", declared)
+	}
+	for k, vs := range req.Header {
+		for _, v := range vs {
+			fmt.Fprintf(&wire, "%s: %s\r\n", k, v)
+		}
+	}
+	wire.WriteString("\r\n")
+	wire.Write(sent)
+	if _, err := conn.Write(wire.Bytes()); err != nil {
+		h.t.Fatal(err)
+	}
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		h.t.Fatalf("reading the answer to a hand-written %s %s: %v", method, path, err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	// ReadResponse takes Connection: close out of the header map into
+	// resp.Close; it is put back so a test can read it where it was sent.
+	if resp.Close {
+		resp.Header.Set("Connection", "close")
+	}
+	return resp.StatusCode, out, resp.Header
+}
+
+// TestLimitRequestHeadersAreCapped: the request line and headers together
+// are capped at relayapi.MaxHeaderBytes, 32 KiB, which net/http enforces
+// before any handler runs, answering 431. The largest header this protocol
+// carries, the auth header at MaxAuthHeader bytes, is two orders of
+// magnitude under it, shown by TestLimitAuthHeaderLength; here a header
+// block at the cap is taken, one carrying a value the size of an ML-DSA-87
+// signature in base64 (the figure the plan first sized the cap by, before
+// the request signature was found to be Ed25519) is taken with room, and
+// the edge is net/http's own: it reads the header block through a buffer
+// of 4096 bytes of slop above MaxHeaderBytes (Server.initialReadLimitSize),
+// so a block of MaxHeaderBytes + 4096 is taken and one byte more is 431,
+// with the sentence net/http writes and the handler never reached.
+func TestLimitRequestHeadersAreCapped(t *testing.T) {
+	h := newHarness(t, Config{})
+	const slop = 4096
+	// The bytes of the block around the one header the test sizes.
+	frame := len("GET /v1/health HTTP/1.1\r\nHost: \r\nX-Junk: \r\n\r\n") + len(strings.TrimPrefix(h.srv.URL, "http://"))
+	for _, tc := range []struct {
+		name  string
+		total int
+		want  int
+	}{
+		{"an ML-DSA-87 signature's worth of header", frame + 6200, http.StatusOK},
+		{"a block at MaxHeaderBytes", relayapi.MaxHeaderBytes, http.StatusOK},
+		{"a block at MaxHeaderBytes plus net/http's slop", relayapi.MaxHeaderBytes + slop, http.StatusOK},
+		{"one byte over", relayapi.MaxHeaderBytes + slop + 1, http.StatusRequestHeaderFieldsTooLarge},
+		{"twice the cap", 2 * relayapi.MaxHeaderBytes, http.StatusRequestHeaderFieldsTooLarge},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, body, _ := h.rawRequest(nil, "GET", "/v1/health",
+				map[string]string{"X-Junk": strings.Repeat("j", tc.total-frame)}, -1, nil)
+			if status != tc.want {
+				t.Fatalf("a header block of %d bytes: %d %.120s; want %d", tc.total, status, body, tc.want)
+			}
+			if status == http.StatusRequestHeaderFieldsTooLarge && !strings.Contains(string(body), "Request Header Fields Too Large") {
+				t.Errorf("the 431's body: %.120s; want net/http's own sentence", body)
+			}
+		})
+	}
+	// The relay is unharmed by the refusals: the next request is answered.
+	if status, _, _ := h.rawRequest(nil, "GET", "/v1/health", nil, -1, nil); status != http.StatusOK {
+		t.Errorf("health after the refusals: %d, want 200", status)
+	}
+}
+
+// fullDirectory is a channel directory at every maximum, marshalled the
+// way the client sends it: MaxChannels channels with 64-byte names of &
+// (a name refuses <, which Windows forbids) and 1024-byte descriptions
+// of < (which the description rule admits), each written by encoding/json
+// as a six-byte \u escape, both times on every channel, signed by owner.
+func fullDirectory(t *testing.T, owner *identity.Identity, at time.Time) relayapi.ChannelsRequest {
+	t.Helper()
+	var chs []channels.Channel
+	for i := 0; i < relayapi.MaxChannels; i++ {
+		nb, na := at, at.Add(time.Hour)
+		chs = append(chs, channels.Channel{
+			Name:        strings.Repeat("&", relayapi.MaxChannelNameBytes-2) + fmt.Sprintf("%02d", i),
+			Description: strings.Repeat("<", relayapi.MaxChannelDescriptionBytes),
+			NotBefore:   &nb, NotAfter: &na,
+		})
+	}
+	doc, sig, err := channels.Sign(owner, &channels.Directory{Issued: at, Channels: chs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return relayapi.ChannelsRequest{Document: doc, Signature: sig}
+}
+
+// fullAllowList is an allow list of MaxAllowlist senders, marshalled the
+// way the client sends it, the senders once plain and once in the signed
+// document.
+func fullAllowList(t *testing.T, owner *identity.Identity, at time.Time) relayapi.AllowRequest {
+	t.Helper()
+	senders := make([]string, 0, relayapi.MaxAllowlist)
+	for i := 0; i < relayapi.MaxAllowlist; i++ {
+		senders = append(senders, fmt.Sprintf("%064x", i+1))
+	}
+	doc, sig, err := allowlist.Sign(owner, &allowlist.Document{Issued: at, Senders: senders})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return relayapi.AllowRequest{Allow: senders, Document: doc, Signature: sig}
+}
+
+// TestLimitBodyCapsPerRoute: every route that reads a body reads it under
+// its own cap, and a body that declares itself over the cap is answered
+// 413 before a byte of it is read, the sentence naming the cap in bytes
+// and the connection closed behind the answer. The post route takes
+// max_bytes + FramingAllowance; the two owner-signed documents take
+// MaxDocumentBytes, and a directory and an allow list built at every
+// maximum and marshalled as the client marshals them — 565,026 and 156,632
+// bytes — are taken under it, one byte over refused with the hint to send
+// the document compact; every other body route takes FramingAllowance
+// alone, shown on the registration, the stream open and an admin token.
+// The refusals are proved by requests that declare the body and send none
+// of it, answered anyway.
+func TestLimitBodyCapsPerRoute(t *testing.T) {
+	h := newHarness(t, Config{MaxBytes: 1 << 20})
+	people := ids(t, "alice", "bob")
+	alice, bob := people[0], people[1]
+	h.register(alice)
+	h.register(bob)
+	at := time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+
+	// The two documents at their maxima are taken.
+	dir := fullDirectory(t, alice, at)
+	wire, err := json.Marshal(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wire) > relayapi.MaxDocumentBytes || len(wire) < 500_000 {
+		t.Fatalf("the full directory is %d bytes on the wire; want under MaxDocumentBytes %d and above 500,000", len(wire), relayapi.MaxDocumentBytes)
+	}
+	if status, body := h.do(alice, "PUT", "/v1/mailbox/"+alice.Fingerprint()+"/channels", dir, nil); status/100 != 2 {
+		t.Fatalf("a directory at every maximum, %d bytes: %d %.200s; want it taken", len(wire), status, body)
+	}
+	list := fullAllowList(t, alice, at)
+	wire, err = json.Marshal(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wire) > relayapi.MaxDocumentBytes || len(wire) < 150_000 {
+		t.Fatalf("the full allow list is %d bytes on the wire; want under MaxDocumentBytes %d and above 150,000", len(wire), relayapi.MaxDocumentBytes)
+	}
+	if status, body := h.do(alice, "PUT", "/v1/mailbox/"+alice.Fingerprint()+"/allow", list, nil); status/100 != 2 {
+		t.Fatalf("an allow list at every maximum, %d bytes: %d %.200s; want it taken", len(wire), status, body)
+	}
+
+	// One byte over each route's cap, declared and never sent: 413 before
+	// a byte, naming the cap; at the cap the body is waited for, which
+	// the deadline turns into a read error, so the edge under the cap is
+	// shown by the documents above and by the routes' own tests.
+	me := alice.Fingerprint()
+	for _, tc := range []struct {
+		name, method, path string
+		from               *identity.Identity
+		limit              int64
+		hint               string
+	}{
+		{"the directory", "PUT", "/v1/mailbox/" + me + "/channels", alice, relayapi.MaxDocumentBytes, hintCompact},
+		{"the allow list", "PUT", "/v1/mailbox/" + me + "/allow", alice, relayapi.MaxDocumentBytes, hintCompact},
+		{"the post", "POST", "/v1/mailbox/" + bob.Fingerprint(), alice, 1<<20 + relayapi.FramingAllowance, ""},
+		{"the stream open", "POST", "/v1/mailbox/" + bob.Fingerprint() + "/streams", alice, relayapi.FramingAllowance, ""},
+		{"the registration", "POST", "/v1/register", alice, relayapi.FramingAllowance, ""},
+		{"the certificate request", "POST", "/v1/mailbox/" + me + "/certs", alice, relayapi.FramingAllowance, ""},
+	} {
+		t.Run(tc.name+" one byte over its cap", func(t *testing.T) {
+			status, body, hdr := h.rawRequest(tc.from, tc.method, tc.path, nil, tc.limit+1, nil)
+			if status != http.StatusRequestEntityTooLarge {
+				t.Fatalf("%d %.200s; want 413", status, body)
+			}
+			want := fmt.Sprintf("%s: at most %d bytes", relayapi.MsgBodyTooLarge, tc.limit)
+			if tc.hint != "" {
+				want += "; " + tc.hint
+			}
+			if got := errorText(t, body); got != want {
+				t.Errorf("the sentence is %q, want %q", got, want)
+			}
+			if hdr.Get("Connection") != "close" {
+				t.Errorf("Connection is %q, want close: the unsent body is not waited for", hdr.Get("Connection"))
+			}
+		})
+	}
+	// An admin token route, under the admin's key.
+	admin := ids(t, "admin")[0]
+	adminPath := adminFile(t, admin)
+	loaded, err := LoadAdmins(adminPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ha := newHarness(t, Config{AdminFile: adminPath, Admins: loaded})
+	status, body, _ := ha.rawRequest(admin, "POST", "/v1/admin/tokens", nil, relayapi.FramingAllowance+1, nil)
+	if status != http.StatusRequestEntityTooLarge || errorText(t, body) != fmt.Sprintf("%s: at most %d bytes", relayapi.MsgBodyTooLarge, relayapi.FramingAllowance) {
+		t.Errorf("an admin token one byte over FramingAllowance: %d %.200s; want 413 naming the cap", status, body)
+	}
+	// A body without a length that runs past the cap is cut at the cap
+	// by MaxBytesReader and answered 413 too, after the cap's worth was
+	// read and no more.
+	chunked := append(bytes.Repeat([]byte("x"), relayapi.FramingAllowance+1), []byte("\r\n0\r\n\r\n")...)
+	size := fmt.Sprintf("%x\r\n", relayapi.FramingAllowance+1)
+	status, body, _ = h.rawRequest(alice, "POST", "/v1/mailbox/"+bob.Fingerprint()+"/streams",
+		map[string]string{"Transfer-Encoding": "chunked"}, -1, append([]byte(size), chunked...))
+	if status != http.StatusRequestEntityTooLarge {
+		t.Errorf("a chunked body over the cap: %d %.200s; want 413", status, body)
+	}
+}
+
+// TestTheAuthHeaderIsReadBeforeTheBody: on every authenticated route the
+// order is the certificate, the auth header parsed, the identity looked
+// up, then the body, then the signature. A request under a fingerprint no
+// mailbox has, declaring sixteen megabytes and sending none of them, is
+// answered 401 before the body is read; one whose header will not parse
+// the same; and the registration, whose signer is not yet anybody, parses
+// the header before the body too. The signature is checked after the body,
+// as it must be, since it is over the body: a registered identity's
+// well-formed request over a declared body that never comes is waited
+// for, which is the signature's read of the body, and a wrong signature
+// after the body is 401 as TestBadSignaturesAreChargedButNeverBlockAGoodOne
+// shows.
+func TestTheAuthHeaderIsReadBeforeTheBody(t *testing.T) {
+	h := newHarness(t, Config{MaxBytes: 16 << 20})
+	people := ids(t, "alice", "stranger")
+	alice, stranger := people[0], people[1]
+	h.register(alice)
+	const sixteen = 16 << 20
+	for _, tc := range []struct {
+		name string
+		from *identity.Identity
+		hdr  map[string]string
+		path string
+	}{
+		{"a stranger's post", stranger, nil, "/v1/mailbox/" + alice.Fingerprint()},
+		{"a stranger's directory", stranger, nil, "/v1/mailbox/" + alice.Fingerprint() + "/channels"},
+		{"a header that will not parse", nil, map[string]string{relayapi.AuthHeader: "v1 not a header"}, "/v1/mailbox/" + alice.Fingerprint()},
+		{"no header at all", nil, nil, "/v1/mailbox/" + alice.Fingerprint()},
+		{"a registration with no header", nil, nil, "/v1/register"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			method := "POST"
+			if strings.HasSuffix(tc.path, "/channels") {
+				method = "PUT"
+			}
+			start := time.Now()
+			status, body, hdr := h.rawRequest(tc.from, method, tc.path, tc.hdr, sixteen, nil)
+			if status != http.StatusUnauthorized {
+				t.Fatalf("%d %.200s in %s; want 401 with the sixteen megabytes unsent", status, body, time.Since(start))
+			}
+			if hdr.Get("Connection") != "close" {
+				t.Errorf("the connection is kept after a refusal before the body; want it closed, the body unread")
+			}
+			// Under net/http's 256 KiB drain: a small declared body, never
+			// sent, is answered at once too, because the relay closes the
+			// connection rather than wait for it.
+			start = time.Now()
+			if status, _, hdr := h.rawRequest(tc.from, method, tc.path, tc.hdr, 4000, nil); status != http.StatusUnauthorized || hdr.Get("Connection") != "close" {
+				t.Errorf("4000 bytes declared and unsent: %d close=%q in %s; want 401 with the connection closed", status, hdr.Get("Connection"), time.Since(start))
+			}
+		})
+	}
+	// A registered identity's well-formed request over a declared body
+	// that never comes is waited for: the signature is over the body, so
+	// the body is read first. The read deadline in the test's connection
+	// shows the wait; the server's own five-minute read timeout would end
+	// it in deployment.
+	req, _ := http.NewRequest("POST", h.srv.URL+"/v1/mailbox/"+alice.Fingerprint(), nil)
+	if err := relayapi.SignRequest(alice, req, nil); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", strings.TrimPrefix(h.srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: %s\r\nContent-Length: 1024\r\n%s: %s\r\n\r\n",
+		req.URL.RequestURI(), req.Host, relayapi.AuthHeader, req.Header.Get(relayapi.AuthHeader))
+	conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if _, err := conn.Read(make([]byte, 1)); err == nil {
+		t.Error("a registered identity's request was answered before its body: the signature cannot have been checked")
+	}
+}
+
+// TestLimitABlobReaderThatStopsIsCutInsideTheWindow: the blob GET is served
+// under a write deadline the relay moves on every write that delivers
+// bytes, the PUT's read deadline turned round, so a large blob on a slow
+// link is served to the end while the reader keeps taking it and a reader
+// that stops is cut inside the window rather than holding the connection
+// to the server's five-minute write timeout. With the stall timeout at
+// 200 ms: a reader that takes the headers and stops sees the connection
+// end within two seconds with less than the blob delivered; one that reads
+// 64 KiB at a time with a pause between reads, longer than the window in
+// all, gets the whole blob.
+func TestLimitABlobReaderThatStopsIsCutInsideTheWindow(t *testing.T) {
+	h := newHarness(t, Config{StallTimeout: 200 * time.Millisecond})
+	people := ids(t, "alice", "bob")
+	alice, bob := people[0], people[1]
+	h.register(alice)
+	h.register(bob)
+	// Larger than the loopback socket buffers on any platform this runs
+	// on, so a reader that stops makes the relay's write block.
+	blob := fakeStream(200, 24<<20)
+	id := h.uploadStream(alice, bob.Fingerprint(), blob)
+	path := fmt.Sprintf("/v1/mailbox/%s/%d/blob", bob.Fingerprint(), id)
+
+	open := func(t *testing.T) (net.Conn, *bufio.Reader) {
+		t.Helper()
+		req, err := http.NewRequest("GET", h.srv.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := relayapi.SignRequest(bob, req, nil); err != nil {
+			t.Fatal(err)
+		}
+		conn, err := net.Dial("tcp", strings.TrimPrefix(h.srv.URL, "http://"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n%s: %s\r\n\r\n",
+			req.URL.RequestURI(), req.Host, relayapi.AuthHeader, req.Header.Get(relayapi.AuthHeader))
+		br := bufio.NewReader(conn)
+		resp, err := http.ReadResponse(br, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK || resp.ContentLength != int64(len(blob)) {
+			t.Fatalf("%d, length %d; want 200 and %d", resp.StatusCode, resp.ContentLength, len(blob))
+		}
+		return conn, br
+	}
+
+	t.Run("a reader that stops is cut", func(t *testing.T) {
+		conn, br := open(t)
+		defer conn.Close()
+		// The headers were read and nothing more for longer than the
+		// window; the relay's write then blocks on the full socket
+		// buffers, the deadline ends it, and the connection is closed.
+		time.Sleep(600 * time.Millisecond)
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		start := time.Now()
+		n, err := io.Copy(io.Discard, br)
+		if err == nil && n == int64(len(blob)) {
+			t.Fatalf("the whole blob arrived to a reader that stopped for three windows")
+		}
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Fatalf("draining what the relay had written took %s; want the connection already cut", elapsed)
+		}
+	})
+	t.Run("a reader slower than the window in all completes", func(t *testing.T) {
+		conn, br := open(t)
+		defer conn.Close()
+		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		var got int64
+		buf := make([]byte, 64<<10)
+		start := time.Now()
+		for got < int64(len(blob)) {
+			n, err := io.ReadFull(br, buf[:min(int64(len(buf)), int64(len(blob))-got)])
+			got += int64(n)
+			if err != nil {
+				t.Fatalf("after %d of %d bytes in %s: %v", got, len(blob), time.Since(start), err)
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+		if elapsed := time.Since(start); elapsed < 400*time.Millisecond {
+			t.Logf("the slow read took %s, under two windows; the test's pace did not exercise the deadline", elapsed)
+		}
+	})
+}
