@@ -87,10 +87,18 @@ same treatment covers a name from a relay older than the rule, and
 name at the one moment an administrator is reading carefully. And what
 the relay lists is checked for shape before it is used: every fingerprint,
 serial and token id in an answer is held to its rule as it comes off the
-wire, and a lifetime it reports in seconds is bounded before anything
-multiplies it, so an answer with a two-byte fingerprint is refused whole
-as malformed, naming the field and the relay, rather than sliced by a
-command that expected sixty-four characters.
+wire, a lifetime it reports in seconds is bounded before anything
+multiplies it, every count it reports is zero or more, every message id
+one or more, a parameter set one of the three, and an upload's offset a
+byte count, so an answer with a two-byte fingerprint or a negative queue
+is refused whole as malformed, naming the field and the relay, rather
+than sliced by a command that expected sixty-four characters or seeked to
+by one that expected an offset. Every integer that enters the program
+from outside — a field in a JSON shape, a number parsed from text, a
+length read from four bytes, a flag — has a row in `internal/limits/ledger.txt`
+saying the range the code holds it to and the test that takes it to the
+edge and one step past; the test beside the ledger walks the tree and
+fails on a site with no row.
 
 **What protects a large message.** The same HPKE ciphersuite, in its stateful
 multi-shot mode: one context for the whole stream, one sealed chunk at a time.

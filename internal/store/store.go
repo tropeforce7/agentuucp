@@ -521,13 +521,13 @@ func readCursor(path, relay string) (int64, error) {
 	}
 	text := strings.TrimSpace(string(data))
 	n, err := strconv.ParseInt(text, 10, 64)
-	if err != nil {
+	if err != nil || n < 0 {
 		// Whatever is in the file, shown but bounded: it is going into a
 		// sentence a person reads.
 		if len(text) > 40 {
 			text = text[:40] + "…"
 		}
-		return 0, damaged(path, fmt.Sprintf("is not a number (%q)", text), nil,
+		return 0, damaged(path, fmt.Sprintf("is not a message id (%q)", text), nil,
 			fmt.Sprintf("delete it and run 'auu inbox --relay %s'; that starts from the beginning and delivers nothing twice", relay))
 	}
 	return n, nil
@@ -614,6 +614,9 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	}
 	if m.Inner == nil {
 		return nil, errors.New("the record holds no message")
+	}
+	if m.RelayID < 0 {
+		return nil, fmt.Errorf("the record's relay id %d is negative", m.RelayID)
 	}
 	return &m, nil
 }

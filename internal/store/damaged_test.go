@@ -119,7 +119,7 @@ func TestDamagedFilesAreNamed(t *testing.T) {
 			name: "the cursor holds abc",
 			damage: func(t *testing.T, s *Store, r *Relay) string {
 				write(t, s.relayPath(r, cursorFile), "abc\n")
-				return s.relayPath(r, cursorFile) + ` is not a number ("abc"): delete it and run 'auu inbox --relay work'; that starts from the beginning and delivers nothing twice`
+				return s.relayPath(r, cursorFile) + ` is not a message id ("abc"): delete it and run 'auu inbox --relay work'; that starts from the beginning and delivers nothing twice`
 			},
 			read: func(s *Store, r *Relay) error { _, err := s.CursorFor(r); return err },
 		},
@@ -127,7 +127,7 @@ func TestDamagedFilesAreNamed(t *testing.T) {
 			name: "the cursor holds a long thing, shown bounded",
 			damage: func(t *testing.T, s *Store, r *Relay) string {
 				write(t, s.relayPath(r, cursorFile), strings.Repeat("x", 100))
-				return s.relayPath(r, cursorFile) + ` is not a number ("` + strings.Repeat("x", 40) + `…"): delete it and run 'auu inbox --relay work'; that starts from the beginning and delivers nothing twice`
+				return s.relayPath(r, cursorFile) + ` is not a message id ("` + strings.Repeat("x", 40) + `…"): delete it and run 'auu inbox --relay work'; that starts from the beginning and delivers nothing twice`
 			},
 			read: func(s *Store, r *Relay) error { _, err := s.CursorFor(r); return err },
 		},

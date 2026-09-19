@@ -52,10 +52,14 @@ func (s *Store) DamagedDir() string { return s.path(damagedDir) }
 //
 // The relay name is held to ValidRelayName here, at the call, as every
 // exported edge of the store holds what it joins onto a path; the id is
-// an int64 the relay numbered, written as digits.
+// an int64 the relay numbered, written as digits, and a negative one is
+// refused before it is written as anything.
 func (s *Store) DamagedPath(relay string, id int64) (string, error) {
 	if err := ValidRelayName(relay); err != nil {
 		return "", err
+	}
+	if id < 0 {
+		return "", fmt.Errorf("relay message id %d is negative", id)
 	}
 	return filepath.Join(s.path(damagedDir, relay), strconv.FormatInt(id, 10)+".bin"), nil
 }

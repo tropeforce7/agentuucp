@@ -371,7 +371,9 @@ auu watch --channel bugs --fetch   # only bugs, and fetch what arrived
 
 A watch returns on the first poll that finds an event, reports every event
 from that poll, and exits 0; at `--timeout` (10 minutes unless you say, `0`
-for no limit, since a watch under a supervisor sits all day) it prints
+for no limit, since a watch under a supervisor sits all day; `auu wait`'s
+`--timeout` must be more than nothing, since a wait is over when it ends)
+it prints
 `nothing happened in 10m0s` and exits 3, the code `auu wait` uses for the
 same thing. Two kinds of event: a `message`, which is a message the relay
 holds that this machine has not fetched — a post, or a completed stream —

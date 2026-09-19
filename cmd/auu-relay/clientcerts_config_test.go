@@ -198,7 +198,7 @@ func TestTheParameterSetComesFromTheBundle(t *testing.T) {
 		}
 		dir := t.TempDir()
 		store := pki.TestStore(t, params)
-		b, _, err := store.IssueRelay([]string{"relay.example.com"}, 1, time.Now())
+		b, err := store.IssueRelay([]string{"relay.example.com"}, 1, time.Now())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -446,7 +446,7 @@ func TestTheRelayWarnsBeforeItsIntermediatesExpire(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			b, _, err := ca.IssueRelay([]string{"relay.example.com"}, 1, issued)
+			b, err := ca.IssueRelay([]string{"relay.example.com"}, 1, issued)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -479,7 +479,7 @@ func TestTheRelayWarnsBeforeItsIntermediatesExpire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _, err := ca.IssueRelay([]string{"relay.example.com"}, 1, long)
+	b, err := ca.IssueRelay([]string{"relay.example.com"}, 1, long)
 	if err != nil {
 		t.Fatal(err)
 	}

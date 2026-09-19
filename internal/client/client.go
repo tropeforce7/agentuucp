@@ -373,6 +373,9 @@ func (c *Client) Health(ctx context.Context) error {
 	if err := c.do(ctx, "GET", "/v1/health", nil, &resp, nil); err != nil {
 		return err
 	}
+	if err := c.checkHealth(&resp); err != nil {
+		return err
+	}
 	if !resp.OK {
 		return errors.New("relay reported unhealthy")
 	}
@@ -434,6 +437,9 @@ func (c *Client) Certs(ctx context.Context) ([]relayapi.CertRecord, error) {
 func (c *Client) MLDSA(ctx context.Context) (int, error) {
 	var resp relayapi.HealthResponse
 	if err := c.do(ctx, "GET", "/v1/health", nil, &resp, nil); err != nil {
+		return 0, err
+	}
+	if err := c.checkHealth(&resp); err != nil {
 		return 0, err
 	}
 	if resp.MLDSA == 0 {
@@ -588,6 +594,9 @@ func (c *Client) Post(ctx context.Context, env *envelope.Envelope, channel strin
 	if err := c.do(ctx, "POST", "/v1/mailbox/"+env.To, raw, &resp, nil); err != nil {
 		return 0, err
 	}
+	if err := c.checkID("the post answer", resp.ID); err != nil {
+		return 0, err
+	}
 	return resp.ID, nil
 }
 
@@ -718,6 +727,9 @@ func (c *Client) ListWait(ctx context.Context, req ListRequest) (Listing, error)
 	}
 	var resp relayapi.ListResponse
 	if err := c.do(ctx, "GET", path, nil, &resp, nil); err != nil {
+		return Listing{}, err
+	}
+	if err := c.checkListing(&resp); err != nil {
 		return Listing{}, err
 	}
 	out := make([]Message, 0, len(resp.Messages))

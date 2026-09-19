@@ -415,7 +415,7 @@ func testBundlePath(t *testing.T, dir string) string {
 func testBundleFor(t *testing.T, dir string, hosts ...string) string {
 	t.Helper()
 	store := pki.TestStore(t, mldsa.MLDSA65())
-	b, _, err := store.IssueRelay(hosts, 1, time.Now())
+	b, err := store.IssueRelay(hosts, 1, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

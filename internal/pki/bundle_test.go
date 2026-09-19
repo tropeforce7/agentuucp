@@ -15,7 +15,7 @@ import (
 // to do. The container suite's R13 found the bare EOF.
 func TestAShortBundleIsNamed(t *testing.T) {
 	store := TestStore(t, mldsa.MLDSA65())
-	b, _, err := store.IssueRelay([]string{"relay.example.com"}, 1, time.Now())
+	b, err := store.IssueRelay([]string{"relay.example.com"}, 1, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

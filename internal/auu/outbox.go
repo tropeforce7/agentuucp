@@ -12,6 +12,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/store"
+	"github.com/tropeforce7/agentuucp/internal/stream"
 )
 
 // The outbox holds streams that have been sealed but not yet delivered.
@@ -135,6 +136,14 @@ func listPending(s *store.Store) ([]*pending, []string, error) {
 		// would point the upload at somebody else's bytes.
 		if p.MessageID != strings.TrimSuffix(name, ".json") {
 			broken = append(broken, strings.TrimSuffix(name, ".json"))
+			continue
+		}
+		// The numbers are the sender's own from when the upload began; a
+		// record whose numbers could not have been written by it is
+		// broken, before any of them is a seek, a piece or a count.
+		if p.Bytes < 0 || p.Chunks < 0 || p.MaxRequest < 0 ||
+			p.ChunkSize < stream.MinChunkSize || p.ChunkSize > stream.MaxChunkSize {
+			broken = append(broken, p.MessageID)
 			continue
 		}
 		if _, err := os.Stat(streamPath(s, p.MessageID)); err != nil {

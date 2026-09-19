@@ -2,7 +2,7 @@ GO ?= go
 BIN := bin
 CLAUDE_DIR ?= $(if $(CLAUDE_CONFIG_DIR),$(CLAUDE_CONFIG_DIR),$(HOME)/.claude)
 
-.PHONY: all build relay-linux test race vet e2e install install-skill clean
+.PHONY: all build relay-linux test race vet limits e2e install install-skill clean
 
 all: vet test build
 
@@ -20,6 +20,11 @@ test:
 
 race:
 	$(GO) test -race -count=1 ./...
+
+# The limit tests on their own: every TestLimit in the tree, which the
+# ledger in internal/limits names beside the site each one shows.
+limits:
+	$(GO) test ./... -run '^TestLimit' -count=1
 
 # The container suite: the deployment guide in four containers and a matrix
 # of what goes wrong in the wild, with a report. Needs Docker; see

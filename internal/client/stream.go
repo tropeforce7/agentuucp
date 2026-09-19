@@ -29,6 +29,9 @@ func (c *Client) OpenStream(ctx context.Context, toFP, channel string, size int6
 	if err != nil {
 		return nil, err
 	}
+	if err := c.checkOpenStream(&out); err != nil {
+		return nil, err
+	}
 	return &out, nil
 }
 
@@ -48,7 +51,7 @@ func (c *Client) UploadOffset(ctx context.Context, upload string) (int64, error)
 	if resp.StatusCode != http.StatusOK {
 		return 0, httpError(resp, nil)
 	}
-	return strconv.ParseInt(resp.Header.Get(relayapi.UploadOffsetHeader), 10, 64)
+	return c.parseOffset(resp.Header.Get(relayapi.UploadOffsetHeader))
 }
 
 // AppendStream sends the next piece of an upload, starting at offset.
@@ -75,13 +78,17 @@ func (c *Client) AppendStream(ctx context.Context, upload string, offset int64, 
 	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 
 	if resp.StatusCode == http.StatusNoContent {
-		return strconv.ParseInt(resp.Header.Get(relayapi.UploadOffsetHeader), 10, 64)
+		next, err := c.parseOffset(resp.Header.Get(relayapi.UploadOffsetHeader))
+		if err != nil {
+			return offset, err
+		}
+		return next, nil
 	}
 	httpErr := httpError(resp, payload)
 	// A conflict carries the truth about where the upload actually is, which
 	// is what makes it recoverable rather than fatal.
 	if resp.StatusCode == http.StatusConflict {
-		if at, convErr := strconv.ParseInt(resp.Header.Get(relayapi.UploadOffsetHeader), 10, 64); convErr == nil {
+		if at, convErr := c.parseOffset(resp.Header.Get(relayapi.UploadOffsetHeader)); convErr == nil {
 			return at, httpErr
 		}
 	}
@@ -92,6 +99,9 @@ func (c *Client) AppendStream(ctx context.Context, upload string, offset int64, 
 func (c *Client) CompleteStream(ctx context.Context, upload string) (int64, error) {
 	var out relayapi.CompleteStreamResponse
 	if err := c.do(ctx, "POST", "/v1/uploads/"+upload+"/complete", nil, &out, nil); err != nil {
+		return 0, err
+	}
+	if err := c.checkID("the completed stream", out.ID); err != nil {
 		return 0, err
 	}
 	return out.ID, nil

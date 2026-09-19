@@ -651,7 +651,7 @@ so an administrator can keep a dedicated identity in its own home.
 ```
 auu-admin status
 
-auu-admin mailboxes ls [--after FP] [--limit N]
+auu-admin mailboxes ls [--after FP] [--limit N]   # N is 1 or more; over 200 the relay answers 200
 auu-admin mailboxes show FP        # queued, allow list state, channels, blocked
 auu-admin mailboxes rm FP          # deregister, discarding queued mail
 auu-admin mailboxes purge FP       # discard queued mail, keep the mailbox

@@ -13,7 +13,7 @@ import (
 // max_bytes has an upper bound as well as a lower one: above it, max_bytes
 // plus the framing allowance overflows int64 and http.MaxBytesReader, handed a
 // negative limit, refuses every body.
-func TestMaxBytesBoundaries(t *testing.T) {
+func TestLimitMaxBytesBoundaries(t *testing.T) {
 	ceiling := relayapi.MaxBytesCeiling
 	cases := []struct {
 		value  int64

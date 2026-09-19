@@ -867,6 +867,9 @@ func cmdWait(args []string) error {
 	if *interval < 5*time.Second {
 		return usageErrf("--interval must be at least 5s; polling harder does not make replies arrive sooner")
 	}
+	if *timeout <= 0 {
+		return usageErrf("--timeout must be more than nothing; a wait of %s is over before it starts", *timeout)
+	}
 	s, id, err := loadIdentity()
 	if err != nil {
 		return err

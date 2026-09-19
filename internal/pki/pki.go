@@ -286,10 +286,6 @@ func selfSign(tmpl *x509.Certificate, key *mldsa.PrivateKey) (*Key, error) {
 	return &Key{Cert: cert, Key: key}, nil
 }
 
-// Clamped reports whether want was cut short by the issuer's own expiry, so a
-// caller can say so rather than let a certificate quietly outlive its chain.
-func Clamped(want, ceiling time.Time) bool { return want.After(ceiling) }
-
 // clamp keeps a certificate from outliving its issuer. One that did would
 // verify until the issuer expired and then stop, on a date nothing warned
 // about.

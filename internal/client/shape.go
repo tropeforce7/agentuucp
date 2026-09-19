@@ -3,6 +3,7 @@ package client
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/tropeforce7/agentuucp/internal/clientca"
@@ -43,6 +44,9 @@ const (
 	wantSerial      = "a certificate serial"
 	wantTokenID     = "a token id (32 lowercase hex characters)"
 	wantSeconds     = "a number of seconds within a hundred years"
+	wantCount       = "a count (zero or more)"
+	wantID          = "a message id (one or more)"
+	wantMLDSA       = "an ML-DSA parameter set (44, 65 or 87, or 0 for none)"
 )
 
 // The enumerated fields of an answer, each held to the set the protocol
@@ -98,10 +102,97 @@ func (c *Client) checkStatus(st *relayapi.AdminStatusResponse) error {
 	if !validSeconds(st.CertLifetimeSecs) {
 		return c.malformed(answer, "cert_lifetime_seconds", wantSeconds)
 	}
+	if !validMLDSA(st.MLDSA) {
+		return c.malformed(answer, "mldsa", wantMLDSA)
+	}
+	l := st.Limits
+	return c.counts(answer,
+		count{"max_bytes", st.MaxBytes},
+		count{"administrators", int64(st.Administrators)}, count{"mailboxes", st.Mailboxes},
+		count{"queued_messages", st.QueuedMessages}, count{"queued_bytes", st.QueuedBytes},
+		count{"live_tokens", st.LiveTokens}, count{"blocks", st.Blocks}, count{"live_certs", st.LiveCerts},
+		count{"limits.requests_per_minute", l.RequestsPerMinute}, count{"limits.posts_per_minute", l.PostsPerMinute},
+		count{"limits.post_bytes_per_hour", l.PostBytesPerHour}, count{"limits.unauthenticated_per_minute", l.UnauthenticatedPerMinute},
+		count{"limits.registrations_per_hour", l.RegistrationsPerHour}, count{"limits.max_mailboxes", l.MaxMailboxes},
+		count{"limits.mailbox_max_messages", l.MailboxMaxMessages}, count{"limits.mailbox_max_bytes", l.MailboxMaxBytes},
+		count{"limits.relay_max_bytes", l.RelayMaxBytes}, count{"limits.max_inflight", l.MaxInflight},
+		count{"limits.max_waiting", l.MaxWaiting})
+}
+
+// checkHealth is the shape of a relay's health: the parameter set it
+// names for client certificates, if any.
+func (c *Client) checkHealth(h *relayapi.HealthResponse) error {
+	if !validMLDSA(h.MLDSA) {
+		return c.malformed("the health answer", "mldsa", wantMLDSA)
+	}
 	return nil
 }
 
+// checkListing is a page of a mailbox: how much is queued, and each
+// message's id and size.
+func (c *Client) checkListing(page *relayapi.ListResponse) error {
+	const answer = "the listing"
+	if err := c.counts(answer, count{"queued", page.Queued}); err != nil {
+		return err
+	}
+	for i := range page.Messages {
+		if page.Messages[i].ID <= 0 {
+			return c.malformed(answer, "id", wantID)
+		}
+		if page.Messages[i].Size < 0 {
+			return c.malformed(answer, "size", wantCount)
+		}
+	}
+	return nil
+}
+
+// checkID is the id a relay gives a message it accepted, from a post or
+// a completed stream.
+func (c *Client) checkID(answer string, id int64) error {
+	if id <= 0 {
+		return c.malformed(answer, "id", wantID)
+	}
+	return nil
+}
+
+// checkOpenStream is an opened upload: the largest piece the relay takes
+// per request, or zero for no advice.
+func (c *Client) checkOpenStream(out *relayapi.OpenStreamResponse) error {
+	return c.counts("the opened stream", count{"max_request", out.MaxRequest})
+}
+
+// parseOffset is the byte count a relay reports for an upload, from the
+// header the upload routes answer with.
+func (c *Client) parseOffset(raw string) (int64, error) {
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 0 {
+		return 0, c.malformed("the upload answer", relayapi.UploadOffsetHeader, wantCount)
+	}
+	return n, nil
+}
+
 func validSeconds(n int64) bool { return n >= 0 && n <= relayapi.MaxDurationSeconds }
+
+// validMLDSA is the parameter set a relay names for client certificates:
+// one of the three, or zero for a relay that names none.
+func validMLDSA(n int) bool { return n == 0 || n == 44 || n == 65 || n == 87 }
+
+// count is one counted field of an answer, by its wire name.
+type count struct {
+	name string
+	n    int64
+}
+
+// counts holds every count in an answer to zero or more, in one place per
+// answer, naming the first field that is not.
+func (c *Client) counts(answer string, fields ...count) error {
+	for _, f := range fields {
+		if f.n < 0 {
+			return c.malformed(answer, f.name, wantCount)
+		}
+	}
+	return nil
+}
 
 // checkMailbox is the shape of one mailbox record, in a listing or alone.
 func (c *Client) checkMailbox(answer string, m *relayapi.MailboxRecord) error {
@@ -111,7 +202,8 @@ func (c *Client) checkMailbox(answer string, m *relayapi.MailboxRecord) error {
 	if !oneOf(m.Allow, allowWords) {
 		return c.malformed(answer, "allow", wantOneOf(allowWords))
 	}
-	return nil
+	return c.counts(answer, count{"queued_messages", m.QueuedMessages}, count{"queued_bytes", m.QueuedBytes},
+		count{"channels", m.Channels}, count{"allowlist_size", m.AllowlistSize})
 }
 
 // checkMailboxes is a page of mailboxes and the cursor for the next, which
@@ -160,6 +252,12 @@ func (c *Client) checkToken(answer string, t *relayapi.TokenRecord) error {
 	}
 	if !oneOf(t.State, tokenStates) {
 		return c.malformed(answer, "state", wantOneOf(tokenStates))
+	}
+	if t.Uses < 0 {
+		return c.malformed(answer, "uses", wantCount)
+	}
+	if t.UsesLeft < 0 || t.UsesLeft > t.Uses {
+		return c.malformed(answer, "uses_left", "between 0 and uses")
 	}
 	return nil
 }

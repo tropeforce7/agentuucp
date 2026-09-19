@@ -42,7 +42,7 @@ func TestBundleFrom(t *testing.T, store *Store, hosts []string) *Loaded {
 // apart without sleeping for one.
 func TestBundleAt(t *testing.T, store *Store, hosts []string, now time.Time) *Loaded {
 	t.Helper()
-	b, _, err := store.IssueRelay(hosts, DefaultIntermediateYears, now)
+	b, err := store.IssueRelay(hosts, DefaultIntermediateYears, now)
 	if err != nil {
 		t.Fatalf("pki: issuing a test bundle: %v", err)
 	}
@@ -66,7 +66,7 @@ func TestBundleAt(t *testing.T, store *Store, hosts []string, now time.Time) *Lo
 // suite's forge does the same with a different "now".
 func TestLoadedAt(t *testing.T, store *Store, hosts []string, now time.Time) *Loaded {
 	t.Helper()
-	b, _, err := store.IssueRelay(hosts, DefaultIntermediateYears, now)
+	b, err := store.IssueRelay(hosts, DefaultIntermediateYears, now)
 	if err != nil {
 		t.Fatalf("pki: issuing a test bundle: %v", err)
 	}

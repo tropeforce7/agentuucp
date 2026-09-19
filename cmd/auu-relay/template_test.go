@@ -31,7 +31,7 @@ import (
 func TestTheShippedTemplateServesItsAnchor(t *testing.T) {
 	dir := t.TempDir()
 	ca := pki.TestStore(t, mldsa.MLDSA65())
-	issued, _, err := ca.IssueRelay([]string{"relay.example.com"}, 1, time.Now())
+	issued, err := ca.IssueRelay([]string{"relay.example.com"}, 1, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

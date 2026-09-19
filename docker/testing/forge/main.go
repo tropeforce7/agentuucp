@@ -139,7 +139,7 @@ func cmdRelay(args []string) error {
 	if err != nil {
 		return err
 	}
-	bundle, warnings, err := store.IssueRelay(hs, *years, now)
+	bundle, err := store.IssueRelay(hs, *years, now)
 	if err != nil {
 		return err
 	}
@@ -167,8 +167,5 @@ func cmdRelay(args []string) error {
 	fmt.Printf("  for           %s\n", strings.Join(hs, ", "))
 	fmt.Printf("  at            %s\n", now.UTC().Format(time.RFC3339))
 	fmt.Printf("  intermediates expire %s\n", loaded.ServerInt.Cert.NotAfter.UTC().Format(time.RFC3339))
-	for _, w := range warnings {
-		fmt.Printf("  warning       %s\n", w)
-	}
 	return nil
 }

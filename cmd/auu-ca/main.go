@@ -245,7 +245,7 @@ func cmdRelay(args []string) error {
 	if !store.Encrypted() {
 		fmt.Fprintln(os.Stderr, "auu-ca: "+legacyWarning(store.Dir()))
 	}
-	bundle, warnings, err := store.IssueRelay(hosts, *years, time.Now())
+	bundle, err := store.IssueRelay(hosts, *years, time.Now())
 	if err != nil {
 		return err
 	}
@@ -273,9 +273,6 @@ func cmdRelay(args []string) error {
 	}
 	if err := store.RecordBundlePath(hosts, recorded); err != nil {
 		return err
-	}
-	for _, w := range warnings {
-		fmt.Fprintln(os.Stderr, "auu-ca: "+w)
 	}
 
 	_, rec, err := store.FindRecord(hosts)

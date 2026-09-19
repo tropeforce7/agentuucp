@@ -91,11 +91,18 @@ person making the change, before anyone else sees it.
    For each family that does not apply, one line with the reason. "Not
    applicable" alone is not a reason.
 
+   A change that adds an integer from outside, a string cut under a range
+   or a file opened by a path that is not local adds its row to the limit
+   ledger (`internal/limits/ledger.txt`, or the file-open ledger for a
+   path) and its `TestLimit` test in the same change, and the record
+   names both; the ledger's test fails until they exist.
+
 4. **Run the enforcement tests**, whatever the change:
 
-       go test ./internal/fileopens ./internal/sqlshape ./internal/auu -run 'TestEveryFileOpenHasItsProvenanceInTheLedger|TestEveryQueryIsAConstant|TestNothingTheNetworkNamesIsAPath'
+       go test ./internal/fileopens ./internal/sqlshape ./internal/limits ./internal/auu -run 'TestEveryFileOpenHasItsProvenanceInTheLedger|TestEveryQueryIsAConstant|TestEveryIntegerFromOutsideHasItsLimitTest|TestNothingTheNetworkNamesIsAPath'
 
-   and `make vet test build`. Record the result.
+   and `make vet test build`. `make limits` runs every limit test on its
+   own. Record the result.
 
 5. **Second reader, when a Go file or a script changed.** The
    `security-review` skill reads the commits on the branch, not the index,

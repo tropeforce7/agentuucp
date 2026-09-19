@@ -161,7 +161,7 @@ func TestOpenLockedReadsCertificatesAndNoKey(t *testing.T) {
 		t.Errorf("the parameter set came back %d; it must come from the certificate", ParameterNumberOf(s.Params))
 	}
 	// And it can issue nothing, rather than panicking on a nil key.
-	_, _, err = s.IssueRelay([]string{"relay.example.com"}, 1, time.Now())
+	_, err = s.IssueRelay([]string{"relay.example.com"}, 1, time.Now())
 	if err == nil {
 		t.Fatal("a locked authority issued a bundle")
 	}
@@ -206,7 +206,7 @@ func TestSetPassphraseChangesWhatOpensIt(t *testing.T) {
 		}
 	}
 	// And it still works: the keys inside are the same ones.
-	if _, _, err := s.IssueRelay([]string{"relay.example.com"}, 1, time.Now()); err != nil {
+	if _, err := s.IssueRelay([]string{"relay.example.com"}, 1, time.Now()); err != nil {
 		t.Errorf("issuing after a passphrase change: %v", err)
 	}
 	// Nothing was left staged.
@@ -251,7 +251,7 @@ func TestADirectoryFromBeforeEncryptionStillOpens(t *testing.T) {
 	if old.Encrypted() {
 		t.Error("an unencrypted authority reports itself encrypted")
 	}
-	if _, _, err := old.IssueRelay([]string{"relay.example.com"}, 1, time.Now()); err != nil {
+	if _, err := old.IssueRelay([]string{"relay.example.com"}, 1, time.Now()); err != nil {
 		t.Errorf("an unencrypted authority cannot issue: %v", err)
 	}
 	// A passphrase given for one is ignored rather than refused: there is

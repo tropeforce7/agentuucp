@@ -1011,7 +1011,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, body []byt
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
+	if err != nil || id <= 0 {
 		s.fail(w, http.StatusBadRequest, "bad message id")
 		return
 	}

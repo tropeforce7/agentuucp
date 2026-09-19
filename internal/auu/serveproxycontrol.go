@@ -116,7 +116,7 @@ func allowRuleFor(f *proxyConfig) (allowRule, error) {
 		if err != nil {
 			return rule, fmt.Errorf("proxy: allow_group %q: %v", f.AllowGroup, err)
 		}
-		gid, err := strconv.Atoi(g.Gid)
+		gid, err := parseGid(g.Gid)
 		if err != nil {
 			return rule, fmt.Errorf("proxy: allow_group %q has gid %q", f.AllowGroup, g.Gid)
 		}
@@ -470,4 +470,15 @@ func serveProxy(config string) error {
 	<-ctx.Done()
 	logf("proxy: stopping")
 	return nil
+}
+
+// parseGid is a group id as os/user writes it: digits, zero or more. The
+// text is the platform's, but the number goes on to be compared with a
+// peer's credentials, so it is held to its shape all the same.
+func parseGid(text string) (int, error) {
+	gid, err := strconv.Atoi(text)
+	if err != nil || gid < 0 {
+		return 0, fmt.Errorf("%q is not a group id", text)
+	}
+	return gid, nil
 }

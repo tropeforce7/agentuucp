@@ -269,7 +269,13 @@ func (s *Store) sweep() (SweepResult, error) {
 				return res, err
 			}
 			for _, f := range files {
+				// A body file is named by its id's digits and nothing else:
+				// a name that parses to the same number another way, "+7"
+				// or "007", is not that message's file and is an orphan.
 				id, convErr := strconv.ParseInt(f.Name(), 10, 64)
+				if convErr == nil && strconv.FormatInt(id, 10) != f.Name() {
+					convErr = errors.New("not a canonical id")
+				}
 				k := key{fp: box.Name(), id: id}
 				size, claimed := want[k]
 				info, statErr := f.Info()

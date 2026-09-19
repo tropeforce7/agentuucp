@@ -194,7 +194,7 @@ func TestNothingTheNetworkNamesIsAPath(t *testing.T) {
 			}},
 		{"a relay host", "pki: IssueRelay's DNS-name rule, before any record directory is named; safeHost is belt and braces",
 			func(v string) string {
-				if _, _, err := ca.IssueRelay([]string{v}, 1, time.Now()); err == nil {
+				if _, err := ca.IssueRelay([]string{v}, 1, time.Now()); err == nil {
 					return ""
 				}
 				// And no record was filed under it, or under anything.

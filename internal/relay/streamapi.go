@@ -377,7 +377,7 @@ func (s *Server) handleBlob(w http.ResponseWriter, r *http.Request, body []byte,
 		return
 	}
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil {
+	if err != nil || id <= 0 {
 		s.fail(w, http.StatusBadRequest, "bad message id")
 		return
 	}

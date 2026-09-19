@@ -104,7 +104,7 @@ func authority(t *testing.T) (*pki.Store, string) {
 // bundleFor is an encoded bundle issued for hosts, as auu-ca kit has it.
 func bundleFor(t *testing.T, store *pki.Store, hosts []string) []byte {
 	t.Helper()
-	b, _, err := store.IssueRelay(hosts, pki.DefaultIntermediateYears, time.Now())
+	b, err := store.IssueRelay(hosts, pki.DefaultIntermediateYears, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

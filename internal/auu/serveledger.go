@@ -99,6 +99,17 @@ func loadLedger(path string) (*ledger, error) {
 	if l.Messages == nil {
 		l.Messages = map[string]*ledgerEntry{}
 	}
+	for id, e := range l.Messages {
+		if e == nil {
+			return nil, fmt.Errorf("%s has no entry under %q; it is the record of what has been answered, "+
+				"so fix it or move it aside knowing that everything in the inbox becomes new mail", path, id)
+		}
+		if e.Failures < 0 {
+			return nil, fmt.Errorf("%s counts %d failures for %s, which is not a count; it is the record of what "+
+				"has been answered, so fix it or move it aside knowing that everything in the inbox becomes new mail",
+				path, e.Failures, id)
+		}
+	}
 	l.path = path
 	return l, nil
 }

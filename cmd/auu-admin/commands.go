@@ -98,6 +98,9 @@ func mailboxesList(args []string) error {
 	if _, err := parseArgs(fs, args); err != nil {
 		return err
 	}
+	if *limit < 1 {
+		return usageErrf("--limit must be at least 1, got %d", *limit)
+	}
 	_, _, cl, err := dial(c)
 	if err != nil {
 		return err

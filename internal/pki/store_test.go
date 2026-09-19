@@ -99,7 +99,7 @@ func TestCreateRefusesADirectoryHoldingAnythingElse(t *testing.T) {
 // which is what makes this an identity rather than a coincidence.
 func TestEncodeBundleIsWhatWriteBundleWrites(t *testing.T) {
 	s := TestStore(t, mldsa.MLDSA65())
-	b, _, err := s.IssueRelay([]string{"relay.example.com"}, 1, time.Now())
+	b, err := s.IssueRelay([]string{"relay.example.com"}, 1, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestEncodeBundleIsWhatWriteBundleWrites(t *testing.T) {
 func TestRecordBundlePathFindsTheRelayByAnyHost(t *testing.T) {
 	s := TestStore(t, mldsa.MLDSA65())
 	hosts := []string{"relay.example.com", "10.0.0.5"}
-	if _, _, err := s.IssueRelay(hosts, 1, time.Now()); err != nil {
+	if _, err := s.IssueRelay(hosts, 1, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	// A record from before the field has none: it decodes as unknown.

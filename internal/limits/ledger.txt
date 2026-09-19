@@ -1,0 +1,172 @@
+# The limit ledger: one row per place in the non-test tree where an
+# integer from outside enters the program, and the range the code holds
+# it to, or that it is open, and the TestLimit test that shows the edge
+# and one step past. The test beside this file finds every such place and
+# holds this file to it: a site with no row, a row with no site, a key
+# twice, a range of no known shape, a test not declared exactly once, a
+# test not named TestLimit, and an output row for a struct the program
+# decodes each fail it. A row is
+#
+#   <file> <enclosing function or struct> <kind> <site as written> = <range> shown by <TestLimit...>
+#
+# where the kind is int for this file, the site is the field with its
+# type, or the callee with its first argument, and the range is one of
+#
+#   [lo, hi]       a closed interval, in the field's unit
+#   >= n, > n      a floor, <= n, < n a ceiling; a duration's bound
+#                  carries its unit, as >= 5s
+#   0 or ...       zero is a sentinel the range does not otherwise hold:
+#                  the default, or unlimited
+#   one of a, b    a set, such as an ML-DSA parameter set
+#   open           no bound but the type's; the test shows a negative
+#                  refused before the value is used
+#   output         a struct the program writes and never decodes, which
+#                  the test proves; no test is named
+#
+# The sweep that wrote this file found 144 sites; that is the floor in
+# the test.
+
+cmd/auu-admin/commands.go mailboxesList int fs.Int("limit") = > 0 shown by TestLimitAdminFlags
+cmd/auu-admin/commands.go tokenIssue int fs.Duration("expires") = >= 1s shown by TestLimitAdminFlags
+cmd/auu-admin/commands.go tokenIssue int fs.Int("uses") = [1, 1000] shown by TestLimitAdminFlags
+cmd/auu-ca/kit.go cmdKit int fs.Int("years") = > 0 shown by TestLimitYearsFlag
+cmd/auu-ca/main.go cmdInit int fs.Int("mldsa") = one of 44, 65, 87 shown by TestLimitMLDSAFlag
+cmd/auu-ca/main.go cmdRelay int fs.Int("years") = > 0 shown by TestLimitYearsFlag
+cmd/auu-ca/main.go cmdShow.relayOut int Retired int = output
+cmd/auu-ca/main.go cmdShow.struct int MLDSA int = output
+cmd/auu-relay/config.go Config int MaxBytes int64 = [1, 1073741824] shown by TestLimitMaxBytesBoundaries
+cmd/auu-relay/config.go Config int MaxStreamBytes int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/config.go LimitsConfig int MailboxMaxBytes int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/config.go LimitsConfig int MailboxMaxMessages int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/config.go LimitsConfig int MaxInflight int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/config.go LimitsConfig int MaxMailboxes int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/config.go LimitsConfig int MaxWaiting int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/config.go LimitsConfig int PostBytesPerHour int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/config.go LimitsConfig int PostsPerMinute int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/config.go LimitsConfig int RegistrationsPerHour int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/config.go LimitsConfig int RelayMaxBytes int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/config.go LimitsConfig int RequestsPerMinute int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/config.go LimitsConfig int UnauthenticatedPerMinute int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.limitPostBytes) = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.limitPosts) = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.limitRegistrations) = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.limitRequests) = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.limitUnauthenticated) = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.mailboxMaxBytes) = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.mailboxMaxMessages) = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxBytes) = [1, 1073741824] shown by TestLimitMaxBytesBoundaries
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxInflight) = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxMailboxes) = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxStreamBytes) = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxWaiting) = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.relayMaxBytes) = >= 0 shown by TestLimitRelaySettings
+internal/agent/proto.go readFrame int binary.BigEndian.Uint32(prefix[:]) = [1, 1048576] shown by TestLimitFrameLength
+internal/agent/proto.go request int Params int = one of 44, 65, 87 shown by TestLimitGenerateParams
+internal/agent/proto.go request int TTL int64 = [0, 31536000] shown by TestLimitUnlockTTL
+internal/allowlist/allowlist.go Document int V int = [1, 1] shown by TestLimitDocumentV
+internal/auu/agent_cmds.go cmdUnlock int fs.Duration("ttl") = >= 0 shown by TestLimitWaitAndWatchFlags
+internal/auu/cert.go certStatusOutput int MLDSA int = output
+internal/auu/identity_cmds.go idJSON int PQCategory int = output
+internal/auu/identity_cmds.go idJSON int SuiteID int = output
+internal/auu/identity_cmds.go peerJSON int PQCategory int = output
+internal/auu/identity_cmds.go peerJSON int SuiteID int = output
+internal/auu/inbox.go attachmentJSON int Size int64 = output
+internal/auu/inbox.go cmdWait int fs.Duration("interval") = >= 5s shown by TestLimitWaitAndWatchFlags
+internal/auu/inbox.go cmdWait int fs.Duration("timeout") = > 0s shown by TestLimitWaitAndWatchFlags
+internal/auu/inbox.go fetchResult int Delivered int = output
+internal/auu/inbox.go fetchResult int Kept int = output
+internal/auu/inbox.go fetchResult int Quarantined int = output
+internal/auu/inbox.go fetchResult int Unreadable int = output
+internal/auu/inbox.go relayFetch int Queued int64 = output
+internal/auu/lookup.go lookupJSON int PQCategory int = output
+internal/auu/lookup.go lookupJSON int SuiteID int = output
+internal/auu/outbox.go pending int Bytes int64 = >= 0 shown by TestLimitPendingRecordIntegers
+internal/auu/outbox.go pending int ChunkSize int = [4096, 16777216] shown by TestLimitPendingRecordIntegers
+internal/auu/outbox.go pending int Chunks int64 = >= 0 shown by TestLimitPendingRecordIntegers
+internal/auu/outbox.go pending int MaxRequest int64 = >= 0 shown by TestLimitPendingRecordIntegers
+internal/auu/send.go sentJSON int Bytes int = output
+internal/auu/send.go sentJSON int ChunkSize int = output
+internal/auu/send.go sentJSON int Chunks int64 = output
+internal/auu/send.go sentJSON int RelayID int64 = output
+internal/auu/serveconfig.go serveChannel int MaxTurns int = 0 or >= 1 shown by TestLimitServeChannelIntegers
+internal/auu/serveconfig.go serveChannel int Retries int = >= 0 shown by TestLimitServeChannelIntegers
+internal/auu/serveconfig.go serveChannel int threadTTL time.Duration = > 0s shown by TestLimitServeChannelIntegers
+internal/auu/serveconfig.go serveChannel int timeout time.Duration = > 0s shown by TestLimitServeChannelIntegers
+internal/auu/serveconfig.go serveConfig int V int = [1, 1] shown by TestLimitServeConfigV
+internal/auu/serveledger.go ledger int V int = [1, 1] shown by TestLimitServeLedgerIntegers
+internal/auu/serveledger.go ledgerEntry int Failures int = >= 0 shown by TestLimitServeLedgerIntegers
+internal/auu/servels.go servedThreadJSON int Turns int = output
+internal/auu/serveproxycontrol.go parseGid int strconv.Atoi(text) = >= 0 shown by TestLimitGroupID
+internal/auu/serveproxycontrol.go proxyFile int V int = [1, 1] shown by TestLimitProxyFileV
+internal/auu/watch.go messageEvent int ID int64 = output
+internal/auu/watch.go messageEvent int Size int64 = output
+internal/auu/watch_cmds.go cmdWatch int fs.Duration("interval") = >= 5s shown by TestLimitWaitAndWatchFlags
+internal/auu/watch_cmds.go cmdWatch int fs.Duration("timeout") = >= 0s shown by TestLimitWaitAndWatchFlags
+internal/channels/channels.go Directory int V int = [1, 1] shown by TestLimitDirectoryV
+internal/client/client.go retryAfter int strconv.ParseInt(raw) = [0, 86400] shown by TestLimitRetryAfter
+internal/client/shape.go (*Client).parseOffset int strconv.ParseInt(raw) = >= 0 shown by TestLimitUploadOffsetAnswer
+internal/envelope/envelope.go Envelope int V int = [1, 1] shown by TestLimitEnvelopeV
+internal/keyfile/keyfile.go parseHeaders int strconv.Atoi(h[f.name]) = > 0 shown by TestLimitHeaderNumbers
+internal/kit/kit.go listenPort int strconv.Atoi(portText) = [1, 65535] shown by TestLimitListenPort
+internal/message/message.go Attachment int Size int64 = >= 0 shown by TestLimitAttachmentSize
+internal/pki/bundle.go Bundle int V int = [1, 1] shown by TestLimitBundleV
+internal/relay/filestore.go (*Store).sweep int strconv.ParseInt(f.Name()) = open shown by TestLimitSweepFileNames
+internal/relay/server.go (*Server).handleDelete int strconv.ParseInt(r.PathValue("id")) = > 0 shown by TestLimitMessageIDInPath
+internal/relay/server.go intParam int strconv.ParseInt(raw) = >= 0 shown by TestLimitListingParameters
+internal/relay/streamapi.go (*Server).checkStreamShape int binary.BigEndian.Uint32(header[stream.EncSize:]) = [82, 1048576] shown by TestLimitManifestChunkLength
+internal/relay/streamapi.go (*Server).handleAppendStream int strconv.ParseInt(r.Header.Get(relayapi.UploadOffsetHeader)) = >= 0 shown by TestLimitUploadOffset
+internal/relay/streamapi.go (*Server).handleBlob int strconv.ParseInt(r.PathValue("id")) = > 0 shown by TestLimitMessageIDInPath
+internal/relay/watch.go (*Server).watchParams int strconv.ParseInt(issued) = open shown by TestLimitWatchIssued
+internal/relayapi/relayapi.go AdminStatusResponse int Administrators int = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go AdminStatusResponse int Blocks int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go AdminStatusResponse int CertLifetimeSecs int64 = [0, 3153600000] shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go AdminStatusResponse int LiveCerts int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go AdminStatusResponse int LiveTokens int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go AdminStatusResponse int MLDSA int = one of 0, 44, 65, 87 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go AdminStatusResponse int Mailboxes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go AdminStatusResponse int MaxBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go AdminStatusResponse int QueuedBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go AdminStatusResponse int QueuedMessages int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go AdminStatusResponse int TokenMaxAgeSecs int64 = [0, 3153600000] shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go CompleteStreamResponse int ID int64 = > 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go HealthResponse int MLDSA int = one of 0, 44, 65, 87 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go LimitsView int MailboxMaxBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go LimitsView int MailboxMaxMessages int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go LimitsView int MaxInflight int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go LimitsView int MaxMailboxes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go LimitsView int MaxWaiting int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go LimitsView int PostBytesPerHour int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go LimitsView int PostsPerMinute int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go LimitsView int RegistrationsPerHour int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go LimitsView int RelayMaxBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go LimitsView int RequestsPerMinute int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go LimitsView int UnauthenticatedPerMinute int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go ListResponse int Queued int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go MailboxRecord int AllowlistSize int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go MailboxRecord int Channels int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go MailboxRecord int QueuedBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go MailboxRecord int QueuedMessages int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go OpenStreamRequest int Size int64 = [1222, 4611686018427387904] shown by TestLimitOpenStreamSize
+internal/relayapi/relayapi.go OpenStreamResponse int MaxRequest int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go ParseAuth int strconv.ParseInt(fields[2]) = open shown by TestLimitAuthTimestamp
+internal/relayapi/relayapi.go PostResponse int ID int64 = > 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go StoredMessage int ID int64 = > 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go StoredMessage int Size int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go TokenRecord int Uses int = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go TokenRecord int UsesLeft int = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/store/channelsettings.go ChannelSettings int V int = [1, 1] shown by TestLimitChannelSettingsV
+internal/store/damagedbox.go DamagedRecord int RelayID int64 = >= 0 shown by TestLimitDamagedRelayID
+internal/store/leftbehind.go (*Store).LeftBehind int strconv.ParseInt(text) = > 0 shown by TestLimitLeftBehindIDs
+internal/store/store.go Config int ChunkSize int = 0 or [4096, 16777216] shown by TestLimitStreamSettings
+internal/store/store.go Config int StreamThreshold int64 = 0 or >= 4096 shown by TestLimitStreamSettings
+internal/store/store.go Stored int RelayID int64 = >= 0 shown by TestLimitStoredRelayID
+internal/store/store.go readCursor int strconv.ParseInt(text) = >= 0 shown by TestLimitCursor
+internal/stream/open.go ManifestLength int binary.BigEndian.Uint32(header[EncSize:HeaderSize]) = [82, 1048576] shown by TestLimitManifestLength
+internal/stream/stream.go Attachment int Size int64 = [0, 4611686018427387904] shown by TestLimitManifestIntegers
+internal/stream/stream.go Manifest int ChunkSize int = [4096, 16777216] shown by TestLimitManifestIntegers
+internal/stream/stream.go Manifest int Chunks int64 = > 0 shown by TestLimitManifestIntegers
+internal/stream/stream.go Manifest int PayloadBytes int64 = [0, 4611686018427387904] shown by TestLimitManifestIntegers
+internal/stream/stream.go Manifest int V int = [1, 1] shown by TestLimitManifestIntegers
+internal/token/token.go Claims int NotAfter int64 = > 0 shown by TestLimitClaimsIntegers
+internal/token/token.go Claims int NotBefore int64 = > 0 shown by TestLimitClaimsIntegers
+internal/token/token.go Claims int Uses int = [1, 1000] shown by TestLimitClaimsIntegers

@@ -271,48 +271,43 @@ type RelayRecord struct {
 // Called again for the same host it is the rotation: two fresh intermediates,
 // the previous client intermediate's certificate carried forward so its
 // leaves still verify, and no retired key anywhere in the output.
-func (s *Store) IssueRelay(hosts []string, years int, now time.Time) (*Bundle, []string, error) {
+func (s *Store) IssueRelay(hosts []string, years int, now time.Time) (*Bundle, error) {
 	if s.locked {
-		return nil, nil, errors.New("this authority was opened without its passphrase, so it can issue nothing")
+		return nil, errors.New("this authority was opened without its passphrase, so it can issue nothing")
 	}
 	if len(hosts) == 0 {
-		return nil, nil, errors.New("at least one --host is required")
+		return nil, errors.New("at least one --host is required")
 	}
 	if years < 1 {
-		return nil, nil, fmt.Errorf("--years must be at least 1, got %d", years)
+		return nil, fmt.Errorf("--years must be at least 1, got %d", years)
+	}
+	// An intermediate cannot outlive its issuer, and one that was quietly
+	// cut short would expire on a date nobody planned for, so more years
+	// than the authorities have left is refused with the most they allow,
+	// not clamped with a warning a script's output loses.
+	if err := yearsFit(years, now, s.Server.Cert.NotAfter, s.Client.Cert.NotAfter); err != nil {
+		return nil, err
 	}
 	name := commonName(s.Anchor.Cert)
 
-	var warnings []string
-	if Clamped(now.AddDate(years, 0, 0), s.Server.Cert.NotAfter) {
-		warnings = append(warnings, fmt.Sprintf(
-			"the server signing intermediate was clamped to %s, when the Server CA expires",
-			s.Server.Cert.NotAfter.Format(time.DateOnly)))
-	}
-	if Clamped(now.AddDate(years, 0, 0), s.Client.Cert.NotAfter) {
-		warnings = append(warnings, fmt.Sprintf(
-			"the client signing intermediate was clamped to %s, when the Client CA expires",
-			s.Client.Cert.NotAfter.Format(time.DateOnly)))
-	}
-
 	serverInt, err := Intermediate(s.Server, name, x509.ExtKeyUsageServerAuth, hosts, years, s.Params, now)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	clientInt, err := Intermediate(s.Client, name, x509.ExtKeyUsageClientAuth, hosts, years, s.Params, now)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	key, rec, err := s.FindRecord(hosts)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	// A retired intermediate that has expired verifies nothing and is
 	// dropped, so the bundle does not grow by one certificate a year.
 	rec.ClientInts, err = unexpired(rec.ClientInts, now)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	// The Client CA first, then every retired intermediate. The current one
 	// is not in the chain: it is carried on its own.
@@ -335,16 +330,16 @@ func (s *Store) IssueRelay(hosts []string, years int, now time.Time) (*Bundle, [
 	// Checked before it is written, with the same code the relay will use,
 	// so a bundle that would not load never reaches a relay host.
 	if _, err := b.load(now); err != nil {
-		return nil, nil, fmt.Errorf("the bundle this would write does not verify: %w", err)
+		return nil, fmt.Errorf("the bundle this would write does not verify: %w", err)
 	}
 
 	rec.Hosts = hosts
 	rec.ClientInts = append(rec.ClientInts, clientInt.Cert.Raw)
 	rec.Updated = now.UTC().Truncate(time.Second)
 	if err := s.saveRelayRecord(key, rec); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return b, warnings, nil
+	return b, nil
 }
 
 // RecordBundlePath remembers where a bundle for hosts was written, or that
@@ -602,4 +597,33 @@ func mustPKCS8(key *mldsa.PrivateKey) []byte {
 		panic("pki: marshalling an ML-DSA key: " + err.Error())
 	}
 	return der
+}
+
+// yearsFit refuses a lifetime the authorities cannot cover: the sentence
+// names what was asked, when the earlier of the two signing authorities
+// expires, and the most --years can be, which is the last whole number of
+// years from now that ends before that expiry. The most is counted from
+// the calendar, not from the count asked for, so a count large enough to
+// wrap AddDate is refused like any other over the most and never reaches
+// a date.
+func yearsFit(years int, now time.Time, ceilings ...time.Time) error {
+	ceiling := ceilings[0]
+	for _, c := range ceilings[1:] {
+		if c.Before(ceiling) {
+			ceiling = c
+		}
+	}
+	most := 0
+	for now.AddDate(most+1, 0, 0).Before(ceiling) {
+		most++
+	}
+	if most < 1 {
+		return fmt.Errorf("--years %d asks for intermediates, but the signing authorities expire %s, "+
+			"within a year: rotate the anchor before issuing", years, ceiling.Format(time.DateOnly))
+	}
+	if years > most {
+		return fmt.Errorf("--years %d asks for intermediates beyond %s, when the signing authorities expire; "+
+			"the most --years can be is %d", years, ceiling.Format(time.DateOnly), most)
+	}
+	return nil
 }

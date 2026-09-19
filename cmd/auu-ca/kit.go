@@ -93,10 +93,7 @@ func cmdKit(args []string) error {
 		return err
 	}
 
-	var (
-		store    *pki.Store
-		warnings []string
-	)
+	var store *pki.Store
 	if *withoutBundle {
 		// Nothing is issued and no passphrase is asked for: the anchor is
 		// read as show reads it.
@@ -115,11 +112,10 @@ func cmdKit(args []string) error {
 		if !store.Encrypted() {
 			fmt.Fprintln(os.Stderr, "auu-ca: "+legacyWarning(store.Dir()))
 		}
-		bundle, w, err := store.IssueRelay(hosts, *years, now)
+		bundle, err := store.IssueRelay(hosts, *years, now)
 		if err != nil {
 			return err
 		}
-		warnings = w
 		if spec.Bundle, err = pki.EncodeBundle(bundle); err != nil {
 			return err
 		}
@@ -152,9 +148,6 @@ func cmdKit(args []string) error {
 		if err := store.RecordBundlePath(hosts, recorded); err != nil {
 			return err
 		}
-	}
-	for _, w := range warnings {
-		fmt.Fprintln(os.Stderr, "auu-ca: "+w)
 	}
 
 	wrote := fmt.Sprintf("%s, %s", sizeText(sum.Size), sum.Arch)

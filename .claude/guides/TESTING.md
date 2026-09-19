@@ -797,6 +797,107 @@ proves (the refusal, the sentence, the absence of the file), with the
 assertion changed only from "this happens" to "this is refused". A test
 made to pass by asserting less proves the fix was not made.
 
+## Limit tests
+
+A limit test takes a value from outside to the edge of what the code allows
+and one step past it, and shows what happens there: an error with a
+sentence, never a panic, never a silent clamp, never a number that has
+rolled over. Its name starts with `TestLimit`, so that `go test ./... -run
+'^TestLimit'` runs the category on its own, and every one is listed in
+`internal/limits/ledger.txt` beside the site it shows. The test in
+`internal/limits` walks the tree for the sites and holds the ledger to them:
+a site with no row, a row with no site, and a row naming a test that does
+not exist each fail it.
+
+There are four kinds.
+
+**An integer with a range.** For every integer from outside that the code
+holds to a range (`lo <= n <= hi`, `n <= max`, `n > 0`), the test feeds
+`lo-1`, `lo`, `hi`, `hi+1`, and the minimum and maximum of the integer's
+type: `math.MinInt64` and `math.MaxInt64` for an `int64`, `0` and
+`math.MaxUint32` for a `uint32`, `math.MinInt` and `math.MaxInt` for an
+`int`, written as the type's constants and not as literals. When the value
+arrives as text, the text forms too: the string one past the type's
+maximum, a leading `+`, `-0`, a leading space, a digit outside ASCII. The
+assertion is the specific error for each value outside the range and the
+specific acceptance of `lo` and `hi`.
+
+**An integer with no upper bound.** A count, a size, a sequence number, a
+duration, an offset: any integer from outside that the code takes without
+a ceiling. The test feeds `-1`, the type's minimum, `0` and the type's
+maximum, and asserts that a negative is refused with an error before the
+value reaches arithmetic, an index, a `make`, a `Sleep` or a database. A
+function that takes such a value and cannot refuse it today starts
+returning an error, and its callers change to carry it; that is the point
+of the test, not a departure to note. `0` is fed on its own because empty
+and absent are different things (see "Empty means something").
+
+**A string under a range.** Every slice of a string or a byte slice whose
+bound is not a constant, every offset taken from a length field, every
+`Index` followed by a cut. The test feeds the empty string, a string one
+byte shorter than the range needs, a bound one past each end, an end
+before its start, a bound that came from a negative number, and a
+multi-byte rune straddling the cut, and asserts the error at each. A panic
+is a failing test, and so is a slice that succeeds on a string that was
+too short.
+
+**A path from outside.** Every row of the file-open ledger whose
+provenance is not `local` (network, operator, derived from either, and any
+value read from a configuration file) names, after `shown by`, the limit
+test that drives the traversal set through the rule at that point: `..`,
+`../x`, `x/../../y`, an absolute path, a backslash form, a drive letter, a
+Windows device name, a NUL byte, the empty string, `.`, and a name longer
+than the filesystem allows. The assertion is one of two: the operation
+refuses with its sentence, or the path it resolves stays under the
+directory it was meant for (`filepath.Rel` from the base has no `..`
+element). An operator's absolute path is the operator's choice and its row
+says so; a value the operator gives that is joined under a directory is
+held to the same rule as one from the network.
+
+**The ledger.** `internal/limits/ledger.txt` holds one row per site the
+test finds:
+
+    <file> <enclosing function> <kind> <site as written> = <range or open> shown by <TestLimit...>
+
+The sites are: a field of integer or duration type in a struct with a
+`json` tag, exported or not, wherever the struct is declared — at package
+level, inside a function (`cmdShow.relayOut`), or as a literal's
+anonymous type (`cmdShow.struct`); a call to `strconv.Atoi` or
+`strconv.Parse*`; a `binary.*.Uint*` read (a `Put*` is a write, and is
+not a site); an integer or duration flag, which in this tree is always a
+`*flag.FlagSet` method; a slice expression with a bound that is not a
+constant. The range is `[lo, hi]`, a floor or a ceiling (`>= 0`, `> 0`,
+`<= n`), a set (`one of 44, 65, 87`), or `open`; a duration's bound
+carries its unit (`>= 5s`), and `0 or` in front says zero is a sentinel
+the range does not otherwise hold, the default or unlimited. A struct
+the program only writes and never decodes says `= output` and names no
+test, and the walk proves the claim: it finds every argument of
+`json.Unmarshal` and `Decoder.Decode` in the tree, directly or through a
+helper whose `any` parameter reaches one, and every type reachable from
+one through fields, slices, maps and pointers, and a field of any such
+type cannot be `output`. An unexported field that is filled by parsing a
+string carries the range the parse enforces and names the parse's test.
+`internal/testutil` is imported by tests only and is skipped, and the
+walk checks that nothing outside a test imports it. A slice whose bound
+is local arithmetic (the length of the thing it slices, a constant offset
+into a value already checked) says so in place of a test: `local: <why>`.
+The test holds the file to the tree the way the file-open ledger does: no
+site without a row, no row without a site, no test named that does not
+exist, and a floor on the count, so that a walk that finds nothing is
+itself the finding. A row's test may be shared: one `TestLimit` over a
+struct's `Validate` can show every integer field of that struct, and one
+over a rule can show every path row that names the rule.
+
+**When a limit test finds something.** The change it forces is the
+smallest that makes the sentence true: a check before the arithmetic, an
+error returned where none was, a function that took an `int` refusing a
+negative. Not a silent clamp, not a conversion to an unsigned type, not
+a comment. Where the documented contract says a value over a cap is
+served at the cap, as a listing limit over MaxListLimit is, that is not
+a clamp but the contract: the row names the cap and the test shows a
+value over it served at it and says so. The test keeps the name that
+says what it proves, and the ledger row points at it.
+
 ## Storage and migrations
 
 **Write the old schema out by hand.** `TestMigrationFromVersionOne` contains

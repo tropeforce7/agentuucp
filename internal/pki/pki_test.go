@@ -7,6 +7,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"fmt"
+	"math"
 	"net"
 	"path/filepath"
 	"strings"
@@ -183,12 +185,12 @@ func TestTheServerIntermediateSignsForItsOwnRelayAndNoOther(t *testing.T) {
 // because it is counted.
 func TestTheExportWithholdsEveryOfflineKey(t *testing.T) {
 	s := hierarchy(t)
-	first, _, err := s.IssueRelay([]string{"relay.example.com"}, 1, time.Now())
+	first, err := s.IssueRelay([]string{"relay.example.com"}, 1, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Rotate, so a retired intermediate exists to be leaked too.
-	second, _, err := s.IssueRelay([]string{"relay.example.com"}, 1, time.Now())
+	second, err := s.IssueRelay([]string{"relay.example.com"}, 1, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,22 +297,42 @@ func TestARotationKeepsEarlierClientCertificatesVerifiable(t *testing.T) {
 	}
 }
 
-func TestLifetimesAreClampedToTheChain(t *testing.T) {
+func TestLifetimesAreRefusedBeyondTheChain(t *testing.T) {
 	// A certificate outliving its issuer would verify until the issuer
-	// expired and then stop, on a date nothing warned about.
+	// expired and then stop, on a date nothing warned about; one quietly
+	// cut short to the issuer's expiry would stop on a date nobody asked
+	// for. More years than the authorities have left is refused, naming
+	// what was asked, when they expire, and the most --years can be.
 	s := hierarchy(t)
-	_, warnings, err := s.IssueRelay([]string{"relay.example.com"}, 50, time.Now())
-	if err != nil {
+	now := time.Now()
+	_, err := s.IssueRelay([]string{"relay.example.com"}, 50, now)
+	if err == nil {
+		t.Fatal("50 years under a 10-year anchor was issued")
+	}
+	want := fmt.Sprintf("--years 50 asks for intermediates beyond %s, when the signing authorities expire; the most --years can be is ",
+		s.Server.Cert.NotAfter.Format(time.DateOnly))
+	if !strings.HasPrefix(err.Error(), want) {
+		t.Fatalf("the refusal is %q, want it to begin %q", err, want)
+	}
+	// The most it says is taken, and one more is not.
+	var most int
+	if _, err := fmt.Sscanf(strings.TrimPrefix(err.Error(), want), "%d", &most); err != nil {
 		t.Fatal(err)
 	}
-	if len(warnings) != 2 {
-		t.Errorf("clamping produced %d warnings, want one per intermediate: %v", len(warnings), warnings)
+	if _, err := s.IssueRelay([]string{"relay.example.com"}, most, now); err != nil {
+		t.Fatalf("the most it said, %d years, was refused: %v", most, err)
 	}
-	for _, w := range warnings {
-		if !strings.Contains(w, "clamped") {
-			t.Errorf("warning %q does not say it clamped", w)
+	if _, err := s.IssueRelay([]string{"relay.example.com"}, most+1, now); err == nil {
+		t.Fatalf("one more than the most it said, %d years, was issued", most+1)
+	}
+	// A count that wraps AddDate to a date inside the window is over the
+	// most all the same, and is refused without reaching a date.
+	for _, years := range []int{1<<62 + 1, math.MaxInt} {
+		if _, err := s.IssueRelay([]string{"relay.example.com"}, years, now); err == nil || !strings.Contains(err.Error(), "the most --years can be is ") {
+			t.Fatalf("%d years: %v; want the refusal naming the most", years, err)
 		}
 	}
+	// What is issued never outlives its authority all the same.
 	l := TestBundleFrom(t, s, []string{"relay.example.com"})
 	if l.ServerInt.Cert.NotAfter.After(s.Server.Cert.NotAfter) {
 		t.Error("the server intermediate outlives its authority")
@@ -438,13 +460,13 @@ func TestAnExpiredRetiredIntermediateDoesNotStopTheBundleLoading(t *testing.T) {
 		t.Fatal(err)
 	}
 	hosts := []string{"relay.example.com"}
-	old, _, err := s.IssueRelay(hosts, 1, twoYearsAgo)
+	old, err := s.IssueRelay(hosts, 1, twoYearsAgo)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// The rotation, now: the expired one is not carried.
-	current, _, err := s.IssueRelay(hosts, 1, time.Now())
+	current, err := s.IssueRelay(hosts, 1, time.Now())
 	if err != nil {
 		t.Fatalf("a rotation after the retired intermediate expired: %v", err)
 	}
