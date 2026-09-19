@@ -239,9 +239,17 @@ func TestEndToEndConversation(t *testing.T) {
 	if string(data) != "// the suspect branch\n" {
 		t.Fatalf("attachment contents wrong: %q", data)
 	}
-	// Extracting twice must not clobber what is already there.
-	if _, err := bob.tryRun("extract", got.ID, "--out", outDir); err == nil {
-		t.Fatal("extract overwrote an existing file")
+	// Extracting twice must not clobber what is already there: the
+	// second copy is written beside the first with a numbered name, and
+	// the line says the sender's name differs.
+	second := bob.run("extract", got.ID, "--out", outDir)
+	if !strings.Contains(second, "Decrypt-2.java") || !strings.Contains(second, "the sender named it Decrypt.java") {
+		t.Fatalf("a second extract:\n%s", second)
+	}
+	for _, name := range []string{"Decrypt.java", "Decrypt-2.java"} {
+		if data, err := os.ReadFile(filepath.Join(outDir, name)); err != nil || string(data) != "// the suspect branch\n" {
+			t.Fatalf("%s after a second extract: %q, %v", name, data, err)
+		}
 	}
 
 	// Bob replies, and alice waits for it on the thread.

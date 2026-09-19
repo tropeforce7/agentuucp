@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/tropeforce7/agentuucp/internal/store"
+	"github.com/tropeforce7/agentuucp/internal/stream"
 )
 
 // TestLimitAStreamedAttachmentThatIsNotAFileIsRefused: a delivered
@@ -55,7 +56,7 @@ func TestLimitAStreamedAttachmentThatIsNotAFileIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spooled := filepath.Join(s.AttachmentDir(store.Inbox, got.Messages[0].ID), "dump.bin")
+	spooled := filepath.Join(s.AttachmentDir(store.Inbox, got.Messages[0].ID), stream.SpoolName(0))
 	if _, err := os.Stat(spooled); err != nil {
 		t.Fatalf("the delivered attachment is not in the spool: %v", err)
 	}

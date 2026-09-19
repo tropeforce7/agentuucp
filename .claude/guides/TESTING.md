@@ -535,14 +535,23 @@ reader finds it. A `network` row's rule and point should read the same as
 the matching row in the paths table.
 
 **A name has one rule, and both ends run it, on every path.** A thread
-id is a message id; an attachment name is a base name; a channel name has
-no slash. Each is one predicate in one package, called at send and at
-open, and called on the stream path as well as the envelope path. The
-stream manifest once copied its body into the message unchecked, so a
-rule that held for a small message was a door for a large one. The test
-for a new rule sends the bad value both ways and by both paths, and the
-value the sender's own command refuses is crafted past it with the wire
-constants as literals, the way `damaged_test` forges an envelope.
+id is a message id; a channel name has no slash. Each is one predicate in
+one package, called at send and at open, and called on the stream path as
+well as the envelope path. The stream manifest once copied its body into
+the message unchecked, so a rule that held for a small message was a door
+for a large one. The test for a new rule sends the bad value both ways and
+by both paths, and the value the sender's own command refuses is crafted
+past it with the wire constants as literals, the way `damaged_test` forges
+an envelope. An attachment name is the one rule of another shape: the
+receiver never refuses a name for what it would do as a path, since it is
+no good relying on the sender to get it right; it holds the name to what
+any text is held to and writes the file under `message.SafeName` of it,
+made unique at the write, and the sender is held to `SafeName`'s fixed
+point (`ValidAttachmentName`) at `envelope.Seal` and `stream.BuildManifest`,
+so the two ends agree by construction: a name the sender may ship is one
+the receiver writes unchanged. `TestLimitSafeNameIsAFixedPoint` pins every
+step and the fixed point; the receiver's tests feed the names past the
+sender's rule, as a stranger's client would.
 
 **A string from the network is never sliced before its rule has run.**
 `s[:16]` on a fifteen-byte string is a panic, and a fingerprint, a serial
@@ -556,16 +565,20 @@ asserting the sentence and the exit code; a panic fails the test by
 itself. The same rule holds for a value from a peer: the thread id was
 sliced to twelve characters in `auu reply` before it had any rule at all.
 
-**What a filesystem folds is refused, and the test skips only where it
-cannot fold.** Two attachment names equal under case folding are refused
-at Validate with `ErrForm`, so a Linux sender is told before anything
-leaves; and an `fs.ErrExist` out of an `O_EXCL` open at delivery is
-wrapped as `ErrForm` too, so whatever a filesystem folds that Validate
-could not foresee (Unicode normalisation on APFS) is kept under damaged
-and acknowledged rather than met again at every fetch. The Validate test
-runs everywhere; the delivery test builds a manifest past Validate and
-skips itself when `probe` says the filesystem keeps the two names apart,
-so that a pass on Linux is a skip and not a false proof.
+**What a filesystem folds is refused at the sender and settled at the
+write, and the test skips only where it cannot fold.** Two attachment
+names equal under case folding are refused by the sender's rule, so a
+Linux sender is told before anything leaves; a receiver takes the pair
+and lets the disk say: the spool keeps a stream's attachments by their
+index in the manifest, so nothing from the network is joined there, and
+the write under `--out` is an exclusive create that on `ErrExist` tries
+`x-2.txt`, `x-3.txt`, so whatever a filesystem folds that no rule could
+foresee (Unicode normalisation on APFS) is folded by the filesystem's own
+answer and nothing is overwritten. The sender's test runs everywhere; the
+delivery and extraction tests build a manifest past the sender's rule and
+ask the disk whether it folds (`probe` against `Probe`), asserting the
+suffix where it does and two files where it does not, so that a pass on
+Linux says only what it can.
 
 **A count against a quota is one arithmetic in one helper, and the test
 drives every caller through it.** `Put` and `OpenUpload` each compared
@@ -610,12 +623,15 @@ file, the test drives the bound, one over it and the type's MaxInt64,
 and asserts the refusal or the clamp, never the wrapped value.
 
 **A message's own words are held to a rule at Validate and escaped again
-where they are shown.** A subject is one line and an attachment name is
-one name: no control, format, private-use or separator rune, refused at
-both ends on both paths. Text keeps newline and tab and nothing else from
-those classes. And because a record from before a rule, or written by
-hand, is still in the spool, every print of a subject, text, name or
-sender goes through an escaper all the same; `--json` is encoding/json's.
+where they are shown.** A subject is one line: no control, format,
+private-use or separator rune, refused at both ends on both paths. Text
+keeps newline and tab and nothing else from those classes. An attachment
+name is held at Validate to one line, UTF-8, no NUL and a size, and the
+rest of that set is the sender's rule and `SafeName`'s `_` at the write,
+never a refusal of the message. And because a record from before a rule,
+or written by hand, is still in the spool, every print of a subject,
+text, name or sender goes through an escaper all the same; `--json` is
+encoding/json's.
 The test for a rule is a table at `Body.Validate` and `Manifest.Validate`
 with ESC, `\r`, a bidi override, a private-use rune, U+2028, a newline, a
 tab and invalid UTF-8, saying for each field whether it is refused or
@@ -705,10 +721,13 @@ collides; a device name (`CON`, `PRN`, `AUX`, `NUL`, `COM0`..`COM9` and
 union of what Microsoft's pages have listed) with any extension or none
 opens the device rather than a file, so an attachment named `nul.txt`
 writes nowhere and one named `con.txt` writes to the console. Test values: each of those, `a/b`,
-`a\\b`, `..`, `.`, `.hidden` (allowed), a trailing space, a trailing dot,
+`a\\b`, `..`, `.`, `.hidden`, a trailing space, a trailing dot,
 `%2F` (which must stay literal in a name and become a segment only in a
-URL), and the empty string. `filepath.Base` at the open is belt and
-braces, never the rule.
+URL), and the empty string. For an attachment name each of these is what
+the sender may not ship and what `SafeName` turns into a base name at the
+write (`x`, `_CON`, `_hidden`, `attachment`), asserted by the expected
+output per row; `filepath.Base` at the open is belt and braces, never the
+rule.
 
 **It has a shape.** Hex is 0-9a-f, lowercase, of one length; a message id
 is 32 of them, a fingerprint 64, a short id 16; base64 has an alphabet and

@@ -51,15 +51,30 @@ func TestValidateRejectsMissingThread(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsBadAttachmentNames(t *testing.T) {
+// A bad attachment name is the sender's to fix and the receiver's to make
+// safe: the sender's rule refuses each, and Body.Validate, which both
+// sides run, takes it, so a receiver writes the file under SafeName of it
+// rather than refusing the message. What Validate still refuses of a name
+// is what it refuses of any text: over the byte cap here, and elsewhere
+// a line break, a NUL and bytes that are not UTF-8.
+func TestASenderMayNotShipABadAttachmentName(t *testing.T) {
 	data := []byte("x")
 	sum := sha256.Sum256(data)
-	for _, name := range []string{"", "..", ".", "a/b", "../x", "..\\x", "dir/../x", strings.Repeat("n", 256)} {
+	for _, name := range []string{"", "..", ".", "a/b", "../x", "..\\x", "dir/../x", "CON", "a<b"} {
+		if err := ValidAttachmentNames([]string{name}); err == nil {
+			t.Errorf("the sender's rule took %q", name)
+		}
 		a := Attachment{Name: name, Media: DefaultMedia, Size: 1, SHA256: hex.EncodeToString(sum[:]), Data: data}
 		b := Body{Type: TypeNote, Thread: "0123456789abcdef0123456789abcdef", Attachments: []Attachment{a}}
-		if err := b.Validate(); err == nil {
-			t.Fatalf("accepted attachment name %q", name)
+		if err := b.Validate(); err != nil {
+			t.Errorf("Validate refused the name %q, which is the receiver's to make safe: %v", name, err)
 		}
+	}
+	over := strings.Repeat("n", 256)
+	a := Attachment{Name: over, Media: DefaultMedia, Size: 1, SHA256: hex.EncodeToString(sum[:]), Data: data}
+	b := Body{Type: TypeNote, Thread: "0123456789abcdef0123456789abcdef", Attachments: []Attachment{a}}
+	if err := b.Validate(); err == nil || !strings.Contains(err.Error(), "longer than 255 bytes") {
+		t.Errorf("a 256-byte name at Validate: %v, want the text rule", err)
 	}
 }
 
@@ -77,11 +92,16 @@ func TestValidateRejectsDigestAndSizeMismatch(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsDuplicateNames(t *testing.T) {
+// Two attachments with one name are the sender's to fix; a receiver
+// writes the second beside the first with a numbered suffix.
+func TestASenderMayNotShipDuplicateNames(t *testing.T) {
 	a, _ := NewAttachment("x.txt", []byte("a"))
 	b := Body{Type: TypeNote, Thread: "0123456789abcdef0123456789abcdef", Attachments: []Attachment{a, a}}
-	if err := b.Validate(); err == nil {
-		t.Fatal("accepted duplicate attachment names")
+	if err := ValidAttachmentNames(b.AttachmentNames()); err == nil || !strings.Contains(err.Error(), "duplicate attachment name") {
+		t.Errorf("the sender's rule: %v, want the duplicate named", err)
+	}
+	if err := b.Validate(); err != nil {
+		t.Errorf("Validate refused a duplicate name, which is settled at the write: %v", err)
 	}
 }
 
@@ -150,24 +170,29 @@ func TestValidateHoldsThreadAndInReplyToToTheIDShape(t *testing.T) {
 }
 
 // Two attachment names that differ only in case are one file on a disk
-// that folds case, so a message may not carry both, on this path as on the
-// stream's: the rule is one, in DistinctAttachmentNames.
-func TestValidateRejectsNamesThatAreOneFileWhereCaseDoesNotCount(t *testing.T) {
+// that folds case, so a sender may not ship both, on this path as on the
+// stream's: the rule is one, in DistinctAttachmentNames, run by the
+// sender's rule. A receiver takes the pair and lets the filesystem say
+// whether they are one file, writing the second as x-2 if they are.
+func TestASenderMayNotShipNamesThatAreOneFileWhereCaseDoesNotCount(t *testing.T) {
 	for _, names := range [][2]string{{"Report.txt", "report.txt"}, {"Makefile", "makefile"}} {
 		a, _ := NewAttachment(names[0], []byte("a"))
 		b, _ := NewAttachment(names[1], []byte("b"))
 		body := Body{Type: TypeNote, Thread: "0123456789abcdef0123456789abcdef", Attachments: []Attachment{a, b}}
-		err := body.Validate()
+		err := ValidAttachmentNames(body.AttachmentNames())
 		if err == nil {
-			t.Fatalf("accepted %q beside %q", names[0], names[1])
+			t.Fatalf("the sender's rule took %q beside %q", names[0], names[1])
 		}
 		if !strings.Contains(err.Error(), "are one file where case does not count") {
 			t.Fatalf("%q beside %q: %v, want the sentence naming the rule", names[0], names[1], err)
 		}
+		if err := body.Validate(); err != nil {
+			t.Fatalf("Validate refused %q beside %q, which the write settles: %v", names[0], names[1], err)
+		}
 	}
 	a, _ := NewAttachment("Report.txt", []byte("a"))
 	b, _ := NewAttachment("report.md", []byte("b"))
-	if err := (&Body{Type: TypeNote, Thread: "0123456789abcdef0123456789abcdef", Attachments: []Attachment{a, b}}).Validate(); err != nil {
+	if err := ValidAttachmentNames([]string{a.Name, b.Name}); err != nil {
 		t.Fatalf("two names that are two files were refused: %v", err)
 	}
 }
@@ -175,7 +200,10 @@ func TestValidateRejectsNamesThatAreOneFileWhereCaseDoesNotCount(t *testing.T) {
 // A subject is one line and free text is prose: neither may carry what a
 // terminal would obey rather than show. The table is what a message may
 // say about itself, at Body.Validate; the stream package runs the same
-// rows through Manifest.Validate, so both paths refuse the same things.
+// rows through BuildManifest, so both paths refuse the same things. An
+// attachment name has two columns: what a receiver takes at Validate (a
+// line break, a NUL and a byte that is not UTF-8 refused as for any
+// text; the rest made safe at the write), and what a sender may ship.
 func TestValidateHoldsSubjectTextAndNamesToWhatATerminalShows(t *testing.T) {
 	for _, tc := range freeTextRows() {
 		subject := Body{Type: TypeAsk, Thread: "0123456789abcdef0123456789abcdef", Subject: "s" + tc.bytes + "s", Text: "x"}
@@ -193,6 +221,9 @@ func TestValidateHoldsSubjectTextAndNamesToWhatATerminalShows(t *testing.T) {
 		if err := named.Validate(); (err == nil) != tc.inName {
 			t.Errorf("attachment name with %s: %v, want accepted=%v", tc.name, err, tc.inName)
 		}
+		if err := ValidAttachmentNames([]string{a.Name}); (err == nil) != tc.shipped {
+			t.Errorf("attachment name with %s at the sender: %v, want shipped=%v", tc.name, err, tc.shipped)
+		}
 	}
 	// The refusal names the character and its kind, and for a subject
 	// says the rule.
@@ -207,10 +238,11 @@ func TestValidateHoldsSubjectTextAndNamesToWhatATerminalShows(t *testing.T) {
 }
 
 // freeTextRow is one thing a sender might put in a subject, a text or an
-// attachment name, and where it is allowed.
+// attachment name, and where it is allowed: inName is what a receiver
+// takes at Validate, shipped what a sender may send.
 type freeTextRow struct {
-	name, bytes               string
-	inSubject, inText, inName bool
+	name, bytes                        string
+	inSubject, inText, inName, shipped bool
 }
 
 // freeTextRows is the table both Validates are held to; the stream
@@ -218,16 +250,16 @@ type freeTextRow struct {
 // import another's.
 func freeTextRows() []freeTextRow {
 	return []freeTextRow{
-		{"an escape", "\x1b[2K", false, false, false},
-		{"a carriage return", "\r", false, false, false},
-		{"a bidi override", "\u202e", false, false, false},
-		{"a private-use rune", "\ue000", false, false, false},
-		{"a line separator", "\u2028", false, false, false},
-		{"a newline", "\n", false, true, false},
-		{"a tab", "\t", false, true, false},
-		{"a byte that is not UTF-8", "\xff", false, false, false},
-		{"plain prose", "hello, world", true, true, true},
-		{"letters beyond ASCII", "café 中文", true, true, true},
+		{"an escape", "\x1b[2K", false, false, true, false},
+		{"a carriage return", "\r", false, false, false, false},
+		{"a bidi override", "\u202e", false, false, true, false},
+		{"a private-use rune", "\ue000", false, false, true, false},
+		{"a line separator", "\u2028", false, false, true, false},
+		{"a newline", "\n", false, true, false, false},
+		{"a tab", "\t", false, true, true, false},
+		{"a byte that is not UTF-8", "\xff", false, false, false, false},
+		{"plain prose", "hello, world", true, true, true, true},
+		{"letters beyond ASCII", "café 中文", true, true, true, true},
 	}
 }
 
@@ -235,8 +267,10 @@ func freeTextRows() []freeTextRow {
 // may be there and a sender cannot know where a message lands: a stem
 // that is a device name opens the device rather than a file, and a
 // trailing dot or space is stripped, so two names collide. The table is
-// what a name may be, at ValidAttachmentName; the stream package runs the
-// same rows through Manifest.Validate.
+// what a sender may ship, at ValidAttachmentName, each refusal saying it
+// holds for every receiver; the stream package runs the same rows
+// through BuildManifest. A receiver takes every row and writes the file
+// under SafeName of it, which TestLimitSafeNameIsAFixedPoint pins.
 func TestAnAttachmentNameIsAFileNameOnWindowsToo(t *testing.T) {
 	for _, tc := range windowsNameRows() {
 		err := ValidAttachmentName(tc.name)
@@ -245,6 +279,9 @@ func TestAnAttachmentNameIsAFileNameOnWindowsToo(t *testing.T) {
 		}
 		if err != nil && !strings.Contains(err.Error(), "for every receiver") {
 			t.Errorf("%q: %v does not say the rule is for every receiver", tc.name, err)
+		}
+		if err := ValidAttachmentText(tc.name); err != nil {
+			t.Errorf("%q: the receiver refused a name that is the write's to make safe: %v", tc.name, err)
 		}
 	}
 	if err := ValidAttachmentName("nul.txt"); err == nil || !strings.Contains(err.Error(), "NUL is a device name on Windows") {
@@ -282,7 +319,7 @@ func windowsNameRows() []windowsNameRow {
 		{"aux.", false},
 		{"report.txt.", false},
 		{"report.txt ", false},
-		{".hidden", true},
+		{".hidden", false},
 		{"console.txt", true},
 		{"CONIN$", false},
 		{"conout$.txt", false},

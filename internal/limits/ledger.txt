@@ -175,6 +175,8 @@ internal/auu/relay.go relayShow string out.ServerIntermediate[:16] = local: Vali
 internal/auu/rm.go cmdRm string m.Inner.ID[:12] #2 = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/auu/rm.go cmdRm string m.Inner.ID[:12] #3 = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/auu/rm.go cmdRm string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/rm.go rmUnreadable string id[:12] #2 = local: ValidID at cmdRm shown by TestLimitRmWholeIDOneShort
+internal/auu/rm.go rmUnreadable string id[:12] = local: ValidID at cmdRm shown by TestLimitRmWholeIDOneShort
 internal/auu/send.go cmdReply string original.Inner.Body.Thread[:12] #2 = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/auu/send.go cmdReply string original.Inner.Body.Thread[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/auu/send.go cmdReply string original.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
@@ -241,6 +243,11 @@ internal/kit/elf.go whatElse string bin[:4] = local: len(bin) >= 4 by the check 
 internal/kit/kit.go listenPort int strconv.Atoi(portText) = [1, 65535] shown by TestLimitListenPort
 internal/message/message.go Attachment int Size int64 = >= 0 shown by TestLimitAttachmentSize
 internal/message/message.go DistinctAttachmentNames string names[:i] = local: i is an index of names from range
+internal/message/safename.go baseOfEither string name[i + 1:] = local: i is an index LastIndexAny gave, under len(name)
+internal/message/safename.go cutRunes string s[:n] = local: n held to [0, len(s)) by the two checks before, walked back to a rune start
+internal/message/safename.go replaceForbidden string name[i:] = local: i walks len(name) from 0 by DecodeRuneInString's size
+internal/message/safename.go replaceForbidden string name[i:i + size] = local: i and size from DecodeRuneInString of name[i:]
+internal/message/safename.go safeNamePass string name[1:] = local: HasPrefix(".") checked the line before
 internal/pki/bundle.go Bundle int V int = [1, 1] shown by TestLimitBundleV
 internal/pki/pki.go splitLabels string h[start:i] = local: start and i walk len(h) from 0
 internal/relay/adminapi.go shortFP string v[:16] = local: ValidFingerprint checked in shortFP, the line before
@@ -305,6 +312,7 @@ internal/store/leftbehind.go (*Store).LeftBehind int strconv.ParseInt(text) = > 
 internal/store/relay.go relayNameBase string base[:room] = local: len(base) > room by the check before, and base is ASCII by construction
 internal/store/store.go (*Store).Find string d[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/store/store.go (*Store).FindThread string t[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/store/store.go (*Store).RemoveByID.struct int RelayID int64 = > 0 shown by TestLimitRemoveByIDRelayFields
 internal/store/store.go Config int ChunkSize int = 0 or [4096, 16777216] shown by TestLimitStreamSettings
 internal/store/store.go Config int StreamThreshold int64 = 0 or >= 4096 shown by TestLimitStreamSettings
 internal/store/store.go Stored int RelayID int64 = >= 0 shown by TestLimitStoredRelayID

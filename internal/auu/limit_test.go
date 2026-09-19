@@ -1,8 +1,13 @@
 package auu
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -14,6 +19,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/envelope"
+	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
@@ -568,45 +574,57 @@ func TestLimitThreadIDIsNotAPathAtServe(t *testing.T) {
 }
 
 // TestLimitAttachmentNameIsNotAPathAtExtract: an attachment's name becomes
-// a file under the directory extract was given, through
-// ValidAttachmentName at Validate and filepath.Base at the write; a record
-// carrying a name from the traversal set is refused at the write, and
-// nothing appears outside the directory.
+// a file under the directory extract was given, through message.SafeName
+// and the unique loop at the write; a record carrying a name from the
+// traversal set is not refused but written under the safe name, one file
+// per record, under the directory and nowhere else, and the line extract
+// prints says the sender's name differs.
 func TestLimitAttachmentNameIsNotAPathAtExtract(t *testing.T) {
 	s, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	scratch := t.TempDir()
-	out := filepath.Join(scratch, "out")
-	if err := os.MkdirAll(out, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	for _, v := range pathSet() {
+		if v == "\x00" || len(v) > 255 {
+			// Refused as text at Open, never a record; the sender's rule
+			// refuses them too (TestLimitNamesAreNotPathsAtValidate).
+			continue
+		}
+		scratch := t.TempDir()
+		out := filepath.Join(scratch, "out")
+		if err := os.MkdirAll(out, 0o700); err != nil {
+			t.Fatal(err)
+		}
 		m := &store.Stored{Inner: &envelope.Inner{
 			ID: strings.Repeat("a", 32), Time: time.Now(),
 			Body: message.Body{Type: message.TypeNote, Thread: strings.Repeat("a", 32), Text: "hi",
-				Attachments: []message.Attachment{{Name: v, Media: "text/plain", Size: 2, SHA256: strings.Repeat("0", 64), Data: []byte("hi")}}},
+				Attachments: []message.Attachment{rawAttachment(v, []byte("hi"))}},
 		}}
 		written, err := extractInto(s, store.Inbox, m, out)
-		if err == nil {
-			t.Errorf("extractInto took the name %q and wrote %v", v, written)
+		if err != nil || len(written) != 1 {
+			t.Errorf("extractInto with the name %q: %v, %v; want one file written", v, written, err)
+			continue
 		}
-		for _, w := range written {
-			if rel, err := filepath.Rel(out, w); err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-				t.Errorf("extractInto wrote %q outside %s for the name %q", w, out, v)
-			}
+		want := filepath.Join(out, message.SafeName(v))
+		if written[0] != want {
+			t.Errorf("the name %q was written as %q, want %q", v, written[0], want)
 		}
-	}
-	entries, err := os.ReadDir(scratch)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 1 || entries[0].Name() != "out" {
-		t.Errorf("extract reached beside its directory: %v", entries)
-	}
-	if under, _ := os.ReadDir(out); len(under) != 0 {
-		t.Errorf("a refused name left %d entries in the directory", len(under))
+		if data, err := os.ReadFile(want); err != nil || string(data) != "hi" {
+			t.Errorf("the name %q: %q, %v", v, data, err)
+		}
+		entries, err := os.ReadDir(scratch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 || entries[0].Name() != "out" {
+			t.Errorf("the name %q reached beside its directory: %v", v, entries)
+		}
+		if under, _ := os.ReadDir(out); len(under) != 1 {
+			t.Errorf("the name %q left %d entries in the directory", v, len(under))
+		}
+		if line := wroteLine(written[0], m.Inner.Body.Attachments[0]); v != message.SafeName(v) && !strings.Contains(line, "the sender named it") {
+			t.Errorf("the line for %q does not say the sender's name differs: %s", v, line)
+		}
 	}
 }
 
@@ -790,44 +808,303 @@ func TestLimitProxyListenIsAnAddressNotAPath(t *testing.T) {
 	}
 }
 
-// TestLimitExtractionRunsTheRuleBeforeThePath: a stored record with an
-// attachment named CON, and one named a/b, is refused at Load, since a
-// record read back is held to the name rule's path part; and the same
-// record handed to extractInto in memory is refused by the rule before a
-// path is made: the --out directory is one that does not exist yet, and
-// it is still absent afterwards, since nothing was stat'ed, created or
-// looked for under it, and the sentence names the rule.
-func TestLimitExtractionRunsTheRuleBeforeThePath(t *testing.T) {
+// TestLimitExtractionWritesSafeUniqueNames: a message with attachments
+// named `../x`, `CON`, `a<b>.txt`, `.bashrc`, `A.txt`, `a.txt`, an empty
+// name, a 250-byte name and a 200-byte name twice — every one but the
+// last a name the sender's rule refuses,
+// carried past it here as a stranger's client would — is opened, saved,
+// listed and extracted into a directory that already holds A.txt. Every
+// file is written under its safe name, made unique at the write: x, _CON,
+// a_b_.txt, _bashrc, A-2.txt (A.txt stood there), attachment, and the
+// long name cut; a.txt is a.txt where the disk tells it from A.txt and
+// a-3.txt where it does not (a.txt being A.txt and a-2.txt the A-2.txt
+// just made), which the test asks the disk. The contents
+// are by digest, the report lines say the sender's name where it
+// differs, a witness outside is untouched, the existing A.txt is as it
+// was, and nothing else is in the directory.
+func TestLimitExtractionWritesSafeUniqueNames(t *testing.T) {
 	s, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := strings.Repeat("c", 32)
+	scratch := t.TempDir()
+	out := filepath.Join(scratch, "out")
+	if err := os.MkdirAll(out, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	witness := filepath.Join(scratch, "witness")
+	if err := os.WriteFile(witness, []byte("keep me\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(out, "A.txt"), []byte("already here\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Does this disk tell a.txt from A.txt?
+	folds := false
+	if _, err := os.Stat(filepath.Join(out, "a.txt")); err == nil {
+		folds = true
+	}
+	// 250 bytes: over the 200 SafeName keeps, under the 255 a name may be
+	// as text (300 would be refused at Open and at the write alike).
+	long := strings.Repeat("n", 250)
+	// A 200-byte name whose extension is 199 bytes, twice: a fixed point
+	// the sender may ship, and the second copy takes the numbered name,
+	// which the first draft of Numbered panicked on (the second reader's
+	// finding: a slice bound below zero).
+	wide := "x." + strings.Repeat("a", 198)
+	names := []string{"../x", "CON", "a<b>.txt", ".bashrc", "A.txt", "a.txt", "", long, wide, wide}
+	var atts []message.Attachment
+	for i, name := range names {
+		atts = append(atts, rawAttachment(name, []byte(fmt.Sprintf("file %d\n", i))))
+	}
+	id := strings.Repeat("d", 32)
+	m := &store.Stored{Inner: &envelope.Inner{
+		ID: id, Time: time.Now().UTC(), From: strings.Repeat("e", 64), To: strings.Repeat("f", 64),
+		Body: message.Body{Type: message.TypeNote, Thread: id, Text: "odd names", Attachments: atts},
+	}}
+	if err := s.Save(store.Inbox, m); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Load(store.Inbox, id); err != nil {
+		t.Fatalf("Load refused a record for its attachment names: %v", err)
+	}
+	written, err := extractInto(s, store.Inbox, m, out)
+	if err != nil {
+		t.Fatalf("extractInto: %v", err)
+	}
+	want := []string{"x", "_CON", "a_b_.txt", "_bashrc", "A-2.txt", "a.txt", "attachment", long[:200], wide, "x." + strings.Repeat("a", 196) + "-2"}
+	if folds {
+		// a.txt is A.txt, which stood there, and a-2.txt is A-2.txt, which
+		// the attachment before it just made.
+		want[5] = "a-3.txt"
+	}
+	if len(written) != len(want) {
+		t.Fatalf("wrote %v, want %d files", written, len(want))
+	}
+	for i, path := range written {
+		if filepath.Base(path) != want[i] || filepath.Dir(path) != out {
+			t.Errorf("attachment %d (%q) was written as %q, want %q under %s", i, names[i], path, want[i], out)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil || string(data) != fmt.Sprintf("file %d\n", i) {
+			t.Errorf("attachment %d: %q, %v", i, data, err)
+		}
+		line := wroteLine(path, atts[i])
+		if differs := want[i] != names[i]; differs != strings.Contains(line, "the sender named it") {
+			t.Errorf("attachment %d: the line %q; the name differs: %v", i, line, differs)
+		}
+	}
+	if data, _ := os.ReadFile(filepath.Join(out, "A.txt")); string(data) != "already here\n" {
+		t.Errorf("the A.txt that stood there was touched: %q", data)
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != len(want)+1 {
+		var got []string
+		for _, e := range entries {
+			got = append(got, e.Name())
+		}
+		t.Errorf("the directory holds %v; want the %d files and A.txt", got, len(want))
+	}
+	if beside, _ := os.ReadDir(scratch); len(beside) != 2 {
+		t.Errorf("something appeared beside the directory: %d entries", len(beside))
+	}
+	if data, _ := os.ReadFile(witness); string(data) != "keep me\n" {
+		t.Errorf("the witness was touched: %q", data)
+	}
+}
+
+// rawAttachment is an inline attachment exactly as given, name and all,
+// with its size and digest right: what a client that is not auu's might
+// send, past the sender's rule.
+func rawAttachment(name string, data []byte) message.Attachment {
+	sum := sha256.Sum256(data)
+	return message.Attachment{Name: name, Media: "application/octet-stream", Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), Data: data}
+}
+
+// TestLimitAStreamExtractsUnderSafeUniqueNames: the stream form of the
+// same. A manifest built with plain names and changed under the seal to
+// `../x`, `CON`, `A.txt`, `a.txt` and an empty name — past the sender's
+// rule, as a client that is not auu's could — is opened and delivered
+// into a home's spool by position, saved as a streamed record with the
+// sender's names, and extracted into a directory that already holds
+// A.txt: every file under its safe name, unique at the write, with the
+// bytes the sender sent, and nothing beside the directory.
+func TestLimitAStreamExtractsUnderSafeUniqueNames(t *testing.T) {
+	alice, err := identity.Generate("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := identity.Generate("bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := []string{"../x", "CON", "A.txt", "a.txt", ""}
+	var sources []stream.Source
+	for i := range names {
+		data := []byte(fmt.Sprintf("stream file %d\n", i))
+		sources = append(sources, stream.Source{Name: fmt.Sprintf("plain%d.bin", i), Media: "application/octet-stream", Size: int64(len(data)),
+			Open: func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }})
+	}
+	id := strings.Repeat("e", 32)
+	m, err := stream.BuildManifest(alice, bob.Public(), id, stream.Body{Type: "note", Thread: id, Text: "odd names"}, sources, stream.MinChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, name := range names {
+		m.Attachments[i].Name = name
+	}
+	var blob bytes.Buffer
+	if err := stream.Seal(&blob, alice, bob.Public(), m, sources); err != nil {
+		t.Fatal(err)
+	}
+	full := blob.Bytes()
+	n, err := stream.ManifestLength(full[:stream.HeaderSize])
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := stream.OpenManifest(bob, full[:stream.HeaderSize], full[stream.HeaderSize:stream.HeaderSize+n])
+	if err != nil {
+		t.Fatalf("a received manifest with odd names: %v", err)
+	}
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := s.AttachmentDir(store.Inbox, id)
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := opened.ToDirectory(bytes.NewReader(full[stream.HeaderSize+n:]), dir); err != nil {
+		t.Fatalf("ToDirectory: %v", err)
+	}
+	inner := &envelope.Inner{From: alice.Fingerprint(), To: bob.Fingerprint(), ID: id, Time: time.Now().UTC(),
+		Body: message.Body{Type: message.TypeNote, Thread: id, Text: "odd names"}}
+	for _, a := range opened.Manifest.Attachments {
+		inner.Body.Attachments = append(inner.Body.Attachments, message.Attachment{Name: a.Name, Media: a.Media, Size: a.Size, SHA256: a.SHA256})
+	}
+	rec := &store.Stored{Inner: inner, Streamed: true, Received: time.Now().UTC()}
+	if err := s.Save(store.Inbox, rec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Load(store.Inbox, id); err != nil {
+		t.Fatalf("Load refused the streamed record for its names: %v", err)
+	}
+	scratch := t.TempDir()
+	out := filepath.Join(scratch, "out")
+	if err := os.MkdirAll(out, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(out, "A.txt"), []byte("already here\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	folds := false
+	if _, err := os.Stat(filepath.Join(out, "a.txt")); err == nil {
+		folds = true
+	}
+	written, err := extractInto(s, store.Inbox, rec, out)
+	if err != nil {
+		t.Fatalf("extractInto: %v", err)
+	}
+	want := []string{"x", "_CON", "A-2.txt", "a.txt", "attachment"}
+	if folds {
+		want[3] = "a-3.txt"
+	}
+	if len(written) != len(want) {
+		t.Fatalf("wrote %v, want %d files", written, len(want))
+	}
+	for i, path := range written {
+		if filepath.Base(path) != want[i] || filepath.Dir(path) != out {
+			t.Errorf("attachment %d (%q) was written as %q, want %q", i, names[i], path, want[i])
+		}
+		if data, err := os.ReadFile(path); err != nil || string(data) != fmt.Sprintf("stream file %d\n", i) {
+			t.Errorf("attachment %d: %q, %v", i, data, err)
+		}
+	}
+	if data, _ := os.ReadFile(filepath.Join(out, "A.txt")); string(data) != "already here\n" {
+		t.Errorf("the A.txt that stood there was touched: %q", data)
+	}
+	if entries, _ := os.ReadDir(out); len(entries) != len(want)+1 {
+		t.Errorf("the directory holds %d entries; want %d", len(entries), len(want)+1)
+	}
+	if beside, _ := os.ReadDir(scratch); len(beside) != 1 {
+		t.Errorf("something appeared beside the directory: %d entries", len(beside))
+	}
+}
+
+// TestLimitASenderDoesNotShipANameTheReceiverWouldChange: auu send
+// --attach of a file whose name a receiver would write differently is
+// refused as a usage error naming the step, inline and as a stream, and
+// nothing is posted; the same names are what the receiver's tests above
+// write safely, so an honest sender is told and a dishonest one changes
+// nothing.
+func TestLimitASenderDoesNotShipANameTheReceiverWouldChange(t *testing.T) {
+	alice, bob := twoPeers(t)
+	dir := t.TempDir()
 	for _, tc := range []struct{ name, says string }{
-		{"CON", "CON is a device name on Windows"},
-		{"a/b", "must not contain a path separator"},
+		{".bashrc", "begins with a dot"},
+		{"a<b>.txt", "Windows forbids"},
+		{"CON", "device name on Windows"},
+		{"report.txt.", "Windows strips"},
+		{"x ", "Windows strips"},
+		{"file‮.txt", "format character"},
+		{strings.Repeat("n", 201) + ".txt", "over 200"},
 	} {
-		m := &store.Stored{Inner: &envelope.Inner{
-			ID: id, Time: time.Now().UTC(), From: strings.Repeat("d", 64), To: strings.Repeat("e", 64),
-			Body: message.Body{Type: message.TypeNote, Thread: id, Text: "hi",
-				Attachments: []message.Attachment{{Name: tc.name, Media: "text/plain", Size: 2, SHA256: strings.Repeat("0", 64), Data: []byte("hi")}}},
-		}}
-		if err := s.Save(store.Inbox, m); err != nil {
-			t.Fatal(err)
+		path := filepath.Join(dir, tc.name)
+		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
+			t.Fatalf("%q: this disk cannot hold the name: %v", tc.name, err)
 		}
-		if _, err := s.Load(store.Inbox, id); err == nil || !strings.Contains(err.Error(), tc.says) {
-			t.Errorf("Load took a record with an attachment named %q: %v", tc.name, err)
+		for _, form := range [][]string{
+			{"send", "--to", "bob", "--attach", path, "an odd name"},
+			{"send", "--to", "bob", "--stream", "--attach", path, "an odd name"},
+		} {
+			out, err := alice.tryRun(form...)
+			var exit *exitError
+			if !errors.As(err, &exit) || exit.code != exitUsage || !strings.Contains(err.Error(), tc.says) {
+				t.Errorf("%v: %v\n%s\nwant a usage error saying %q", form, err, out, tc.says)
+			}
 		}
-		out := filepath.Join(t.TempDir(), "not", "yet")
-		written, err := extractInto(s, store.Inbox, m, out)
-		if err == nil || !strings.Contains(err.Error(), tc.says) {
-			t.Errorf("extractInto with %q: %v, %v; want the rule's sentence", tc.name, written, err)
-		}
-		if _, err := os.Stat(filepath.Dir(out)); !os.IsNotExist(err) {
-			t.Errorf("extractInto with %q touched the directory before the rule ran: %v", tc.name, err)
-		}
-		// The next row writes the same id: Remove runs the rule and
-		// refuses this record, so the file goes by its name.
-		os.Remove(filepath.Join(s.Root(), string(store.Inbox), id+".json"))
+		os.Remove(path)
+	}
+	var got inboxJSON
+	if err := json.Unmarshal([]byte(bob.run("inbox", "--json")), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Messages) != 0 {
+		t.Errorf("bob received %d messages from refused sends", len(got.Messages))
+	}
+}
+
+// TestLimitRmWholeIDOneShort: rm removes a record Load refuses by its
+// whole id and nothing shorter: an id one character short is a prefix,
+// which cannot name an unreadable record, so rm says no message matches
+// and the record stays; the whole id removes it. The id is held to
+// ValidID at cmdRm before rmUnreadable prints its first twelve.
+func TestLimitRmWholeIDOneShort(t *testing.T) {
+	alice, bob := twoPeers(t)
+	alice.run("send", "--to", "bob", "--subject", "kept", "one")
+	bob.run("inbox")
+	m := recordOf(t, bob, store.Inbox, "kept")
+	path := filepath.Join(bob.home, "inbox", m.Inner.ID+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(string(data), `"thread": "`, `"thread": "zz`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bob.tryRun("rm", m.Inner.ID[:31]); err == nil || !strings.Contains(err.Error(), "no message matches") {
+		t.Errorf("rm of an id one short: %v; want no match", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("an id one short removed the record: %v", err)
+	}
+	if out := bob.run("rm", m.Inner.ID); !strings.Contains(out, "removed here (the record could not be read)") {
+		t.Errorf("rm of the whole id: %s", out)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("the record is still there: %v", err)
 	}
 }

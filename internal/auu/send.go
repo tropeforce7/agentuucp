@@ -520,6 +520,12 @@ func loadAttachments(paths []string) ([]message.Attachment, error) {
 		if err != nil {
 			return nil, usageErrf("reading %s: %v", p, err)
 		}
+		// The sender's rule, here as a usage error before anything is
+		// sealed, naming the step a receiver would take with the name;
+		// SealFor runs it again, for every path that seals.
+		if err := message.ValidAttachmentName(filepath.Base(p)); err != nil {
+			return nil, usageErrf("%v", err)
+		}
 		a, err := message.NewAttachment(filepath.Base(p), data)
 		if err != nil {
 			return nil, usageErrf("%v", err)

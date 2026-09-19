@@ -84,7 +84,7 @@ type row struct {
 
 // shownFloor is how many rows named a test when the ledger was written;
 // a count under it means rows lost their tests, not that the tree shrank.
-const shownFloor = 154
+const shownFloor = 155
 
 // absolutePath is the operator form for a whole path used as given, alone
 // or followed by a comma and a note, and environmentsPath the ending of

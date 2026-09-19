@@ -761,6 +761,45 @@ func (s *Store) Remove(box Box, id string) error {
 	return err
 }
 
+// RemoveByID removes a message by its id alone, without loading the
+// record: the way out for a record Load refuses, which List does not
+// show and Find cannot name. The boxes are searched for the id's file
+// and the first found is removed with its attachments; the box is
+// returned, with the relay name and the relay's number the raw record
+// carried, each held to its own rule (ValidRelayName; a positive int64)
+// and empty or zero when it did not carry one that passes, so the caller
+// can leave the relay's copy accounted for. Nothing else in the record is
+// read. ErrNotExist when no box holds the id.
+func (s *Store) RemoveByID(id string) (box Box, relay string, relayID int64, err error) {
+	if err := message.ValidID(id); err != nil {
+		return "", "", 0, fmt.Errorf("message id %q is %w", id, err)
+	}
+	for _, box := range []Box{Inbox, Quarantine, Sent} {
+		path := s.msgPath(box, id)
+		data, err := regular.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", "", 0, err
+		}
+		var raw struct {
+			Relay   string `json:"relay"`
+			RelayID int64  `json:"relay_id"`
+		}
+		if json.Unmarshal(data, &raw) == nil {
+			if ValidRelayName(raw.Relay) == nil && raw.RelayID > 0 {
+				relay, relayID = raw.Relay, raw.RelayID
+			}
+		}
+		if err := s.Remove(box, id); err != nil {
+			return "", "", 0, err
+		}
+		return box, relay, relayID, nil
+	}
+	return "", "", 0, os.ErrNotExist
+}
+
 // AttachmentDir is where a streamed message's files live: beside its record,
 // named for the message.
 func (s *Store) AttachmentDir(box Box, id string) string {
@@ -775,6 +814,11 @@ func (s *Store) ServeDir() string { return s.path(serveDir) }
 
 // Find looks a message up in the inbox, then sent, then quarantine, accepting a
 // unique id prefix of at least 4 characters.
+// ErrNoMatch is Find's answer when no readable record has the id or the
+// prefix; it wraps the id, and a caller that would remove a record by its
+// id without reading it asks for this and nothing else.
+var ErrNoMatch = errors.New("no message matches")
+
 func (s *Store) Find(idOrPrefix string) (Box, *Stored, error) {
 	if len(idOrPrefix) < 4 {
 		return "", nil, errors.New("message id prefix must be at least 4 characters")
@@ -818,7 +862,7 @@ func (s *Store) Find(idOrPrefix string) (Box, *Stored, error) {
 	}
 	switch len(distinct) {
 	case 0:
-		return "", nil, fmt.Errorf("no message matches %q", idOrPrefix)
+		return "", nil, fmt.Errorf("%w %q", ErrNoMatch, idOrPrefix)
 	case 1:
 		return boxes[0], hits[0], nil
 	default:

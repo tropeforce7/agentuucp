@@ -74,12 +74,16 @@ func TestLimitAttachmentDigest(t *testing.T) {
 }
 
 // TestLimitNamesAreNotPathsAtValidate: a thread id and a reply id name a
-// directory under an expert host's serve directory and an attachment
-// name a file on the receiver; Body.Validate runs message.ValidID and
-// ValidAttachmentName on each, so a value from the limit guide's
+// directory under an expert host's serve directory, and Body.Validate
+// runs message.ValidID on each, so a value from the limit guide's
 // traversal set — `..`, `../x`, `x/../../y`, `a/b`, an absolute path, a
 // backslash form, a drive letter, a Windows device name, a NUL, the empty
-// string, `.`, and a 300-byte name — is refused at the door.
+// string, `.`, and a 300-byte name — is refused at the door. An
+// attachment name is a file on the receiver, and the same values are
+// not refused there but made safe: Validate takes each (but a NUL and
+// the 300 bytes, which the text rule refuses), SafeName of it is a base
+// name the sender's rule takes, and the sender's rule refuses the value
+// itself.
 func TestLimitNamesAreNotPathsAtValidate(t *testing.T) {
 	set := []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", strings.Repeat("a", 300)}
 	for _, v := range set {
@@ -97,8 +101,16 @@ func TestLimitNamesAreNotPathsAtValidate(t *testing.T) {
 		}
 		b = goodBody(t)
 		b.Attachments[0].Name = v
-		if err := b.Validate(); err == nil {
-			t.Errorf("attachment name %q was accepted", v)
+		text := v != "\x00" && len(v) <= 255
+		if err := b.Validate(); (err == nil) != text {
+			t.Errorf("attachment name %q at Validate: %v; want taken=%v", v, err, text)
+		}
+		safe := SafeName(v)
+		if strings.ContainsAny(safe, `/\`) || safe == "" || safe == "." || safe == ".." || len(safe) > SafeNameMaxBytes {
+			t.Errorf("SafeName(%q) = %q is not a base name", v, safe)
+		}
+		if err := ValidAttachmentName(safe); err != nil {
+			t.Errorf("the sender's rule refuses SafeName(%q) = %q: %v", v, safe, err)
 		}
 		if err := ValidAttachmentName(v); err == nil {
 			t.Errorf("ValidAttachmentName took %q", v)

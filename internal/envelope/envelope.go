@@ -159,6 +159,13 @@ func SealFor(sender *identity.Identity, recipient *identity.Public, channel stri
 	if err := body.Validate(); err != nil {
 		return nil, nil, err
 	}
+	// The sender's rule for attachment names runs here, where every
+	// envelope leaves, and nowhere on the receiving path: a receiver
+	// writes whatever name arrives under SafeName of it, and an honest
+	// sender is told before anything leaves what a receiver would change.
+	if err := message.ValidAttachmentNames(body.AttachmentNames()); err != nil {
+		return nil, nil, fmt.Errorf("message: %w", err)
+	}
 	id, err := NewID()
 	if err != nil {
 		return nil, nil, err

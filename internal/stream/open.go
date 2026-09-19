@@ -10,9 +10,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
@@ -130,6 +130,10 @@ func OpenManifest(self *identity.Identity, header, sealed []byte) (*Opened, erro
 		Manifest: &m, SealedManifestBytes: n, Sender: sender, recipient: recipient,
 	}, nil
 }
+
+// SpoolName is the file attachment i of a delivered stream is kept under
+// in its spool directory: its index in the manifest, in decimal.
+func SpoolName(i int) string { return strconv.Itoa(i) }
 
 // Writers is how a caller receives the payload: one io.Writer per attachment,
 // created as each is reached, so nothing is opened until it is needed.
@@ -262,7 +266,14 @@ func (o *Opened) OpenPayload(r io.Reader, out Writers) error {
 	return closeCurrent()
 }
 
-// ToDirectory receives a payload into dir, atomically.
+// ToDirectory receives a payload into dir, atomically, each attachment
+// under its index in the manifest — "0", "1", … — and never under the
+// sender's name: the directory is a spool the program reads back by
+// position, and the name the sender chose is the record's, for display,
+// and the write's, made safe, when the attachment is extracted. So no
+// name from the network is joined onto this directory, two attachments
+// the sender named alike never meet here, and what the filesystem folds
+// is nobody's concern until the write.
 //
 // OpenPayload writes as it decrypts, because a two gigabyte attachment cannot
 // be held anywhere else, so a stream that fails at its last chunk has already
@@ -289,23 +300,14 @@ func (o *Opened) ToDirectory(r io.Reader, dir string) (err error) {
 		}
 	}()
 
-	if err := o.OpenPayload(r, func(a Attachment) (io.WriteCloser, error) {
-		// The name has already been through ValidAttachmentName in Validate,
-		// so it is a base name; Base is belt and braces, and the create is
-		// exclusive and by the handle, so a device the name reaches on
-		// this platform is refused with nothing written.
-		f, err := regular.Create(filepath.Join(tmp, filepath.Base(a.Name)), 0o600)
-		if errors.Is(err, fs.ErrExist) {
-			// Two names Validate told apart are one file on this disk:
-			// case folding it foresaw and refused, but a filesystem may
-			// fold more, such as Unicode normalisation on APFS. That is
-			// the manifest's fault, not the transport's, so it is refused
-			// as malformed, and the receiver keeps the stream under
-			// damaged and acknowledges it rather than meeting it again at
-			// every fetch.
-			return nil, fmt.Errorf("%w: attachment %q is one file with another on this disk", ErrForm, a.Name)
-		}
-		return f, err
+	next := 0
+	if err := o.OpenPayload(r, func(Attachment) (io.WriteCloser, error) {
+		// The attachments arrive in the manifest's order, one call each;
+		// the file is its position, a name of the program's own, and the
+		// create is exclusive and by the handle all the same.
+		name := SpoolName(next)
+		next++
+		return regular.Create(filepath.Join(tmp, name), 0o600)
 	}); err != nil {
 		return err
 	}

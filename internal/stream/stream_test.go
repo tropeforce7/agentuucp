@@ -466,6 +466,9 @@ func TestWrongRecipient(t *testing.T) {
 
 // The manifest is what the signature covers, so every claim in it that the
 // payload must satisfy is checked on the way out as well as on the way in.
+// A name with a separator is not a lie about the payload any more: a
+// receiver writes the file under SafeName of it, which the stream form of
+// the extraction test in internal/auu shows.
 func TestManifestLies(t *testing.T) {
 	from, to := pair(t)
 	for name, mutate := range map[string]func(*Manifest){
@@ -477,7 +480,6 @@ func TestManifestLies(t *testing.T) {
 		"chunk size above the maximum": func(m *Manifest) { m.ChunkSize = MaxChunkSize + 1 },
 		"attachment size wrong":        func(m *Manifest) { m.Attachments[0].Size++ },
 		"digest changed":               func(m *Manifest) { m.Attachments[0].SHA256 = strings.Repeat("0", 64) },
-		"name with a separator":        func(m *Manifest) { m.Attachments[0].Name = "../escape" },
 		"unknown version":              func(m *Manifest) { m.V = 99 },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -693,6 +695,7 @@ func TestToDirectoryIsAtomic(t *testing.T) {
 	blob, _ := build(t, from, to, cs, files)
 	n := mustLen(t, blob)
 
+	var opened *Opened
 	deliver := func(t *testing.T, b []byte) (string, error) {
 		t.Helper()
 		dir := filepath.Join(t.TempDir(), "message.d")
@@ -700,6 +703,7 @@ func TestToDirectoryIsAtomic(t *testing.T) {
 		if err != nil {
 			return dir, err
 		}
+		opened = o
 		return dir, o.ToDirectory(bytes.NewReader(b[HeaderSize+n:]), dir)
 	}
 
@@ -708,13 +712,18 @@ func TestToDirectoryIsAtomic(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for name, want := range files {
-			got, err := os.ReadFile(filepath.Join(dir, name))
+		// The spool is positional: attachment i is the file "i", and the
+		// sender's name is the manifest's alone.
+		for i, a := range opened.Manifest.Attachments {
+			got, err := os.ReadFile(filepath.Join(dir, SpoolName(i)))
 			if err != nil {
-				t.Fatalf("%q missing: %v", name, err)
+				t.Fatalf("%q (attachment %d) missing: %v", a.Name, i, err)
 			}
-			if !bytes.Equal(got, want) {
-				t.Fatalf("%q differs", name)
+			if !bytes.Equal(got, files[a.Name]) {
+				t.Fatalf("%q differs", a.Name)
+			}
+			if _, err := os.Stat(filepath.Join(dir, a.Name)); err == nil {
+				t.Fatalf("%q was spooled under the sender's name", a.Name)
 			}
 		}
 		if _, err := os.Stat(dir + ".part"); !os.IsNotExist(err) {

@@ -359,3 +359,86 @@ func TestRmOfAQuarantinedStream(t *testing.T) {
 		t.Fatalf("the attachment directory is still there: %v", err)
 	}
 }
+
+// TestRmRemovesARecordLoadRefusesByItsID: a record Load refuses — here one
+// kept on the relay whose digest was changed on disk — is not listed and
+// not found by a prefix, but its whole id removes it without the record
+// being read: the file and its attachment directory go, the relay's copy
+// is remembered as left behind from the relay name and number the raw
+// record carried, the next fetch is quiet, and the sentence says the
+// record could not be read. A prefix is not enough, --remote-only is
+// refused, and a record with no relay fields says the relay was not
+// told. The edge is older than the safe-name commit that closed it: rm
+// loaded first, so a record this program could not read was one it could
+// not let go of either.
+func TestRmRemovesARecordLoadRefusesByItsID(t *testing.T) {
+	relayURL, st := startRelayConfig(t, relay.Config{Streams: true, Limits: relay.DefaultLimits()})
+	alice, bob := watchers(t, relayURL)
+	name := bob.defaultRelayName()
+	alice.run("send", "--to", "bob", "--subject", "kept", "one")
+	bob.run("inbox")
+	m := recordOf(t, bob, store.Inbox, "kept")
+	s, _, _ := bob.opened()
+	path := filepath.Join(bob.home, "inbox", m.Inner.ID+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A thread that is not a message id: what Load refuses, written by
+	// hand into the indented record.
+	broken := strings.Replace(string(data), `"thread": "`, `"thread": "zz`, 1)
+	if broken == string(data) {
+		t.Fatalf("the record has no thread to break:\n%s", data)
+	}
+	if err := os.WriteFile(path, []byte(broken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(s.AttachmentDir(store.Inbox, m.Inner.ID), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Load(store.Inbox, m.Inner.ID); err == nil {
+		t.Fatal("the broken record still loads")
+	}
+	// A prefix cannot name it, and --remote-only has nothing to do.
+	if _, err := bob.tryRun("rm", m.Inner.ID[:12]); err == nil || !strings.Contains(err.Error(), "no message matches") {
+		t.Errorf("rm by prefix: %v; want no match", err)
+	}
+	if _, err := bob.tryRun("rm", "--remote-only", m.Inner.ID); err == nil || !strings.Contains(err.Error(), "cannot be read") {
+		t.Errorf("rm --remote-only: %v; want the refusal", err)
+	}
+	out := bob.run("rm", m.Inner.ID)
+	want := m.Inner.ID[:12] + ": removed here (the record could not be read); its copy on " + name + ", if there is one, is left there\n"
+	if out != want {
+		t.Fatalf("rm said:\n%s\nwant\n%s", out, want)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("the record is still there: %v", err)
+	}
+	if _, err := os.Stat(s.AttachmentDir(store.Inbox, m.Inner.ID)); !os.IsNotExist(err) {
+		t.Errorf("the attachment directory is still there: %v", err)
+	}
+	if ids, err := s.LeftBehind(name); err != nil || len(ids) != 1 || ids[0] != m.RelayID {
+		t.Fatalf("left behind: %v (%v), want %d", ids, err, m.RelayID)
+	}
+	if len(queuedOn(t, st, bob.exportFingerprint())) != 1 {
+		t.Fatal("the relay's copy went")
+	}
+	if out := bob.run("inbox"); strings.Contains(out, "before this machine's cursor") {
+		t.Fatalf("the fetch called the home damaged:\n%s", out)
+	}
+	// A record with no relay fields that pass: the local copy goes and
+	// the sentence says the relay was not told.
+	other := strings.Repeat("c", 32)
+	if err := os.WriteFile(filepath.Join(bob.home, "inbox", other+".json"), []byte(`{"relay":"","relay_id":-1,"inner":{"id":"`+other+`"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out = bob.run("rm", other)
+	want = other[:12] + ": removed here (the record could not be read); the relay's copy, if there is one, was not told\n"
+	if out != want {
+		t.Fatalf("rm of a record with no relay fields said:\n%s\nwant\n%s", out, want)
+	}
+	// And an id no box holds is the ordinary refusal.
+	if _, err := bob.tryRun("rm", strings.Repeat("d", 32)); err == nil || !strings.Contains(err.Error(), "no message matches") {
+		t.Errorf("rm of an unknown id: %v", err)
+	}
+}

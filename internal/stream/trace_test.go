@@ -264,16 +264,18 @@ func TestNamesThatAreOneFileWhereCaseDoesNotCountAreRefused(t *testing.T) {
 	}
 }
 
-// What a filesystem folds beyond case, Validate cannot foresee, so the
-// open is where it is caught: an O_EXCL open that finds the file already
-// there is the manifest's fault, refused as ErrForm, which the receiver
-// keeps under damaged and acknowledges rather than meeting again at every
-// fetch. The manifest here passed Validate with two names and is changed
-// under the opened stream to two the disk spells as one, which is what a
-// pair Validate cannot tell apart looks like at this point; the test skips
-// itself where the disk keeps Probe and probe apart, so that a pass on
-// Linux is a skip and not a false proof.
-func TestNamesTheDiskSpellsAsOneAreRefusedAtTheOpen(t *testing.T) {
+// What a filesystem folds beyond case, no rule at Validate can foresee,
+// and the spool no longer needs to: attachments are kept by their index in
+// the manifest, so two names the disk spells as one — a pair changed under
+// the opened stream here to what a pair Validate cannot tell apart looks
+// like at this point — are two files in the spool with their own bytes,
+// and the write under --out settles the collision with a numbered suffix
+// (the extraction test in internal/auu). Before the positional spool the
+// second O_EXCL open found the first's file and the stream was refused as
+// malformed; the test then proved the refusal, and now proves the two
+// files. It skips itself where the disk keeps Probe and probe apart, so
+// that a pass on Linux says nothing it cannot.
+func TestNamesTheDiskSpellsAsOneAreTwoFilesInTheSpool(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "Probe"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
@@ -298,15 +300,15 @@ func TestNamesTheDiskSpellsAsOneAreRefusedAtTheOpen(t *testing.T) {
 	// Past Validate: the second name is now the first with its case
 	// changed, which the digests, being over the bytes, do not notice.
 	o.Manifest.Attachments[1].Name = "report.txt"
-	err = o.ToDirectory(bytes.NewReader(blob[HeaderSize+n:]), filepath.Join(dir, "out"))
-	if !errors.Is(err, ErrForm) {
-		t.Fatalf("ToDirectory: %v; expected the stream refused as malformed (ErrForm) so that the receiver drops it and moves on", err)
+	out := filepath.Join(dir, "out")
+	if err := o.ToDirectory(bytes.NewReader(blob[HeaderSize+n:]), out); err != nil {
+		t.Fatalf("ToDirectory: %v; two names the disk spells as one are two files in a positional spool", err)
 	}
-	if !strings.Contains(err.Error(), `attachment "report.txt" is one file with another on this disk`) {
-		t.Errorf("the refusal does not name the attachment: %v", err)
-	}
-	if _, statErr := os.Stat(filepath.Join(dir, "out")); statErr == nil {
-		t.Error("the output directory was made for a refused stream")
+	for i, want := range []string{"upper", "lower"} {
+		got, err := os.ReadFile(filepath.Join(out, SpoolName(i)))
+		if err != nil || string(got) != want {
+			t.Errorf("attachment %d: %q, %v; want %q", i, got, err, want)
+		}
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "out.part")); statErr == nil {
 		t.Error("the temporary directory was left behind")
@@ -393,7 +395,9 @@ func TestAManifestStampedInTheFutureIsMalformed(t *testing.T) {
 }
 
 // The manifest's attachment names are held to the same Windows rows
-// ValidAttachmentName is, on this path as on the envelope's.
+// ValidAttachmentName is, on this path as on the envelope's: at
+// BuildManifest, the sender's side; a received manifest takes every row
+// and the receiver writes under SafeName.
 func TestValidateHoldsTheManifestNamesToWindowsToo(t *testing.T) {
 	from, to := pair(t)
 	const id = "0123456789abcdef0123456789abcdef"
@@ -417,7 +421,7 @@ func TestValidateHoldsTheManifestNamesToWindowsToo(t *testing.T) {
 		{"aux.", false},
 		{"report.txt.", false},
 		{"report.txt ", false},
-		{".hidden", true},
+		{".hidden", false},
 		{"console.txt", true},
 		{"CONIN$", false},
 		{"conout$.txt", false},

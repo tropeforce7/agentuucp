@@ -374,11 +374,18 @@ A refused send names what to change, and nothing was queued:
   a character a terminal would obey (the text may hold line breaks and
   tabs). Remove the character; nothing was sent.
 - `attachment "NAME": NUL is a device name on Windows, so the name is
-  refused for every receiver`, or `name ends in a dot or a space, which
-  Windows strips, ...` — the receiver may be on Windows and the sender
-  cannot know; rename the file (`con`, `prn`, `aux`, `nul`, `com0`–`com9`
-  and `lpt0`–`lpt9`, their superscript forms too, with any extension are
-  devices there). Nothing was sent.
+  refused for every receiver`, `name ends in a dot or a space, which
+  Windows strips, ...`, `name begins with a dot, which hides the file
+  where it is written, ...`, `name must not contain '?', which Windows
+  forbids in a file name, ...` or `name is N bytes, over 200` — the
+  sender's rule is the name a receiver would write unchanged: a receiver
+  writes every attachment under a safe form of its name (the base name,
+  forbidden characters made `_`, trailing dots and spaces trimmed, a
+  leading dot made `_`, a device stem prefixed, cut to 200 bytes) and
+  never depends on the sender for it, and a sender may not ship a name
+  the receiver would change. Rename the file (`con`, `prn`, `aux`, `nul`,
+  `com0`–`com9` and `lpt0`–`lpt9`, their superscript forms too, with any
+  extension are devices on Windows). Nothing was sent.
 - `PATH/serve.json: channel "bugs": channels "Bugs" and "bugs" are one
   directory where case does not count; rename one` — from `auu serve check` or at
   start: each channel is a directory under the serve directory, and two

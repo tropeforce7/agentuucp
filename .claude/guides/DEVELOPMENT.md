@@ -280,7 +280,10 @@ envelope, the manifest, the store, `send` and `serve` all run; and the
 eight things the network names that become a path — a fingerprint, an
 upload id, a token id, an attachment name, a channel name, a relay host,
 a message id, a thread id — each have one rule at one named point, walked
-by one table test that a new such place gets its row in first. A rule
+by one table test that a new such place gets its row in first (for an
+attachment name the rule is `message.SafeName` at the write rather than
+a refusal, since a receiver never depends on the sender's name, and the
+sender is held to its fixed point). A rule
 must run on both paths: the manifest's body was never opened as an
 envelope's is, and a rule that held for a small message was a door for a
 large one until `Manifest.Validate` ran the same predicate.

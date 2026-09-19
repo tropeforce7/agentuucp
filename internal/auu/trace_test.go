@@ -227,7 +227,17 @@ func TestAnEmptyAttachmentIsDeliveredNotAckedAway(t *testing.T) {
 			t.Fatalf("%q did not arrive as a stream", subject)
 		}
 		bs, _, _ := bob.opened()
-		path := filepath.Join(bs.AttachmentDir(store.Inbox, rec.Inner.ID), "empty.txt")
+		// The spool keeps attachments by their position, not their name.
+		at := -1
+		for i, a := range rec.Inner.Body.Attachments {
+			if a.Name == "empty.txt" {
+				at = i
+			}
+		}
+		if at < 0 {
+			t.Fatalf("%q: the record has no attachment named empty.txt", subject)
+		}
+		path := filepath.Join(bs.AttachmentDir(store.Inbox, rec.Inner.ID), stream.SpoolName(at))
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatalf("%q: the empty attachment is not there: %v", subject, err)

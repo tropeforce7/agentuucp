@@ -122,10 +122,15 @@ cannot be written there is no use to anyone. For the same reason a name is
 a file name on Windows too: not a device name such as `con`, `nul.txt` or
 `com1.log`, which would open the device rather than a file there, holding
 no colon, which names a drive or a stream there, none of the six other
-characters Windows forbids in a file name (`< > " | ? *`), and
-not ending in a dot or a space, which Windows strips; the refusal names
-the rule and says it holds for every receiver, since a sender cannot know
-where a message lands. Above 64 KiB in all, the
+characters Windows forbids in a file name (`< > " | ? *`), not beginning
+with a dot, which would hide it where it is written, not ending in a dot
+or a space, which Windows strips, and at most 200 bytes; the refusal
+names the rule and says it holds for every receiver, since a sender
+cannot know where a message lands. The rule is exactly what a receiver
+would change: `auu extract` writes every attachment under a safe form of
+its name (see *Receive*), and the sender's rule is that the name is
+already that form, so an honest sender never ships a name a receiver
+would write differently. Above 64 KiB in all, the
 message goes as a stream, in pieces, resumed with `auu send --resume` if
 it is interrupted; nothing about the command changes.
 
@@ -262,13 +267,22 @@ auu reply MESSAGE-ID 'It is missing. Open an issue against home-java.'
 ```
 
 `auu extract` writes each attachment under `--out` (the working directory
-by default) as a new file: a name that already exists there, whatever it
-is, is refused with "already exists; move it or choose another --out
-directory", and nothing is overwritten. The file is made and the spooled
-bytes are read by their handle, not their name: an attachment that turns
-out not to be a regular file — a device the name reaches on this platform,
-a pipe or a link somebody planted in the spool — is refused with a sentence
-saying what was found, and nothing is written.
+by default) as a new file, and never depends on the sender for the name.
+Whatever the sender called it, the file is written under a safe form of
+the name — the base name alone, with any character a terminal would obey
+or Windows forbids made `_`, a trailing dot or space trimmed, a leading
+dot made `_` so nothing hides in your directory, a Windows device name
+prefixed with `_`, cut to 200 bytes, and `attachment` when nothing is
+left — and made unique at the write: a name that already stands there,
+whatever it is, is left alone and the file is written beside it as
+`x-2.txt`, `x-3.txt`, so that what your disk folds (case, on macOS and
+Windows) is settled by the disk's own answer and nothing is overwritten.
+The line that reports each file says the sender's name where it differs
+from what was written. The file is made and the spooled bytes are read by
+their handle, not their name: an attachment that turns out not to be a
+regular file — a device the name reaches on this platform, a pipe or a
+link somebody planted in the spool — is refused with a sentence saying
+what was found, and nothing is written.
 
 A thread id works there too. `auu reply THREAD-ID` answers whatever is latest
 on the thread — including your own last message, in which case it is a

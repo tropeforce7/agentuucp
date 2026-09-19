@@ -1,10 +1,13 @@
 package auu
 
 import (
+	"errors"
 	"fmt"
+	"os"
 
 	"github.com/tropeforce7/agentuucp/internal/client"
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
 
@@ -64,6 +67,23 @@ func cmdRm(args []string) error {
 	for _, want := range ids {
 		box, m, err := s.Find(want)
 		if err != nil {
+			// A record Load refuses is not listed and cannot be found by
+			// a prefix, but a whole id can still name it: it is removed
+			// without being read, so that a record this program cannot
+			// read is never one it cannot let go of either. Only when
+			// nothing matched: any other failure of Find — a box that
+			// could not be listed — is its own error, not a reason to
+			// remove a record blind.
+			if message.ValidID(want) == nil && errors.Is(err, store.ErrNoMatch) {
+				res, handled, herr := rmUnreadable(s, want, *localOnly, *remoteOnly, *asJSON)
+				if herr != nil {
+					return herr
+				}
+				if handled {
+					results = append(results, res)
+					continue
+				}
+			}
 			return usageErrf("%v", err)
 		}
 		res := rmResult{ID: m.Inner.ID}
@@ -148,6 +168,42 @@ func cmdRm(args []string) error {
 		}
 	}
 	return finishRm(results, *asJSON, nil)
+}
+
+// rmUnreadable removes a record Load refuses, by its whole id. The relay
+// is not asked, since nothing the record says can be trusted; but the
+// relay's name and the relay's number, read from the raw record under
+// their own rules, are enough to remember the relay's copy as left
+// behind, so the next fetch does not find the cursor past mail it cannot
+// account for. Without them the local copy goes and the sentence says the
+// relay's copy, if any, was not told. --remote-only has nothing it can
+// do and is refused. handled is false when no box holds the id.
+func rmUnreadable(s *store.Store, id string, localOnly, remoteOnly, asJSON bool) (rmResult, bool, error) {
+	if remoteOnly {
+		return rmResult{}, false, usageErrf("%s: the record cannot be read, so the relay's copy cannot be named; remove the local copy with '%s rm %s'", id[:12], prog, id)
+	}
+	box, relay, relayID, err := s.RemoveByID(id)
+	if errors.Is(err, os.ErrNotExist) {
+		return rmResult{}, false, nil
+	}
+	if err != nil {
+		return rmResult{}, false, err
+	}
+	res := rmResult{ID: id, RemovedLocal: true}
+	line := fmt.Sprintf("%s: removed here (the record could not be read)", id[:12])
+	if relay != "" && box != store.Sent {
+		if err := s.AddLeftBehind(relay, relayID); err != nil {
+			return rmResult{}, false, err
+		}
+		res.Relay = relay
+		line += fmt.Sprintf("; its copy on %s, if there is one, is left there", relay)
+	} else if box != store.Sent {
+		line += "; the relay's copy, if there is one, was not told"
+	}
+	if !asJSON {
+		fmt.Println(line)
+	}
+	return res, true, nil
 }
 
 // rmLine is what one id's removal says.

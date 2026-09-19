@@ -220,12 +220,17 @@ func TestLimitStoredRecordShapes(t *testing.T) {
 		{"digest one short", func(m *Stored) { m.Inner.Body.Attachments[0].SHA256 = strings.Repeat("0", 63) }, "digest is 63 characters, not 64"},
 		{"digest not lowercase hex", func(m *Stored) { m.Inner.Body.Attachments[0].SHA256 = strings.Repeat("G", 64) }, "digest is not lowercase hex"},
 		{"size negative", func(m *Stored) { m.Inner.Body.Attachments[0].Size = -1 }, "size -1 is negative"},
-		{"attachment named by a device", func(m *Stored) { m.Inner.Body.Attachments[0].Name = "CON" }, "CON is a device name on Windows"},
-		{"attachment named with a slash", func(m *Stored) { m.Inner.Body.Attachments[0].Name = "a/b" }, "must not contain a path separator"},
 	} {
 		err := write(t, tc.mutate)
 		if err == nil || !strings.Contains(err.Error(), tc.says) {
 			t.Errorf("%s: %v; want %q", tc.name, err, tc.says)
+		}
+	}
+	// An attachment's name is not a reason to refuse a record: the write
+	// uses SafeName of it and the terminal escapes it.
+	for _, name := range []string{"CON", "a/b", "a<b>.txt", ""} {
+		if err := write(t, func(m *Stored) { m.Inner.Body.Attachments[0].Name = name }); err != nil {
+			t.Errorf("a record with an attachment named %q: %v; want it loaded", name, err)
 		}
 	}
 	if err := write(t, func(m *Stored) {}); err != nil {
@@ -333,7 +338,7 @@ func outsideUntouched(t *testing.T, outside, witness string, what string) {
 
 // TestLimitMessageIDIsNotAPathAtTheStoresEdges: a message id names the
 // record's file, and every edge of the store that takes one runs
-// message.ValidID before the join: Save, Load, Remove, and the damaged
+// message.ValidID before the join: Save, Load, Remove, RemoveByID, and the damaged
 // box's DamagedPath and KeepDamaged through the relay's number. Each is
 // fed the traversal set and refuses it, and nothing appears outside the
 // home.
@@ -349,6 +354,9 @@ func TestLimitMessageIDIsNotAPathAtTheStoresEdges(t *testing.T) {
 		}
 		if err := s.Remove(Inbox, v); err == nil {
 			t.Errorf("Remove took the id %q", v)
+		}
+		if _, _, _, err := s.RemoveByID(v); err == nil || errors.Is(err, os.ErrNotExist) {
+			t.Errorf("RemoveByID took the id %q: %v", v, err)
 		}
 	}
 	outsideUntouched(t, outside, witness, "an id from the traversal set")
@@ -539,4 +547,66 @@ func TestLimitRelaysDirectoryEntries(t *testing.T) {
 		t.Errorf("the second listing warned again:\n%s", again)
 	}
 	outsideUntouched(t, outside, witness, "an entry of relays/")
+}
+
+// TestLimitRemoveByIDRelayFields: RemoveByID reads two fields of a record
+// it does not otherwise trust, the relay name and the relay's number, so
+// the relay's copy can be remembered as left behind; each is held to its
+// rule alone — ValidRelayName, and a positive int64 — and a record whose
+// fields fail (a negative, zero, the type's minimum, a name that is not
+// a relay name, JSON that is not a record) is removed all the same with
+// nothing to remember. The type's maximum is taken.
+func TestLimitRemoveByIDRelayFields(t *testing.T) {
+	s, outside, witness := reviewHome(t)
+	id := strings.Repeat("a", 32)
+	write := func(t *testing.T, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(s.msgPath(Inbox, id)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(s.msgPath(Inbox, id), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(s.AttachmentDir(Inbox, id), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		body        string
+		relay       string
+		relayID     int64
+		description string
+	}{
+		{`{"relay":"work","relay_id":7}`, "work", 7, "as written"},
+		{`{"relay":"work","relay_id":9223372036854775807}`, "work", math.MaxInt64, "the type's maximum"},
+		{`{"relay":"work","relay_id":0}`, "", 0, "zero"},
+		{`{"relay":"work","relay_id":-1}`, "", 0, "negative"},
+		{`{"relay":"work","relay_id":-9223372036854775808}`, "", 0, "the type's minimum"},
+		{`{"relay":"work","relay_id":9223372036854775808}`, "", 0, "one past the maximum"},
+		{`{"relay":"../x","relay_id":7}`, "", 0, "a relay name that is a path"},
+		{`{"relay":"","relay_id":7}`, "", 0, "no relay name"},
+		{`{"relay":"CON","relay_id":7}`, "", 0, "a device as a relay name"},
+		{`not json`, "", 0, "not a record"},
+		{`{"relay":"work","relay_id":"7"}`, "", 0, "a number written as text"},
+	} {
+		write(t, tc.body)
+		box, relay, relayID, err := s.RemoveByID(id)
+		if err != nil || box != Inbox {
+			t.Errorf("%s: %v, %q; want removed from the inbox", tc.description, err, box)
+			continue
+		}
+		if relay != tc.relay || relayID != tc.relayID {
+			t.Errorf("%s: relay %q id %d; want %q %d", tc.description, relay, relayID, tc.relay, tc.relayID)
+		}
+		if _, err := os.Stat(s.msgPath(Inbox, id)); !os.IsNotExist(err) {
+			t.Errorf("%s: the record is still there", tc.description)
+		}
+		if _, err := os.Stat(s.AttachmentDir(Inbox, id)); !os.IsNotExist(err) {
+			t.Errorf("%s: the attachment directory is still there", tc.description)
+		}
+	}
+	if _, _, _, err := s.RemoveByID(id); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("RemoveByID of an id no box holds: %v; want ErrNotExist", err)
+	}
+	outsideUntouched(t, outside, witness, "RemoveByID")
 }

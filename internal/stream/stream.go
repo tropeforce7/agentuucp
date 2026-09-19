@@ -233,12 +233,13 @@ func (m *Manifest) Validate() error {
 			ErrForm, m.Chunks, m.PayloadBytes, m.ChunkSize, want)
 	}
 	var total int64
-	names := make([]string, 0, len(m.Attachments))
 	for _, a := range m.Attachments {
-		if err := message.ValidAttachmentName(a.Name); err != nil {
-			return fmt.Errorf("%w: attachment %v", ErrForm, err)
+		// The name is held to what any text is held to; a receiver
+		// writes it under SafeName, and the sender's rule ran at
+		// BuildManifest.
+		if err := message.ValidAttachmentText(a.Name); err != nil {
+			return fmt.Errorf("%w: %v", ErrForm, err)
 		}
-		names = append(names, a.Name)
 		if a.Size < 0 {
 			return fmt.Errorf("%w: attachment %q has a negative size", ErrForm, a.Name)
 		}
@@ -253,9 +254,6 @@ func (m *Manifest) Validate() error {
 				ErrForm, MaxPayloadBytes)
 		}
 		total += a.Size
-	}
-	if err := message.DistinctAttachmentNames(names); err != nil {
-		return fmt.Errorf("%w: %v", ErrForm, err)
 	}
 	if total != m.PayloadBytes {
 		return fmt.Errorf("%w: attachments total %d bytes, payload_bytes says %d",

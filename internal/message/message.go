@@ -137,75 +137,40 @@ func mediaTypeFor(name string) string {
 	return DefaultMedia
 }
 
-// ValidAttachmentName checks a name is a safe base name: something that can
-// become a file in a directory of the receiver's choosing and nothing else,
-// and something a terminal can show.
-//
-// It is separate from Validate because a streamed attachment's name arrives
-// in a manifest, long before its data, and must be judged on its own.
-func ValidAttachmentName(name string) error {
-	if err := validAttachmentPath(name); err != nil {
-		return err
-	}
-	// The set a channel name may not hold either: a name is printed in a
-	// column by 'auu read', and an escape sequence or a bidi override in
-	// it would drive the terminal rather than be shown.
-	if !utf8.ValidString(name) {
-		return fmt.Errorf("attachment %q: name is not valid UTF-8", name)
-	}
-	if r, what := channels.ForbiddenRune(name); what != "" {
-		return fmt.Errorf("attachment %q: name contains %U, a %s", name, r, what)
-	}
-	return nil
-}
-
-// validAttachmentPath is the part of the name rule that is about the
-// filesystem: what the name would do as a path. ValidShape holds a record
-// read back to this part alone, so that a record from before a rule, or
-// written by hand, with an escape sequence in a name is still listed and
-// shown, escaped, as its subject and text are; ValidAttachmentName is the
-// whole rule, at every door and at the write.
-func validAttachmentPath(name string) error {
-	if name == "" {
-		return errors.New("attachment: empty name")
-	}
+// ValidAttachmentText is the receiver's rule for an attachment name, the
+// part of the message rules that holds for any text: valid UTF-8, one
+// line, no NUL, and not over maxNameBytes. Everything else a name might
+// be — a path, a device, a character a terminal would obey, a name Windows
+// cannot make — is SafeName's to make safe at the write, since a receiver
+// never depends on the sender having followed the sender's rule. It runs
+// at Body.Validate and Manifest.Validate, on both sides.
+func ValidAttachmentText(name string) error {
 	if len(name) > maxNameBytes {
 		return fmt.Errorf("attachment %q: name longer than %d bytes", name, maxNameBytes)
 	}
-	if strings.ContainsAny(name, "/\\") {
-		return fmt.Errorf("attachment %q: name must not contain a path separator", name)
+	if !utf8.ValidString(name) {
+		return fmt.Errorf("attachment %q: name is not valid UTF-8", name)
 	}
-	// A colon names a drive or an alternate data stream on Windows, so
-	// C:x written under a directory there is not a file in it, and the
-	// other six characters Windows forbids in a file name are refused
-	// with it, since the receiver may be there and a sender cannot know.
-	if strings.Contains(name, ":") {
-		return fmt.Errorf("attachment %q: name must not contain a colon, which names a drive or a stream on Windows", name)
-	}
-	if i := strings.IndexAny(name, channels.WindowsForbidden); i >= 0 {
-		return fmt.Errorf("attachment %q: name must not contain %q, which Windows forbids in a file name, so the name is refused for every receiver", name, name[i])
-	}
-	if name == "." || name == ".." {
-		return fmt.Errorf("attachment %q: invalid name", name)
+	if strings.ContainsAny(name, "\n\r") {
+		return fmt.Errorf("attachment %q: name is more than one line", name)
 	}
 	if strings.ContainsRune(name, 0) {
 		return fmt.Errorf("attachment %q: name contains a null byte", name)
 	}
-	// A file name on Windows too, since the receiver may be there and a
-	// sender cannot know where a message lands: a stem that is a device
-	// name opens the device rather than a file (nul.txt writes nowhere,
-	// con.txt writes to the console, and an O_EXCL open of a device fails
-	// with an error that is not "exists", so it would not even be refused
-	// as malformed), and a trailing dot or space is stripped by the
-	// filesystem, so report.txt. and report.txt are one file and collide
-	// the way case does.
-	if stem, _, _ := strings.Cut(name, "."); channels.WindowsDevice(stem) {
-		return fmt.Errorf("attachment %q: %s is a device name on Windows, so the name is refused for every receiver", name, strings.ToUpper(stem))
-	}
-	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
-		return fmt.Errorf("attachment %q: name ends in a dot or a space, which Windows strips, so the name is refused for every receiver", name)
-	}
 	return nil
+}
+
+// ValidAttachmentNames is the sender's rule over a message's names: each
+// one SafeName's fixed point, and no two that fold to one file. It runs
+// where a message leaves — envelope.Seal and stream.BuildManifest — and
+// nowhere on the receiving path.
+func ValidAttachmentNames(names []string) error {
+	for _, name := range names {
+		if err := ValidAttachmentName(name); err != nil {
+			return err
+		}
+	}
+	return DistinctAttachmentNames(names)
 }
 
 // ValidSubject applies the rules for a subject: valid UTF-8, at most 4096
@@ -253,10 +218,11 @@ func ValidText(text string) error {
 // Report.txt and report.txt as one file. Without the second rule an honest
 // Linux sender with Makefile and makefile stopped a Mac receiving from that
 // relay at all: the second file failed to open and the fetch met the same
-// message at every try. Both ends run it on both paths, so the sender is
-// told before anything leaves. What a filesystem folds beyond case, such
-// as Unicode normalisation on APFS, is not foreseen here and is refused
-// where the file is opened instead.
+// message at every try. The sender runs it, through ValidAttachmentNames,
+// so it is told before anything leaves; a receiver does not, since what
+// a filesystem folds — case, or Unicode normalisation on APFS — is
+// settled at the write by the filesystem's own answer and a numbered
+// suffix.
 func DistinctAttachmentNames(names []string) error {
 	for i, name := range names {
 		for _, earlier := range names[:i] {
@@ -306,14 +272,8 @@ func (b *Body) ValidShape() error {
 	}
 	for i := range b.Attachments {
 		a := &b.Attachments[i]
-		// The name becomes a file under --out at extract; a record read
-		// back is held to the path part of the name rule as one received
-		// is to the whole, so a record written by hand or before the rule
-		// is refused here and never joined onto a path. The character
-		// part stays the escaper's, as it is for a subject and a text.
-		if err := validAttachmentPath(a.Name); err != nil {
-			return fmt.Errorf("attachment %d: %v", i, err)
-		}
+		// The name is not a reason to refuse a record: the write uses
+		// SafeName of it and the terminal escapes it, as for a subject.
 		if err := ValidDigest(a.SHA256); err != nil {
 			return fmt.Errorf("attachment %d: %v", i, err)
 		}
@@ -324,10 +284,12 @@ func (b *Body) ValidShape() error {
 	return nil
 }
 
-// Validate checks an attachment's name is a safe base name and that the digest
-// and size describe the data actually carried.
+// Validate checks an attachment's name is text and that the digest and
+// size describe the data actually carried. The name is not held to the
+// sender's rule here: this runs on both sides, and a receiver writes the
+// file under SafeName of whatever arrived.
 func (a *Attachment) Validate() error {
-	if err := ValidAttachmentName(a.Name); err != nil {
+	if err := ValidAttachmentText(a.Name); err != nil {
 		return err
 	}
 	if a.Size != int64(len(a.Data)) {
@@ -359,15 +321,19 @@ func (b *Body) Validate() error {
 	if err := ValidText(b.Text); err != nil {
 		return err
 	}
-	names := make([]string, 0, len(b.Attachments))
 	for i := range b.Attachments {
 		if err := b.Attachments[i].Validate(); err != nil {
 			return err
 		}
-		names = append(names, b.Attachments[i].Name)
-	}
-	if err := DistinctAttachmentNames(names); err != nil {
-		return fmt.Errorf("message: %w", err)
 	}
 	return nil
+}
+
+// AttachmentNames is the names in order, for the sender's rule.
+func (b *Body) AttachmentNames() []string {
+	names := make([]string, 0, len(b.Attachments))
+	for i := range b.Attachments {
+		names = append(names, b.Attachments[i].Name)
+	}
+	return names
 }

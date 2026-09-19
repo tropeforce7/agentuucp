@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/tropeforce7/agentuucp/internal/message"
 )
 
 // TestLimitManifestIntegers: every integer a manifest carries, at the
@@ -153,12 +155,14 @@ func TestLimitManifestLength(t *testing.T) {
 	}
 }
 
-// TestLimitNamesAreNotPathsAtManifestValidate: a manifest's id, its
-// thread and its attachment names become a record's file, a thread
-// directory and files on the receiver; Manifest.Validate runs
-// message.ValidID and ValidAttachmentName on each, so a value from the
+// TestLimitNamesAreNotPathsAtManifestValidate: a manifest's id and its
+// thread become a record's file and a thread directory on the receiver;
+// Manifest.Validate runs message.ValidID on each, so a value from the
 // limit guide's traversal set is refused as ErrForm before anything is
-// opened.
+// opened. An attachment name is a file on the receiver and is not
+// refused but made safe: a received manifest takes each value (but a NUL
+// and the 300 bytes, which the text rule refuses), SafeName of it is a
+// base name, and BuildManifest, the sender's side, refuses the value.
 func TestLimitNamesAreNotPathsAtManifestValidate(t *testing.T) {
 	from, to := pair(t)
 	set := []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", strings.Repeat("a", 300)}
@@ -179,8 +183,16 @@ func TestLimitNamesAreNotPathsAtManifestValidate(t *testing.T) {
 		}
 		m = fresh()
 		m.Attachments[0].Name = v
-		if err := m.Validate(); !errors.Is(err, ErrForm) {
-			t.Errorf("attachment name %q: %v; want ErrForm", v, err)
+		text := v != "\x00" && len(v) <= 255
+		if err := m.Validate(); (err == nil) != text {
+			t.Errorf("attachment name %q at a received manifest: %v; want taken=%v", v, err, text)
+		}
+		if safe := message.SafeName(v); strings.ContainsAny(safe, `/\`) || message.ValidAttachmentName(safe) != nil {
+			t.Errorf("SafeName(%q) = %q is not a name the sender's rule takes", v, safe)
+		}
+		if _, err := BuildManifest(from, to.Public(), strings.Repeat("a", 32), Body{Type: "ask", Thread: strings.Repeat("a", 32), Text: "x"},
+			sourcesOf(memSource{v, []byte("x")}), MinChunkSize); !errors.Is(err, ErrForm) {
+			t.Errorf("BuildManifest took the attachment name %q: %v", v, err)
 		}
 	}
 }

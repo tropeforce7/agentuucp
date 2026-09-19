@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/message"
 )
 
 // Source is one attachment waiting to be sealed: its metadata, and something
@@ -72,6 +73,16 @@ func BuildManifest(from *identity.Identity, to *identity.Public, id string,
 	m.Chunks = ChunkCount(m.PayloadBytes, chunkSize)
 	if err := m.Validate(); err != nil {
 		return nil, err
+	}
+	// The sender's rule for attachment names runs here, where every
+	// stream leaves, and nowhere on the receiving path: a receiver
+	// writes whatever name arrives under SafeName of it.
+	names := make([]string, 0, len(m.Attachments))
+	for _, a := range m.Attachments {
+		names = append(names, a.Name)
+	}
+	if err := message.ValidAttachmentNames(names); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrForm, err)
 	}
 	return m, nil
 }

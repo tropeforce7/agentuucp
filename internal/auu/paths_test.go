@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +32,9 @@ import (
 // test walks every component that becomes part of a path somewhere: a
 // fingerprint in a URL, an upload id, a token id, an attachment name, a
 // channel name, a relay host, a message id and a thread id. Each row names
-// the rule and the point it runs at, and is fed the limit guide's
+// the rule and the point it runs at (for an attachment name, the rule is
+// not a refusal but message.SafeName at the write, and the row asserts
+// the safe name and the sender's refusal), and is fed the limit guide's
 // traversal set: `..`, `../x`, `x/../../y`, `a/b`, an absolute path, a
 // backslash form, a drive letter, a Windows device name, a NUL, the empty
 // string, `.`, and a name longer than a filesystem allows. When a new
@@ -159,21 +162,28 @@ func TestLimitNothingTheNetworkNamesIsAPath(t *testing.T) {
 				}
 				return wire(boss, "DELETE", "/v1/admin/tokens/", v, "bad token id")
 			}},
-		{"an attachment name", "message.ValidAttachmentName at Body.Validate and Manifest.Validate; filepath.Base again at the open",
+		{"an attachment name", "message.SafeName at the write, the receiver's; the sender's rule at SealFor and BuildManifest refuses what SafeName would change",
 			func(v string) string {
-				if message.ValidAttachmentName(v) == nil {
+				// The receiver never refuses a name for what it would do as
+				// a path: it writes under SafeName, which is a base name the
+				// sender's rule takes; the sender's side refuses the value.
+				safe := message.SafeName(v)
+				if strings.ContainsAny(safe, `/\`) || message.ValidAttachmentName(safe) != nil {
 					return ""
 				}
-				b := body(anID)
-				b.Attachments = []message.Attachment{{Name: v, Media: "x", Size: 1, SHA256: strings.Repeat("0", 64), Data: []byte("x")}}
-				if b.Validate() == nil {
+				if message.ValidAttachmentName(v) == nil {
 					return ""
 				}
 				if _, err := stream.BuildManifest(alice, bob.Public(), anID, stream.Body{Type: "ask", Thread: anID, Text: "x"},
 					memSource(v), stream.MinChunkSize); !errors.Is(err, stream.ErrForm) {
 					return ""
 				}
-				return "refused"
+				b := body(anID)
+				b.Attachments = []message.Attachment{{Name: v, Media: "x", Size: 1, SHA256: strings.Repeat("0", 64), Data: []byte("x")}}
+				if _, _, err := envelope.SealFor(alice, bob.Public(), "", b); err == nil {
+					return ""
+				}
+				return "made safe as " + strconv.Quote(safe) + ", and refused at the sender"
 			}},
 		{"a channel name", "channels.ValidName: at the relay for every post and stream opened (400), at Directory.Validate for every push, and at the client's --channel",
 			func(v string) string {

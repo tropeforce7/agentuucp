@@ -25,6 +25,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
+	"github.com/tropeforce7/agentuucp/internal/stream"
 	"github.com/tropeforce7/agentuucp/internal/term"
 )
 
@@ -709,6 +710,18 @@ func printMessage(s *store.Store, box store.Box, m *store.Stored) {
 	fmt.Printf("\n%s\n", identity.PrintableLines(strings.TrimRight(m.Inner.Body.Text, "\n")))
 }
 
+// wroteLine is what extract says of one file: the path it wrote and the
+// size, and, when the name is not the one the sender gave, the sender's
+// name too, escaped, so that a person sees what was written and why it
+// differs.
+func wroteLine(path string, a message.Attachment) string {
+	line := fmt.Sprintf("wrote %s (%s)", path, term.HumanBytes(a.Size))
+	if filepath.Base(path) != a.Name {
+		line += fmt.Sprintf("; the sender named it %s", identity.Printable(a.Name))
+	}
+	return line
+}
+
 func cmdExtract(args []string) error {
 	fs := newFlagSet("extract")
 	out := fs.String("out", "", "directory to write into (default ./auu-attachments/<id>)")
@@ -752,7 +765,7 @@ func cmdExtract(args []string) error {
 		return err
 	}
 	for i, path := range written {
-		fmt.Printf("wrote %s (%s)\n", path, term.HumanBytes(m.Inner.Body.Attachments[i].Size))
+		fmt.Println(wroteLine(path, m.Inner.Body.Attachments[i]))
 	}
 	fmt.Println("\nThese files came from another machine. Read them; do not run them.")
 	return nil
@@ -764,21 +777,18 @@ func cmdExtract(args []string) error {
 // that are a person's: serve uses it to put the files an asker sent where
 // the handler can read them.
 //
-// Every file is checked again as it is written rather than only when the
-// message was opened, and a streamed one is copied without ever being held
-// in memory.
+// A receiver never depends on the sender's name: each file is written
+// under message.SafeName of it, and made unique at the write by an
+// exclusive create and a numbered suffix — x-2.txt, x-3.txt — so that
+// whatever already stands there, and whatever this filesystem folds
+// (case, a Unicode form), is settled by the filesystem's own answer and
+// nothing is overwritten. Every file's digest is checked again as it is
+// written rather than only when the message was opened, and a streamed
+// one is copied without ever being held in memory.
 func extractInto(s *store.Store, box store.Box, m *store.Stored, dir string) ([]string, error) {
 	var written []string
-	for _, a := range m.Inner.Body.Attachments {
-		// The name was held to its rule when the message was opened and
-		// again when the record was read back; it runs once more here,
-		// before a path exists, since this is the step that touches the
-		// filesystem. An inline attachment's Validate re-checks the
-		// digest at the moment of writing too.
+	for i, a := range m.Inner.Body.Attachments {
 		if m.Streamed {
-			if err := message.ValidAttachmentName(a.Name); err != nil {
-				return written, fmt.Errorf("refusing to write %q: %w", a.Name, err)
-			}
 			if a.Media == "" {
 				return written, fmt.Errorf("refusing to write %q: empty media type", a.Name)
 			}
@@ -788,10 +798,7 @@ func extractInto(s *store.Store, box store.Box, m *store.Stored, dir string) ([]
 				return written, fmt.Errorf("refusing to write %q: %w", a.Name, err)
 			}
 		}
-		target, err := writeAttachment(s, box, m, a, dir, a.Name)
-		if os.IsExist(err) {
-			return written, usageErrf("%s already exists; move it or choose another --out directory", target)
-		}
+		target, err := writeUnique(s, box, m, i, a, dir, message.SafeName(a.Name))
 		if err != nil {
 			return written, err
 		}
@@ -800,24 +807,44 @@ func extractInto(s *store.Store, box store.Box, m *store.Stored, dir string) ([]
 	return written, nil
 }
 
-// writeAttachment writes one attachment of m under dir as name, which has
-// passed the name rule, and returns the path it made. The create is
-// exclusive and by the handle: whatever already stood under the name — a
-// file, a device, a link — is os.ErrExist, returned as is for the caller
-// to say or to try another name, and a device the platform hands back
-// under the name is refused with nothing written. On any error after the
-// create, what this call made is removed, so a half-written file is not
-// mistaken for the real thing; the name was this call's to make.
-func writeAttachment(s *store.Store, box store.Box, m *store.Stored, a message.Attachment, dir, name string) (string, error) {
-	target := filepath.Join(dir, filepath.Base(name))
+// maxNameTries is how many numbered names writeUnique tries before it
+// gives up on a directory.
+const maxNameTries = 1000
+
+// writeUnique writes attachment i of m under dir as safe, a name SafeName
+// made, or as the first of safe-2, safe-3, … that nothing stands under,
+// and returns the path it made. Each candidate is cut to the safe cap, so
+// the loop's names are safe names too; after maxNameTries the directory
+// is refused by name.
+func writeUnique(s *store.Store, box store.Box, m *store.Stored, i int, a message.Attachment, dir, safe string) (string, error) {
+	for n := 1; n <= maxNameTries; n++ {
+		target, err := writeAttachment(s, box, m, i, a, dir, message.Numbered(safe, n))
+		if err == nil || !os.IsExist(err) {
+			return target, err
+		}
+	}
+	return "", fmt.Errorf("%s holds %d files named like %q already; choose another --out directory", dir, maxNameTries, safe)
+}
+
+// writeAttachment writes attachment i of m under dir as name, which
+// SafeName made, and returns the path it made. The create is exclusive
+// and by the handle: whatever already stood under the name — a file, a
+// device, a link — is os.ErrExist, returned as is for writeUnique to try
+// the next name, and a device the platform hands back under the name is
+// refused with nothing written. On any error after the create, what this
+// call made is removed, so a half-written file is not mistaken for the
+// real thing; the name was this call's to make.
+func writeAttachment(s *store.Store, box store.Box, m *store.Stored, i int, a message.Attachment, dir, name string) (string, error) {
+	target := filepath.Join(dir, name)
 	out, err := regular.Create(target, 0o600)
 	if err != nil {
 		return target, err
 	}
 	if m.Streamed {
-		// A streamed attachment is already a file and may be far larger
-		// than memory, so it is copied rather than loaded.
-		src := filepath.Join(s.AttachmentDir(box, m.Inner.ID), filepath.Base(a.Name))
+		// A streamed attachment is already a file in the spool, kept by
+		// its position and never by its name, and may be far larger than
+		// memory, so it is copied rather than loaded.
+		src := filepath.Join(s.AttachmentDir(box, m.Inner.ID), stream.SpoolName(i))
 		err = copyStreamed(src, out, a)
 	} else {
 		_, err = out.Write(a.Data)
