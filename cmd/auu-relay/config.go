@@ -41,13 +41,9 @@ const (
 	defaultTokenMaxAge = 720 * time.Hour
 
 	// defaultMaxStreamBytes caps one stream at four gigabytes. It is a
-	// separate ceiling from the per-request max_bytes, which bounds a single
-	// upload piece rather than the whole.
+	// separate ceiling from max_bytes, which bounds one envelope and is the
+	// threshold past which a stream attempt that stopped short is kept.
 	defaultMaxStreamBytes int64 = 4 << 30
-	// defaultUploadTTL is how long a half-finished upload holds its
-	// reservation before the relay gives the room back.
-	defaultUploadTTL = 24 * time.Hour
-
 	// defaultCertLifetime is how long an issued client certificate lives.
 	// Revocation is a row this relay reads on every request, so lifetime is
 	// hygiene rather than security; a year is short enough to bound a lost
@@ -79,8 +75,6 @@ type Config struct {
 	Streams bool `json:"streams"`
 	// MaxStreamBytes is the largest declared stream; 0 is unlimited.
 	MaxStreamBytes int64 `json:"max_stream_bytes"`
-	// UploadTTL is how long an unfinished upload is kept, as a Go duration.
-	UploadTTL string `json:"upload_ttl"`
 	// PublicURL is the URL users reach this relay at. It is the audience every
 	// enrolment token must name, so that a token issued for one relay cannot
 	// be spent on another. Empty skips that check.
@@ -255,7 +249,6 @@ func Defaults() Config {
 		Registration:   relayapi.RegistrationOpen,
 		Streams:        true,
 		MaxStreamBytes: defaultMaxStreamBytes,
-		UploadTTL:      defaultUploadTTL.String(),
 		Admin:          AdminConfig{TokenMaxAge: defaultTokenMaxAge.String()},
 		ClientCerts: ClientCertsConfig{
 			Mode:     relayapi.ClientCertsOff,
@@ -441,8 +434,6 @@ func (c *Config) Merge(fs *flag.FlagSet, f *flagValues) {
 			c.Streams = f.streams
 		case "max-stream-bytes":
 			c.MaxStreamBytes = f.maxStreamBytes
-		case "upload-ttl":
-			c.UploadTTL = f.uploadTTL
 		case "client-certs":
 			c.ClientCerts.Mode = f.clientCerts
 		case "client-certs-dir":
@@ -495,10 +486,6 @@ func (c *Config) Resolve() {
 	if c.Admin.TokenMaxAge == "" {
 		c.Admin.TokenMaxAge = defaultTokenMaxAge.String()
 	}
-	if c.UploadTTL == "" {
-		c.UploadTTL = defaultUploadTTL.String()
-	}
-
 	if c.AccessLog == "" {
 		c.AccessLog = relay.AccessLogFull
 	}
@@ -563,9 +550,6 @@ func (c Config) Validate() error {
 	if c.MaxStreamBytes < 0 {
 		return fmt.Errorf("max_stream_bytes must not be negative, got %d (use 0 for unlimited)",
 			c.MaxStreamBytes)
-	}
-	if _, err := c.ParsedUploadTTL(); err != nil {
-		return err
 	}
 	if c.Registration == relayapi.RegistrationToken && c.Admin.AuthorizedFile == "" {
 		return errors.New("registration is token, which needs administrators to issue them: " +
@@ -827,21 +811,6 @@ func Encode(w io.Writer, cfg Config) error {
 // never holds and never prints. This stays so that the next secret to arrive
 // has an obvious place to be handled.
 func (c Config) Redacted() Config { return c }
-
-// ParsedUploadTTL is how long an unfinished upload is kept.
-func (c Config) ParsedUploadTTL() (time.Duration, error) {
-	if c.UploadTTL == "" {
-		return defaultUploadTTL, nil
-	}
-	d, err := time.ParseDuration(c.UploadTTL)
-	if err != nil {
-		return 0, fmt.Errorf("upload_ttl %q is not a duration: %w", c.UploadTTL, err)
-	}
-	if d <= 0 {
-		return 0, fmt.Errorf("upload_ttl must be positive, got %s", d)
-	}
-	return d, nil
-}
 
 // TokenMaxAge parses the configured token lifetime cap.
 func (c Config) TokenMaxAge() (time.Duration, error) {

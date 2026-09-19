@@ -291,16 +291,11 @@ func TestAStreamIsFiledUnderTheChannelItWasOpenedFor(t *testing.T) {
 	if status != http.StatusCreated {
 		t.Fatalf("open after refusals: %d %s (a refused channel was charged)", status, body)
 	}
-	status, body, _ = h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob,
-		map[string]string{relayapi.UploadOffsetHeader: "0"})
-	if status != http.StatusNoContent {
-		t.Fatalf("append: %d %s", status, body)
+	status, body, _ = h.putStream(alice, opened.Upload, blob, 0)
+	if status != http.StatusCreated {
+		t.Fatalf("put: %d %s", status, body)
 	}
-	status, body, _ = h.send(alice, "POST", "/v1/uploads/"+opened.Upload+"/complete", nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("complete: %d %s", status, body)
-	}
-	var done relayapi.CompleteStreamResponse
+	var done relayapi.PutStreamResponse
 	if err := json.Unmarshal(body, &done); err != nil {
 		t.Fatal(err)
 	}
@@ -342,12 +337,8 @@ func TestTheListingSaysWhichChannel(t *testing.T) {
 	if status != http.StatusCreated {
 		t.Fatalf("open: %d %s", status, body)
 	}
-	if status, body, _ := h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob,
-		map[string]string{relayapi.UploadOffsetHeader: "0"}); status != http.StatusNoContent {
-		t.Fatalf("append: %d %s", status, body)
-	}
-	if status, body, _ := h.send(alice, "POST", "/v1/uploads/"+opened.Upload+"/complete", nil, nil); status != http.StatusOK {
-		t.Fatalf("complete: %d %s", status, body)
+	if status, body, _ := h.putStream(alice, opened.Upload, blob, 0); status != http.StatusCreated {
+		t.Fatalf("put: %d %s", status, body)
 	}
 
 	status, raw := h.do(bob, "GET", "/v1/mailbox/"+fp, nil, nil)

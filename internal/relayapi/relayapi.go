@@ -458,11 +458,42 @@ const (
 	KindStream   = "stream"
 )
 
-// Headers for a resumable upload. The names follow the tus convention, which
+// UploadOffsetHeader is the header an upload attempt carries, saying where
+// in the stream its body begins, and the header a 409 carries back, saying
+// where the relay's copy ends. The name follows the tus convention, which
 // is what anybody implementing a second client will expect.
+const UploadOffsetHeader = "Upload-Offset"
+
+// A stream is one request per attempt. The sender opens an upload, which
+// charges the quota and answers an id, and then PUTs the sealed bytes from
+// an offset to the end in one request with Content-Length equal to what is
+// left; when the last byte lands the relay places the message and answers
+// its id. An attempt that stops short keeps its bytes only when the relay
+// holds at least ResumeThreshold of the stream in all and the attempt was
+// the first: then the partial lives ResumeWindow, for one resumed attempt
+// from where it ends; a resumed attempt that stops short, or a first one
+// that stops under the threshold, leaves nothing, and the sender opens
+// again from zero. So the relay never keeps less than a threshold's worth
+// for an upload that did not complete, a message is placed by at most two
+// attempts on one id, and a sender that trickles bytes buys nothing.
 const (
-	UploadOffsetHeader = "Upload-Offset"
-	UploadLengthHeader = "Upload-Length"
+	// ResumeWindow is how long a kept partial lives, from the moment it is
+	// kept, and how long an opened upload waits for its first byte; the
+	// edge is inclusive, a resume at exactly the window is taken.
+	ResumeWindow = 60 * time.Second
+	// ResumeWindowSeconds is ResumeWindow as the open answer carries it.
+	ResumeWindowSeconds int64 = 60
+)
+
+// The sentences of an attempt refused by its length, as the relay's error
+// text begins; a client tells them apart by the status.
+const (
+	// MsgLengthRequired is the 411 for an attempt with no Content-Length:
+	// an attempt runs to the end, and the relay must be told where that is.
+	MsgLengthRequired = "an upload attempt must carry Content-Length; a chunked body cannot be judged before it is read"
+	// MsgNotToTheEnd is the 400 for an attempt whose offset and length do
+	// not reach the stream's size.
+	MsgNotToTheEnd = "an upload attempt runs from its offset to the end of the stream"
 )
 
 // Stream wire types.
@@ -479,11 +510,17 @@ type (
 	OpenStreamResponse struct {
 		Upload  string    `json:"upload"`
 		Expires time.Time `json:"expires"`
-		// MaxRequest is the largest body the relay will take in one PATCH, so
-		// a client can size its pieces without guessing.
-		MaxRequest int64 `json:"max_request"`
+		// ResumeThreshold is the least the relay must hold of the stream,
+		// in bytes, for a first attempt that stops short to be kept for a
+		// resume: the relay's max_bytes.
+		ResumeThreshold int64 `json:"resume_threshold"`
+		// ResumeWindow is how long a kept partial lives, in seconds, and
+		// how long this upload waits for its first byte.
+		ResumeWindow int64 `json:"resume_window"`
 	}
-	CompleteStreamResponse struct {
+	// PutStreamResponse is the 201 that ends an attempt which reached the
+	// end: the message's id in the recipient's mailbox.
+	PutStreamResponse struct {
 		ID int64 `json:"id"`
 	}
 )

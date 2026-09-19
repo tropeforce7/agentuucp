@@ -1,12 +1,14 @@
 package relay
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"runtime"
@@ -82,31 +84,31 @@ func TestStreamUploadRoundTrip(t *testing.T) {
 	if status != http.StatusCreated {
 		t.Fatalf("open: %d %s", status, body)
 	}
-	if opened.MaxRequest <= 0 {
-		t.Fatal("open did not say how large a piece may be")
+	if opened.ResumeThreshold != relayapi.DefaultMaxBytes || opened.ResumeWindow != relayapi.ResumeWindowSeconds {
+		t.Fatalf("open said threshold %d and window %d; want max_bytes and %d", opened.ResumeThreshold, opened.ResumeWindow, relayapi.ResumeWindowSeconds)
 	}
 
-	// Three pieces, so appending is exercised rather than a single write.
-	offsets := []int{0, 1000, 2500, len(blob)}
-	for i := 0; i < len(offsets)-1; i++ {
-		from, to := offsets[i], offsets[i+1]
-		status, body, hdr := h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob[from:to],
-			map[string]string{relayapi.UploadOffsetHeader: strconv.Itoa(from)})
-		if status != http.StatusNoContent {
-			t.Fatalf("append %d..%d: %d %s", from, to, status, body)
-		}
-		if got := hdr.Get(relayapi.UploadOffsetHeader); got != strconv.Itoa(to) {
-			t.Fatalf("offset after append is %q, want %d", got, to)
-		}
+	// One attempt, the whole stream, placed with the answer.
+	status, body, hdr := h.putStream(alice, opened.Upload, blob, 0)
+	if status != http.StatusCreated {
+		t.Fatalf("put: %d %s", status, body)
 	}
-
-	status, body, _ = h.send(alice, "POST", "/v1/uploads/"+opened.Upload+"/complete", nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("complete: %d %s", status, body)
+	if got := hdr.Get(relayapi.UploadOffsetHeader); got != strconv.Itoa(len(blob)) {
+		t.Fatalf("offset after the attempt is %q, want %d", got, len(blob))
 	}
-	var done relayapi.CompleteStreamResponse
+	var done relayapi.PutStreamResponse
 	if err := json.Unmarshal(body, &done); err != nil {
 		t.Fatal(err)
+	}
+	if done.ID <= 0 {
+		t.Fatalf("the attempt placed nothing: %+v", done)
+	}
+	var left int
+	if err := h.store.db.QueryRow(`SELECT COUNT(*) FROM uploads`).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if left != 0 {
+		t.Fatalf("%d upload rows remain after the stream was placed", left)
 	}
 
 	// It lists as a stream, with its size and no inline body.
@@ -172,73 +174,63 @@ func TestStreamUploadRules(t *testing.T) {
 	}
 
 	t.Run("an offset that does not match is a conflict with the truth", func(t *testing.T) {
-		h, opened, blob := setup(t, Config{})
-		h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob[:1000],
-			map[string]string{relayapi.UploadOffsetHeader: "0"})
-		status, _, hdr := h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob[1000:2000],
-			map[string]string{relayapi.UploadOffsetHeader: "500"})
+		// A first attempt that stops past the threshold (max_bytes 2048
+		// here) is kept; the next attempt at any other offset is told
+		// where the copy ends.
+		h, opened, blob := setup(t, Config{MaxBytes: 2048})
+		if status, body, _ := h.putPartial(alice, opened.Upload, blob, 0, 2500); status != http.StatusBadRequest || !strings.Contains(string(body), "kept for one resume") {
+			t.Fatalf("a partial past the threshold: %d %s; want 400 saying it is kept", status, body)
+		}
+		status, _, hdr := h.putStream(alice, opened.Upload, blob, 500)
 		if status != http.StatusConflict {
 			t.Fatalf("status %d, want 409", status)
 		}
-		if got := hdr.Get(relayapi.UploadOffsetHeader); got != "1000" {
-			t.Fatalf("the conflict reported offset %q, want 1000", got)
+		if got := hdr.Get(relayapi.UploadOffsetHeader); got != "2500" {
+			t.Fatalf("the conflict reported offset %q, want 2500", got)
+		}
+		// And from the truth, the rest lands.
+		if status, body, _ := h.putStream(alice, opened.Upload, blob, 2500); status != http.StatusCreated {
+			t.Fatalf("the resumed attempt: %d %s", status, body)
 		}
 	})
 
-	t.Run("more than the declared size is refused", func(t *testing.T) {
+	t.Run("an attempt that does not run to the end is refused before a byte is read", func(t *testing.T) {
 		h, opened, blob := setup(t, Config{})
-		tooMuch := append(append([]byte(nil), blob...), bytes.Repeat([]byte("x"), 100)...)
-		status, body, _ := h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, tooMuch,
-			map[string]string{relayapi.UploadOffsetHeader: "0"})
-		if status != http.StatusRequestEntityTooLarge {
-			t.Fatalf("status %d, want 413: %s", status, body)
+		for _, tc := range []struct {
+			name   string
+			body   []byte
+			offset int
+		}{
+			{"more than the declared size", append(append([]byte(nil), blob...), bytes.Repeat([]byte("x"), 100)...), 0},
+			{"less than the rest", blob[:len(blob)-1], 0},
+			{"the rest from the wrong start", blob[1:], 0},
+		} {
+			status, body, _ := h.sendRaw(alice, "PUT", "/v1/uploads/"+opened.Upload, tc.body,
+				map[string]string{relayapi.UploadOffsetHeader: strconv.Itoa(tc.offset)})
+			if status != http.StatusBadRequest || !strings.Contains(string(body), relayapi.MsgNotToTheEnd) {
+				t.Errorf("%s: %d %s; want 400 saying an attempt runs to the end", tc.name, status, body)
+			}
 		}
-	})
-
-	t.Run("completing early is a conflict", func(t *testing.T) {
-		h, opened, blob := setup(t, Config{})
-		h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob[:1000],
-			map[string]string{relayapi.UploadOffsetHeader: "0"})
-		status, body, _ := h.send(alice, "POST", "/v1/uploads/"+opened.Upload+"/complete", nil, nil)
-		if status != http.StatusConflict {
-			t.Fatalf("status %d, want 409: %s", status, body)
+		u, err := h.store.Upload(opened.Upload)
+		if err != nil || u.Received != 0 {
+			t.Fatalf("the upload after the refusals: %+v %v; want untouched at 0", u, err)
 		}
 	})
 
 	t.Run("only the opener may touch it", func(t *testing.T) {
 		h, opened, blob := setup(t, Config{})
 		for _, c := range []struct {
-			method, path string
-			body         []byte
+			method string
+			body   []byte
 		}{
-			{"PATCH", "/v1/uploads/" + opened.Upload, blob[:100]},
-			{"HEAD", "/v1/uploads/" + opened.Upload, nil},
-			{"DELETE", "/v1/uploads/" + opened.Upload, nil},
+			{"PUT", blob},
+			{"DELETE", nil},
 		} {
-			status, _, _ := h.sendRaw(carol, c.method, c.path, c.body,
+			status, _, _ := h.sendRaw(carol, c.method, "/v1/uploads/"+opened.Upload, c.body,
 				map[string]string{relayapi.UploadOffsetHeader: "0"})
 			if status != http.StatusForbidden {
 				t.Errorf("%s by a stranger gave %d, want 403", c.method, status)
 			}
-		}
-		status, _, _ := h.send(carol, "POST", "/v1/uploads/"+opened.Upload+"/complete", nil, nil)
-		if status != http.StatusForbidden {
-			t.Errorf("complete by a stranger gave %d, want 403", status)
-		}
-	})
-
-	t.Run("head reports the offset for resumption", func(t *testing.T) {
-		h, opened, blob := setup(t, Config{})
-		h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob[:1500],
-			map[string]string{relayapi.UploadOffsetHeader: "0"})
-		status, _, hdr := h.sendRaw(alice, "HEAD", "/v1/uploads/"+opened.Upload, nil, nil)
-		if status != http.StatusOK {
-			t.Fatalf("head: %d", status)
-		}
-		if hdr.Get(relayapi.UploadOffsetHeader) != "1500" ||
-			hdr.Get(relayapi.UploadLengthHeader) != strconv.Itoa(len(blob)) {
-			t.Fatalf("head said offset %q of %q", hdr.Get(relayapi.UploadOffsetHeader),
-				hdr.Get(relayapi.UploadLengthHeader))
 		}
 	})
 
@@ -258,8 +250,10 @@ func TestStreamUploadRules(t *testing.T) {
 }
 
 // The three structural checks are the whole of what the relay can say about a
-// stream, so each boundary of each is tested.
-func TestCompleteChecksTheShape(t *testing.T) {
+// stream, so each boundary of each is tested. They run as the first bytes
+// of an attempt pass, before any is written, and a wrong shape ends the
+// attempt with 400 and leaves nothing of the upload.
+func TestAnAttemptChecksTheShapeAsItsFirstBytesPass(t *testing.T) {
 	people := ids(t, "alice", "bob")
 	alice, bob := people[0], people[1]
 
@@ -272,18 +266,24 @@ func TestCompleteChecksTheShape(t *testing.T) {
 		if status != http.StatusCreated {
 			return status, string(body)
 		}
-		if status, body, _ := h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob,
-			map[string]string{relayapi.UploadOffsetHeader: "0"}); status != http.StatusNoContent {
-			t.Fatalf("append: %d %s", status, body)
+		status, body, _ = h.putStream(alice, opened.Upload, blob, 0)
+		if status != http.StatusCreated {
+			// A refused shape leaves nothing: no row, no file.
+			var left int
+			if err := h.store.db.QueryRow(`SELECT COUNT(*) FROM uploads`).Scan(&left); err != nil || left != 0 {
+				t.Errorf("%d upload rows after a refused shape (%v)", left, err)
+			}
+			if _, err := os.Stat(h.store.uploadPath(opened.Upload)); !os.IsNotExist(err) {
+				t.Errorf("the upload's file remains after a refused shape: %v", err)
+			}
 		}
-		status, body, _ = h.send(alice, "POST", "/v1/uploads/"+opened.Upload+"/complete", nil, nil)
 		return status, string(body)
 	}
 
 	minSize := stream.HeaderSize + stream.MinChunk0 + stream.TagSize
 	t.Run("the smallest possible stream is accepted", func(t *testing.T) {
-		if status, body := upload(t, fakeStream(stream.MinChunk0, stream.TagSize)); status != http.StatusOK {
-			t.Fatalf("status %d, want 200: %s", status, body)
+		if status, body := upload(t, fakeStream(stream.MinChunk0, stream.TagSize)); status != http.StatusCreated {
+			t.Fatalf("status %d, want 201: %s", status, body)
 		}
 	})
 	t.Run("one byte smaller is refused at open", func(t *testing.T) {
@@ -468,9 +468,7 @@ func TestUploadsRowIsTheOnlyRecordOfASender(t *testing.T) {
 		t.Fatal("the upload does not record who may append")
 	}
 
-	h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob,
-		map[string]string{relayapi.UploadOffsetHeader: "0"})
-	h.send(alice, "POST", "/v1/uploads/"+opened.Upload+"/complete", nil, nil)
+	h.putStream(alice, opened.Upload, blob, 0)
 
 	var rows int
 	if err := h.store.db.QueryRow(`SELECT COUNT(*) FROM uploads`).Scan(&rows); err != nil {
@@ -520,11 +518,11 @@ func (f *filler) Read(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// sendPiece appends to an upload from a reader, so the piece never exists as a
-// slice on the sending side either.
-func (h *harness) sendPiece(id *identity.Identity, upload string, offset, n int64, head []byte) (int, []byte) {
+// sendWhole is one attempt at an upload from a reader, so the stream never
+// exists as a slice on the sending side either.
+func (h *harness) sendWhole(id *identity.Identity, upload string, offset, n int64, head []byte) (int, []byte) {
 	h.t.Helper()
-	req, err := http.NewRequest("PATCH", h.srv.URL+"/v1/uploads/"+upload, &filler{head: head, n: n})
+	req, err := http.NewRequest("PUT", h.srv.URL+"/v1/uploads/"+upload, &filler{head: head, n: n})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -543,7 +541,7 @@ func (h *harness) sendPiece(id *identity.Identity, upload string, offset, n int6
 }
 
 // The relay must never hold a stream it is carrying, in either direction. This
-// is the claim the whole design rests on: 256 MiB goes up in 16 MiB pieces and
+// is the claim the whole design rests on: 256 MiB goes up in one attempt and
 // comes back down, and the heap does not follow it.
 //
 // Nothing on either side of the measurement holds the bytes — the request body
@@ -551,10 +549,9 @@ func (h *harness) sendPiece(id *identity.Identity, upload string, offset, n int6
 // so what is left is what the relay kept.
 func TestRelayDoesNotHoldAStream(t *testing.T) {
 	const total = 256 << 20
-	const piece = 16 << 20
 	const bound = 64 << 20
 
-	h := newHarness(t, Config{MaxBytes: piece})
+	h := newHarness(t, Config{})
 	people := ids(t, "alice", "bob")
 	alice, bob := people[0], people[1]
 	h.register(alice)
@@ -565,41 +562,26 @@ func TestRelayDoesNotHoldAStream(t *testing.T) {
 		t.Fatalf("open: %d %s", status, body)
 	}
 
-	// Only the first bytes have to be shaped like a stream: complete checks
-	// the header and the manifest length, and nothing else is ever opened.
+	// Only the first bytes have to be shaped like a stream: the attempt
+	// checks the header and the manifest length as they pass, and nothing
+	// else is ever looked at.
 	head := fakeStream(200, 0)
 
 	runtime.GC()
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	for off := int64(0); off < total; off += piece {
-		n := int64(piece)
-		if rest := total - off; rest < n {
-			n = rest
-		}
-		var h0 []byte
-		if off == 0 {
-			h0 = head
-		}
-		if status, out := h.sendPiece(alice, opened.Upload, off, n, h0); status != http.StatusNoContent {
-			t.Fatalf("append at %d: %d %s", off, status, out)
-		}
+	status, body = h.sendWhole(alice, opened.Upload, 0, total, head)
+	if status != http.StatusCreated {
+		t.Fatalf("the attempt: %d %s", status, body)
 	}
 	runtime.GC()
 	runtime.ReadMemStats(&after)
 	grew := int64(after.HeapAlloc) - int64(before.HeapAlloc)
 	if grew > bound {
-		t.Fatalf("uploading %d MiB in %d MiB pieces grew the heap by %d bytes",
-			total>>20, piece>>20, grew)
+		t.Fatalf("uploading %d MiB in one attempt grew the heap by %d bytes", total>>20, grew)
 	}
-	t.Logf("upload:   %d MiB in %d MiB pieces grew the heap by %d KiB",
-		total>>20, piece>>20, grew>>10)
-
-	status, body, _ = h.send(alice, "POST", "/v1/uploads/"+opened.Upload+"/complete", nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("complete: %d %s", status, body)
-	}
-	var done relayapi.CompleteStreamResponse
+	t.Logf("upload:   %d MiB in one attempt grew the heap by %d KiB", total>>20, grew>>10)
+	var done relayapi.PutStreamResponse
 	if err := json.Unmarshal(body, &done); err != nil {
 		t.Fatal(err)
 	}
@@ -677,23 +659,72 @@ func TestOwnerMayAlwaysPostToOwnMailbox(t *testing.T) {
 	}
 }
 
-// uploadStream puts a stream in a mailbox in one piece and returns its id.
+// putStream is one attempt at an upload: the blob from offset to its end
+// in one PUT, with the length declared. It returns the answer.
+func (h *harness) putStream(from *identity.Identity, upload string, blob []byte, offset int) (int, []byte, http.Header) {
+	h.t.Helper()
+	return h.sendRaw(from, "PUT", "/v1/uploads/"+upload, blob[offset:],
+		map[string]string{relayapi.UploadOffsetHeader: strconv.Itoa(offset)})
+}
+
+// putPartial is an attempt that stops short: the request declares the
+// bytes from offset to the end and sends only the first upTo-offset of
+// them before closing its side of the connection, as a sender whose link
+// dropped would. It returns the relay's answer to that, read from the
+// same connection, and the closing is what makes the answer definite: the
+// relay's rule has run by the time it writes.
+func (h *harness) putPartial(from *identity.Identity, upload string, blob []byte, offset, upTo int) (int, []byte, http.Header) {
+	h.t.Helper()
+	req, err := http.NewRequest("PUT", h.srv.URL+"/v1/uploads/"+upload, nil)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	req.ContentLength = int64(len(blob) - offset)
+	req.Header.Set(relayapi.UploadOffsetHeader, strconv.Itoa(offset))
+	if err := relayapi.SignRequest(from, req, nil); err != nil {
+		h.t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", strings.TrimPrefix(h.srv.URL, "http://"))
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	defer conn.Close()
+	var wire bytes.Buffer
+	fmt.Fprintf(&wire, "PUT %s HTTP/1.1\r\nHost: %s\r\nContent-Length: %d\r\nConnection: close\r\n", req.URL.RequestURI(), req.Host, req.ContentLength)
+	for k, vs := range req.Header {
+		for _, v := range vs {
+			fmt.Fprintf(&wire, "%s: %s\r\n", k, v)
+		}
+	}
+	wire.WriteString("\r\n")
+	wire.Write(blob[offset:upTo])
+	if _, err := conn.Write(wire.Bytes()); err != nil {
+		h.t.Fatal(err)
+	}
+	if err := conn.(*net.TCPConn).CloseWrite(); err != nil {
+		h.t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		h.t.Fatalf("reading the answer to a partial attempt: %v", err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, out, resp.Header
+}
+
+// uploadStream puts a stream in a mailbox in one attempt and returns its id.
 func (h *harness) uploadStream(from *identity.Identity, toFP string, blob []byte) int64 {
 	h.t.Helper()
 	status, opened, body := h.openStream(from, toFP, int64(len(blob)))
 	if status != http.StatusCreated {
 		h.t.Fatalf("open: %d %s", status, body)
 	}
-	status, body, _ = h.sendRaw(from, "PATCH", "/v1/uploads/"+opened.Upload, blob,
-		map[string]string{relayapi.UploadOffsetHeader: "0"})
-	if status != http.StatusNoContent {
-		h.t.Fatalf("append: %d %s", status, body)
+	status, body, _ = h.putStream(from, opened.Upload, blob, 0)
+	if status != http.StatusCreated {
+		h.t.Fatalf("put: %d %s", status, body)
 	}
-	status, body, _ = h.send(from, "POST", "/v1/uploads/"+opened.Upload+"/complete", nil, nil)
-	if status != http.StatusOK {
-		h.t.Fatalf("complete: %d %s", status, body)
-	}
-	var done relayapi.CompleteStreamResponse
+	var done relayapi.PutStreamResponse
 	if err := json.Unmarshal(body, &done); err != nil {
 		h.t.Fatal(err)
 	}
@@ -800,19 +831,23 @@ func TestAShortStreamFileIsDroppedWhenServed(t *testing.T) {
 	}
 }
 
-// A full disk met while a piece of a stream is being written is a 507 with
-// the same sentence handlePost gives, not a 500 that says nothing: the
-// sender is told whose problem the room is, and what it has already sent is
-// kept for a resume, so the reservation is neither released nor leaked — it
-// waits, and expires with the upload if nobody comes back. The container
-// suite's R18 found the 500.
+// A full disk met while a stream is being written is a 507 with the same
+// sentence handlePost gives, not a 500 that says nothing: the sender is
+// told whose problem the room is. Under the one-attempt wire nothing of an
+// attempt the disk cut short is kept unless it passed the threshold; here
+// it did not, so the upload is gone with the answer and the counters count
+// nothing. The container suite's R18 found the 500.
 //
 // Only /dev/full refuses a write with ENOSPC without a filesystem of one's
-// own, so the piece is written to it in place of the upload's file; it is
-// Linux's, and elsewhere the store-level test below carries the rule.
+// own. The upload's file is opened by its handle now, so a link to
+// /dev/full under its name is refused as a link, not written to; the file
+// is therefore replaced by a hard link to the device, which the handle
+// check sees as the device it is and the store writes to as the disk. It
+// is Linux's, and needs a device node one may link; elsewhere, and where
+// the link is refused, the store-level test below carries the rule.
 func TestAnUploadOnAFullDiskIsA507(t *testing.T) {
 	if _, err := os.Stat("/dev/full"); err != nil {
-		t.Skip("no /dev/full on this platform; TestAppendUploadMapsAFullDisk covers the mapping")
+		t.Skip("no /dev/full on this platform; TestReceiveUploadMapsAFullDisk covers the mapping")
 	}
 	h := newHarness(t, Config{})
 	people := ids(t, "alice", "bob")
@@ -829,14 +864,13 @@ func TestAnUploadOnAFullDiskIsA507(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("/dev/full", path); err != nil {
-		t.Fatal(err)
+	if err := os.Link("/dev/full", path); err != nil {
+		t.Skipf("cannot link /dev/full under the upload's name here: %v; TestReceiveUploadMapsAFullDisk covers the mapping", err)
 	}
 
-	status, body, _ = h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob[:1000],
-		map[string]string{relayapi.UploadOffsetHeader: "0"})
+	status, body, _ = h.putStream(alice, opened.Upload, blob, 0)
 	if status != http.StatusInsufficientStorage {
-		t.Fatalf("a piece on a full disk answered %d, want 507: %s", status, body)
+		t.Fatalf("an attempt on a full disk answered %d, want 507: %s", status, body)
 	}
 	if got := errorText(t, body); got != relayapi.MsgRelayFull {
 		t.Fatalf("507 body %q, want %q", got, relayapi.MsgRelayFull)
@@ -844,40 +878,16 @@ func TestAnUploadOnAFullDiskIsA507(t *testing.T) {
 	if !strings.Contains(h.logs.String(), "limit=\"relay storage\"") {
 		t.Fatalf("the refusal did not name its limit in the log:\n%s", h.logs.String())
 	}
-	// The reservation is kept, at the offset the relay truly has, and the
-	// counters count nothing, since nothing was queued.
-	u, err := h.store.Upload(opened.Upload)
-	if err != nil || u.Received != 0 {
-		t.Fatalf("upload after the refusal: %+v, %v; want kept at offset 0", u, err)
-	}
-	status, _, hdr := h.sendRaw(alice, "HEAD", "/v1/uploads/"+opened.Upload, nil, nil)
-	if status != http.StatusOK || hdr.Get(relayapi.UploadOffsetHeader) != "0" {
-		t.Fatalf("HEAD after the refusal: %d offset %q", status, hdr.Get(relayapi.UploadOffsetHeader))
-	}
 	h.assertCountersAgree()
 	if n, b := h.queued(bob.Fingerprint()); n != 0 || b != 0 {
 		t.Fatalf("the refusal charged the mailbox: %d messages, %d bytes", n, b)
 	}
-
-	// Room made: the file is a file again, and the upload finishes from
-	// where the relay said it was.
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	status, body, _ = h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob,
-		map[string]string{relayapi.UploadOffsetHeader: "0"})
-	if status != http.StatusNoContent {
-		t.Fatalf("append once there is room: %d %s", status, body)
-	}
-	status, body, _ = h.send(alice, "POST", "/v1/uploads/"+opened.Upload+"/complete", nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("complete once there is room: %d %s", status, body)
+	// Room made: the sender opens again and the stream lands.
+	if id := h.uploadStream(alice, bob.Fingerprint(), blob); id <= 0 {
+		t.Fatalf("the stream once there is room: %d", id)
 	}
 	if n, _ := h.queued(bob.Fingerprint()); n != 1 {
-		t.Fatalf("queued %d after the resumed upload, want 1", n)
+		t.Fatalf("queued %d after the stream, want 1", n)
 	}
 	h.assertCountersAgree()
 }
@@ -892,11 +902,11 @@ func (h *harness) queued(fp string) (messages, bytes int64) {
 	return messages, bytes
 }
 
-// The copy's error is the write's, and a full disk or an exhausted quota is
-// ErrRelayFull with the row advanced by exactly what reached the disk; any
-// other error from the copy is passed through as it came, since it may be
-// the request's and not the disk's.
-func TestAppendUploadMapsAFullDisk(t *testing.T) {
+// The copy's error is the write's, and a full disk or an exhausted quota
+// is ErrRelayFull; the request's own error is ErrShortAttempt. Either way,
+// under the threshold nothing is kept: the row and the file are gone with
+// the answer, and the counters count nothing.
+func TestReceiveUploadMapsAFullDisk(t *testing.T) {
 	people := ids(t, "alice", "bob")
 	alice, bob := people[0], people[1]
 	for _, tc := range []struct {
@@ -917,33 +927,87 @@ func TestAppendUploadMapsAFullDisk(t *testing.T) {
 			if status != http.StatusCreated {
 				t.Fatalf("open: %d %s", status, body)
 			}
-			// 700 bytes reach the disk, then the write fails.
-			got, err := h.store.AppendUpload(opened.Upload, 0, func(f *os.File, limit int64) (int64, error) {
-				n, werr := f.Write(blob[:700])
-				if werr != nil {
-					return int64(n), werr
-				}
-				return int64(n), tc.err
-			})
-			if got != 700 {
-				t.Fatalf("received %d, want the 700 that reached the disk", got)
+			// 700 bytes reach the disk, then the copy fails.
+			received, err := h.store.ReceiveUpload(opened.Upload, 0, relayapi.DefaultMaxBytes, time.Now, time.Minute,
+				func(f *os.File, want int64) (int64, error) {
+					n, werr := f.Write(blob[:700])
+					if werr != nil {
+						return int64(n), werr
+					}
+					return int64(n), tc.err
+				})
+			if received.Kept || received.Placed != 0 || received.Offset != 0 {
+				t.Fatalf("received %+v; want nothing kept", received)
 			}
 			if tc.full && !errors.Is(err, ErrRelayFull) {
 				t.Fatalf("error %v, want ErrRelayFull", err)
 			}
-			if !tc.full && (errors.Is(err, ErrRelayFull) || !errors.Is(err, tc.err)) {
-				t.Fatalf("error %v, want the request's own %v", err, tc.err)
+			if !tc.full && !errors.Is(err, ErrShortAttempt) {
+				t.Fatalf("error %v, want ErrShortAttempt", err)
 			}
-			u, err := h.store.Upload(opened.Upload)
-			if err != nil || u.Received != 700 {
-				t.Fatalf("the row says %d received (%v), want 700", u.Received, err)
+			if _, err := h.store.Upload(opened.Upload); !errors.Is(err, ErrNoUpload) {
+				t.Fatalf("the row after the failed attempt: %v; want gone", err)
 			}
-			if info, err := os.Stat(h.store.uploadPath(opened.Upload)); err != nil || info.Size() != 700 {
-				t.Fatalf("the file holds %d bytes, want 700", info.Size())
+			if _, err := os.Stat(h.store.uploadPath(opened.Upload)); !os.IsNotExist(err) {
+				t.Fatalf("the file after the failed attempt: %v; want gone", err)
 			}
 			h.assertCountersAgree()
 		})
 	}
+}
+
+// TestAFileLongerThanItsRowIsNotKept: on the end path, a sync that fails
+// puts the file back to the length its row names, and when that fails
+// too the upload is aborted whole rather than left. Left, the row would
+// say u.Received with the file holding the whole stream, the sender
+// would be answered 507 and keep the id, and its next attempt from zero
+// would be told 409 at u.Received and append after the extra bytes: a
+// corrupt stream placed. The plant closes the handle under the store
+// once every byte is written, so the sync and the truncate both fail on
+// it; the answer is the sync's error with nothing kept, and the row, the
+// file, the lock's entry and the reservation are gone.
+func TestAFileLongerThanItsRowIsNotKept(t *testing.T) {
+	h := newHarness(t, Config{})
+	people := ids(t, "alice", "bob")
+	alice, bob := people[0], people[1]
+	h.register(alice)
+	h.register(bob)
+	blob := fakeStream(200, 3000)
+	status, opened, body := h.openStream(alice, bob.Fingerprint(), int64(len(blob)))
+	if status != http.StatusCreated {
+		t.Fatalf("open: %d %s", status, body)
+	}
+	received, err := h.store.ReceiveUpload(opened.Upload, 0, relayapi.DefaultMaxBytes, time.Now, time.Minute,
+		func(f *os.File, want int64) (int64, error) {
+			n, werr := f.Write(blob)
+			if werr != nil {
+				return int64(n), werr
+			}
+			f.Close()
+			return int64(n), nil
+		})
+	if err == nil || errors.Is(err, ErrShortAttempt) || !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("error %v, want the sync's own, the handle being closed", err)
+	}
+	if received != (Received{}) {
+		t.Fatalf("received %+v; want nothing kept", received)
+	}
+	if _, err := h.store.Upload(opened.Upload); !errors.Is(err, ErrNoUpload) {
+		t.Fatalf("the row after the failed end: %v; want gone", err)
+	}
+	if _, err := os.Stat(h.store.uploadPath(opened.Upload)); !os.IsNotExist(err) {
+		t.Fatalf("the file after the failed end: %v; want gone", err)
+	}
+	h.store.uploadsMu.Lock()
+	_, held := h.store.uploads[opened.Upload]
+	h.store.uploadsMu.Unlock()
+	if held {
+		t.Fatal("the lock entry outlived the abort")
+	}
+	if status, _, _ := h.putStream(alice, opened.Upload, blob, 0); status != http.StatusNotFound {
+		t.Errorf("the next attempt at the id: %d, want 404", status)
+	}
+	h.assertCountersAgree()
 }
 
 // The list carries how many messages the mailbox holds in all, whatever
@@ -1011,23 +1075,18 @@ func TestTheListSaysHowManyAreQueued(t *testing.T) {
 	expect(last+1000, 0, 2)
 
 	// An upload that is open is reserved, not queued: the count is unmoved
-	// until it completes.
+	// until it is placed.
 	blob := fakeStream(200, 3000)
 	status, opened, body := h.openStream(alice, bob.Fingerprint(), int64(len(blob)))
 	if status != http.StatusCreated {
 		t.Fatalf("open: %d %s", status, body)
 	}
-	status, body, _ = h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob,
-		map[string]string{relayapi.UploadOffsetHeader: "0"})
-	if status != http.StatusNoContent {
-		t.Fatalf("append: %d %s", status, body)
-	}
 	expect(last, 0, 2)
-	status, body, _ = h.send(alice, "POST", "/v1/uploads/"+opened.Upload+"/complete", nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("complete: %d %s", status, body)
+	status, body, _ = h.putStream(alice, opened.Upload, blob, 0)
+	if status != http.StatusCreated {
+		t.Fatalf("put: %d %s", status, body)
 	}
-	var done relayapi.CompleteStreamResponse
+	var done relayapi.PutStreamResponse
 	if err := json.Unmarshal(body, &done); err != nil {
 		t.Fatal(err)
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
 	"github.com/tropeforce7/agentuucp/internal/term"
@@ -154,11 +155,12 @@ func finishStream(s *store.Store, id *identity.Identity, r *store.Relay, p *pend
 			// outright is the worse of the two.
 			p.remove(s)
 		case isStorageFull(err):
-			// The relay ran out of room part way. It keeps what it has and
-			// the sealed copy is here, so nothing is lost but time: the
-			// sentence says whose problem the room is, and that the upload
-			// waits for it.
-			hint = fmt.Errorf("%v. The upload is kept; finish it with '%s send --resume' when there is room",
+			// The relay ran out of room part way. The sealed copy is here,
+			// and the relay keeps what its rule keeps for as long as it
+			// keeps it, so nothing is lost but time: the sentence says
+			// whose problem the room is, and that the sealed copy waits
+			// for it.
+			hint = fmt.Errorf("%v. The sealed copy is kept; finish it with '%s send --resume' when there is room",
 				hint, prog)
 		case fresh:
 			fmt.Fprintf(os.Stderr,
@@ -270,73 +272,65 @@ func resumeRelay(s *store.Store, p *pending, flag string) (*store.Relay, error) 
 	return r, err
 }
 
-// uploadStream sends a sealed file, resuming from whatever the relay already
-// has if a piece fails part way.
+// uploadStream sends the sealed stream in the outbox to the relay, one
+// attempt per turn: an open, then a PUT of the whole file from the offset
+// the relay reports to the end, streamed from disk. It answers the message
+// id the relay placed the stream under.
 //
-// A large stream is many requests, so it meets the relay's per-identity
-// request rate as a matter of course. A 429 or a 503 is not a failure: it is
-// the relay saying when to come back, and this waits exactly that long. Only
-// an error that is neither, and makes no progress, gives up.
+// An attempt that stops short is the relay's to judge: it keeps the
+// partial only when the attempt was the first and got past the relay's
+// threshold, and then for the resume window. The sender learns what the
+// relay kept the only way this wire tells it, by the next attempt: one
+// from zero on the same upload is answered 409 with the offset the
+// relay's copy ends at when a partial is kept, 404 or 410 when the relay
+// has let the upload go, and taken as the fresh attempt it is when the
+// upload is untouched. A 409 past zero is resumed from, once; a second
+// short attempt has cost the relay's partial and the next answer says so.
+// Three attempts that end in an error other than a wait are the turn's
+// limit, and the sealed bytes are still on disk to try with.
 func uploadStream(c *client.Client, s *store.Store, p *pending) (int64, error) {
 	path := streamPath(s, p.MessageID)
 	info, err := os.Stat(path)
 	if err != nil {
 		return 0, err
 	}
-
-	// An upload this process did not start is resumed rather than reopened:
-	// the relay already holds a prefix of these exact bytes, and the sealed
-	// file cannot be made a second time.
-	var offset int64
-	if p.Upload != "" {
-		offset, err = c.UploadOffset(ctx(), p.Upload)
-		if err != nil {
-			// The reservation is gone, most likely expired. Starting over is
-			// the only thing left, and the bytes are still on disk to do it
-			// with.
-			p.Upload, p.MaxRequest = "", 0
-		}
-	}
-	if p.Upload == "" {
-		opened, err := c.OpenStream(ctx(), p.To, p.Channel, info.Size())
+	// Each attempt opens the file afresh at its offset, and reads it by
+	// the handle: the outbox is this home's own, but what stands under
+	// the record's name is not taken on trust.
+	attempt := func(offset int64) (int64, error) {
+		f, err := regular.Open(path)
 		if err != nil {
 			return 0, err
 		}
-		p.Upload, p.MaxRequest, offset = opened.Upload, opened.MaxRequest, 0
-		if err := p.save(s); err != nil {
-			return 0, err
-		}
-	}
-	piece := p.MaxRequest
-	if piece <= 0 {
-		piece = 4 << 20
-	}
-	if offset > info.Size() {
-		return 0, fmt.Errorf("the relay holds %d bytes of an upload that is only %d; abandon it with '%s send --resume'",
-			offset, info.Size(), prog)
-	}
-
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-
-	stalled := 0
-	for offset < info.Size() {
-		n := info.Size() - offset
-		if n > piece {
-			n = piece
-		}
+		defer f.Close()
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
 			return 0, err
 		}
-		next, err := c.AppendStream(ctx(), p.Upload, offset, io.LimitReader(f, n), n)
-		if err == nil {
-			offset, stalled = next, 0
-			continue
-		}
+		n := info.Size() - offset
+		return c.PutStream(ctx(), p.Upload, offset, io.LimitReader(f, n), n)
+	}
 
+	var offset int64
+	resumed := false
+	for failed := 0; ; {
+		if p.Upload == "" {
+			opened, err := c.OpenStream(ctx(), p.To, p.Channel, info.Size())
+			if err != nil {
+				return 0, err
+			}
+			p.Upload, offset, resumed = opened.Upload, 0, false
+			if err := p.save(s); err != nil {
+				return 0, err
+			}
+		}
+		if offset > info.Size() {
+			return 0, fmt.Errorf("the relay holds %d bytes of an upload that is only %d; abandon it with '%s send --resume'",
+				offset, info.Size(), prog)
+		}
+		relayID, err := attempt(offset)
+		if err == nil {
+			return relayID, nil
+		}
 		if wait, ok := relayAskedToWait(err); ok {
 			if wait <= 0 {
 				wait = time.Second
@@ -345,33 +339,47 @@ func uploadStream(c *client.Client, s *store.Store, p *pending) (int64, error) {
 				wait = 30 * time.Second
 			}
 			time.Sleep(wait)
-			// A refusal is not progress, but it is not a stall either: the
-			// relay has told us to come back and we are coming back.
+			// A refusal is not progress, but it is not a failure of the
+			// upload either: the relay has told us to come back and we are
+			// coming back, at whatever offset it then says.
 			continue
 		}
 		if isStorageFull(err) {
-			// Retrying will not help: the relay has no room, and it keeps
-			// the upload for a resume once somebody has made some.
+			// Retrying will not help: the relay has no room. Whether it
+			// kept the partial is its rule's to say, and the next attempt
+			// on the same upload is how this side asks, so the id stays
+			// with the record for --resume once somebody has made room.
 			return 0, err
 		}
-
-		// Anything else: ask where the relay actually got to, and continue
-		// from there if that is somewhere new.
-		at, offErr := c.UploadOffset(ctx(), p.Upload)
-		if offErr != nil {
+		var resume *client.ResumeError
+		if errors.As(err, &resume) && resume.At > 0 && !resumed {
+			// The relay kept the partial and says where it ends: one
+			// resumed attempt from there, within the window.
+			offset, resumed = resume.At, true
+			continue
+		}
+		if failed++; failed >= 3 {
 			return 0, err
 		}
-		if at == offset {
-			stalled++
-			if stalled >= 3 {
+		if isGone(err) || isMissingOnRelay(err) || resume != nil {
+			// The relay has let the upload go, or holds a partial this
+			// process has already had its one resume from: the next
+			// attempt is a new upload from zero, and a partial nobody
+			// will resume is let go now rather than at the window's end.
+			if resume != nil {
+				c.AbortStream(ctx(), p.Upload)
+			}
+			p.Upload = ""
+			if err := p.save(s); err != nil {
 				return 0, err
 			}
-		} else {
-			stalled = 0
+			continue
 		}
-		offset = at
+		// Anything else — the link dropped, the relay refused the attempt,
+		// the one resume stopped short — is tried again from zero on the
+		// same upload, and the relay's answer to that says what it holds.
+		offset = 0
 	}
-	return c.CompleteStream(ctx(), p.Upload)
 }
 
 // sourcesFor turns file paths into stream sources, which are opened twice:

@@ -153,7 +153,7 @@ func TestLimitNothingTheNetworkNamesIsAPath(t *testing.T) {
 				if relay.ValidUploadID(v) {
 					return ""
 				}
-				return wire(alice, "PATCH", "/v1/uploads/", v, "bad upload id")
+				return wire(alice, "PUT", "/v1/uploads/", v, "bad upload id")
 			}},
 		{"a token id in a URL", "relay: handleAdminRevokeToken, token.ValidID, 400 before the store is asked",
 			func(v string) string {

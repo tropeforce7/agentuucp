@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -35,35 +36,21 @@ func (c *Client) OpenStream(ctx context.Context, toFP, channel string, size int6
 	return &out, nil
 }
 
-// UploadOffset asks how much of an upload the relay already has, which is how
-// a client resumes after a dropped connection.
-func (c *Client) UploadOffset(ctx context.Context, upload string) (int64, error) {
-	req, err := c.signedRequest(ctx, "HEAD", "/v1/uploads/"+upload, nil)
+// PutStream is one attempt at an upload: the sealed stream from offset to
+// the end, streamed from body with its length declared, in one request.
+// It answers the message's id when the attempt reached the end. When it
+// did not, the error carries what the relay said: a 409 whose Upload-Offset
+// is where the relay's copy ends, from which a sender resumes once within
+// the window when the relay kept the partial, and everything else means
+// nothing is kept and the sender opens anew.
+//
+// body is read straight onto the wire: nothing is buffered, so a
+// gigabyte costs a gigabyte of reading and not of memory. The signature
+// covers an empty body, since the payload cannot be held to be signed.
+func (c *Client) PutStream(ctx context.Context, upload string, offset int64, body io.Reader, length int64) (int64, error) {
+	req, err := c.signedRequest(ctx, "PUT", "/v1/uploads/"+upload, nil)
 	if err != nil {
 		return 0, err
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("contacting relay: %w", err)
-	}
-	defer resp.Body.Close()
-	io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		return 0, httpError(resp, nil)
-	}
-	return c.parseOffset(resp.Header.Get(relayapi.UploadOffsetHeader))
-}
-
-// AppendStream sends the next piece of an upload, starting at offset.
-//
-// body is read straight onto the wire: nothing is buffered, so the piece may
-// be as large as the relay's per-request limit without costing memory. The
-// returned offset is what the relay now holds, which is where the next piece
-// begins.
-func (c *Client) AppendStream(ctx context.Context, upload string, offset int64, body io.Reader, length int64) (int64, error) {
-	req, err := c.signedRequest(ctx, "PATCH", "/v1/uploads/"+upload, nil)
-	if err != nil {
-		return offset, err
 	}
 	req.Body = io.NopCloser(body)
 	req.ContentLength = length
@@ -72,40 +59,40 @@ func (c *Client) AppendStream(ctx context.Context, upload string, offset int64, 
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return offset, fmt.Errorf("contacting relay: %w", err)
+		return 0, fmt.Errorf("contacting relay: %w", err)
 	}
 	defer resp.Body.Close()
 	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 
-	if resp.StatusCode == http.StatusNoContent {
-		next, err := c.parseOffset(resp.Header.Get(relayapi.UploadOffsetHeader))
-		if err != nil {
-			return offset, err
+	if resp.StatusCode == http.StatusCreated {
+		var out relayapi.PutStreamResponse
+		if err := json.Unmarshal(payload, &out); err != nil {
+			return 0, c.malformed("the placed stream", "body", "JSON")
 		}
-		return next, nil
+		if err := c.checkID("the placed stream", out.ID); err != nil {
+			return 0, err
+		}
+		return out.ID, nil
 	}
 	httpErr := httpError(resp, payload)
 	// A conflict carries the truth about where the upload actually is, which
-	// is what makes it recoverable rather than fatal.
+	// is what makes it resumable rather than fatal.
 	if resp.StatusCode == http.StatusConflict {
 		if at, convErr := c.parseOffset(resp.Header.Get(relayapi.UploadOffsetHeader)); convErr == nil {
-			return at, httpErr
+			return 0, &ResumeError{At: at, HTTPError: httpErr}
 		}
 	}
-	return offset, httpErr
+	return 0, httpErr
 }
 
-// CompleteStream finishes an upload, turning it into a message.
-func (c *Client) CompleteStream(ctx context.Context, upload string) (int64, error) {
-	var out relayapi.CompleteStreamResponse
-	if err := c.do(ctx, "POST", "/v1/uploads/"+upload+"/complete", nil, &out, nil); err != nil {
-		return 0, err
-	}
-	if err := c.checkID("the completed stream", out.ID); err != nil {
-		return 0, err
-	}
-	return out.ID, nil
+// ResumeError is a 409 from an attempt: the relay's copy ends at At, and an
+// attempt from there is what it will take.
+type ResumeError struct {
+	At int64
+	*HTTPError
 }
+
+func (e *ResumeError) Unwrap() error { return e.HTTPError }
 
 // AbortStream throws an unfinished upload away.
 func (c *Client) AbortStream(ctx context.Context, upload string) error {

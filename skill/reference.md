@@ -56,7 +56,7 @@ Sending:
 ```
 auu send --to NAME|self [--subject S] [--channel NAME] [--attach FILE]... TEXT
 auu send --to NAME --body-file FILE                # or - to read the body from stdin
-auu send --resume                                  # finish an interrupted upload
+auu send --resume                                  # finish an interrupted upload: from the relay's partial, or anew
 auu reply MESSAGE-ID|THREAD-ID [--subject S] [--channel NAME] [--attach FILE]... TEXT
 ```
 

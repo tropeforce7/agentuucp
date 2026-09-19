@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -18,74 +19,169 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
 
-// interrupter sits in front of a relay and stops accepting upload pieces after
-// a given number of them, by dropping the connection rather than answering.
-// That is what a crashed relay, a closed laptop lid or a lost network looks
-// like from the sending side: no status, no offset, nothing to go on but a
-// HEAD.
+// interrupter sits in front of a relay and cuts an upload attempt once a
+// given number of its body's bytes have gone through, by closing the
+// connection without an answer rather than answering; from then until it
+// is opened it cuts every attempt the same way at its first byte. That is
+// what a crashed relay, a closed laptop lid or a lost network looks like
+// from the sending side: no status, no offset, nothing to go on but the
+// next attempt. The relay behind it sees each cut attempt as one that
+// stopped short, and applies its rule. Each attempt the relay answered
+// through an open gate is recorded with the offset it declared and the
+// status it got, which is how a test tells a resume from a restart.
 type interrupter struct {
-	inner  http.Handler
-	mu     sync.Mutex
-	allow  int // pieces still to let through; negative means all of them
-	cut    int // pieces dropped
-	passed int // pieces forwarded
+	inner    http.Handler
+	mu       sync.Mutex
+	allow    int64 // bytes of an attempt's body still let through; negative means all of them
+	cut      int   // attempts dropped
+	through  int64 // bytes of dropped attempts the relay was given
+	answered []attemptSeen
+}
+
+// attemptSeen is one attempt the relay answered.
+type attemptSeen struct {
+	offset int64
+	status int
 }
 
 func (f *interrupter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	isPiece := r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/v1/uploads/")
-	if isPiece {
+	if r.Method != http.MethodPut || !strings.HasPrefix(r.URL.Path, "/v1/uploads/") {
+		f.inner.ServeHTTP(w, r)
+		return
+	}
+	offset, _ := strconv.ParseInt(r.Header.Get(relayapi.UploadOffsetHeader), 10, 64)
+	f.mu.Lock()
+	allow := f.allow
+	f.mu.Unlock()
+	if allow < 0 {
+		rec := &statusSeen{ResponseWriter: w}
+		f.inner.ServeHTTP(rec, r)
 		f.mu.Lock()
-		drop := f.allow == 0
-		if drop {
-			f.cut++
-		} else {
-			f.passed++
-			if f.allow > 0 {
-				f.allow--
-			}
-		}
+		f.answered = append(f.answered, attemptSeen{offset, rec.status})
 		f.mu.Unlock()
-		if drop {
-			hj, ok := w.(http.Hijacker)
-			if !ok {
-				http.Error(w, "cannot hijack", http.StatusInternalServerError)
-				return
-			}
-			conn, _, err := hj.Hijack()
-			if err != nil {
-				return
-			}
+		return
+	}
+	// The body reaches the relay up to the allowance and then ends the way
+	// a dropped connection's does; the relay's answer is swallowed and the
+	// connection closed without it.
+	body := &cutBody{r: r.Body, left: allow}
+	r.Body = body
+	f.inner.ServeHTTP(&swallowed{w: w}, r)
+	f.mu.Lock()
+	f.cut++
+	f.through += body.given
+	f.allow = 0
+	f.mu.Unlock()
+	if hj, ok := w.(http.Hijacker); ok {
+		if conn, _, err := hj.Hijack(); err == nil {
 			conn.Close()
-			return
 		}
 	}
-	f.inner.ServeHTTP(w, r)
 }
 
+// open lets every attempt through from now on.
 func (f *interrupter) open() {
 	f.mu.Lock()
 	f.allow = -1
 	f.mu.Unlock()
 }
 
+// counts answers how many attempts the relay answered and how many the
+// gate cut.
 func (f *interrupter) counts() (passed, cut int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.passed, f.cut
+	return len(f.answered), f.cut
 }
 
+// seen answers the attempts the relay answered, in order.
+func (f *interrupter) seen() []attemptSeen {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]attemptSeen(nil), f.answered...)
+}
+
+// given answers how many bytes of cut attempts reached the relay.
+func (f *interrupter) given() int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.through
+}
+
+// cutBody delivers left bytes of a body and then fails the read, as a
+// read from a connection that dropped does.
+type cutBody struct {
+	r     io.ReadCloser
+	left  int64
+	given int64
+}
+
+func (b *cutBody) Read(p []byte) (int, error) {
+	if b.left <= 0 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	if int64(len(p)) > b.left {
+		p = p[:b.left]
+	}
+	n, err := b.r.Read(p)
+	b.left -= int64(n)
+	b.given += int64(n)
+	return n, err
+}
+
+func (b *cutBody) Close() error { return b.r.Close() }
+
+// swallowed is a ResponseWriter that keeps the answer from the connection
+// and hands the relay the real one underneath for its deadlines, so that
+// the connection can be closed with nothing written on it.
+type swallowed struct {
+	w      http.ResponseWriter
+	header http.Header
+}
+
+func (s *swallowed) Header() http.Header {
+	if s.header == nil {
+		s.header = make(http.Header)
+	}
+	return s.header
+}
+func (s *swallowed) WriteHeader(int)             {}
+func (s *swallowed) Write(p []byte) (int, error) { return len(p), nil }
+func (s *swallowed) Unwrap() http.ResponseWriter { return s.w }
+
+// statusSeen records the status an answer carried.
+type statusSeen struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusSeen) WriteHeader(code int) {
+	s.status = code
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusSeen) Write(p []byte) (int, error) {
+	if s.status == 0 {
+		s.status = http.StatusOK
+	}
+	return s.ResponseWriter.Write(p)
+}
+
+func (s *statusSeen) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
 // startInterruptibleRelay is startRelayConfig with a gate in front of the
-// upload endpoint. piece is the relay's per-request cap, which is what the
-// client sizes its pieces from, so a small one makes a small payload take
-// several of them.
-func startInterruptibleRelay(t *testing.T, allow int, piece int64) (string, *interrupter) {
+// upload route that lets pieces bytes of the first attempt through, in
+// units of piece, before cutting it. piece is also the relay's max_bytes,
+// which is the threshold under which a stopped attempt keeps nothing, so
+// one piece or more through is a partial the relay keeps.
+func startInterruptibleRelay(t *testing.T, pieces int, piece int64) (string, *interrupter) {
 	t.Helper()
-	return startInterruptibleRelayWith(t, allow, piece, nil)
+	return startInterruptibleRelayWith(t, pieces, piece, nil)
 }
 
 // startInterruptibleRelayWith is startInterruptibleRelay with a hand on the
 // relay's settings before it starts.
-func startInterruptibleRelayWith(t *testing.T, allow int, piece int64, mutate func(*relay.Config)) (string, *interrupter) {
+func startInterruptibleRelayWith(t *testing.T, pieces int, piece int64, mutate func(*relay.Config)) (string, *interrupter) {
 	t.Helper()
 	dir := t.TempDir()
 	st, err := relay.OpenStore(filepath.Join(dir, "relay.db"), filepath.Join(dir, "messages"))
@@ -102,15 +198,18 @@ func startInterruptibleRelayWith(t *testing.T, allow int, piece int64, mutate fu
 	if mutate != nil {
 		mutate(&cfg)
 	}
-	gate := &interrupter{inner: relay.NewServer(st, cfg), allow: allow}
+	gate := &interrupter{inner: relay.NewServer(st, cfg), allow: int64(pieces) * piece}
 	srv := httptest.NewServer(gate)
 	t.Cleanup(srv.Close)
 	return srv.URL, gate
 }
 
-// An upload cut off part way is finished by --resume, and the message arrives
-// once, byte for byte. Nothing is sealed twice: the HPKE context cannot be
-// rewound, so the second attempt must be sending the same file.
+// An upload cut off part way is finished by --resume from where the relay
+// says its copy ends, and the message arrives once, byte for byte. Nothing
+// is sealed twice: the HPKE context cannot be rewound, so the second
+// attempt must be sending the same file. Under the old wire this was
+// proved by counting pieces; under the one-attempt wire the resumed
+// attempt declares the offset the relay kept, and that is what is read.
 func TestStreamResumesAfterAnInterruptedUpload(t *testing.T) {
 	relayURL, gate := startInterruptibleRelay(t, 2, 64<<10)
 	alice := newUser(t, "alice", relayURL)
@@ -120,7 +219,8 @@ func TestStreamResumesAfterAnInterruptedUpload(t *testing.T) {
 	alice.run("allow", "push")
 	bob.run("allow", "push")
 
-	// Several pieces long at a 64 KiB per-request cap.
+	// Several times the relay's threshold, so the cut leaves a partial
+	// the relay keeps.
 	payload := make([]byte, 400<<10)
 	for i := range payload {
 		payload[i] = byte(i*31 + 7)
@@ -132,11 +232,15 @@ func TestStreamResumesAfterAnInterruptedUpload(t *testing.T) {
 
 	if out, err := alice.tryRun("send", "--to", "bob", "--subject", "the long one",
 		"--attach", file, "here it is"); err == nil {
-		t.Fatalf("the send should have failed with the relay cut off after two pieces:\n%s", out)
+		t.Fatalf("the send should have failed with the relay cut off part way:\n%s", out)
 	}
 	passed, cut := gate.counts()
-	if passed == 0 || cut == 0 {
-		t.Fatalf("the gate let %d pieces through and cut %d; the test proves nothing", passed, cut)
+	if cut == 0 || passed != 0 {
+		t.Fatalf("the gate answered %d attempts and cut %d; the test proves nothing", passed, cut)
+	}
+	const piece = 64 << 10
+	if got := gate.given(); got != 2*piece {
+		t.Fatalf("the relay was given %d bytes before the cut, want %d", got, 2*piece)
 	}
 
 	// The sealed stream and its record are still there, and the record knows
@@ -153,8 +257,6 @@ func TestStreamResumesAfterAnInterruptedUpload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the sealed stream did not survive the failure: %v", err)
 	}
-	const piece = 64 << 10
-	whole := int((info.Size() + piece - 1) / piece)
 
 	// A new message warns about it, without being blocked by it.
 	small := filepath.Join(t.TempDir(), "note.txt")
@@ -166,27 +268,27 @@ func TestStreamResumesAfterAnInterruptedUpload(t *testing.T) {
 		t.Fatalf("sending something else disturbed the outbox: %v", err)
 	}
 
-	passedBefore, _ := gate.counts()
 	gate.open()
 	alice.run("send", "--resume")
 
 	// It carried on from where the relay had got to rather than starting the
 	// upload again, which is the whole point: the relay already holds a prefix
-	// of these exact bytes.
-	passedAfter, _ := gate.counts()
-	resumed := passedAfter - passedBefore
-	if resumed >= whole {
-		t.Fatalf("--resume sent %d pieces of a %d-piece stream; it restarted rather than resumed",
-			resumed, whole)
+	// of these exact bytes. The first attempt from zero is how the sender
+	// asks, and the relay's 409 says where; the second declares that offset
+	// and places the stream. A resume that forgot what the relay said would
+	// finish too, in an attempt from zero, and only the offsets say so.
+	seen := gate.seen()
+	if len(seen) != 2 {
+		t.Fatalf("--resume made %d answered attempts, want 2 (the ask and the resume): %+v", len(seen), seen)
 	}
-	// Exactly one upload's worth of pieces went across the two attempts, at
-	// the size the relay asked for. A resume that forgot what the relay said
-	// it would take still finishes, but in the wrong number of requests, and
-	// only counting them says so.
-	if passedAfter != whole {
-		t.Fatalf("%d pieces sent in total for a %d-piece stream (%d before the cut, %d after); "+
-			"the resumed pieces are not the size the relay advertised",
-			passedAfter, whole, passedBefore, resumed)
+	if seen[0].offset != 0 || seen[0].status != http.StatusConflict {
+		t.Fatalf("the ask: %+v, want offset 0 answered 409", seen[0])
+	}
+	if seen[1].offset != 2*piece || seen[1].status != http.StatusCreated {
+		t.Fatalf("the resume: %+v, want offset %d answered 201", seen[1], 2*piece)
+	}
+	if seen[1].offset >= info.Size() {
+		t.Fatalf("the resume's offset %d is not inside the %d-byte stream", seen[1].offset, info.Size())
 	}
 
 	// Both halves of the outbox record are gone, and the bytes were never
@@ -337,40 +439,45 @@ func TestRefusedStreamLeavesNothingBehind(t *testing.T) {
 	}
 }
 
-// fullDisk sits in front of a relay and answers a piece the way the relay
-// does when its disk is full — 507 with relayapi.MsgRelayFull — after a
-// given number of pieces have gone through. The relay behind it is real, so
-// what the client resumes against is a real reservation.
+// fullDisk sits in front of a relay and answers an attempt the way the
+// relay does when its disk fills part way through it — the bytes up to
+// the full mark taken, then 507 with relayapi.MsgRelayFull — by letting a
+// given number of bytes through to the relay, which sees an attempt that
+// stopped short there and applies its rule to what it holds, and
+// answering the 507 in the relay's place. The relay behind it is real, so
+// what the client resumes against is a real partial, kept the way a full
+// disk's is.
 type fullDisk struct {
 	inner   http.Handler
 	mu      sync.Mutex
-	allow   int // pieces still to let through; negative means all of them
+	allow   int64 // bytes of an attempt still let through; negative means all of them
 	refused int
 	passed  int
 }
 
 func (f *fullDisk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/v1/uploads/") {
-		f.mu.Lock()
-		refuse := f.allow == 0
-		if refuse {
-			f.refused++
-		} else {
-			f.passed++
-			if f.allow > 0 {
-				f.allow--
-			}
-		}
-		f.mu.Unlock()
-		if refuse {
-			io.Copy(io.Discard, r.Body)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusInsufficientStorage)
-			json.NewEncoder(w).Encode(relayapi.ErrorResponse{Error: relayapi.MsgRelayFull})
-			return
-		}
+	if r.Method != http.MethodPut || !strings.HasPrefix(r.URL.Path, "/v1/uploads/") {
+		f.inner.ServeHTTP(w, r)
+		return
 	}
-	f.inner.ServeHTTP(w, r)
+	f.mu.Lock()
+	allow := f.allow
+	if allow < 0 {
+		f.passed++
+	} else {
+		f.refused++
+		f.allow = 0
+	}
+	f.mu.Unlock()
+	if allow < 0 {
+		f.inner.ServeHTTP(w, r)
+		return
+	}
+	r.Body = &cutBody{r: r.Body, left: allow}
+	f.inner.ServeHTTP(&swallowed{w: w}, r)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusInsufficientStorage)
+	json.NewEncoder(w).Encode(relayapi.ErrorResponse{Error: relayapi.MsgRelayFull})
 }
 
 func (f *fullDisk) open() {
@@ -390,7 +497,9 @@ func (f *fullDisk) counts() (passed, refused int) {
 // sentence names whose problem the room is and that --resume finishes it
 // when there is some, and nothing is retried against a disk that has no
 // room. The container suite's R18 found a 500 and a hint to resume an upload
-// that could not finish.
+// that could not finish. Under the one-attempt wire the relay keeps the
+// partial by its rule, the attempt having got past the threshold, and
+// --resume finds it by an attempt from zero and finishes from there.
 func TestAFullRelayKeepsTheOutbox(t *testing.T) {
 	dir := t.TempDir()
 	st, err := relay.OpenStore(filepath.Join(dir, "relay.db"), filepath.Join(dir, "messages"))
@@ -405,7 +514,7 @@ func TestAFullRelayKeepsTheOutbox(t *testing.T) {
 			Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
 			Limits:   relay.DefaultLimits(),
 		}),
-		allow: 2,
+		allow: 2 * (64 << 10),
 	}
 	srv := httptest.NewServer(gate)
 	t.Cleanup(srv.Close)
@@ -439,15 +548,15 @@ func TestAFullRelayKeepsTheOutbox(t *testing.T) {
 		t.Fatalf("exit %v, want %d", runErr, exitTransport)
 	}
 	want := "the relay is out of storage; whoever runs it needs to make room. " +
-		"The upload is kept; finish it with 'auu send --resume' when there is room"
+		"The sealed copy is kept; finish it with 'auu send --resume' when there is room"
 	if runErr.Error() != want {
 		t.Fatalf("error %q, want %q", runErr, want)
 	}
 	if warning != "" {
 		t.Fatalf("stderr had more than the error: %q", warning)
 	}
-	if passed, refused := gate.counts(); passed != 2 || refused != 1 {
-		t.Fatalf("%d pieces passed and %d were refused; a 507 is not to be retried", passed, refused)
+	if passed, refused := gate.counts(); passed != 0 || refused != 1 {
+		t.Fatalf("%d attempts passed and %d were refused; a 507 is not to be retried", passed, refused)
 	}
 
 	// The outbox is untouched: the sealed stream and a record naming the
@@ -460,13 +569,17 @@ func TestAFullRelayKeepsTheOutbox(t *testing.T) {
 	if _, err := os.Stat(sealed); err != nil {
 		t.Fatalf("the sealed stream did not survive: %v", err)
 	}
-	if u, err := st.Upload(p.Upload); err != nil || u.Received == 0 {
-		t.Fatalf("the relay's reservation: %+v, %v; want kept with the pieces it accepted", u, err)
+	if u, err := st.Upload(p.Upload); err != nil || u.Received != 2*(64<<10) {
+		t.Fatalf("the relay's partial: %+v, %v; want kept at the bytes it accepted", u, err)
 	}
 
-	// Room made: --resume finishes from where the relay got to.
+	// Room made: --resume finishes from where the relay got to, in the
+	// ask from zero and the attempt from there.
 	gate.open()
 	alice.run("send", "--resume")
+	if passed, _ := gate.counts(); passed != 2 {
+		t.Fatalf("--resume made %d attempts, want the ask and the resume", passed)
+	}
 	if entries, err := os.ReadDir(filepath.Join(alice.home, "outbox")); err == nil && len(entries) != 0 {
 		t.Fatalf("outbox not cleared after --resume: %d entries", len(entries))
 	}

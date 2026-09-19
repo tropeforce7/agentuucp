@@ -341,13 +341,16 @@ func TestARenamedFollowUpIsNotAnswered(t *testing.T) {
 	}
 }
 
-// A relay refuses an upload past its expiry with 410 and forgets it, so an
-// interrupted upload whose reservation has lapsed cannot be resumed as it
-// stands. The sender does not fail on that: --resume asks the relay where
-// it got to, is told the upload is gone, opens a new one for the same
-// sealed bytes and sends them all, and the message arrives once. The
-// relay's clock is moved by hand between the cut and the resume.
-func TestResumeReopensAnUploadThatExpiredBetweenPieces(t *testing.T) {
+// A relay refuses an attempt at an upload past its window with 410 and
+// forgets it, so an interrupted upload whose partial has lapsed cannot be
+// resumed as it stands. The sender does not fail on that: --resume asks
+// the relay by an attempt from zero, is told the upload is gone, opens a
+// new one for the same sealed bytes and sends them all, and the message
+// arrives once. The relay's clock is moved by hand between the cut and
+// the resume. Before the one-attempt wire this was
+// TestResumeReopensAnUploadThatExpiredBetweenPieces, with the relay's
+// upload_ttl setting standing where the fixed window now stands.
+func TestResumeReopensAnUploadWhoseWindowHasPassed(t *testing.T) {
 	var clockMu sync.Mutex
 	now := time.Now()
 	clock := func() time.Time {
@@ -356,7 +359,6 @@ func TestResumeReopensAnUploadThatExpiredBetweenPieces(t *testing.T) {
 		return now
 	}
 	relayURL, gate := startInterruptibleRelayWith(t, 2, 64<<10, func(c *relay.Config) {
-		c.UploadTTL = time.Hour
 		c.Now = clock
 	})
 	alice := newUser(t, "alice", relayURL)
@@ -376,33 +378,32 @@ func TestResumeReopensAnUploadThatExpiredBetweenPieces(t *testing.T) {
 	}
 	if out, err := alice.tryRun("send", "--to", "bob", "--subject", "the lapsed one",
 		"--attach", file, "here it is"); err == nil {
-		t.Fatalf("the send should have failed with the relay cut off after two pieces:\n%s", out)
+		t.Fatalf("the send should have failed with the relay cut off part way:\n%s", out)
 	}
-	if passed, cut := gate.counts(); passed == 0 || cut == 0 {
-		t.Fatalf("the gate let %d pieces through and cut %d; the test proves nothing", passed, cut)
+	if passed, cut := gate.counts(); passed != 0 || cut == 0 {
+		t.Fatalf("the gate answered %d attempts and cut %d; the test proves nothing", passed, cut)
 	}
 	before := onlyPending(t, alice)
-	sealed, err := os.Stat(filepath.Join(alice.home, "outbox", before.MessageID+".stream"))
-	if err != nil {
+	if _, err := os.Stat(filepath.Join(alice.home, "outbox", before.MessageID+".stream")); err != nil {
 		t.Fatal(err)
 	}
 
-	// The reservation lapses while the sender is away.
+	// The window passes while the sender is away.
 	clockMu.Lock()
-	now = now.Add(time.Hour + time.Minute)
+	now = now.Add(relayapi.ResumeWindow + time.Minute)
 	clockMu.Unlock()
 	gate.open()
-	passedBefore, _ := gate.counts()
 	out := alice.run("send", "--resume")
 	if strings.Contains(out, "nothing to resume") {
 		t.Fatalf("--resume found nothing:\n%s", out)
 	}
-	// Reopened: the whole stream went again under a new upload id, from
-	// the same sealed bytes, and the outbox is clear.
-	passedAfter, _ := gate.counts()
-	const piece = 64 << 10
-	if whole := int((sealed.Size() + piece - 1) / piece); passedAfter-passedBefore != whole {
-		t.Errorf("--resume sent %d pieces after the lapse; want the whole stream of %d, reopened", passedAfter-passedBefore, whole)
+	// Reopened: the ask was answered 410, and the whole stream went again
+	// under a new upload id from zero, from the same sealed bytes; the
+	// outbox is clear.
+	seen := gate.seen()
+	if len(seen) != 2 || seen[0].offset != 0 || seen[0].status != http.StatusGone ||
+		seen[1].offset != 0 || seen[1].status != http.StatusCreated {
+		t.Errorf("--resume's attempts after the lapse: %+v; want the ask answered 410 and the whole stream from zero answered 201", seen)
 	}
 	if entries, err := os.ReadDir(filepath.Join(alice.home, "outbox")); err == nil && len(entries) != 0 {
 		t.Errorf("the outbox was not cleared after the reopened resume: %d entries", len(entries))

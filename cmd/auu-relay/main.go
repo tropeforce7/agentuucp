@@ -45,7 +45,6 @@ type flagValues struct {
 	registration   string
 	streams        bool
 	maxStreamBytes int64
-	uploadTTL      string
 	publicURL      string
 	adminFile      string
 	tokenMaxAge    string
@@ -91,8 +90,6 @@ func registerFlags(fs *flag.FlagSet) *flagValues {
 	fs.BoolVar(&f.streams, "streams", d.Streams, "accept chunked stream uploads for large messages")
 	fs.Int64Var(&f.maxStreamBytes, "max-stream-bytes", d.MaxStreamBytes,
 		"largest stream this relay will accept (0: unlimited)")
-	fs.StringVar(&f.uploadTTL, "upload-ttl", d.UploadTTL,
-		"how long an unfinished upload keeps its reservation")
 	fs.StringVar(&f.publicURL, "public-url", "",
 		"the URL users reach this relay at; enrolment tokens must name it")
 	fs.StringVar(&f.adminFile, "admin-file", "",
@@ -348,10 +345,6 @@ func relayConfig(cfg Config, parts *clientCertParts, log *slog.Logger) (relay.Co
 	if err != nil {
 		return relay.Config{}, err
 	}
-	uploadTTL, err := cfg.ParsedUploadTTL()
-	if err != nil {
-		return relay.Config{}, err
-	}
 	var clientCerts *relay.ClientCertPolicy
 	var anchor *x509.Certificate
 	if parts != nil {
@@ -381,7 +374,6 @@ func relayConfig(cfg Config, parts *clientCertParts, log *slog.Logger) (relay.Co
 		TrustAnchor:    anchor,
 		Streams:        cfg.Streams,
 		MaxStreamBytes: cfg.MaxStreamBytes,
-		UploadTTL:      uploadTTL,
 		Logger:         log,
 		Limits:         cfg.Limits.Relay(),
 		AccessLog:      cfg.AccessLog,
@@ -469,8 +461,7 @@ func logEnrolment(cfg Config, admins *relay.Admins, log *slog.Logger) {
 		"public_url", orEmpty(cfg.PublicURL),
 		"admin_file", orEmpty(cfg.Admin.AuthorizedFile),
 		"token_max_age", cfg.Admin.TokenMaxAge,
-		"streams", cfg.Streams, "max_stream_bytes", cfg.MaxStreamBytes,
-		"upload_ttl", cfg.UploadTTL)
+		"streams", cfg.Streams, "max_stream_bytes", cfg.MaxStreamBytes)
 	if cfg.Admin.AuthorizedFile == "" {
 		log.Info("no admin file configured; this relay has no administrators and the admin API is closed")
 	} else if admins != nil {

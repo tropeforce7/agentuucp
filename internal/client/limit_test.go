@@ -108,7 +108,7 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 		{"/v1/admin/tokens", tokens(func(tk *relayapi.TokenRecord, n int64) { tk.Uses, tk.UsesLeft = int(n), int(n) }), callTokens},
 		{"/v1/mailbox/" + fp, listing(func(l *relayapi.ListResponse, n int64) { l.Queued = n }), callList},
 		{"/v1/mailbox/" + fp, listing(func(l *relayapi.ListResponse, n int64) { l.Messages[0].Size = n }), callList},
-		{"/v1/mailbox/" + bob.Fingerprint() + "/streams", func(n int64) any { return relayapi.OpenStreamResponse{Upload: "u", MaxRequest: n} },
+		{"/v1/mailbox/" + bob.Fingerprint() + "/streams", func(n int64) any { return relayapi.OpenStreamResponse{Upload: "u", ResumeThreshold: n} },
 			func(c *Client) error {
 				_, err := c.OpenStream(context.Background(), bob.Fingerprint(), "", 5000)
 				return err
@@ -121,12 +121,15 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 		{"/v1/mailbox/" + fp, listing(func(l *relayapi.ListResponse, n int64) { l.Messages[0].ID = n }), callList},
 		{"/v1/mailbox/" + bob.Fingerprint(), func(n int64) any { return relayapi.PostResponse{ID: n} },
 			func(c *Client) error { _, err := c.Post(context.Background(), env, ""); return err }},
-		{"/v1/uploads/u/complete", func(n int64) any { return relayapi.CompleteStreamResponse{ID: n} },
-			func(c *Client) error { _, err := c.CompleteStream(context.Background(), "u"); return err }},
 	}
 	seconds := []shape{
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.TokenMaxAgeSecs = n }), callStatus},
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.CertLifetimeSecs = n }), callStatus},
+		{"/v1/mailbox/" + bob.Fingerprint() + "/streams", func(n int64) any { return relayapi.OpenStreamResponse{Upload: "u", ResumeWindow: n} },
+			func(c *Client) error {
+				_, err := c.OpenStream(context.Background(), bob.Fingerprint(), "", 5000)
+				return err
+			}},
 	}
 	mldsa := []shape{
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.MLDSA = int(n) }), callStatus},
@@ -208,12 +211,12 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 }
 
 // TestLimitUploadOffsetAnswer: the byte count a relay reports for an
-// upload, in the header the upload routes answer with, is zero or more: a
-// negative, the type's minimum, the text one past the type's maximum, an
-// empty header and a digit outside ASCII are each a malformed answer, from
-// an offset query, from an append taken, and from an append the relay
-// answered with a conflict; zero, a plus sign and the type's maximum are
-// taken.
+// upload, in the header a 409 to an attempt carries, is zero or more and
+// is what a sender resumes from: a negative, the type's minimum, the text
+// one past the type's maximum, an empty header, a digit outside ASCII and
+// a sign inside the digits are each the conflict alone, with no offset to
+// resume from (not a ResumeError); zero, a plus sign and the type's
+// maximum are read. The id a 201 carries is held to a message id.
 func TestLimitUploadOffsetAnswer(t *testing.T) {
 	alice, err := identity.Generate("alice")
 	if err != nil {
@@ -221,9 +224,11 @@ func TestLimitUploadOffsetAnswer(t *testing.T) {
 	}
 	var header string
 	var status int
+	var body string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(relayapi.UploadOffsetHeader, header)
 		w.WriteHeader(status)
+		w.Write([]byte(body))
 	}))
 	t.Cleanup(srv.Close)
 	c, err := New(srv.URL, alice, nil)
@@ -231,47 +236,42 @@ func TestLimitUploadOffsetAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	for _, tc := range []struct {
-		name string
-		call func() (int64, error)
-		code int
-	}{
-		{"UploadOffset", func() (int64, error) { return c.UploadOffset(ctx, "u") }, http.StatusOK},
-		{"AppendStream taken", func() (int64, error) { return c.AppendStream(ctx, "u", 0, strings.NewReader("x"), 1) }, http.StatusNoContent},
-	} {
-		status = tc.code
-		for _, h := range []string{"-1", strconv.FormatInt(math.MinInt64, 10), "9223372036854775808", "", "\u0661", "1-2"} {
-			header = h
-			_, err := tc.call()
-			if !errors.Is(err, ErrMalformedAnswer) || !strings.Contains(err.Error(), relayapi.UploadOffsetHeader) {
-				t.Errorf("%s with the header %q: %v; want ErrMalformedAnswer naming the header", tc.name, h, err)
-			}
-		}
-		for _, tc2 := range []struct {
-			h    string
-			want int64
-		}{{"0", 0}, {"+1", 1}, {"9223372036854775807", math.MaxInt64}} {
-			header = tc2.h
-			n, err := tc.call()
-			if err != nil || n != tc2.want {
-				t.Errorf("%s with the header %q: %d %v; want %d", tc.name, tc2.h, n, err, tc2.want)
-			}
-		}
-	}
-	// A conflict names where the upload is; a conflict whose header is not
-	// a byte count is the conflict alone, at the offset the caller sent.
-	status = http.StatusConflict
-	for _, h := range []string{"-1", "x", ""} {
+	put := func() (int64, error) { return c.PutStream(ctx, "u", 7, strings.NewReader("x"), 1) }
+	status, body = http.StatusConflict, `{"error":"upload is at offset 3, not 7"}`
+	for _, h := range []string{"-1", strconv.FormatInt(math.MinInt64, 10), "9223372036854775808", "", "\u0661", "1-2"} {
 		header = h
-		n, err := c.AppendStream(ctx, "u", 7, strings.NewReader("x"), 1)
+		_, err := put()
+		var resume *ResumeError
 		var httpErr *HTTPError
-		if !errors.As(err, &httpErr) || httpErr.Status != http.StatusConflict || n != 7 {
-			t.Errorf("a conflict with the header %q: %d %v; want the conflict at the caller's offset", h, n, err)
+		if errors.As(err, &resume) || !errors.As(err, &httpErr) || httpErr.Status != http.StatusConflict {
+			t.Errorf("a conflict with the header %q: %v; want the conflict alone, nothing to resume from", h, err)
 		}
 	}
-	header = "3"
-	if n, err := c.AppendStream(ctx, "u", 7, strings.NewReader("x"), 1); n != 3 || err == nil {
-		t.Errorf("a conflict at 3: %d %v; want 3 and the conflict", n, err)
+	for _, tc := range []struct {
+		h    string
+		want int64
+	}{{"0", 0}, {"+1", 1}, {"9223372036854775807", math.MaxInt64}} {
+		header = tc.h
+		_, err := put()
+		var resume *ResumeError
+		if !errors.As(err, &resume) || resume.At != tc.want {
+			t.Errorf("a conflict with the header %q: %v; want a ResumeError at %d", tc.h, err, tc.want)
+		}
+	}
+	// The placed message's id, from the 201: zero, a negative and the
+	// type's minimum are malformed; one and the maximum are taken.
+	status, header = http.StatusCreated, ""
+	for _, id := range []int64{0, -1, math.MinInt64} {
+		body = `{"id":` + strconv.FormatInt(id, 10) + `}`
+		if _, err := put(); !errors.Is(err, ErrMalformedAnswer) {
+			t.Errorf("a 201 with id %d: %v; want ErrMalformedAnswer", id, err)
+		}
+	}
+	for _, id := range []int64{1, math.MaxInt64} {
+		body = `{"id":` + strconv.FormatInt(id, 10) + `}`
+		if got, err := put(); err != nil || got != id {
+			t.Errorf("a 201 with id %d: %d %v; want it taken", id, got, err)
+		}
 	}
 }
 

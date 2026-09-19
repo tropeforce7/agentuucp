@@ -589,8 +589,8 @@ func TestResumeUsesTheRelayTheUploadWasOpenedOn(t *testing.T) {
 		"--subject", "the long one", "--attach", file, "here it is"); err == nil {
 		t.Fatalf("the send should have failed with personal cut off:\n%s", out)
 	}
-	if passed, cut := gate.counts(); passed == 0 || cut == 0 {
-		t.Fatalf("the gate let %d pieces through and cut %d; the test proves nothing", passed, cut)
+	if passed, cut := gate.counts(); passed != 0 || cut == 0 {
+		t.Fatalf("the gate answered %d attempts and cut %d; the test proves nothing", passed, cut)
 	}
 	p := onlyPending(t, alice)
 	if p.Relay != "personal" {

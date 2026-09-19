@@ -166,10 +166,18 @@ func (c *Client) checkID(answer string, id int64) error {
 	return nil
 }
 
-// checkOpenStream is an opened upload: the largest piece the relay takes
-// per request, or zero for no advice.
+// checkOpenStream is an opened upload: the threshold past which a first
+// attempt that stops short is kept, zero or more, and the window a kept
+// partial lives, in seconds within the bound every seconds field has.
 func (c *Client) checkOpenStream(out *relayapi.OpenStreamResponse) error {
-	return c.counts("the opened stream", count{"max_request", out.MaxRequest})
+	const answer = "the opened stream"
+	if err := c.counts(answer, count{"resume_threshold", out.ResumeThreshold}); err != nil {
+		return err
+	}
+	if !validSeconds(out.ResumeWindow) {
+		return c.malformed(answer, "resume_window", wantSeconds)
+	}
+	return nil
 }
 
 // parseOffset is the byte count a relay reports for an upload, from the

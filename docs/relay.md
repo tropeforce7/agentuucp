@@ -36,7 +36,6 @@ flag you do not type never overrides the file.
 | `--max-bytes N` | `max_bytes` | 16 MiB, at most 1 GiB |
 | `--streams` | `streams` | true |
 | `--max-stream-bytes N` | `max_stream_bytes` | 4 GiB, 0 is unlimited |
-| `--upload-ttl DURATION` | `upload_ttl` | `24h` |
 | `--registration open\|token\|closed` | `registration` | `open` |
 | `--public-url URL` | `public_url` | none |
 | `--admin-file PATH` | `admin.authorized_file` | none, no administrators |
@@ -139,14 +138,28 @@ directory aside to start empty.
 
 ### 1.2 Large messages
 
-Above 64 KiB a client stops posting one envelope and uploads a stream in
-chunks, resuming if it is interrupted. Three settings govern it:
+Above 64 KiB a client stops posting one envelope and uploads a stream: an
+open that reserves the room, then one request per attempt carrying the
+sealed bytes from an offset to the end. Three settings govern it:
 
 | setting | what it does |
 |---|---|
 | `streams` | whether the relay accepts stream uploads at all. Turn it off and an open is refused with a 403 naming this setting |
 | `max_stream_bytes` | the largest stream the relay will reserve space for, declared up front and refused before a byte is sent. `0` is unlimited, under a cap of 2^62 bytes no setting lifts |
-| `upload_ttl` | how long an unfinished upload is kept. Past it the relay refuses the next append, completion or abort with a 410 that says when it expired and to open again, and forgets the upload with the answer, so the reservation ends when it was promised to; the sender's `send --resume` opens a new upload for the same sealed bytes. An expired upload nobody touches is swept by the purge that runs every hundredth request, which skips an upload mid-append rather than wait behind its sender and returns to it next time |
+| `max_bytes` | besides being the largest envelope a post may carry, the resume threshold: an attempt that stops short after at least this many bytes, when it was the first, leaves a partial the sender may resume once within sixty seconds; one that stops short of it, or a resumed one that stops short, leaves nothing, and the upload and its reservation go with the answer. The relay announces it at the open as `resume_threshold`, with the window as `resume_window` |
+
+The window is not a setting: sixty seconds from the open, and sixty from
+the moment a partial is kept. Past it the relay refuses the next attempt
+with a 410 that says when the upload expired and to open again, and forgets
+the upload with the answer, so the reservation ends when it was promised to;
+the sender's `send --resume` opens a new upload for the same sealed bytes. An
+expired upload nobody touches is swept by the purge that runs every hundredth
+request, which skips an upload mid-attempt rather than wait behind its sender
+and returns to it next time. Bytes that stop coming end inside the window
+too: an attempt runs under a stall deadline of sixty seconds that every
+delivering read moves on, so a transfer of any length finishes while bytes
+keep arriving and a stalled one is cut and judged as an attempt that stopped
+short. The server's five-minute read timeout stands on every other route.
 
 **At the shipped defaults a 2 GB file is refused**, and deliberately so: a
 sender's whole `post_bytes_per_hour` budget is 256 MiB and one recipient's
@@ -251,7 +264,7 @@ Three replies say the relay is refusing rather than failing:
 |---|---|---|
 | `429` | out of budget, `Retry-After` says for how long | `auu` waits and retries three times on its own; if it still fails, wait as the error says |
 | `503` | too many requests at once | the same, it clears on its own |
-| `507` | the recipient's mailbox, or the relay, is full — including a disk that fills part way through an upload | the recipient runs `auu rm` on mail they have read, or the operator makes room; retrying will not help, and a part-sent stream waits in `outbox/` for `auu send --resume` |
+| `507` | the recipient's mailbox, or the relay, is full — including a disk that fills part way through an upload | the recipient runs `auu rm` on mail they have read, or the operator makes room; retrying will not help, and the sealed copy waits in `outbox/` for `auu send --resume`, which resumes what the relay kept or opens anew |
 
 `GET /v1/health` is exempt from all of it, so monitoring does not flap while
 the relay is under attack.

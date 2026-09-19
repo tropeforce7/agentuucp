@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/stream"
 )
 
 // The adversarial trace of v0.8.1 (reviews/trace/) found six things on the
@@ -23,17 +25,19 @@ import (
 // for what it proves and adjusted only as far as its fix needed; each
 // failed on the code as shipped and passes on the fix.
 
-// TestOneAppendAtATimePerUpload: AppendUpload read the row, copied onto the
-// file, and only then added to the row, so two appends at one offset both
-// passed the offset check, both landed on the file, and the upload held
-// more than it declared and more than was reserved. Now the upload's lock
-// is held from the offset check through the update: the first append
-// lands, the second waits for it and meets ErrUploadOffset at the real
-// offset, and the upload holds exactly what it declared. The trace's test
-// called the second append while the first was parked, which under the
-// lock would wait for ever; the second runs in a goroutine here and the
-// first is released after it has been called.
-func TestOneAppendAtATimePerUpload(t *testing.T) {
+// TestOneAttemptAtATimePerUpload: the old wire's AppendUpload read the
+// row, copied onto the file, and only then added to the row, so two
+// appends at one offset both passed the offset check, both landed on the
+// file, and the upload held more than it declared and more than was
+// reserved. The fix was the upload's lock held from the offset check
+// through the update, and ReceiveUpload keeps it: the first attempt at
+// offset 0 lands and places the stream, the second waits for it and
+// finds the upload gone (ErrNoUpload), and the mailbox holds exactly one
+// message of what was declared. The trace's test called the second while
+// the first was parked, which under the lock would wait for ever; the
+// second runs in a goroutine here and the first is released after it has
+// been called.
+func TestOneAttemptAtATimePerUpload(t *testing.T) {
 	h := newHarness(t, Config{})
 	people := ids(t, "alice", "bob")
 	alice, bob := people[0], people[1]
@@ -56,28 +60,24 @@ func TestOneAppendAtATimePerUpload(t *testing.T) {
 	release := make(chan struct{})
 	first := make(chan error, 1)
 	go func() {
-		_, err := h.store.AppendUpload(id, 0, func(f *os.File, limit int64) (int64, error) {
+		_, err := h.store.ReceiveUpload(id, 0, relayapi.DefaultMaxBytes, time.Now, time.Minute, func(f *os.File, want int64) (int64, error) {
 			// Past the offset check, and about to copy.
 			close(entered)
 			<-release
-			return io.Copy(f, io.LimitReader(bytes.NewReader(piece), limit))
+			return io.Copy(f, io.LimitReader(bytes.NewReader(piece), want))
 		})
 		first <- err
 	}()
 	<-entered
-	// A second append at the same offset, while the first is still copying.
-	// It waits on the upload's lock, so it is asked for in a goroutine and
-	// the first is released once it has been.
-	type outcome struct {
-		received int64
-		err      error
-	}
-	second := make(chan outcome, 1)
+	// A second attempt at the same offset, while the first is still
+	// copying. It waits on the upload's lock, so it is asked for in a
+	// goroutine and the first is released once it has been.
+	second := make(chan error, 1)
 	go func() {
-		received, err := h.store.AppendUpload(id, 0, func(f *os.File, limit int64) (int64, error) {
-			return io.Copy(f, io.LimitReader(bytes.NewReader(piece), limit))
+		_, err := h.store.ReceiveUpload(id, 0, relayapi.DefaultMaxBytes, time.Now, time.Minute, func(f *os.File, want int64) (int64, error) {
+			return io.Copy(f, io.LimitReader(bytes.NewReader(piece), want))
 		})
-		second <- outcome{received, err}
+		second <- err
 	}()
 	// Nothing says when the second has reached the lock; a moment is
 	// enough for it to have been called, and the outcome is the same either
@@ -85,37 +85,31 @@ func TestOneAppendAtATimePerUpload(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	close(release)
 	firstErr := <-first
-	secondOut := <-second
+	secondErr := <-second
 
-	u, err := h.store.Upload(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(h.store.uploadPath(id))
-	if err != nil {
-		t.Fatal(err)
-	}
 	if firstErr != nil {
-		t.Fatalf("the first append: %v", firstErr)
+		t.Fatalf("the first attempt: %v", firstErr)
 	}
-	if !errors.Is(secondOut.err, ErrUploadOffset) || secondOut.received != size {
-		t.Fatalf("the second append at offset 0 gave received=%d err=%v, want ErrUploadOffset at %d",
-			secondOut.received, secondOut.err, size)
+	if !errors.Is(secondErr, ErrNoUpload) {
+		t.Fatalf("the second attempt at offset 0: %v, want ErrNoUpload, the first having placed the stream", secondErr)
 	}
-	if u.Received != size || info.Size() != size {
-		t.Fatalf("an upload declared at %d bytes holds %d on disk and %d in its row after two appends at offset 0",
-			size, info.Size(), u.Received)
+	if _, err := h.store.Upload(id); !errors.Is(err, ErrNoUpload) {
+		t.Fatalf("the upload after two attempts: %v; want gone with the placement", err)
 	}
+	if n, b := h.queued(bob.Fingerprint()); n != 1 || b != size {
+		t.Fatalf("the mailbox holds %d messages of %d bytes after two attempts at offset 0; want one of %d", n, b, size)
+	}
+	h.assertCountersAgree()
 }
 
-// TestTwoAppendsAtOneOffsetOnTheWireLandOnce is the same race over HTTP: two
+// TestTwoAttemptsAtOneOffsetOnTheWireLandOnce is the same race over HTTP: two
 // PATCH requests at Upload-Offset 0, the first still receiving its body
 // while the second arrives whole. The first is answered 204 at the declared
 // length, the second 409 naming the real offset, HEAD reports the declared
 // length, and the disk holds exactly the reservation. The second PATCH is
 // sent from a goroutine, since under the lock it is answered only after the
 // first has finished.
-func TestTwoAppendsAtOneOffsetOnTheWireLandOnce(t *testing.T) {
+func TestTwoAttemptsAtOneOffsetOnTheWireLandOnce(t *testing.T) {
 	h := newHarness(t, Config{})
 	people := ids(t, "alice", "bob")
 	alice, bob := people[0], people[1]
@@ -123,6 +117,7 @@ func TestTwoAppendsAtOneOffsetOnTheWireLandOnce(t *testing.T) {
 	h.register(bob)
 
 	const size = 64 << 10
+	blob := fakeStream(200, size-stream.HeaderSize-200)
 	status, opened, body := h.openStream(alice, bob.Fingerprint(), size)
 	if status != http.StatusCreated {
 		t.Fatalf("open: %d %s", status, body)
@@ -136,7 +131,7 @@ func TestTwoAppendsAtOneOffsetOnTheWireLandOnce(t *testing.T) {
 	pr, pw := io.Pipe()
 	first := make(chan answer, 1)
 	go func() {
-		req, err := http.NewRequest("PATCH", h.srv.URL+"/v1/uploads/"+opened.Upload, pr)
+		req, err := http.NewRequest("PUT", h.srv.URL+"/v1/uploads/"+opened.Upload, pr)
 		if err != nil {
 			first <- answer{status: -1, body: []byte(err.Error())}
 			return
@@ -158,7 +153,7 @@ func TestTwoAppendsAtOneOffsetOnTheWireLandOnce(t *testing.T) {
 	}()
 	// Half the body goes through, and the relay is inside its copy once the
 	// upload file has grown at all: the row was read before the copy began.
-	if _, err := pw.Write(bytes.Repeat([]byte("a"), size/2)); err != nil {
+	if _, err := pw.Write(blob[:size/2]); err != nil {
 		t.Fatal(err)
 	}
 	path := h.store.uploadPath(opened.Upload)
@@ -167,63 +162,54 @@ func TestTwoAppendsAtOneOffsetOnTheWireLandOnce(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("the relay never began writing the first piece")
+			t.Fatal("the relay never began writing the first attempt")
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	// The second PATCH, whole, at the same offset, from a goroutine: it is
-	// answered once the first has finished.
+	// The second attempt, whole, at the same offset, from a goroutine: it
+	// is answered once the first has finished.
 	second := make(chan answer, 1)
 	go func() {
-		status, body, hdr := h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload,
-			bytes.Repeat([]byte("b"), size), map[string]string{relayapi.UploadOffsetHeader: "0"})
+		status, body, hdr := h.putStream(alice, opened.Upload, blob, 0)
 		second <- answer{status, body, hdr.Get(relayapi.UploadOffsetHeader)}
 	}()
 	time.Sleep(50 * time.Millisecond)
-	if _, err := pw.Write(bytes.Repeat([]byte("a"), size/2)); err != nil {
+	if _, err := pw.Write(blob[size/2:]); err != nil {
 		t.Fatal(err)
 	}
 	pw.Close()
 	firstAnswer := <-first
 	secondAnswer := <-second
 
-	if firstAnswer.status != http.StatusNoContent || firstAnswer.offset != strconv.Itoa(size) {
-		t.Fatalf("the first PATCH: %d %s offset=%s, want 204 at %d", firstAnswer.status, firstAnswer.body, firstAnswer.offset, size)
+	if firstAnswer.status != http.StatusCreated || firstAnswer.offset != strconv.Itoa(size) {
+		t.Fatalf("the first attempt: %d %s offset=%s, want 201 at %d", firstAnswer.status, firstAnswer.body, firstAnswer.offset, size)
 	}
-	if secondAnswer.status != http.StatusConflict || secondAnswer.offset != strconv.Itoa(size) {
-		t.Fatalf("the second PATCH at offset 0: %d %s offset=%s, want 409 naming %d", secondAnswer.status, secondAnswer.body, secondAnswer.offset, size)
+	if secondAnswer.status != http.StatusNotFound {
+		t.Fatalf("the second attempt at offset 0: %d %s, want 404, the first having placed the stream", secondAnswer.status, secondAnswer.body)
 	}
-	status, _, hdr := h.sendRaw(alice, "HEAD", "/v1/uploads/"+opened.Upload, nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("head: %d", status)
+	// One message of the declared size, and no upload left: the stream
+	// landed once.
+	if n, b := h.queued(bob.Fingerprint()); n != 1 || b != size {
+		t.Fatalf("the mailbox holds %d messages of %d bytes after two attempts at offset 0; want one of %d", n, b, size)
 	}
-	offset, _ := strconv.ParseInt(hdr.Get(relayapi.UploadOffsetHeader), 10, 64)
-	length, _ := strconv.ParseInt(hdr.Get(relayapi.UploadLengthHeader), 10, 64)
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("the upload's file is still there after the placement: %v", err)
 	}
-	if offset != length || info.Size() != size {
-		t.Fatalf("after two PATCHes at offset 0 HEAD says %d of %d bytes and the file is %d bytes: the upload holds more than it declared",
-			offset, length, info.Size())
-	}
-	// And the upload completes, as one that holds what it declared does —
-	// once its shape is right: the bytes here are not a stream, so what is
-	// asserted is that the relay got as far as looking, at the declared
-	// length, rather than refusing at the offset.
-	if status, body, _ := h.send(alice, "POST", "/v1/uploads/"+opened.Upload+"/complete", nil, nil); status == http.StatusConflict {
-		t.Fatalf("complete after the race: %d %s; the upload's offset is not its length", status, body)
-	}
+	h.assertCountersAgree()
 }
 
-// TestTheUploadLockIsHeldNoLongerThanTheAppend: a second append at the
-// advanced offset, sent after the first has finished, goes through — the
-// lock covers one append and is released with it — and a completion and an
-// abort take the same lock and drop its entry, so the map holds an entry
-// only for an upload in progress.
-func TestTheUploadLockIsHeldNoLongerThanTheAppend(t *testing.T) {
-	h := newHarness(t, Config{})
+// TestTheUploadLockIsHeldNoLongerThanTheAttempt: under the old wire a
+// second append at the advanced offset, sent after the first had
+// finished, went through — the lock covered one append and was released
+// with it — and a completion and an abort took the same lock and dropped
+// its entry. Under the one-attempt wire the same is proved with a first
+// attempt that stops short past the threshold (kept, the lock released
+// with it), a resumed attempt from its offset that is answered and not
+// waited on and places the stream (the entry gone with it), and an abort
+// of the gone upload that takes and drops a fresh entry.
+func TestTheUploadLockIsHeldNoLongerThanTheAttempt(t *testing.T) {
+	h := newHarness(t, Config{MaxBytes: 2048})
 	people := ids(t, "alice", "bob")
 	alice, bob := people[0], people[1]
 	h.register(alice)
@@ -240,29 +226,30 @@ func TestTheUploadLockIsHeldNoLongerThanTheAppend(t *testing.T) {
 		t.Fatal(err)
 	}
 	half := bytes.Repeat([]byte("h"), size/2)
-	append := func(offset int64) (int64, error) {
-		return h.store.AppendUpload(id, offset, func(f *os.File, limit int64) (int64, error) {
-			return io.Copy(f, io.LimitReader(bytes.NewReader(half), limit))
+	attempt := func(offset int64) (Received, error) {
+		return h.store.ReceiveUpload(id, offset, 2048, time.Now, time.Minute, func(f *os.File, want int64) (int64, error) {
+			return io.Copy(f, io.LimitReader(bytes.NewReader(half), want))
 		})
 	}
 	done := make(chan error, 1)
 	go func() {
-		received, err := append(0)
-		if err == nil && received != size/2 {
-			err = errors.New("the first append did not land half")
+		received, err := attempt(0)
+		if !errors.Is(err, ErrShortAttempt) || !received.Kept || received.Offset != size/2 {
+			done <- fmt.Errorf("the first attempt did not leave half kept: %+v %v", received, err)
+			return
 		}
-		done <- err
+		done <- nil
 	}()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	// The lock was released with the first append: the second, at the
-	// advanced offset, is answered and not waited on.
+	// The lock was released with the first attempt: the resumed one, at
+	// the kept offset, is answered and not waited on.
 	got := make(chan error, 1)
 	go func() {
-		received, err := append(size / 2)
-		if err == nil && received != size {
-			err = errors.New("the second append did not land the rest")
+		received, err := attempt(size / 2)
+		if err == nil && received.Placed == 0 {
+			err = errors.New("the resumed attempt did not place the stream")
 		}
 		got <- err
 	}()
@@ -272,32 +259,23 @@ func TestTheUploadLockIsHeldNoLongerThanTheAppend(t *testing.T) {
 			t.Fatal(err)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("the second append at the advanced offset never returned: the lock outlived the first")
+		t.Fatal("the resumed attempt never returned: the lock outlived the first")
 	}
 	h.store.uploadsMu.Lock()
 	_, held := h.store.uploads[id]
 	h.store.uploadsMu.Unlock()
-	if !held {
-		t.Fatal("no lock entry for an upload in progress")
-	}
-	if _, err := h.store.CompleteUpload(id); err != nil {
-		t.Fatal(err)
-	}
-	h.store.uploadsMu.Lock()
-	_, held = h.store.uploads[id]
-	h.store.uploadsMu.Unlock()
 	if held {
-		t.Fatal("the lock entry outlived the upload's completion")
+		t.Fatal("the lock entry outlived the upload's placement")
 	}
 	// An abort of an upload that is gone takes and drops a fresh entry too.
 	if aborted, err := h.store.AbortUpload(id); err != nil || aborted {
-		t.Fatalf("abort of a completed upload: %v %v", aborted, err)
+		t.Fatalf("abort of a placed upload: %v %v", aborted, err)
 	}
 	h.store.uploadsMu.Lock()
 	n := len(h.store.uploads)
 	h.store.uploadsMu.Unlock()
 	if n != 0 {
-		t.Fatalf("%d lock entries after complete and abort, want none", n)
+		t.Fatalf("%d lock entries after the placement and the abort, want none", n)
 	}
 }
 

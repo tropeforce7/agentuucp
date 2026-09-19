@@ -95,10 +95,7 @@ func TestAStreamWhoseManifestOverstatesItsPayloadIsKeptAndAcknowledged(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.AppendStream(ctx, opened.Upload, 0, bytes.NewReader(short), int64(len(short))); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.CompleteStream(ctx, opened.Upload); err != nil {
+	if _, err := c.PutStream(ctx, opened.Upload, 0, bytes.NewReader(short), int64(len(short))); err != nil {
 		t.Fatal(err)
 	}
 	// And an ordinary message behind it.

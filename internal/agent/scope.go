@@ -68,9 +68,9 @@ const httpDomain = "ccx-http-v1\n"
 // receiveRoutes is the receive set: the requests a receive-scope unlock will
 // sign, as the relay registers them. A segment of "*" matches any one
 // non-empty path segment. Everything signed under ccx-http-v1 that is not
-// here is send: a post, a stream's open, append, abort and completion, a
-// directory or an allow list pushed, a certificate issued, a registration,
-// and every administrative route. The health check and the key lookup are
+// here is send: a post, a stream's open, its one PUT per attempt and its
+// abort, a directory or an allow list pushed, a certificate issued, a
+// registration, and every administrative route. The health check and the key lookup are
 // not here because the client does not sign them — the relay verifies no
 // signature on either — so they never reach the agent; a signing string
 // for one arriving here is not the client's, and is send like anything
@@ -85,7 +85,6 @@ var receiveRoutes = []struct {
 	{"GET", "/v1/mailbox/*/channels"}, // a directory
 	{"GET", "/v1/mailbox/*/certs"},    // this identity's certificates
 	{"DELETE", "/v1/mailbox/*/*"},     // acknowledging a message, and auu rm
-	{"HEAD", "/v1/uploads/*"},         // how much of a resumable upload the relay holds
 	{"POST", "/v1/mailbox/*/certs"},   // renewing this machine's certificate; see above
 }
 

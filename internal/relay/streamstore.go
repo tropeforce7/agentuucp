@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/regular"
@@ -28,6 +30,9 @@ import (
 var (
 	ErrNoUpload     = errors.New("relay: no such upload")
 	ErrUploadOffset = errors.New("relay: upload offset does not match")
+	// ErrShortAttempt is an attempt that stopped before the end: the
+	// Received beside it says what, if anything, is kept.
+	ErrShortAttempt = errors.New("relay: upload attempt stopped short of the end")
 	ErrStreamTooBig = errors.New("relay: stream is larger than this relay accepts")
 )
 
@@ -192,23 +197,62 @@ func (s *Store) Upload(id string) (*Upload, error) {
 	return &u, nil
 }
 
-// AppendUpload copies at most the remaining bytes from r onto the end of an
-// upload, and records how far it now reaches.
+// Received is what one attempt left behind: the message id when the
+// stream was placed, or the offset the upload now stands at and whether
+// anything of it is kept for a resume.
+type Received struct {
+	// Placed is the message's id in the mailbox, when the attempt reached
+	// the end; zero otherwise.
+	Placed int64
+	// Offset is where the upload stands after the attempt: the size when
+	// placed, the kept partial's length when kept, zero when nothing is.
+	Offset int64
+	// Kept says a partial remains for one resumed attempt within the
+	// window; false when the attempt placed the stream or left nothing.
+	Kept bool
+	// Expires is when a kept partial goes, on the relay's clock.
+	Expires time.Time
+}
+
+// ReceiveUpload is one attempt: it copies the stream's bytes from offset
+// to the end onto the upload's file, and either places the message or
+// applies the rule for an attempt that stopped short.
 //
 // The copy streams: nothing larger than the buffer is held, whatever the
-// sender sends. offset must match what the relay already has, so a client that
-// lost a connection asks with HEAD and resumes from the truth.
+// sender sends. offset must match what the relay already has, so a sender
+// that lost a connection is told where to resume by the 409 that carries
+// the truth. r is given the file and how many bytes are wanted, and
+// returns how many it wrote and the error that ended it, if one did; the
+// caller's r is also where the shape of the first bytes is judged.
 //
-// One append at a time per upload, and none while a completion or an abort
-// is under way: the upload's lock is held from the offset check through the
-// file write and the row's update. Without it two appends at one offset
-// both passed the check, both landed on the file, and the upload held twice
-// what it declared and twice what was reserved — an admitted sender's way
-// past the quotas, bounded only by the in-flight cap. The lock is held
-// across the body copy on purpose; a SQLite transaction is not, because a
-// transaction open for the length of a network read would hold the one
-// connection every other request needs.
-func (s *Store) AppendUpload(id string, offset int64, r func(w *os.File, limit int64) (int64, error)) (int64, error) {
+// One attempt at a time per upload, and no abort or purge while one runs:
+// the upload's lock is held from the offset check through the copy, the
+// sync and the row's update or the file's removal, so two attempts at one
+// offset cannot both land, an abort sees the row before or after and
+// never between, and the purge, which never waits on a sender, skips an
+// upload mid-attempt. A SQLite transaction is not held across the copy,
+// since a transaction open for the length of a network read would hold
+// the one connection every other request needs.
+//
+// When the copy reaches size the stream is synced and placed, under the
+// same lock, and the message's id answered. When it stops short: a first
+// attempt (offset zero) that leaves at least threshold bytes on the disk
+// is kept for one resumed attempt, its bytes synced and the row's
+// received and expires written, expires being the window from the
+// moment the attempt stopped, read from now once the copy has ended and
+// never from when the request began — a transfer that ran longer than
+// the window before its link dropped would otherwise be kept already
+// expired; anything else — a first
+// attempt under the threshold, or a resumed attempt, whose one resume is
+// then spent — leaves nothing: the upload is deleted whole, its file and
+// its row, and the reservation with it. So the relay never keeps less
+// than a threshold's worth for an upload that did not complete, and a
+// message is placed by at most two attempts on one id. A copy the file
+// itself cut short — a full disk — is the store's fault (ErrRelayFull for
+// ENOSPC), reported after the same rule has run.
+func (s *Store) ReceiveUpload(id string, offset int64, threshold int64, now func() time.Time, window time.Duration,
+	r func(w *os.File, want int64) (int64, error)) (Received, error) {
+
 	unlock := s.uploadLock(id)
 	u, err := s.Upload(id)
 	if errors.Is(err, ErrNoUpload) {
@@ -217,73 +261,127 @@ func (s *Store) AppendUpload(id string, offset int64, r func(w *os.File, limit i
 		// and nothing will come for it again. Kept, it was one mutex per
 		// such race until the store closed.
 		s.forgetUploadLock(id, unlock)
-		return 0, err
+		return Received{}, err
 	}
-	defer unlock()
 	if err != nil {
-		return 0, err
+		unlock()
+		return Received{}, err
 	}
 	if offset != u.Received {
-		return u.Received, ErrUploadOffset
+		unlock()
+		return Received{Offset: u.Received, Kept: u.Received > 0, Expires: u.Expires}, ErrUploadOffset
 	}
-	remaining := u.Size - u.Received
-	if remaining <= 0 {
-		return u.Received, nil
+	want := u.Size - u.Received
+	if want <= 0 {
+		unlock()
+		return Received{Offset: u.Received}, ErrUploadOffset
 	}
 
 	// The file is opened by its handle: the directory is the relay's own,
 	// but what stands under an upload's name is not taken on trust.
 	f, err := regular.OpenFile(s.uploadPath(id), os.O_WRONLY|os.O_APPEND, fileMode)
 	if err != nil {
-		return u.Received, s.fault(s.uploadPath(id), err)
+		unlock()
+		return Received{Offset: u.Received}, s.fault(s.uploadPath(id), err)
 	}
-	n, copyErr := r(f, remaining)
-	if n > 0 {
+	n, copyErr := r(f, want)
+	if n == want && copyErr == nil {
+		// The end. Synced and placed under the lock, the lock's entry gone
+		// with the upload. A sync that fails puts the file back to what
+		// the row says; if that fails too, or the close does, the file
+		// is longer than its row and the upload is aborted whole rather
+		// than kept: a row naming fewer bytes than the file holds would
+		// have the next attempt append after the extra ones and place a
+		// corrupt stream.
 		if err := f.Sync(); err != nil {
-			// What did not reach the disk was not received. The file is put
-			// back to what the row says, so that a resume appends at the
-			// truth rather than after bytes the row does not know about.
-			f.Truncate(u.Received)
+			if terr := f.Truncate(u.Received); terr != nil {
+				f.Close()
+				s.abortLocked(id)
+				s.forgetUploadLock(id, unlock)
+				return Received{}, s.fault(s.uploadPath(id), err)
+			}
 			f.Close()
-			return u.Received, s.fault(s.uploadPath(id), err)
+			unlock()
+			return Received{Offset: u.Received}, s.fault(s.uploadPath(id), err)
 		}
-	}
-	if err := f.Close(); err != nil {
-		return u.Received, s.fault(s.uploadPath(id), err)
-	}
-	if n > 0 {
-		if _, err := s.db.Exec(`UPDATE uploads SET received = received + ? WHERE id = ?`, n, id); err != nil {
-			return u.Received, err
+		if err := f.Close(); err != nil {
+			s.abortLocked(id)
+			s.forgetUploadLock(id, unlock)
+			return Received{}, s.fault(s.uploadPath(id), err)
 		}
+		messageID, err := s.placeUpload(u)
+		s.forgetUploadLock(id, unlock)
+		if err != nil {
+			return Received{Offset: u.Received}, err
+		}
+		return Received{Placed: messageID, Offset: u.Size}, nil
 	}
-	// The copy's error is the write's when the disk is full: mapped like
-	// every other write here, so a full disk is a 507 the sender can wait
-	// out with what it has already sent kept, not a 500 that says nothing.
-	// A read error from the request passes through unchanged.
-	if copyErr != nil {
-		return u.Received + n, s.fault(s.uploadPath(id), copyErr)
+
+	// Stopped short. A first attempt that reached the threshold is kept;
+	// everything else leaves nothing. The window runs from this moment,
+	// the copy's end, not from the request's start.
+	held := u.Received + n
+	if u.Received == 0 && held >= threshold && n > 0 {
+		expires := now().Add(window)
+		if err := f.Sync(); err != nil {
+			f.Truncate(0)
+			f.Close()
+			s.abortLocked(id)
+			s.forgetUploadLock(id, unlock)
+			return Received{}, s.fault(s.uploadPath(id), err)
+		}
+		if _, err := s.db.Exec(`UPDATE uploads SET received = ?, expires = ? WHERE id = ?`, held, expires.Unix(), id); err != nil {
+			// A partial the row cannot name is not kept: a file longer
+			// than its row would be appended to at the wrong place.
+			f.Truncate(0)
+			f.Close()
+			s.abortLocked(id)
+			s.forgetUploadLock(id, unlock)
+			return Received{}, err
+		}
+		f.Close()
+		unlock()
+		return Received{Offset: held, Kept: true, Expires: expires}, s.shortCause(id, copyErr)
 	}
-	return u.Received + n, nil
+	f.Truncate(u.Received)
+	f.Close()
+	_, abortErr := s.abortLocked(id)
+	s.forgetUploadLock(id, unlock)
+	if abortErr != nil {
+		return Received{}, abortErr
+	}
+	return Received{}, s.shortCause(id, copyErr)
 }
 
-// CompleteUpload turns a finished upload into a message.
+// shortCause is the error an attempt that stopped short is answered with:
+// ErrShortAttempt for a sender that stopped, wrapped around the copy's
+// own error where there was one, or the disk's fault where the file cut
+// it short.
+func (s *Store) shortCause(id string, copyErr error) error {
+	if isFileError(copyErr) {
+		return s.fault(s.uploadPath(id), copyErr)
+	}
+	if copyErr != nil {
+		return fmt.Errorf("%w: %v", ErrShortAttempt, copyErr)
+	}
+	return ErrShortAttempt
+}
+
+// isFileError reports whether a copy's error came from the file and not
+// from the request: os.File's writes wrap theirs in *fs.PathError, and a
+// body's reader never does; a full disk's errno is named too, for a
+// caller that hands it over bare.
+func isFileError(err error) bool {
+	var pe *fs.PathError
+	return errors.As(err, &pe) || errors.Is(err, syscall.ENOSPC) || errors.Is(err, syscall.EDQUOT)
+}
+
+// placeUpload turns a finished upload into a message, under the upload's
+// lock, which the caller holds.
 //
 // The file is renamed into place before the transaction commits, so the
 // invariant Put keeps holds here too: after a commit there is always a file.
-// Under the upload's lock, so that an append still copying cannot land on
-// a file that has just been renamed into place: a completion waits for it,
-// and then finds the row past its size or exactly at it.
-func (s *Store) CompleteUpload(id string) (int64, error) {
-	unlock := s.uploadLock(id)
-	defer s.forgetUploadLock(id, unlock)
-	u, err := s.Upload(id)
-	if err != nil {
-		return 0, err
-	}
-	if u.Received != u.Size {
-		return 0, ErrUploadOffset
-	}
-
+func (s *Store) placeUpload(u *Upload) (int64, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
@@ -303,10 +401,10 @@ func (s *Store) CompleteUpload(id string) (int64, error) {
 	if err := adjustCounters(tx, u.To, 1, u.Size); err != nil {
 		return 0, err
 	}
-	if _, err := tx.Exec(`DELETE FROM uploads WHERE id = ?`, id); err != nil {
+	if _, err := tx.Exec(`DELETE FROM uploads WHERE id = ?`, u.ID); err != nil {
 		return 0, err
 	}
-	if err := s.place(s.uploadPath(id), u.To, messageID); err != nil {
+	if err := s.place(s.uploadPath(u.ID), u.To, messageID); err != nil {
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -406,11 +504,11 @@ func (s *Store) forgetUploadLock(id string, unlock func()) {
 // ever. It says how many it removed and how many it left for next time.
 //
 // Housekeeping never waits on a sender. The purge runs inside an unrelated
-// caller's request, and an append holds its upload's lock across the copy
+// caller's request, and an attempt holds its upload's lock across the copy
 // of the request body, so a purge that took the lock as an abort does
 // stood behind a dribbling sender for as long as the read timeout let it,
 // with that caller's slot held and its answer unsent. An upload whose lock
-// is held is skipped and met at the next purge; by then the append has
+// is held is skipped and met at the next purge; by then the attempt has
 // ended, or the expiry has refused it and aborted the row itself.
 func (s *Store) PurgeUploads(now time.Time) (purged, skipped int, err error) {
 	rows, err := s.db.Query(`SELECT id FROM uploads WHERE expires < ?`, now.Unix())
@@ -463,13 +561,6 @@ func (s *Store) MessageKind(toFP string, id int64) (kind string, size int64, err
 func (s *Store) OpenMessage(toFP string, id int64) (*os.File, error) {
 	f, err := regular.Open(s.messagePath(toFP, id))
 	return f, s.fault(s.messagePath(toFP, id), err)
-}
-
-// OpenUploadFile returns an upload's file, for a caller that will read the
-// start of it.
-func (s *Store) OpenUploadFile(id string) (*os.File, error) {
-	f, err := regular.Open(s.uploadPath(id))
-	return f, s.fault(s.uploadPath(id), err)
 }
 
 // ErrNoMessage is returned for a message id nothing knows about.

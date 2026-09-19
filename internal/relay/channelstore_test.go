@@ -444,16 +444,14 @@ func TestAStreamCompletesUnderItsChannel(t *testing.T) {
 	if err != nil || up.Channel != "bugs" {
 		t.Fatalf("the upload's channel: %+v %v", up, err)
 	}
-	if _, err := s.AppendUpload(id, 0, func(w *os.File, limit int64) (int64, error) {
+	received, err := s.ReceiveUpload(id, 0, 1<<20, time.Now, time.Minute, func(w *os.File, want int64) (int64, error) {
 		n, err := w.Write([]byte("hello"))
 		return int64(n), err
-	}); err != nil {
-		t.Fatal(err)
+	})
+	if err != nil || received.Placed == 0 {
+		t.Fatalf("the attempt: %+v %v; want the stream placed", received, err)
 	}
-	msgID, err := s.CompleteUpload(id)
-	if err != nil {
-		t.Fatal(err)
-	}
+	msgID := received.Placed
 	l, err := s.Listing(fp, 0, 10, false)
 	if err != nil {
 		t.Fatal(err)

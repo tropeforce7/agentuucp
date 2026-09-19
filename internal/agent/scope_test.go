@@ -44,7 +44,6 @@ func TestTheClassifierAdmitsTheReceiveSetAndNothingElse(t *testing.T) {
 		"the directory":                  "GET /v1/mailbox/" + fp + "/channels",
 		"this identity's certs":          "GET /v1/mailbox/" + fp + "/certs",
 		"acknowledging":                  "DELETE /v1/mailbox/" + fp + "/12",
-		"how much the relay holds":       "HEAD /v1/uploads/u-1",
 		"{id} equal to allow under blob": "GET /v1/mailbox/" + fp + "/allow/blob", // routed to the blob handler, which refuses the id; nothing originates
 		"a certificate renewed":          "POST /v1/mailbox/" + fp + "/certs",
 		"another mailbox's certs":        "POST /v1/mailbox/" + other + "/certs", // by shape; the relay refuses "not your mailbox", and the signature is the caller's
@@ -52,9 +51,11 @@ func TestTheClassifierAdmitsTheReceiveSetAndNothingElse(t *testing.T) {
 	send := map[string]string{
 		"a post":                      "POST /v1/mailbox/" + fp,
 		"a stream opened":             "POST /v1/mailbox/" + fp + "/streams",
-		"a chunk appended":            "PATCH /v1/uploads/u-1",
+		"an attempt at the stream":    "PUT /v1/uploads/u-1",
 		"an upload aborted":           "DELETE /v1/uploads/u-1",
-		"an upload completed":         "POST /v1/uploads/u-1/complete",
+		"an old chunk append":         "PATCH /v1/uploads/u-1",         // a route from before, send like anything unknown
+		"an old completion":           "POST /v1/uploads/u-1/complete", // likewise
+		"an old HEAD of an upload":    "HEAD /v1/uploads/u-1",          // a route from before; nothing receives on it now
 		"an allow list pushed":        "PUT /v1/mailbox/" + fp + "/allow",
 		"a directory pushed":          "PUT /v1/mailbox/" + fp + "/channels",
 		"a registration":              "POST /v1/register",

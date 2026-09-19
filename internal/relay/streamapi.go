@@ -114,9 +114,10 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
 		return
 	}
-	// The server's clock, which is also the one the expiry is read by.
+	// The server's clock, which is also the one the expiry is read by: an
+	// upload nobody puts a byte to within the window is gone.
 	now := s.cfg.Now()
-	expires := now.Add(s.uploadTTL())
+	expires := now.Add(relayapi.ResumeWindow)
 	switch err := s.store.OpenUpload(id, fp, callerFP, channel, req.Size, now, expires,
 		s.cfg.Limits.Quotas(), s.cfg.MaxStreamBytes); {
 	case err == nil:
@@ -137,17 +138,33 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 	}
 
 	s.writeJSON(w, http.StatusCreated, relayapi.OpenStreamResponse{
-		Upload:     id,
-		Expires:    expires.UTC().Truncate(time.Second),
-		MaxRequest: s.cfg.MaxBytes,
+		Upload:          id,
+		Expires:         expires.UTC().Truncate(time.Second),
+		ResumeThreshold: s.cfg.MaxBytes,
+		ResumeWindow:    relayapi.ResumeWindowSeconds,
 	})
 }
 
-func (s *Server) uploadTTL() time.Duration {
-	if s.cfg.UploadTTL > 0 {
-		return s.cfg.UploadTTL
+// stallTimeout is how long the stream route waits for an attempt's next
+// byte: the window, unless a test set it shorter.
+func (s *Server) stallTimeout() time.Duration {
+	if s.cfg.StallTimeout > 0 {
+		return s.cfg.StallTimeout
 	}
-	return 24 * time.Hour
+	return relayapi.ResumeWindow
+}
+
+// refuseUnread answers a request whose body the handler will not read,
+// and closes the connection after. What net/http does with the unread
+// body is its own: whether or not the connection is to be closed, the
+// server's finishRequest closes the body, which reads up to 256 KiB of
+// what was declared before giving up, and a larger declaration is not
+// drained at all; with the header the connection is not kept for another
+// request. So a refusal here costs at most 256 KiB of read, by net/http,
+// and no disk work.
+func (s *Server) refuseUnread(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Connection", "close")
+	s.fail(w, status, msg)
 }
 
 // msgNoUpload is the answer for an upload id the relay does not hold: never
@@ -184,7 +201,8 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, callerFP string)
 		s.fail(w, http.StatusForbidden, "not your upload")
 		return nil, false
 	}
-	if now := s.cfg.Now(); !now.Before(u.Expires) {
+	// The edge is inclusive: at exactly expires the upload is still here.
+	if now := s.cfg.Now(); now.After(u.Expires) {
 		if _, err := s.store.AbortUpload(u.ID); err != nil {
 			s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
 			return nil, false
@@ -197,159 +215,169 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, callerFP string)
 	return u, true
 }
 
-// handleAppendStream copies the next piece of a stream onto its file.
+// handlePutStream is one attempt: the sealed stream from an offset to the
+// end in one request, streamed onto the upload's file under the stall
+// deadline, shape-checked as its first bytes pass, and placed in the
+// mailbox when the last byte lands.
 //
-// The body is never read into memory: it is copied straight through, bounded
-// both by the relay's max_bytes and by what the stream has left to send, so
-// neither a large request nor a lying one can cost more than the smaller of
-// the two.
-func (s *Server) handleAppendStream(w http.ResponseWriter, r *http.Request, callerFP string) {
+// The length is judged before a byte is read: an attempt with no
+// Content-Length (a chunked body) cannot be judged and is 411; one whose
+// offset and length do not reach the stream's size is 400, since an
+// attempt runs to the end or is not an attempt; the body is not read for
+// either, and the connection is closed after the answer, what net/http
+// drains before closing being refuseUnread's to say. The offset must be
+// where the relay's copy ends, or 409 carrying that offset, which is how
+// a sender learns where to resume. Then the copy, under ReceiveUpload's
+// rule for what an attempt that stops short leaves.
+func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerFP string) {
 	u, ok := s.upload(w, r, callerFP)
 	if !ok {
 		return
 	}
 	offset, err := strconv.ParseInt(r.Header.Get(relayapi.UploadOffsetHeader), 10, 64)
 	if err != nil || offset < 0 {
-		s.fail(w, http.StatusBadRequest, "bad or missing "+relayapi.UploadOffsetHeader)
+		s.refuseUnread(w, http.StatusBadRequest, "bad or missing "+relayapi.UploadOffsetHeader)
 		return
 	}
 	if offset != u.Received {
 		w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(u.Received, 10))
-		s.fail(w, http.StatusConflict, fmt.Sprintf(
+		s.refuseUnread(w, http.StatusConflict, fmt.Sprintf(
 			"upload is at offset %d, not %d; resume from there", u.Received, offset))
 		return
 	}
-
-	body := http.MaxBytesReader(w, r.Body, s.cfg.MaxBytes+relayapi.FramingAllowance)
-	var overflow bool
-	received, err := s.store.AppendUpload(u.ID, offset, func(f *os.File, limit int64) (int64, error) {
-		n, err := io.Copy(f, io.LimitReader(body, limit))
-		if err != nil {
-			return n, err
-		}
-		// Anything still readable is more than the stream said it would send.
-		var probe [1]byte
-		if extra, _ := body.Read(probe[:]); extra > 0 {
-			overflow = true
-		}
-		return n, nil
-	})
+	length := r.ContentLength
 	switch {
+	case length < 0:
+		s.refuseUnread(w, http.StatusLengthRequired, relayapi.MsgLengthRequired)
+		return
+	case length != u.Size-offset:
+		// A difference of two values the relay holds (offset is
+		// u.Received, at most u.Size), never a sum of two claimed ones.
+		s.refuseUnread(w, http.StatusBadRequest, fmt.Sprintf(
+			"%s: an attempt at offset %d with %d bytes does not reach %d", relayapi.MsgNotToTheEnd, offset, length, u.Size))
+		return
+	}
+
+	// The stall deadline: the connection's read and write deadlines are
+	// the relay's own for this request, now + the stall timeout, and each
+	// read that delivers bytes moves both, so a transfer of any length
+	// completes while bytes keep coming, a stalled one ends inside the
+	// window as an attempt that stopped short, and the answer at the end
+	// is always writable within a window of the last byte — the server's
+	// five-minute write deadline, set when the headers were read, would
+	// otherwise fail the 201 of a transfer longer than that after the
+	// message was placed.
+	rc := http.NewResponseController(w)
+	stall := s.stallTimeout()
+	extend := func() {
+		rc.SetReadDeadline(time.Now().Add(stall))
+		rc.SetWriteDeadline(time.Now().Add(stall))
+	}
+	extend()
+	body := &deadlineReader{r: r.Body, extend: extend}
+	var badShape error
+	received, err := s.store.ReceiveUpload(u.ID, offset, s.cfg.MaxBytes, s.cfg.Now, relayapi.ResumeWindow,
+		func(f *os.File, want int64) (int64, error) {
+			if offset == 0 {
+				// The shape of the first bytes, before they are written:
+				// the header's manifest length within its bounds and
+				// leaving room for a final chunk, against the size the
+				// open declared. A wrong shape is a body the relay will
+				// not take a byte of.
+				header := make([]byte, stream.HeaderSize)
+				n, err := io.ReadFull(body, header)
+				if err != nil {
+					return 0, err
+				}
+				if err := checkStreamShape(header, u.Size); err != nil {
+					badShape = err
+					return 0, err
+				}
+				if _, err := f.Write(header); err != nil {
+					return 0, err
+				}
+				rest, err := io.Copy(f, io.LimitReader(body, want-int64(n)))
+				return int64(n) + rest, err
+			}
+			return io.Copy(f, io.LimitReader(body, want))
+		})
+	// The answer is written under a window of its own: the stall that
+	// ended a read has spent the write's deadline too, and what the relay
+	// kept is said to anyone still listening.
+	rc.SetWriteDeadline(time.Now().Add(stall))
+	switch {
+	case err == nil:
+		// The upload is a message now, and a listing held for the
+		// recipient finds it.
+		s.notify.Wake(mailKey(u.To))
+		w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(received.Offset, 10))
+		s.writeJSON(w, http.StatusCreated, relayapi.PutStreamResponse{ID: received.Placed})
+		return
+	case badShape != nil:
+		s.refuseUnread(w, http.StatusBadRequest, badShape.Error())
+		return
 	case errors.Is(err, ErrUploadOffset):
-		w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(received, 10))
-		s.fail(w, http.StatusConflict, "upload moved while this request was in flight")
+		w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(received.Offset, 10))
+		s.refuseUnread(w, http.StatusConflict, "upload moved while this request was in flight")
 		return
 	case errors.Is(err, ErrNoUpload):
-		// Aborted, completed or purged between the look above and the
-		// lock: the same answer as for an id never seen, which the sender
-		// does not retry; a 500 here was retried.
-		s.fail(w, http.StatusNotFound, msgNoUpload)
+		// Aborted or purged between the look above and the lock: the
+		// same answer as for an id never seen, which the sender does not
+		// retry.
+		s.refuseUnread(w, http.StatusNotFound, msgNoUpload)
 		return
-	case err != nil:
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			s.fail(w, http.StatusRequestEntityTooLarge, "request body too large")
+	case errors.Is(err, ErrRelayFull):
+		setLimit(w, limitRelayFull)
+		s.refuseUnread(w, http.StatusInsufficientStorage, relayapi.MsgRelayFull)
+		return
+	case errors.Is(err, ErrShortAttempt):
+		// The sender stopped, or the stall deadline ended it; either way
+		// the sender is most likely gone, and the answer says what the
+		// relay kept for anyone still listening.
+		w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(received.Offset, 10))
+		if received.Kept {
+			s.refuseUnread(w, http.StatusBadRequest, fmt.Sprintf(
+				"the attempt stopped short at %d of %d bytes; kept for one resume until %s",
+				received.Offset, u.Size, received.Expires.UTC().Format(time.RFC3339)))
 			return
 		}
-		if errors.Is(err, ErrRelayFull) {
-			setLimit(w, limitRelayFull)
-			s.fail(w, http.StatusInsufficientStorage, relayapi.MsgRelayFull)
-			return
-		}
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuseUnread(w, http.StatusBadRequest, fmt.Sprintf(
+			"the attempt stopped short at %d of %d bytes and nothing is kept; open a new stream", offset, u.Size))
 		return
 	}
-	if overflow {
-		w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(received, 10))
-		s.fail(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
-			"this upload declared %d bytes and has now been sent more", u.Size))
-		return
-	}
-
-	w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(received, 10))
-	w.WriteHeader(http.StatusNoContent)
+	s.refuseUnread(w, http.StatusInternalServerError, relayapi.MsgStorageError)
 }
 
-// handleHeadStream is how a client resumes: it asks where the relay got to.
-func (s *Server) handleHeadStream(w http.ResponseWriter, r *http.Request, callerFP string) {
-	u, ok := s.upload(w, r, callerFP)
-	if !ok {
-		return
-	}
-	w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(u.Received, 10))
-	w.Header().Set(relayapi.UploadLengthHeader, strconv.FormatInt(u.Size, 10))
-	w.WriteHeader(http.StatusOK)
+// deadlineReader is a request body whose every delivering read moves the
+// stall deadline on.
+type deadlineReader struct {
+	r      io.Reader
+	extend func()
 }
 
-// handleCompleteStream turns a finished upload into a message.
-//
-// The structural checks are the whole of what the relay can say about a
-// stream: it holds no key and cannot open a chunk. They exist so that a
+func (d *deadlineReader) Read(p []byte) (int, error) {
+	n, err := d.r.Read(p)
+	if n > 0 {
+		d.extend()
+	}
+	return n, err
+}
+
+// checkStreamShape applies to a stream's first bytes the whole of what the
+// relay can say about it, holding no key and opening no chunk: the
+// manifest chunk's declared length is within its bounds and leaves room
+// for a final chunk within the size the open declared. It exists so that a
 // recipient is never handed something that could not possibly be a stream.
-func (s *Server) handleCompleteStream(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {
-	u, ok := s.upload(w, r, callerFP)
-	if !ok {
-		return
-	}
-	if u.Received != u.Size {
-		w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(u.Received, 10))
-		s.fail(w, http.StatusConflict, fmt.Sprintf(
-			"upload has %d of %d bytes; send the rest before completing it", u.Received, u.Size))
-		return
-	}
-	if err := s.checkStreamShape(u); err != nil {
-		s.fail(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	id, err := s.store.CompleteUpload(u.ID)
-	if err != nil {
-		if errors.Is(err, ErrUploadOffset) {
-			s.fail(w, http.StatusConflict, "upload is not complete")
-			return
-		}
-		if errors.Is(err, ErrNoUpload) {
-			s.fail(w, http.StatusNotFound, msgNoUpload)
-			return
-		}
-		// Placing the file makes a directory and a directory entry, which
-		// a full disk can refuse after every byte was accepted. The upload
-		// is kept, and completing it again when there is room is enough.
-		if errors.Is(err, ErrRelayFull) {
-			setLimit(w, limitRelayFull)
-			s.fail(w, http.StatusInsufficientStorage, relayapi.MsgRelayFull)
-			return
-		}
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
-		return
-	}
-	// The upload is a message now, and a listing held for the recipient
-	// finds it.
-	s.notify.Wake(mailKey(u.To))
-	s.writeJSON(w, http.StatusOK, relayapi.CompleteStreamResponse{ID: id})
-}
-
-// checkStreamShape reads the first few bytes of a finished upload and applies
-// the three inequalities the format guarantees. It opens nothing and decrypts
-// nothing.
-func (s *Server) checkStreamShape(u *Upload) error {
-	if min := int64(stream.HeaderSize + stream.MinChunk0 + stream.TagSize); u.Size < min {
-		return fmt.Errorf("a stream is at least %d bytes; this one is %d", min, u.Size)
-	}
-	f, err := s.store.OpenUploadFile(u.ID)
-	if err != nil {
-		return errors.New("upload could not be read")
-	}
-	defer f.Close()
-	header := make([]byte, stream.HeaderSize)
-	if _, err := io.ReadFull(f, header); err != nil {
-		return errors.New("upload is shorter than a stream header")
+func checkStreamShape(header []byte, size int64) error {
+	if min := int64(stream.HeaderSize + stream.MinChunk0 + stream.TagSize); size < min {
+		return fmt.Errorf("a stream is at least %d bytes; this one is %d", min, size)
 	}
 	length := int64(binary.BigEndian.Uint32(header[stream.EncSize:]))
 	if length < stream.MinChunk0 || length > stream.MaxChunk0 {
 		return fmt.Errorf("the manifest chunk claims %d bytes, outside [%d, %d]",
 			length, stream.MinChunk0, stream.MaxChunk0)
 	}
-	if int64(stream.HeaderSize)+length+stream.TagSize > u.Size {
+	if int64(stream.HeaderSize)+length+stream.TagSize > size {
 		return errors.New("the manifest chunk does not leave room for a final chunk")
 	}
 	return nil
@@ -439,34 +467,11 @@ func (s *Server) handleBlob(w http.ResponseWriter, r *http.Request, body []byte,
 	http.ServeContent(w, r, "", info.ModTime(), f)
 }
 
-// authedNoMailbox is authed for a route whose path carries no mailbox
-// fingerprint: the upload routes are addressed by upload id, and who may touch
-// one is decided from the row rather than the path.
-func (s *Server) authedNoMailbox(fn func(w http.ResponseWriter, r *http.Request, body []byte, callerFP string)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// Before the body is read, as authedWithCert and uploadAuthed do: a
-		// caller without a certificate this relay honours is refused
-		// without the relay accepting what they wanted to send. verifyCaller
-		// checks the certificate again below; the answer is the same, and
-		// this one comes first.
-		if _, ok := s.clientCert(w, r); !ok {
-			return
-		}
-		body, ok := s.readBody(w, r)
-		if !ok {
-			return
-		}
-		fp, ok := s.verifyCaller(w, r, body)
-		if !ok {
-			return
-		}
-		fn(w, r, body, fp)
-	}
-}
-
-// uploadAuthed is the same for the routes whose body is the payload itself and
-// must not be read into memory. The signature therefore covers an empty body,
-// which is what the client signs for these requests.
+// uploadAuthed is authed for the upload routes, whose path carries no
+// mailbox fingerprint (who may touch an upload is decided from the row)
+// and whose body, on the PUT, is the payload itself and must not be read
+// into memory. The signature therefore covers an empty body, which is what
+// the client signs for these requests.
 func (s *Server) uploadAuthed(fn func(w http.ResponseWriter, r *http.Request, callerFP string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Nothing of the body has been read at this point, which is the

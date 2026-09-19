@@ -419,9 +419,10 @@ the file and only then updated the row, and two appends at one offset
 both passed the offset check and both landed: an admitted sender held
 twice what they declared and twice what was reserved, bounded only by the
 in-flight cap, and the upload could never complete. Now the store keeps a
-mutex per upload in progress, taken by an append from the offset check
-through the file write and the row's update, and by a completion or an
-abort for its whole length; the entry goes with the upload. A SQLite
+mutex per upload in progress, taken by an attempt from the offset check
+through the copy, the sync and the row's update or the file's removal
+(under the one-attempt wire placement runs under it too), and by an abort
+for its whole length; the entry goes with the upload. A SQLite
 transaction is the wrong tool for it: one open for the length of a
 network read would hold the one connection every other request needs.
 Serialise with a lock what a transaction cannot span, and test it with
@@ -824,6 +825,21 @@ message may be old but not from a clock no relay would have accepted.
 
 **Retry-After is an integer number of seconds, never a date, never zero.**
 Rounded up; a zero would invite the client straight back into a refusal.
+
+**An upload attempt is one request.** The chunked upload wire — an append
+per piece, a `HEAD` for the offset, a completion — let a sender build a
+stream up on the relay a piece at a time, each piece a request of its own
+with its own lock, and a resume the sender could repeat without end. Under
+the one-attempt wire a `PUT` carries the sealed bytes from an offset to
+the end, with `Content-Length` required and equal to what is left, judged
+before a byte is read; an attempt that stops short is kept only when it
+was the first and reached the threshold, for sixty seconds from the
+moment it stopped and one resume, and otherwise leaves nothing; and the
+sender learns what the relay holds by its next attempt, never by asking.
+A limit on what a request may carry is not a reason to cut the request
+into more of them: the relay streams the body to disk under a stall
+deadline that every delivering read moves, so the request's length is the
+stream's.
 
 **`ServeMux` sets `Request.Pattern` on a copy the outer middleware never
 sees.** If you need the matched route in the outermost handler, record it at

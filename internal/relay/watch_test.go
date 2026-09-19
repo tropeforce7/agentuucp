@@ -236,7 +236,7 @@ func TestAHeldListingAnswersEmptyAtTheWait(t *testing.T) {
 	}
 }
 
-func TestACompletedStreamWakesAHeldListing(t *testing.T) {
+func TestAPlacedStreamWakesAHeldListing(t *testing.T) {
 	h := newHarness(t, Config{})
 	people := ids(t, "alice", "bob")
 	alice, bob := people[0], people[1]
@@ -250,16 +250,22 @@ func TestACompletedStreamWakesAHeldListing(t *testing.T) {
 	if status != http.StatusCreated {
 		t.Fatalf("open: %d %s", status, body)
 	}
-	if status, body, _ := h.sendRaw(bob, "PATCH", "/v1/uploads/"+opened.Upload, blob,
-		map[string]string{relayapi.UploadOffsetHeader: "0"}); status != http.StatusNoContent {
-		t.Fatalf("append: %d %s", status, body)
-	}
-	// Opened and appended is not arrived.
+	// Opened is not arrived, and neither is an attempt that stopped short.
 	if l.answered() {
-		t.Fatal("an upload not yet complete answered the hold")
+		t.Fatal("an upload opened answered the hold")
 	}
-	if status, body, _ := h.send(bob, "POST", "/v1/uploads/"+opened.Upload+"/complete", nil, nil); status != http.StatusOK {
-		t.Fatalf("complete: %d %s", status, body)
+	if status, body, _ := h.putPartial(bob, opened.Upload, blob, 0, 1000); status != http.StatusBadRequest {
+		t.Fatalf("a partial attempt: %d %s", status, body)
+	}
+	if l.answered() {
+		t.Fatal("an attempt that stopped short answered the hold")
+	}
+	status, opened, body = h.openStream(bob, alice.Fingerprint(), int64(len(blob)))
+	if status != http.StatusCreated {
+		t.Fatalf("open again: %d %s", status, body)
+	}
+	if status, body, _ := h.putStream(bob, opened.Upload, blob, 0); status != http.StatusCreated {
+		t.Fatalf("put: %d %s", status, body)
 	}
 	status, resp, _ := l.answer(t)
 	if status != http.StatusOK || len(resp.Messages) != 1 || resp.Messages[0].Kind != relayapi.KindStream ||

@@ -131,8 +131,14 @@ would change: `auu extract` writes every attachment under a safe form of
 its name (see *Receive*), and the sender's rule is that the name is
 already that form, so an honest sender never ships a name a receiver
 would write differently. Above 64 KiB in all, the
-message goes as a stream, in pieces, resumed with `auu send --resume` if
-it is interrupted; nothing about the command changes.
+message goes as a stream: sealed to `outbox/` first, then uploaded in one
+request per attempt, the whole of it or the rest of it from where the
+relay's copy ends. An attempt that is interrupted is tried again on the
+spot, and `auu send --resume` finishes what a failed command left: it asks
+the relay by an attempt from zero, resumes once from the partial the relay
+kept when it kept one (an attempt past the relay's threshold, within sixty
+seconds), and otherwise opens anew for the same sealed bytes. Nothing about
+the command changes.
 
 A note to yourself needs no peer at all:
 
@@ -404,7 +410,7 @@ for no limit, since a watch under a supervisor sits all day; `auu wait`'s
 it prints
 `nothing happened in 10m0s` and exits 3, the code `auu wait` uses for the
 same thing. Two kinds of event: a `message`, which is a message the relay
-holds that this machine has not fetched — a post, or a completed stream —
+holds that this machine has not fetched — a post, or a placed stream —
 said with its relay, channel, kind, size and relay id; and a `directory`,
 which is a peer accepting a newer channel directory on the relay, said with
 who, when it was issued, which channels were added, removed and updated by

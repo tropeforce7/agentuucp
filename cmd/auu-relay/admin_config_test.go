@@ -282,10 +282,6 @@ func TestStreamConfig(t *testing.T) {
 		if cfg.MaxStreamBytes != defaultMaxStreamBytes {
 			t.Fatalf("max_stream_bytes %d, want %d", cfg.MaxStreamBytes, defaultMaxStreamBytes)
 		}
-		ttl, err := cfg.ParsedUploadTTL()
-		if err != nil || ttl != defaultUploadTTL {
-			t.Fatalf("upload_ttl %v, %v; want %v", ttl, err, defaultUploadTTL)
-		}
 	})
 
 	t.Run("streams off from the file and the flag", func(t *testing.T) {
@@ -333,23 +329,20 @@ func TestStreamConfig(t *testing.T) {
 		}
 	})
 
-	t.Run("upload_ttl edges", func(t *testing.T) {
-		for _, d := range []string{"1ns", "1s", "720h", "2562047h"} {
-			if _, err := resolve(t, "", "--upload-ttl", d); err != nil {
-				t.Fatalf("upload_ttl %q was refused: %v", d, err)
-			}
+	t.Run("upload_ttl is a setting from before, refused by name", func(t *testing.T) {
+		// A stream's partial lives the wire's resume window, sixty
+		// seconds, and no setting says otherwise; a file that still
+		// carries the old key is refused as any unknown key is.
+		if _, err := resolve(t, writeFile(t, `{"upload_ttl": "24h"}`)); err == nil || !strings.Contains(err.Error(), "upload_ttl") {
+			t.Fatalf("upload_ttl in the file: %v; want the refusal naming it", err)
 		}
-		for _, d := range []string{"0s", "-1ns", "-720h", "soon", "24"} {
-			if _, err := resolve(t, "", "--upload-ttl", d); err == nil {
-				t.Fatalf("upload_ttl %q was accepted", d)
-			} else if !strings.Contains(err.Error(), "upload_ttl") {
-				t.Fatalf("error %q does not name the setting", err)
-			}
+		if _, err := resolve(t, "", "--upload-ttl", "24h"); err == nil {
+			t.Fatal("--upload-ttl was taken")
 		}
 	})
 
 	t.Run("printed and round trips", func(t *testing.T) {
-		cfg, err := resolve(t, "", "--streams=false", "--max-stream-bytes", "123", "--upload-ttl", "90m")
+		cfg, err := resolve(t, "", "--streams=false", "--max-stream-bytes", "123")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -357,7 +350,7 @@ func TestStreamConfig(t *testing.T) {
 		if err := Encode(&out, cfg.Redacted()); err != nil {
 			t.Fatal(err)
 		}
-		for _, key := range []string{"streams", "max_stream_bytes", "upload_ttl"} {
+		for _, key := range []string{"streams", "max_stream_bytes"} {
 			if !strings.Contains(out.String(), key) {
 				t.Fatalf("--print-config omits %s:\n%s", key, out.String())
 			}
@@ -366,10 +359,9 @@ func TestStreamConfig(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// The duration round trips as the operator wrote it, not normalised.
-		if back.Streams || back.MaxStreamBytes != 123 || back.UploadTTL != "90m" {
-			t.Fatalf("the stream settings did not round trip: streams=%v max=%d ttl=%q",
-				back.Streams, back.MaxStreamBytes, back.UploadTTL)
+		if back.Streams || back.MaxStreamBytes != 123 {
+			t.Fatalf("the stream settings did not round trip: streams=%v max=%d",
+				back.Streams, back.MaxStreamBytes)
 		}
 	})
 }

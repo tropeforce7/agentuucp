@@ -47,8 +47,12 @@ type Config struct {
 	streamsSet bool
 	// MaxStreamBytes is the largest declared stream. Zero is unlimited.
 	MaxStreamBytes int64
-	// UploadTTL is how long an unfinished upload is kept. Zero means 24h.
-	UploadTTL time.Duration
+	// StallTimeout is how long the stream route waits for the next byte of
+	// an attempt before ending it as one that stopped short, extended on
+	// every read that delivers bytes; zero means relayapi.ResumeWindow. It
+	// is a field so a test can set it short on a loopback connection: the
+	// deadline is the wall clock's, not Now's.
+	StallTimeout time.Duration
 	// Logger receives one line per request. Never receives request bodies.
 	Logger *slog.Logger
 	// Limits is the rate limit and quota policy. The zero value is unlimited;
@@ -181,10 +185,8 @@ func NewServer(store *Store, cfg Config) *Server {
 
 	s.route("POST /v1/mailbox/{fp}/streams", s.authed(s.handleOpenStream))
 	s.route("GET /v1/mailbox/{fp}/{id}/blob", s.authed(s.handleBlob))
-	s.route("PATCH /v1/uploads/{id}", s.uploadAuthed(s.handleAppendStream))
-	s.route("HEAD /v1/uploads/{id}", s.uploadAuthed(s.handleHeadStream))
+	s.route("PUT /v1/uploads/{id}", s.uploadAuthed(s.handlePutStream))
 	s.route("DELETE /v1/uploads/{id}", s.uploadAuthed(s.handleAbortStream))
-	s.route("POST /v1/uploads/{id}/complete", s.authedNoMailbox(s.handleCompleteStream))
 
 	s.route("GET /v1/admin/status", s.adminAuthed(s.handleAdminStatus))
 	s.route("GET /v1/admin/mailboxes", s.adminAuthed(s.handleAdminMailboxes))
@@ -376,6 +378,10 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
 }
+
+// Unwrap lets http.NewResponseController reach the connection through
+// the recorder, for the stream route's deadlines.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

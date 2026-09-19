@@ -349,7 +349,7 @@ func TestTheCertificateIsCheckedBeforeTheBodyIsRead(t *testing.T) {
 	over := bytes.Repeat([]byte("x"), 4096+relayapi.FramingAllowance+1)
 
 	for _, tc := range []struct{ name, method, path string }{
-		{"completion, by upload id", "POST", "/v1/uploads/" + strings.Repeat("ab", 16) + "/complete"},
+		{"an attempt, by upload id", "PUT", "/v1/uploads/" + strings.Repeat("ab", 16)},
 		{"post, by mailbox", "POST", "/v1/mailbox/" + fp},
 		{"allow list, by mailbox", "PUT", "/v1/mailbox/" + fp + "/allow"},
 	} {

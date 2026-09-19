@@ -545,19 +545,57 @@ Three things fall out of that shape:
   manifest, learns who sent it and how big it is, and only then agrees to
   download the rest. A stranger cannot make anybody pull two gigabytes.
 - **Nothing is ever held whole.** The sender seals a chunk at a time, the relay
-  writes a request at a time, the receiver decrypts a chunk at a time and
-  writes it straight to a file. Sending a 2 GB file costs about 20 MiB of
-  memory at each end.
+  writes each byte to its file as it arrives, the receiver decrypts a chunk at
+  a time and writes it straight to a file. Sending a 2 GB file costs about
+  20 MiB of memory at each end.
+
+On the wire the upload is three routes. `POST /v1/mailbox/{fp}/streams` opens
+it: the signed size and channel charge the recipient's quota and the sender's
+byte budget, and the answer is an upload id, when it expires, and two numbers
+the sender needs, `resume_threshold` (bytes, the relay's `max_bytes`) and
+`resume_window` (seconds, sixty). `PUT /v1/uploads/{id}` is one attempt: the
+sealed stream from an offset to the end in one request, with `Upload-Offset`
+saying where it starts and `Content-Length` required and equal to the bytes
+left, so that an attempt runs to the end or is not an attempt. The relay judges
+the headers before it reads a byte — no length is `411`, a length that does not
+reach the end is `400`, an offset that is not where the relay's copy ends is
+`409` carrying that offset — and then streams the body to the upload's file,
+checking the shape of the first bytes as they pass. When the last byte lands
+the stream is placed in the mailbox and the answer is `201` with the message
+id. `DELETE /v1/uploads/{id}` lets go of an upload before then.
+
+An attempt that stops short — the sender's link dropped, or its bytes stopped
+coming — is judged by one rule: if it was the first attempt and what the relay
+holds is at least the threshold, the partial is kept for one resume, for sixty
+seconds from that moment and no longer; otherwise nothing is kept, and the
+upload, its file, its row and its reservation go together. So the relay never
+holds less than a threshold's worth of an upload that did not finish, a stream
+is placed by at most two attempts on one id, and a sender that trickles a byte
+at a time builds nothing up. The sender learns what the relay kept the way this
+wire tells it, by the next attempt: one from zero on the same id is `409` with
+the kept offset, from which it resumes once; `404` or `410` when the relay has
+let the upload go, on which it opens anew; and it is simply the fresh attempt
+when the relay never saw the one that was lost. A resume after the window is
+`410`, naming when the upload expired and saying to open again, with the
+upload and its reservation gone; an upload nobody puts a byte to within sixty
+seconds of its open goes the same way.
+
+Bytes that stop coming end inside the window too. The attempt runs under the
+relay's own stall deadline on the connection, sixty seconds by default and
+moved on by every read that delivers bytes, so a transfer of any length
+finishes while bytes keep arriving and a stalled one is cut and judged by the
+rule above, its answer written under a fresh deadline of its own for anyone
+still listening. The server's five-minute read timeout stands on every other
+route. A refusal before the body is read closes the connection; the standard
+library still drains up to 256 KiB of a body it did not read before closing,
+which is the one cost a refused attempt has.
 
 An interrupted upload resumes: the sealed copy stays in `outbox/` and
-`auu send --resume` carries on from the byte the relay already has. That is
+`auu send --resume` carries on from the byte the relay says it has. That is
 also why sending seals to disk first — the nonce counter inside an HPKE context
 only goes forwards, so a chunk that was lost could never be sealed the same way
-twice. An upload has an expiry, `upload_ttl` on the relay, and past it the
-append, completion and abort routes all answer `410`, naming when it expired
-and saying to open again, with the upload and its reservation gone; the
-resume then opens a new upload for the same sealed bytes rather than
-failing. A resume that names an upload the relay no longer holds at all is
-answered `404`, on the append as on the rest. A relay whose disk fills part way through is the same case: it answers
-`507`, keeps what it has, and `auu send` says the upload is kept and to resume
-it when there is room.
+twice. A relay whose disk fills part way through answers `507`, keeps the
+partial when the rule above keeps it, and `auu send` says the sealed copy is
+kept and to resume when there is room. Downloads resume too: the blob route
+honours `Range`, so a receiver that holds the first part of a stream asks for
+the rest from there, and a range from the end or past it is `416`.

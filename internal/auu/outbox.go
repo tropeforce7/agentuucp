@@ -1,6 +1,7 @@
 package auu
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,11 +43,6 @@ type pending struct {
 	// default, which is where it was opened.
 	Relay  string `json:"relay,omitempty"`
 	Upload string `json:"upload,omitempty"`
-	// MaxRequest is what the relay said it would take in one PATCH when the
-	// upload was opened. It is recorded because a resume does not reopen the
-	// upload and so never hears it again; without it a resumed upload would
-	// fall back to a guess and send several times as many requests.
-	MaxRequest int64 `json:"max_request,omitempty"`
 	// Channel is the recipient's channel the stream is for, so a resumed
 	// upload is opened for the same one; empty is default.
 	Channel   string       `json:"channel,omitempty"`
@@ -129,8 +125,13 @@ func listPending(s *store.Store) ([]*pending, []string, error) {
 		if err != nil {
 			return nil, nil, err
 		}
+		// Strictly: a record from before this wire carries fields this
+		// record does not (max_request), and would be resumed against a
+		// PUT it never had; it is broken by name and abandoned.
 		var p pending
-		if err := json.Unmarshal(data, &p); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&p); err != nil {
 			broken = append(broken, strings.TrimSuffix(name, ".json"))
 			continue
 		}
@@ -149,7 +150,7 @@ func listPending(s *store.Store) ([]*pending, []string, error) {
 		// The numbers are the sender's own from when the upload began; a
 		// record whose numbers could not have been written by it is
 		// broken, before any of them is a seek, a piece or a count.
-		if p.Bytes < 0 || p.Chunks < 0 || p.MaxRequest < 0 ||
+		if p.Bytes < 0 || p.Chunks < 0 ||
 			p.ChunkSize < stream.MinChunkSize || p.ChunkSize > stream.MaxChunkSize {
 			broken = append(broken, p.MessageID)
 			continue

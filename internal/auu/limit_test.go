@@ -159,11 +159,13 @@ func TestLimitProxyFileV(t *testing.T) {
 	}
 }
 
-// TestLimitPendingRecordIntegers: an outbox record's bytes, chunks and
-// max_request are counts and its chunk_size is within [MinChunkSize,
-// MaxChunkSize], as the sender wrote them; a record that says otherwise is
-// broken, listed by its id and not resumed, before any number is a seek,
-// a piece or a count. Zero, the bounds and the type's maximum are read.
+// TestLimitPendingRecordIntegers: an outbox record's bytes and chunks are
+// counts and its chunk_size is within [MinChunkSize, MaxChunkSize], as the
+// sender wrote them; a record that says otherwise is broken, listed by its
+// id and not resumed, before any number is a seek or a count. Zero, the
+// bounds and the type's maximum are read. A record from before this wire,
+// carrying max_request, is broken by the strict decode: it names an
+// upload of a protocol the relay no longer has.
 func TestLimitPendingRecordIntegers(t *testing.T) {
 	s, err := store.Open(t.TempDir())
 	if err != nil {
@@ -189,7 +191,7 @@ func TestLimitPendingRecordIntegers(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	good := pending{Bytes: 5000, Chunks: 2, ChunkSize: stream.DefaultChunkSize, MaxRequest: 1 << 20}
+	good := pending{Bytes: 5000, Chunks: 2, ChunkSize: stream.DefaultChunkSize}
 	for _, tc := range []struct {
 		name string
 		p    pending
@@ -198,8 +200,6 @@ func TestLimitPendingRecordIntegers(t *testing.T) {
 		{"bytes MinInt64", pending{Bytes: math.MinInt64, Chunks: 2, ChunkSize: stream.DefaultChunkSize}},
 		{"chunks -1", pending{Bytes: 5000, Chunks: -1, ChunkSize: stream.DefaultChunkSize}},
 		{"chunks MinInt64", pending{Bytes: 5000, Chunks: math.MinInt64, ChunkSize: stream.DefaultChunkSize}},
-		{"max_request -1", pending{Bytes: 5000, Chunks: 2, ChunkSize: stream.DefaultChunkSize, MaxRequest: -1}},
-		{"max_request MinInt64", pending{Bytes: 5000, Chunks: 2, ChunkSize: stream.DefaultChunkSize, MaxRequest: math.MinInt64}},
 		{"chunk_size 0", pending{Bytes: 5000, Chunks: 2, ChunkSize: 0}},
 		{"chunk_size one under", pending{Bytes: 5000, Chunks: 2, ChunkSize: stream.MinChunkSize - 1}},
 		{"chunk_size one over", pending{Bytes: 5000, Chunks: 2, ChunkSize: stream.MaxChunkSize + 1}},
@@ -217,14 +217,22 @@ func TestLimitPendingRecordIntegers(t *testing.T) {
 		p    pending
 	}{
 		{"as written", good},
-		{"zero bytes, chunks and max_request", pending{ChunkSize: stream.MinChunkSize}},
-		{"the type's maximum", pending{Bytes: math.MaxInt64, Chunks: math.MaxInt64, ChunkSize: stream.MaxChunkSize, MaxRequest: math.MaxInt64}},
+		{"zero bytes and chunks", pending{ChunkSize: stream.MinChunkSize}},
+		{"the type's maximum", pending{Bytes: math.MaxInt64, Chunks: math.MaxInt64, ChunkSize: stream.MaxChunkSize}},
 	} {
 		write(t, tc.p)
 		waiting, broken, err := listPending(s)
 		if err != nil || len(waiting) != 1 || len(broken) != 0 {
 			t.Errorf("%s: waiting %d, broken %v, %v; want the record read", tc.name, len(waiting), broken, err)
 		}
+	}
+	// A record from before: the old wire's max_request in it.
+	old := `{"message_id":"` + id + `","to":"` + strings.Repeat("c", 64) + `","started":"2026-09-19T00:00:00Z","time":"2026-09-19T00:00:00Z","body":{"type":"note","thread":"` + id + `","text":"x"},"bytes":5000,"chunks":2,"chunk_size":` + strconv.Itoa(stream.DefaultChunkSize) + `,"max_request":1048576,"upload":"u"}`
+	if err := os.WriteFile(pendingPath(s, id), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if waiting, broken, err := listPending(s); err != nil || len(waiting) != 0 || len(broken) != 1 || broken[0] != id {
+		t.Errorf("a record from before the wire: waiting %d, broken %v, %v; want it broken by name", len(waiting), broken, err)
 	}
 }
 

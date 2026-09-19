@@ -125,9 +125,9 @@ func TestLimitRelaySettings(t *testing.T) {
 	})
 }
 
-// TestLimitDurationSettings: the three durations the relay's file carries
+// TestLimitDurationSettings: the two durations the relay's file carries
 // as text, read by time.ParseDuration. client_certs.lifetime is within
-// [an hour, ten years]; upload_ttl and admin.token_max_age are more than
+// [an hour, ten years]; admin.token_max_age is more than
 // nothing. One under and one over a bound, zero, a negative, the text one
 // past the type's maximum, a bare number, "inf", a unit alone and a digit
 // outside ASCII are each refused naming the setting; the bounds, a plus
@@ -155,7 +155,7 @@ func TestLimitDurationSettings(t *testing.T) {
 			}
 		}
 	})
-	for _, key := range []string{"upload_ttl", "admin.token_max_age"} {
+	for _, key := range []string{"admin.token_max_age"} {
 		t.Run(key, func(t *testing.T) {
 			for _, v := range append([]string{"0s", "-1s", "-9223372036854775808ns"}, forms...) {
 				if _, err := resolve(t, file(key, v)); err == nil || !strings.Contains(err.Error(), key) {

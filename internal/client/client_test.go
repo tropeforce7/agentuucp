@@ -582,11 +582,11 @@ func TestARelaysSentenceCannotDriveTheTerminal(t *testing.T) {
 	}
 	ctx := context.Background()
 	// The three places an HTTPError is made from an answer: the plain
-	// route, the upload's append, and the blob's fetch.
+	// route, the stream's attempt, and the blob's fetch.
 	attempts := map[string]func() error{
 		"health": func() error { return c.Health(ctx) },
-		"append": func() error {
-			_, err := c.AppendStream(ctx, strings.Repeat("a", 32), 0, strings.NewReader("x"), 1)
+		"put": func() error {
+			_, err := c.PutStream(ctx, strings.Repeat("a", 32), 0, strings.NewReader("x"), 1)
 			return err
 		},
 		"blob": func() error {

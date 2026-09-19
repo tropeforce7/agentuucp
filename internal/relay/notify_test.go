@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/channels"
-	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 // woken reports whether a wake channel has been closed, without waiting.
@@ -259,8 +258,9 @@ func TestAPostAndACompletedStreamWakeTheRecipient(t *testing.T) {
 		t.Fatalf("%d queued after the wake, want 1", got)
 	}
 
-	// A completed stream: the open and the appends wake nobody, since
-	// there is no row yet; the completion does.
+	// A placed stream: the open wakes nobody, since there is no row yet,
+	// and neither does an attempt that stopped short; the attempt that
+	// reaches the end does, with the placement.
 	bobMail, cancel = n.Subscribe(mailKey(bob.Fingerprint()))
 	defer cancel()
 	blob := fakeStream(200, 3000)
@@ -268,18 +268,24 @@ func TestAPostAndACompletedStreamWakeTheRecipient(t *testing.T) {
 	if status != http.StatusCreated {
 		t.Fatalf("open: %d %s", status, body)
 	}
-	status, body, _ = h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob,
-		map[string]string{relayapi.UploadOffsetHeader: "0"})
-	if status != http.StatusNoContent {
-		t.Fatalf("append: %d %s", status, body)
+	if woken(bobMail) {
+		t.Fatal("an upload opened woke the recipient")
+	}
+	if status, body, _ := h.putPartial(alice, opened.Upload, blob, 0, 1000); status != http.StatusBadRequest {
+		t.Fatalf("a partial attempt: %d %s", status, body)
 	}
 	if woken(bobMail) {
-		t.Fatal("an upload not yet complete woke the recipient")
+		t.Fatal("an attempt that stopped short woke the recipient")
 	}
-	if status, body, _ := h.send(alice, "POST", "/v1/uploads/"+opened.Upload+"/complete", nil, nil); status != http.StatusOK {
-		t.Fatalf("complete: %d %s", status, body)
+	// Nothing was kept under the threshold, so the upload is opened anew.
+	status, opened, body = h.openStream(alice, bob.Fingerprint(), int64(len(blob)))
+	if status != http.StatusCreated {
+		t.Fatalf("open again: %d %s", status, body)
 	}
-	wokenWithin(t, bobMail, "the recipient of a completed stream")
+	if status, body, _ := h.putStream(alice, opened.Upload, blob, 0); status != http.StatusCreated {
+		t.Fatalf("put: %d %s", status, body)
+	}
+	wokenWithin(t, bobMail, "the recipient of a placed stream")
 	if woken(aliceMail) {
 		t.Fatal("a stream to bob woke alice")
 	}

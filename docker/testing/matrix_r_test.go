@@ -324,18 +324,20 @@ func r18(t *testing.T) {
 	r = alice.auu("send", "--to", "bob", "--subject", "two megabytes as a stream", "--attach", "/home/alice/two-meg.bin", "big")
 	expectCode(t, r, 2)
 	stderrIs(t, r, "auu: the relay is out of storage; whoever runs it needs to make room. "+
-		"The upload is kept; finish it with 'auu send --resume' when there is room")
+		"The sealed copy is kept; finish it with 'auu send --resume' when there is room")
 	if out := alice.exec("", "sh", "-c", "ls /home/alice/.auu/outbox | wc -l"); strings.TrimSpace(out.stdout) != "2" {
 		t.Errorf("the outbox holds %s entries, want the sealed stream and its record", strings.TrimSpace(out.stdout))
 	}
-	// Room made, as an operator would make it: the filesystem grows and
-	// keeps what the relay already holds, and the resume finishes.
+	// Room made, as an operator would make it: the filesystem grows, and
+	// the resume finishes from the sealed copy. The disk filled under the
+	// relay's threshold (max_bytes, 16 MiB at the default), so the relay
+	// kept nothing of the attempt and the resume opens anew.
 	relay.mustRoot(t, "mount -o remount,size=8m "+messagesDir)
 	expectSays(t, alice.auu("send", "--resume"), 0, "sent to bob via relay.example.com as a stream")
 	expectSays(t, bob.auu("inbox"), 0, "two megabytes as a stream")
 	verdict(t, "ok", "An envelope on a full disk is a 507 and one sentence that says whose problem it is. A stream on the "+
 		"same disk is the same 507 part way through, the client keeps the sealed stream and says so, and once there is "+
-		"room 'auu send --resume' finishes from where the relay got to.")
+		"room 'auu send --resume' sends it from the sealed copy, resuming what the relay kept or opening anew.")
 }
 
 func r20(t *testing.T) {

@@ -156,13 +156,14 @@ func TestLimitMessageIDInPath(t *testing.T) {
 	}
 }
 
-// TestLimitUploadOffset: the offset an append declares is the upload's
+// TestLimitUploadOffset: the offset an attempt declares is the upload's
 // own, never negative: a negative, the type's minimum, the text one past
 // the type's maximum, a sign inside the digits, an empty value and a
 // digit outside ASCII are each 400 naming the header (a leading space
 // cannot arrive: net/http trims a header's value); an offset that is a
 // number but not the upload's is 409 saying where the upload is; a plus
-// sign before zero at the start is taken.
+// sign before zero at the start is taken, and the attempt from it that
+// runs to the end places the stream, the header saying so.
 func TestLimitUploadOffset(t *testing.T) {
 	h := newHarness(t, Config{})
 	people := ids(t, "alice", "bob")
@@ -175,30 +176,31 @@ func TestLimitUploadOffset(t *testing.T) {
 		t.Fatalf("open: %d %s", status, body)
 	}
 	for _, offset := range []string{"-1", strconv.FormatInt(math.MinInt64, 10), "9223372036854775808", "1-2", "\u0660", ""} {
-		status, body, _ := h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob[:100],
+		status, body, _ := h.sendRaw(alice, "PUT", "/v1/uploads/"+opened.Upload, blob,
 			map[string]string{relayapi.UploadOffsetHeader: offset})
 		if status != http.StatusBadRequest || !strings.Contains(errorText(t, body), relayapi.UploadOffsetHeader) {
 			t.Errorf("offset %q: %d %s; want 400 naming the header", offset, status, body)
 		}
 	}
 	for _, offset := range []string{"1", "9223372036854775807"} {
-		status, body, hdr := h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob[:100],
+		status, body, hdr := h.sendRaw(alice, "PUT", "/v1/uploads/"+opened.Upload, blob,
 			map[string]string{relayapi.UploadOffsetHeader: offset})
 		if status != http.StatusConflict || hdr.Get(relayapi.UploadOffsetHeader) != "0" {
 			t.Errorf("offset %s before anything was sent: %d %s; want 409 with the header at 0", offset, status, body)
 		}
 	}
-	status, body, hdr := h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob[:100],
+	status, body, hdr := h.sendRaw(alice, "PUT", "/v1/uploads/"+opened.Upload, blob,
 		map[string]string{relayapi.UploadOffsetHeader: "+0"})
-	if status != http.StatusNoContent || hdr.Get(relayapi.UploadOffsetHeader) != "100" {
-		t.Errorf("offset +0: %d %s; want 204 and the header at 100", status, body)
+	if status != http.StatusCreated || hdr.Get(relayapi.UploadOffsetHeader) != strconv.Itoa(len(blob)) {
+		t.Errorf("offset +0: %d %s; want 201 and the header at %d", status, body, len(blob))
 	}
 }
 
 // TestLimitManifestChunkLength: the length the first chunk's header
 // declares for the manifest is within [MinChunk0, MaxChunk0] and leaves
-// room for a final chunk: one under, one over and the type's maximum are
-// refused at completion naming the bounds.
+// room for a final chunk: one under, one over, zero and the type's
+// maximum are refused as the attempt's first bytes pass, naming the
+// bounds, and the refusal leaves no upload behind.
 func TestLimitManifestChunkLength(t *testing.T) {
 	h := newHarness(t, Config{})
 	people := ids(t, "alice", "bob")
@@ -213,11 +215,14 @@ func TestLimitManifestChunkLength(t *testing.T) {
 		if status != http.StatusCreated {
 			t.Fatalf("open: %d %s", status, body)
 		}
-		if status, body, _ := h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload, blob,
-			map[string]string{relayapi.UploadOffsetHeader: "0"}); status != http.StatusNoContent {
-			t.Fatalf("append: %d %s", status, body)
+		status, body, _ = h.putStream(alice, opened.Upload, blob, 0)
+		var left int
+		if err := h.store.db.QueryRow(`SELECT COUNT(*) FROM uploads WHERE id = ?`, opened.Upload).Scan(&left); err != nil {
+			t.Fatal(err)
 		}
-		status, body, _ = h.send(alice, "POST", "/v1/uploads/"+opened.Upload+"/complete", nil, nil)
+		if status == http.StatusBadRequest && left != 0 {
+			t.Errorf("a refused shape left its upload behind")
+		}
 		return status, body
 	}
 	for _, length := range []uint32{stream.MinChunk0 - 1, stream.MaxChunk0 + 1, math.MaxUint32, 0} {

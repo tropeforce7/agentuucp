@@ -7,12 +7,12 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/stream"
 )
 
 // The second adversarial trace, at v0.9.0 (reviews/trace/): the quota
@@ -59,13 +59,10 @@ func TestAnEnvelopeIsChargedAgainstStreamReservations(t *testing.T) {
 	}
 	// And the stream, completed on top of it, leaves the mailbox and the
 	// relay at their quotas, not past them.
-	if _, err := h.store.AppendUpload(id, 0, func(f *os.File, limit int64) (int64, error) {
-		return io.Copy(f, io.LimitReader(bytes.NewReader(bytes.Repeat([]byte("s"), streamSize)), limit))
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.store.CompleteUpload(id); err != nil {
-		t.Fatal(err)
+	if received, err := h.store.ReceiveUpload(id, 0, relayapi.DefaultMaxBytes, time.Now, time.Minute, func(f *os.File, want int64) (int64, error) {
+		return io.Copy(f, io.LimitReader(bytes.NewReader(bytes.Repeat([]byte("s"), streamSize)), want))
+	}); err != nil || received.Placed == 0 {
+		t.Fatalf("the stream: %+v %v; want it placed", received, err)
 	}
 	var queued, relayQueued int64
 	if err := h.store.db.QueryRow(`SELECT queued_bytes FROM mailboxes WHERE fp = ?`, bob.Fingerprint()).Scan(&queued); err != nil {
@@ -148,20 +145,24 @@ func TestAnEnvelopeIsCountedBesideStreamReservations(t *testing.T) {
 // abandoned, and its reservation with it. Now every route refuses an
 // expired upload with 410, says when it expired and to open again, and
 // aborts the row there and then, so the reservation goes with the answer.
-// The clock is the server's, moved by hand.
+// Under the one-attempt wire the expiry is the resume window, sixty
+// seconds, from the open and again from a kept partial, and the edge is
+// inclusive: at the window the upload is still here, a second past it is
+// gone. The clock is the server's, moved by hand.
 func TestAnExpiredUploadTakesNoBytes(t *testing.T) {
-	h := newHarness(t, Config{UploadTTL: time.Minute})
+	// max_bytes 2048, so a partial of 3000 is past the threshold and kept.
+	h := newHarness(t, Config{MaxBytes: 2048})
 	clock := h.clock
 	people := ids(t, "alice", "bob")
 	alice, bob := people[0], people[1]
 	h.register(alice)
 	h.register(bob)
 
-	const size = 4096
+	blob := fakeStream(200, 4096)
 	open := func() relayapi.OpenStreamResponse {
 		t.Helper()
 		status, body := h.do(alice, "POST", "/v1/mailbox/"+bob.Fingerprint()+"/streams",
-			relayapi.OpenStreamRequest{Size: size}, nil)
+			relayapi.OpenStreamRequest{Size: int64(len(blob))}, nil)
 		if status != http.StatusCreated {
 			t.Fatalf("open: %d %s", status, body)
 		}
@@ -171,84 +172,82 @@ func TestAnExpiredUploadTakesNoBytes(t *testing.T) {
 		}
 		return opened
 	}
-	first := open()
-	piece := bytes.Repeat([]byte("p"), size/2)
-	if status, body, _ := h.sendRaw(alice, "PATCH", "/v1/uploads/"+first.Upload, piece,
-		map[string]string{relayapi.UploadOffsetHeader: "0"}); status != http.StatusNoContent {
-		t.Fatalf("the first piece, in time: %d %s", status, body)
+	rowsLeft := func(t *testing.T) int {
+		t.Helper()
+		var left int
+		if err := h.store.db.QueryRow(`SELECT COUNT(*) FROM uploads`).Scan(&left); err != nil {
+			t.Fatal(err)
+		}
+		return left
 	}
-	clock.advance(time.Minute + time.Second)
 
-	status, body, _ := h.sendRaw(alice, "PATCH", "/v1/uploads/"+first.Upload, piece,
-		map[string]string{relayapi.UploadOffsetHeader: strconv.Itoa(size / 2)})
+	// An upload nobody puts a byte to within the window: the first attempt
+	// a second past it is 410, the row and the file gone with the answer.
+	first := open()
+	if got, want := first.Expires, clock.Now().Add(relayapi.ResumeWindow).UTC().Truncate(time.Second); !got.Equal(want) {
+		t.Fatalf("the open promises expiry at %s, want the window from now, %s", got, want)
+	}
+	clock.advance(relayapi.ResumeWindow + time.Second)
+	status, body, _ := h.putStream(alice, first.Upload, blob, 0)
 	if status != http.StatusGone {
-		t.Fatalf("an append to an upload past its expiry (%s, clock now %s) was answered %d %s; "+
+		t.Fatalf("an attempt at an upload past its expiry (%s, clock now %s) was answered %d %s; "+
 			"expected 410", first.Expires.Format(time.RFC3339), clock.Now().Format(time.RFC3339), status, body)
 	}
 	if !strings.Contains(string(body), "expired at "+first.Expires.UTC().Format(time.RFC3339)) ||
 		!strings.Contains(string(body), "open a new stream") {
 		t.Errorf("the refusal does not say when it expired and what to do: %s", body)
 	}
-	// Gone with the answer: the row, its file and its reservation.
-	var left int
-	if err := h.store.db.QueryRow(`SELECT COUNT(*) FROM uploads`).Scan(&left); err != nil {
-		t.Fatal(err)
-	}
-	if left != 0 {
+	if left := rowsLeft(t); left != 0 {
 		t.Errorf("%d upload rows remain after the refusal, want none", left)
 	}
 	if _, err := os.Stat(h.store.uploadPath(first.Upload)); !os.IsNotExist(err) {
 		t.Errorf("the expired upload's file is still there: %v", err)
 	}
-	if status, body, _ := h.sendRaw(alice, "HEAD", "/v1/uploads/"+first.Upload, nil, nil); status != http.StatusNotFound {
-		t.Errorf("HEAD on the expired upload after the refusal: %d %s, want 404", status, body)
-	}
-	// And the sender opens again and sends it, as the answer said.
-	second := open()
-	whole := bytes.Repeat([]byte("p"), size)
-	if status, body, _ := h.sendRaw(alice, "PATCH", "/v1/uploads/"+second.Upload, whole,
-		map[string]string{relayapi.UploadOffsetHeader: "0"}); status != http.StatusNoContent {
-		t.Fatalf("the reopened upload: %d %s", status, body)
-	}
-	// Completed in time, it is refused for its shape and nothing else:
-	// 4096 bytes of "p" are no stream, but the route got past the expiry.
-	if status, body := h.do(alice, "POST", "/v1/uploads/"+second.Upload+"/complete", nil, nil); status != http.StatusBadRequest {
-		t.Fatalf("completing the reopened upload in time: %d %s, want the shape refused with 400", status, body)
-	}
-	if _, err := h.store.AbortUpload(second.Upload); err != nil {
-		t.Fatal(err)
+	if status, body, _ := h.putStream(alice, first.Upload, blob, 0); status != http.StatusNotFound {
+		t.Errorf("an attempt at the expired upload after the refusal: %d %s, want 404", status, body)
 	}
 
-	// Completion the same: a finished upload that expired before its
-	// sender said so is refused and gone, not turned into a message.
+	// A kept partial expires the same way: kept at 3000 with a new
+	// expiry, the resume at the window's edge is taken, one a second past
+	// it is 410 and the partial is gone.
+	second := open()
+	if status, body, _ := h.putPartial(alice, second.Upload, blob, 0, 3000); status != http.StatusBadRequest || !strings.Contains(string(body), "kept for one resume") {
+		t.Fatalf("a partial past the threshold: %d %s; want it kept", status, body)
+	}
+	u, err := h.store.Upload(second.Upload)
+	if err != nil || u.Received != 3000 {
+		t.Fatalf("the kept partial: %+v %v; want 3000", u, err)
+	}
+	if want := clock.Now().Add(relayapi.ResumeWindow); !u.Expires.Equal(want.Truncate(time.Second)) && !u.Expires.Equal(want) {
+		t.Fatalf("the kept partial expires at %s, want the window from now, %s", u.Expires, want)
+	}
+	clock.advance(relayapi.ResumeWindow)
+	if status, body, _ := h.putStream(alice, second.Upload, blob, 3000); status != http.StatusCreated {
+		t.Fatalf("a resume at the window's edge: %d %s; want 201, the edge being inclusive", status, body)
+	}
 	third := open()
-	if status, body, _ := h.sendRaw(alice, "PATCH", "/v1/uploads/"+third.Upload, whole,
-		map[string]string{relayapi.UploadOffsetHeader: "0"}); status != http.StatusNoContent {
-		t.Fatalf("the third upload: %d %s", status, body)
+	if status, body, _ := h.putPartial(alice, third.Upload, blob, 0, 3000); status != http.StatusBadRequest {
+		t.Fatalf("a partial past the threshold: %d %s", status, body)
 	}
-	clock.advance(time.Minute + time.Second)
-	status, body = h.do(alice, "POST", "/v1/uploads/"+third.Upload+"/complete", nil, nil)
-	if status != http.StatusGone {
-		t.Fatalf("completing an expired upload: %d %s, want 410", status, body)
+	clock.advance(relayapi.ResumeWindow + time.Second)
+	if status, body, _ := h.putStream(alice, third.Upload, blob, 3000); status != http.StatusGone {
+		t.Fatalf("a resume a second past the window: %d %s; want 410", status, body)
 	}
-	if err := h.store.db.QueryRow(`SELECT COUNT(*) FROM uploads`).Scan(&left); err != nil {
-		t.Fatal(err)
-	}
-	if left != 0 {
-		t.Errorf("%d upload rows remain after the refused completion, want none", left)
+	if left := rowsLeft(t); left != 0 {
+		t.Errorf("%d upload rows remain after the refused resume, want none", left)
 	}
 	// An abort of an expired upload is the abort the sender wanted: the
 	// route answers 410 with the row gone, and the client reads that as
 	// gone.
 	fourth := open()
-	clock.advance(time.Minute + time.Second)
+	clock.advance(relayapi.ResumeWindow + time.Second)
 	if status, body, _ := h.sendRaw(alice, "DELETE", "/v1/uploads/"+fourth.Upload, nil, nil); status != http.StatusGone {
 		t.Errorf("aborting an expired upload: %d %s, want 410", status, body)
 	}
 }
 
 // TestThePurgeWaitsOnNoSender: PurgeUploads aborted every expired upload
-// under that upload's lock, and AppendUpload holds the lock across the
+// under that upload's lock, and ReceiveUpload holds the lock across the
 // request body's copy. The purge runs inline at the end of every hundredth
 // request, before that request's in-flight slot is released and its
 // response flushed, so a sender still dribbling the body of an append to
@@ -269,7 +268,7 @@ func TestThePurgeWaitsOnNoSender(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now()
-	// Expired an hour ago; the store's append does not read the expiry,
+	// Expired an hour ago; the store's receive does not read the expiry,
 	// the route does.
 	if err := h.store.OpenUpload(id, bob.Fingerprint(), alice.Fingerprint(), "default",
 		size, now.Add(-2*time.Hour), now.Add(-time.Hour), Quotas{}, 0); err != nil {
@@ -279,10 +278,10 @@ func TestThePurgeWaitsOnNoSender(t *testing.T) {
 	release := make(chan struct{})
 	appended := make(chan error, 1)
 	go func() {
-		_, err := h.store.AppendUpload(id, 0, func(f *os.File, limit int64) (int64, error) {
+		_, err := h.store.ReceiveUpload(id, 0, relayapi.DefaultMaxBytes, time.Now, time.Minute, func(f *os.File, want int64) (int64, error) {
 			close(entered)
 			<-release // the sender, dribbling
-			return io.Copy(f, io.LimitReader(bytes.NewReader(bytes.Repeat([]byte("p"), size)), limit))
+			return io.Copy(f, io.LimitReader(bytes.NewReader(bytes.Repeat([]byte("p"), size)), want))
 		})
 		appended <- err
 	}()
@@ -303,43 +302,45 @@ func TestThePurgeWaitsOnNoSender(t *testing.T) {
 			t.Errorf("PurgeUploads: %v", r.err)
 		}
 		if r.purged != 0 || r.skipped != 1 {
-			t.Errorf("the purge removed %d and skipped %d while the append held the lock; want 0 and 1", r.purged, r.skipped)
+			t.Errorf("the purge removed %d and skipped %d while the attempt held the lock; want 0 and 1", r.purged, r.skipped)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatalf("PurgeUploads has waited 2s behind an append that is still reading its request body; " +
+		t.Fatalf("PurgeUploads has waited 2s behind an attempt that is still reading its request body; " +
 			"expected the purge, which runs inside an unrelated caller's request, not to wait on a sender")
 	}
-	// The upload is still there, untouched, for the append to finish on.
+	// The upload is still there, untouched, for the attempt to finish on.
 	if _, err := h.store.Upload(id); err != nil {
 		t.Fatalf("the skipped upload is gone: %v", err)
 	}
 	close(release)
 	if err := <-appended; err != nil {
-		t.Fatalf("the append that held the lock: %v", err)
+		t.Fatalf("the attempt that held the lock: %v", err)
 	}
-	// The next purge, once the append has ended, takes it.
+	// The attempt ran to the end and placed the stream, so the next purge,
+	// once the lock is free, finds nothing to take: the row went with the
+	// placement and the entry with the row.
 	p, s, err := h.store.PurgeUploads(time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p != 1 || s != 0 {
-		t.Errorf("the next purge removed %d and skipped %d; want 1 and 0", p, s)
+	if p != 0 || s != 0 {
+		t.Errorf("the next purge removed %d and skipped %d; want nothing, the stream having been placed", p, s)
 	}
 	if _, err := h.store.Upload(id); !errors.Is(err, ErrNoUpload) {
-		t.Errorf("the skipped upload survived the next purge: %v", err)
+		t.Errorf("the upload is still there after the attempt placed it: %v", err)
 	}
 	if h.store.uploadLocked(id) {
-		t.Error("the purged upload's lock entry was kept")
+		t.Error("the placed upload's lock entry was kept")
 	}
 }
 
-// TestAnAppendThatMeetsAVanishedRowIs404: an upload aborted, completed or
+// TestAnAttemptThatMeetsAVanishedRowIs404: an upload aborted, placed or
 // purged between the route's look at the row and the store's lock made
-// AppendUpload answer ErrNoUpload, which the route turned into a 500 the
-// sender retried; and the lock entry the append made for the gone id was
-// never removed. Now it is the same 404 as for an id never seen, and the
-// entry goes with it.
-func TestAnAppendThatMeetsAVanishedRowIs404(t *testing.T) {
+// the store answer ErrNoUpload, which the route turned into a 500 the
+// sender retried; and the lock entry made for the gone id was never
+// removed. Now it is the same 404 as for an id never seen, and the entry
+// goes with it. (The finding was the append's; the attempt inherits it.)
+func TestAnAttemptThatMeetsAVanishedRowIs404(t *testing.T) {
 	h := newHarness(t, Config{})
 	people := ids(t, "alice", "bob")
 	alice, bob := people[0], people[1]
@@ -351,11 +352,11 @@ func TestAnAppendThatMeetsAVanishedRowIs404(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.store.AppendUpload(gone, 0, func(*os.File, int64) (int64, error) { return 0, nil }); !errors.Is(err, ErrNoUpload) {
-		t.Fatalf("an append to no upload: %v, want ErrNoUpload", err)
+	if _, err := h.store.ReceiveUpload(gone, 0, 0, time.Now, 0, func(*os.File, int64) (int64, error) { return 0, nil }); !errors.Is(err, ErrNoUpload) {
+		t.Fatalf("an attempt at no upload: %v, want ErrNoUpload", err)
 	}
 	if h.store.uploadLocked(gone) {
-		t.Error("an append to no upload left a lock entry behind")
+		t.Error("an attempt at no upload left a lock entry behind")
 	}
 
 	// At the route: the test holds the upload's lock while the append is
@@ -379,8 +380,7 @@ func TestAnAppendThatMeetsAVanishedRowIs404(t *testing.T) {
 	}
 	answered := make(chan answer, 1)
 	go func() {
-		status, body, _ := h.sendRaw(alice, "PATCH", "/v1/uploads/"+opened.Upload,
-			bytes.Repeat([]byte("p"), size), map[string]string{relayapi.UploadOffsetHeader: "0"})
+		status, body, _ := h.putStream(alice, opened.Upload, fakeStream(200, size-stream.HeaderSize-200), 0)
 		answered <- answer{status, body}
 	}()
 	// Long enough for the route to have looked at the row and reached the
@@ -392,9 +392,9 @@ func TestAnAppendThatMeetsAVanishedRowIs404(t *testing.T) {
 	h.store.forgetUploadLock(opened.Upload, unlock)
 	got := <-answered
 	if got.status != http.StatusNotFound || !strings.Contains(string(got.body), msgNoUpload) {
-		t.Fatalf("an append that met an aborted row was answered %d %s; want 404 %q", got.status, got.body, msgNoUpload)
+		t.Fatalf("an attempt that met an aborted row was answered %d %s; want 404 %q", got.status, got.body, msgNoUpload)
 	}
 	if h.store.uploadLocked(opened.Upload) {
-		t.Error("the aborted upload's lock entry was kept by the append that met it")
+		t.Error("the aborted upload's lock entry was kept by the attempt that met it")
 	}
 }

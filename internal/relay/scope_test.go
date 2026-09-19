@@ -34,16 +34,14 @@ func TestTheClassifierAgreesWithTheRelay(t *testing.T) {
 		"GET /v1/mailbox/{fp}/channels":  agent.ScopeReceive,
 		"GET /v1/mailbox/{fp}/certs":     agent.ScopeReceive,
 		"DELETE /v1/mailbox/{fp}/{id}":   agent.ScopeReceive,
-		"HEAD /v1/uploads/{id}":          agent.ScopeReceive,
 		"POST /v1/mailbox/{fp}/certs":    agent.ScopeReceive, // renewal: this identity's own certificate, on the live one, no token
 
 		// Everything that originates.
 		"POST /v1/register":                        agent.ScopeSend,
 		"POST /v1/mailbox/{fp}":                    agent.ScopeSend,
 		"POST /v1/mailbox/{fp}/streams":            agent.ScopeSend,
-		"PATCH /v1/uploads/{id}":                   agent.ScopeSend,
+		"PUT /v1/uploads/{id}":                     agent.ScopeSend,
 		"DELETE /v1/uploads/{id}":                  agent.ScopeSend,
-		"POST /v1/uploads/{id}/complete":           agent.ScopeSend,
 		"PUT /v1/mailbox/{fp}/allow":               agent.ScopeSend,
 		"PUT /v1/mailbox/{fp}/channels":            agent.ScopeSend,
 		"GET /v1/admin/status":                     agent.ScopeSend,
@@ -94,11 +92,11 @@ func TestTheClassifierAgreesWithTheRelay(t *testing.T) {
 			t.Errorf("the table classifies %q, which the relay no longer registers", pattern)
 		}
 	}
-	// A registered route's upload id is hex, and an upload id the relay
-	// would refuse is still classified by shape, so the classifier is not
-	// leaning on the relay's validation for its answer.
+	// A registered route's message id is a number, and a blob path with an
+	// id the relay would refuse is still classified by shape, so the
+	// classifier is not leaning on the relay's validation for its answer.
 	if got := agent.ScopeOf(agent.OpSign, agent.KeyIdentity,
-		relayapi.SigningString("HEAD", "/v1/uploads/not-hex", 1700000000, "AAAA", nil)); got != agent.ScopeReceive {
-		t.Errorf("HEAD of an upload the relay would refuse is %s, want receive by shape", got)
+		relayapi.SigningString("GET", "/v1/mailbox/"+strings.Repeat("a", 64)+"/not-a-number/blob", 1700000000, "AAAA", nil)); got != agent.ScopeReceive {
+		t.Errorf("a blob GET with an id the relay would refuse is %s, want receive by shape", got)
 	}
 }
