@@ -2,6 +2,8 @@ module github.com/tropeforce7/agentuucp
 
 go 1.27.0
 
+retract [v0.4.0, v0.10.0] // integer, string and path handling faults fixed in v0.11.0
+
 require (
 	golang.org/x/crypto v0.56.0
 	modernc.org/sqlite v1.58.0

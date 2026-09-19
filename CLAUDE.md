@@ -88,3 +88,13 @@ design decisions in a section 0, and those are not to be re-opened:
   deployment guide in four containers and a matrix of what goes wrong in
   the wild, with a report of what each party saw. `docker/testing/README.md`
   says how to run one row.
+- No commit without the rules review. After `git add` and before
+  `git commit`, run the `rules-review` skill (`.claude/skills/rules-review/`):
+  it reads the staged diff against the testing and development guides and
+  writes a record under `.git/rules-review/` naming every rule the change
+  touches, the line, and the test that shows the value, with a reason for
+  each family that does not apply. The hook in `.claude/hooks/rules-gate.sh`
+  refuses `git commit` until a record for exactly the staged diff says
+  "ready". Commit from the index only: no `-a`, no pathspecs, since the hook
+  reads what is staged. When a reviewer is present the commit request
+  carries the record, and nothing is approved without it.

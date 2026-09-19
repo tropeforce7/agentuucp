@@ -28,7 +28,9 @@ it reaches this software through the way we use it.
 ## Which versions
 
 The latest tag. A fix goes out as a new tag, and its note says which earlier
-versions carry the fault.
+versions carry the fault. Versions before v0.11.0 are retracted in go.mod and
+not supported; a report against one is answered by pointing at the current
+version.
 
 ## What to expect
 

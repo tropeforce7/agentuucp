@@ -998,6 +998,18 @@ changed and why.** Read the existing ones. No body, no bullet list, no
 trailers. The reasoning that does not fit belongs in
 `reviews/IMPLEMENTATION_NOTES.md`, where it can be as long as it needs to be.
 
+**No commit without the rules review.** Every one of the rules in these two
+guides was learned from a fault that shipped, and a change that reads well
+can still put one back: a number multiplied before it is bounded, a name
+sliced before its rule has run, a path made from a string the network chose.
+So after `git add` and before `git commit` the change is read against the
+guides by the `rules-review` skill, which writes a record under
+`.git/rules-review/` naming each rule the change touches, the line, and the
+test that shows the value. The hook in `.claude/hooks/rules-gate.sh` refuses
+a commit with no record for the staged diff, or one that does not say ready.
+The record is the answer to "what did you check", and it is written before
+anyone has to ask.
+
 **The specifications are not in the repository.** `reviews/` is git-ignored.
 Do not commit anything from it, and do not write anything there except
 `IMPLEMENTATION_NOTES.md`.

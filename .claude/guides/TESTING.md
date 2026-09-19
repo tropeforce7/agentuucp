@@ -1216,3 +1216,8 @@ Encrypt run — say that it is outstanding and what it needs, and record it.
   with reasons.
 - Nothing under `reviews/`, `bin/` or `.claude/settings.local.json` is
   staged.
+- The rules review has been run over the staged diff (the `rules-review`
+  skill) and its record says ready: every rule the change touches named
+  with its line and the test that shows the value, and a reason for each
+  family that does not apply. The commit hook refuses a commit without it,
+  and a reviewer refuses a request without it.

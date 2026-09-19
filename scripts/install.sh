@@ -56,7 +56,7 @@ while [ $# -gt 0 ]; do
 		shift 2
 		;;
 	--version)
-		[ $# -ge 2 ] || fail "--version wants a tag, like v0.6.1"
+		[ $# -ge 2 ] || fail "--version wants a tag, like v0.11.0"
 		version=$2
 		shift 2
 		;;
