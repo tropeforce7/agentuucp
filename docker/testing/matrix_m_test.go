@@ -362,7 +362,9 @@ func m10(t *testing.T) {
 		att["sha256"] = strings.Repeat("0", 64)
 	})()
 	r := bob.auu("extract", s.ID, "--out", "/home/bob/m10")
-	expectSays(t, r, 1, `auu: refusing to write att.txt: attachment "att.txt": sha256 does not match data`)
+	// The name is quoted in the sentence since c5911c3, where a received
+	// name became something the receiver writes a safe form of.
+	expectSays(t, r, 1, `auu: refusing to write "att.txt": attachment "att.txt": sha256 does not match data`)
 	verdict(t, "ok", "The digest is checked on the way out, and the file is not written.")
 }
 

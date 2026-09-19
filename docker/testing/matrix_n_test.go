@@ -4,9 +4,12 @@ package e2e
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 // The network and the agent.
@@ -28,26 +31,86 @@ func pauseRelay(t *testing.T) func() {
 	return func() { compose("unpause", "relay") }
 }
 
+// n01Bytes is the size of the upload the relay is frozen under: a hundred
+// megabytes, so that the stream opened twice — which the resume does when
+// the relay kept nothing — fits a sender's post_bytes_per_hour budget of
+// 256 MiB, which an open charges whole and an abandoned upload never gives
+// back. The gigabyte the row tried first was refused at the open for that.
+const n01Bytes = 100000000
+
+// n01Quota is the relay's share of a processor while the upload runs, as a
+// CFS quota of microseconds per hundred-millisecond period: two per cent.
+// Under the one-request wire the whole stream is one PUT, and the
+// container network carries a hundred megabytes in about a tenth of a
+// second, inside which no poll of the relay's log lands, so the second the
+// row used to sleep before pausing found the send finished and the outbox
+// empty. At two per cent the relay takes the same PUT in about seven
+// seconds (measured 2026-09-20), which is room to freeze it after its copy
+// has passed max_bytes and long before the PUT ends.
+const n01Quota = "2000"
+
+// throttleRelay holds the relay's container to n01Quota of a processor,
+// the way docker update does on any running container, and returns what
+// lifts the quota again. Everything in the container is held, the relay
+// and a shell run by docker exec alike.
+func throttleRelay(t *testing.T) func() {
+	t.Helper()
+	if r := runHost(nil, "docker", "update", "--cpu-period", "100000", "--cpu-quota", n01Quota, relay.id); r.code != 0 {
+		t.Fatalf("throttling the relay: %s", r.stderr)
+	}
+	return func() { runHost(nil, "docker", "update", "--cpu-quota", "-1", relay.id) }
+}
+
+// waitUploadPast polls the relay's copy of the one open upload until it
+// holds at least n bytes. Under the throttle each poll's shell is slow and
+// the copy moves by megabytes between two of them, so where the freeze
+// lands is past n by some way, and nowhere near the end.
+func waitUploadPast(t *testing.T, n int64, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		r := runHost(nil, "docker", "exec", "--user", "root", relay.id, "sh", "-c",
+			"stat -c %s "+messagesDir+"/uploads/* 2>/dev/null")
+		if got, err := strconv.ParseInt(strings.TrimSpace(r.stdout), 10, 64); err == nil && got >= n {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the relay's copy of the upload did not reach %d bytes in %s; stat says %q", n, timeout, r.stdout)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func n01(t *testing.T) {
-	alice.exec("", "sh", "-c", "head -c 200000000 /dev/urandom > /home/alice/large.bin")
+	alice.exec("", "sh", "-c", fmt.Sprintf("head -c %d /dev/urandom > /home/alice/large.bin", n01Bytes))
 	t.Cleanup(func() {
 		alice.exec("", "sh", "-c", "rm -rf /home/alice/.auu/outbox/* /home/alice/large.bin")
 		bob.exec("", "sh", "-c", "rm -rf /home/bob/n01 /home/bob/.auu/inbox/*.d")
 	})
-	// The relay is frozen once the upload has been opened, so the sender
-	// is stuck part way through it, and then killed.
+	// The relay is slowed, the send begins, and once the relay's copy of
+	// the upload has passed max_bytes — the relay's default, which this
+	// stack does not change, and the least a stopped first attempt is kept
+	// at — the relay is frozen: the sender's one PUT is stuck part way
+	// through, and the sender is killed there.
+	restore := throttleRelay(t)
+	t.Cleanup(restore)
 	m := logMark()
 	done := make(chan result, 1)
 	go func() {
-		done <- alice.auu("send", "--to", "bob", "--subject", "two hundred megabytes", "--attach", "/home/alice/large.bin", "large")
+		done <- alice.auu("send", "--to", "bob", "--subject", "a hundred megabytes", "--attach", "/home/alice/large.bin", "large")
 	}()
 	waitRelayLog(t, m, "path=/v1/mailbox/{fp}/streams status=201", 60*time.Second)
+	waitUploadPast(t, relayapi.DefaultMaxBytes, 60*time.Second)
 	unpause := pauseRelay(t)
-	time.Sleep(time.Second)
+	t.Cleanup(unpause)
+	if strings.Contains(relayLogSince(m), "path=/v1/uploads/{id} status=201") {
+		t.Fatalf("the upload finished before the relay was frozen; n01Quota wants lowering for this network")
+	}
 	alice.root("pkill -u alice -x auu")
 	r := <-done
 	record(alice, "(the killed send)", "", r)
 	unpause()
+	restore()
 	ls := alice.exec("", "sh", "-c", "ls /home/alice/.auu/outbox")
 	expectCode(t, ls, 0)
 	if !strings.Contains(ls.stdout, ".stream") {
@@ -55,15 +118,22 @@ func n01(t *testing.T) {
 	}
 	r = alice.auu("send", "--to", "bob", "--subject", "meanwhile", "a small one")
 	expectSays(t, r, 0, "sent to bob", "warning: 1 unfinished stream in the outbox; finish with 'auu send --resume'")
+	// The first attempt stopped past max_bytes, so the relay kept it for
+	// the window, which the resume is well inside: its first PUT from zero
+	// on the same id is answered 409 with the relay's offset, and the next
+	// sends the rest.
 	r = alice.auu("send", "--resume")
 	expectSays(t, r, 0, "sent to bob")
+	if log := relayLogSince(m); !strings.Contains(log, "path=/v1/uploads/{id} status=409") {
+		t.Errorf("the relay did not answer the resume with its offset; the log since the send says:\n%s", log)
+	}
 	in := fetchJSON(t, bob)
 	if in.Fetch.Delivered != 2 {
 		t.Fatalf("bob fetched %+v", in.Fetch)
 	}
 	var id string
 	for _, m := range in.Messages {
-		if m.Subject == "two hundred megabytes" {
+		if m.Subject == "a hundred megabytes" {
 			id = m.ID
 		}
 	}
@@ -76,8 +146,10 @@ func n01(t *testing.T) {
 	if want != got {
 		t.Errorf("the file arrived as %s, was %s", got, want)
 	}
-	verdict(t, "ok", "The stream is sealed to disk before the upload begins, every send after the interruption says "+
-		"so, and send --resume finishes it whole.")
+	verdict(t, "ok", "The stream is sealed to disk before the upload begins, the killed send leaves the sealed copy, "+
+		"every send after the interruption says so, and send --resume asks the relay where its copy ends — the "+
+		"relay kept the stopped attempt, its 409 named the offset — and sends the rest from the sealed copy, so "+
+		"the stream is placed whole by two attempts on one id.")
 }
 
 func n02(t *testing.T) {

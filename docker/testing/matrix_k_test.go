@@ -195,7 +195,9 @@ func k15(t *testing.T) {
 	defer alice.write(t, aliceRelayDir+"/cursor", "abc")()
 	r := alice.auu("inbox")
 	expectCode(t, r, 5)
-	stderrIs(t, r, "auu: "+aliceRelayDir+`/cursor is not a number ("abc"): delete it and run 'auu inbox --relay relay.example.com'; `+
+	// "is not a message id" since d7b8ff8, where the cursor became a
+	// message id held to its shape at the read rather than a number.
+	stderrIs(t, r, "auu: "+aliceRelayDir+`/cursor is not a message id ("abc"): delete it and run 'auu inbox --relay relay.example.com'; `+
 		"that starts from the beginning and delivers nothing twice")
 	verdict(t, "ok", "The file, what it holds, what to do and what that costs, and exit 5.")
 }

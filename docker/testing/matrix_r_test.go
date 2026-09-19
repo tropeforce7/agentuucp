@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	relaypkg "github.com/tropeforce7/agentuucp/internal/relay"
 )
 
 // The relay: its settings, its files, its disk. Each row edits the relay
@@ -382,7 +384,11 @@ func r22(t *testing.T) {
 	if !nofault {
 		relay.sql(t, "PRAGMA user_version = 99")
 	}
-	expectNoStart(t, "relay: database is schema version 99, but this relay understands 6; it was written by a newer release")
+	// The version the relay understands is the relay package's constant,
+	// not a literal: the literal said 6 from v0.5.0, when a446312 bumped
+	// the schema, until this row was read again, and the row had failed
+	// on every run since without anyone reading why.
+	expectNoStart(t, fmt.Sprintf("relay: database is schema version 99, but this relay understands %d; it was written by a newer release", relaypkg.SchemaVersion))
 	verdict(t, "ok", "")
 }
 
@@ -497,12 +503,15 @@ func r28(t *testing.T) {
 		}
 	})
 	r := alice.auu("inbox")
-	expectSays(t, r, 2, "auu: contacting relay: Get \"https://relay.example.com:9443/v1/mailbox/",
-		"dial tcp: lookup relay.example.com")
+	// The first request a listing makes is the health question, for the
+	// relay's max_bytes the page is held to, so a relay that cannot be
+	// reached is met there, and the step is named.
+	expectSays(t, r, 2, "auu: asking the relay's max_bytes before a listing: contacting relay: "+
+		"Get \"https://relay.example.com:9443/v1/health\"", "dial tcp: lookup relay.example.com")
 	relayStart(t)
 	expectSays(t, alice.auu("inbox"), 0)
-	verdict(t, "observed", "Go's dial error with the whole URL in it, exit 2. In this network a stopped relay also loses "+
-		"its name; on a real host it would be 'connection refused'.")
+	verdict(t, "observed", "Go's dial error with the whole URL in it, on the health question a listing asks first, "+
+		"exit 2. In this network a stopped relay also loses its name; on a real host it would be 'connection refused'.")
 }
 
 func r29(t *testing.T) {
