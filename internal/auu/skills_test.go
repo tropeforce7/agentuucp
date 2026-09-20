@@ -127,7 +127,7 @@ func dispatched(t *testing.T) map[string][][]string {
 	known := map[string][][]string{
 		"auu":       commandsOf(t, "main.go", "func dispatch(args []string) error {"),
 		"auu-admin": commandsOf(t, filepath.Join("..", "..", "cmd", "auu-admin", "main.go"), "func run(args []string) error {"),
-		"auu-ca":    commandsOf(t, filepath.Join("..", "..", "cmd", "auu-ca", "main.go"), "func main() {"),
+		"auu-ca":    commandsOf(t, filepath.Join("..", "..", "cmd", "auu-ca", "main.go"), "func dispatch(cmd string, args []string) error {"),
 	}
 	for prog, groups := range known {
 		if len(groups) < 4 {

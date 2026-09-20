@@ -11,9 +11,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/tropeforce7/agentuucp/internal/buildinfo"
 	"github.com/tropeforce7/agentuucp/internal/relay"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
@@ -357,7 +360,10 @@ func TestTheShippedUnitAndSettingsNameTheSameCredential(t *testing.T) {
 }
 
 // TestStartupLogsWhereTheBundleCameFrom: an operator checking that the
-// credential is in use greps the journal for bundle_source.
+// credential is in use greps the journal for bundle_source; and the same
+// line leads with the version the binary was built from and the schema
+// it speaks, before the address, since a journal is what an operator has
+// when asking which relay is running.
 func TestStartupLogsWhereTheBundleCameFrom(t *testing.T) {
 	fromCredential, credPath := credentialConfig(t, "relay-bundle")
 	fromFile := Defaults()
@@ -382,6 +388,37 @@ func TestStartupLogsWhereTheBundleCameFrom(t *testing.T) {
 			if !strings.Contains(logs.String(), "cert="+tc.path) {
 				t.Errorf("startup log does not name the bundle's path %s:\n%s", tc.path, logs.String())
 			}
+			assertStartingLine(t, logs.String(), "tls=files")
 		})
 	}
+}
+
+// assertStartingLine holds the "relay starting" line to its first fields:
+// the version, which is whatever the tree this test binary was built from
+// says and never empty, then the schema, then the address, then the TLS
+// mode given.
+func assertStartingLine(t *testing.T, logs, tls string) {
+	t.Helper()
+	line := regexp.MustCompile(`msg="relay starting" version=(\S+) schema=(\d+) addr=\S+ ` + regexp.QuoteMeta(tls) + ` `).FindStringSubmatch(logs)
+	if line == nil {
+		t.Fatalf("the starting line does not lead with version, schema, addr and %s:\n%s", tls, logs)
+	}
+	if line[1] != buildinfo.Version() {
+		t.Errorf("the starting line says version %s, want %s", line[1], buildinfo.Version())
+	}
+	if line[2] != strconv.Itoa(relay.SchemaVersion) {
+		t.Errorf("the starting line says schema %s, want %d", line[2], relay.SchemaVersion)
+	}
+}
+
+// TestStartupLogsTheVersionWithTLSOff: the other branch of the starting
+// line, for a relay serving plain HTTP, leads with the same two fields.
+func TestStartupLogsTheVersionWithTLSOff(t *testing.T) {
+	cfg := Defaults()
+	cfg.DB = filepath.Join(t.TempDir(), "relay.db")
+	cfg.TLS.Mode = ModeOff
+	cfg.Resolve()
+	var logs bytes.Buffer
+	logStartup(cfg, nil, slog.New(slog.NewTextHandler(&logs, nil)))
+	assertStartingLine(t, logs.String(), "tls=off")
 }

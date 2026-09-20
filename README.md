@@ -222,7 +222,9 @@ than by CI. `docker/testing/README.md` has the rest.
 which for a `go install …@vX` build is that tag and for a build from a clone
 is what its version control says. `auu-admin version`, `auu-ca version` and
 `auu-relay --version` do the same, and the relay's line adds the database
-schema it speaks.
+schema it speaks; every one of the four answers `--version` too. A running
+relay says the same two things on its `relay starting` log line, so a
+journal answers what relay is running.
 
 ### 3.2 Tab completion
 

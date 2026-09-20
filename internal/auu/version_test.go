@@ -37,4 +37,9 @@ func TestVersionSaysWhatThisBinaryIs(t *testing.T) {
 		t.Fatalf("auu version --json is %s, want version and skills", raw)
 	}
 	usageError(t, alice, `unexpected argument "extra"`, "version", "extra")
+	// --version is the same command, for the hand that reaches for the
+	// flag every other program answers.
+	if flag := alice.run("--version"); flag != out {
+		t.Fatalf("auu --version said %q, auu version %q", flag, out)
+	}
 }

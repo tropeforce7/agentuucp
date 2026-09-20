@@ -490,8 +490,10 @@ journalctl -u auu-relay -f
 ```
 
 The first lines say what registration mode it is in, how many administrators
-it found, and its limits. The `relay starting` line says where the bundle
-came from:
+it found, and its limits. The `relay starting` line leads with the version
+the binary was built from and the schema it speaks (`version=v0.11.0
+schema=8`), which is how a journal says what relay is running, and says
+where the bundle came from:
 
 ```
 journalctl -u auu-relay | grep bundle_source

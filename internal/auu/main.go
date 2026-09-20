@@ -108,7 +108,7 @@ Usage:
   auu lock
   auu agent start|stop|status [--json]
 
-  auu version [--json]               # the version this binary was built from
+  auu version [--json]               # the version this binary was built from; --version is the same
 
   auu skill install [--dir DIR] [--force] [--json]   # write the Claude Code skills the binary carries
   auu skill ls [--dir DIR] [--json]  # which of them the directory holds, and whether they match
@@ -318,7 +318,7 @@ func dispatch(args []string) error {
 		return cmdLock(rest)
 	case "agent":
 		return cmdAgent(rest)
-	case "version":
+	case "version", "--version":
 		return cmdVersion(rest)
 	case "skill", "skills":
 		return cmdSkill(rest)

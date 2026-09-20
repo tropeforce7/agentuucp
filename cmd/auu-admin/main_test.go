@@ -283,6 +283,28 @@ func TestTokenShowOffline(t *testing.T) {
 	}
 }
 
+// auu-admin version and --version say what this binary was built from,
+// as `auu-admin vX`, asking no relay anything; what the version is depends
+// on the tree the test binary was built from, so the assertion is the
+// name and that a version is carried.
+func TestVersionSaysWhatThisBinaryIs(t *testing.T) {
+	stranger := newPersona(t, "stranger", "https://relay.invalid")
+	out := stranger.run("version")
+	if !strings.HasPrefix(out, "auu-admin ") || strings.TrimSpace(strings.TrimPrefix(out, "auu-admin ")) == "" {
+		t.Fatalf("auu-admin version said %q", out)
+	}
+	if flag := stranger.run("--version"); flag != out {
+		t.Fatalf("auu-admin --version said %q, auu-admin version %q", flag, out)
+	}
+	// An argument it does not take is refused by name, as auu and auu-ca
+	// refuse it.
+	for _, spelling := range []string{"version", "--version"} {
+		if _, err := stranger.tryRun(spelling, "extra"); err == nil || !strings.Contains(err.Error(), `unexpected argument "extra"`) {
+			t.Errorf("auu-admin %s extra: %v; want the usage error naming it", spelling, err)
+		}
+	}
+}
+
 func TestMailboxesAndBlocks(t *testing.T) {
 	f := newFixture(t, relay.Config{})
 	alice, err := identity.Generate("alice")

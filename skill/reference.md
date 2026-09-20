@@ -146,7 +146,7 @@ journal is where its mints, requests and refusals are.
 What this binary is, and the skills it carries:
 
 ```
-auu version [--json]                               # the version it was built from
+auu version [--json]                               # the version it was built from (--version is the same)
 auu skill install [--dir DIR] [--force] [--json]   # write these three skills out of the binary
 auu skill ls [--dir DIR] [--json]                  # which of them the directory holds, and whether they match
 auu skill show NAME|reference                      # print one, without installing it
@@ -199,7 +199,7 @@ auu-admin token revoke ID
 auu-admin token show TOKEN
 auu-admin certs ls [FP] [--all]
 auu-admin certs revoke SERIAL [--reason TEXT] [--yes]
-auu-admin version
+auu-admin version | --version
 ```
 
 Every `auu-admin` command takes `--json` and `--relay NAME|URL`.
@@ -212,12 +212,14 @@ auu-ca kit --host NAME|IP [--host ...] --relay-binary FILE --out FILE
            [--client-certs off] [--without-bundle] [--years 1] [--dir DIR]
 auu-ca show [--dir DIR] [--json]                   # what the authority holds and when it expires
 auu-ca passphrase [--dir DIR]
-auu-ca version
+auu-ca version | --version
 ```
 
 The relay itself is flags rather than subcommands, and answers one of them
 without any settings: `auu-relay --version` prints the version it was built
-from and the database schema it speaks, as `auu-relay v0.3.0 (schema 6)`.
+from and the database schema it speaks, as `auu-relay v0.11.0 (schema 8)`;
+its `relay starting` log line leads with the same two, `version=` and
+`schema=`.
 
 ## Exit codes
 

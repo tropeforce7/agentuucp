@@ -33,7 +33,7 @@ Usage:
                     [--client-certs off] [--without-bundle] [--years 1] [--dir DIR]
   auu-ca show       [--dir DIR] [--json]
   auu-ca passphrase [--dir DIR]
-  auu-ca version
+  auu-ca version | --version
 
   init        create a trust anchor and the two authorities beneath it
   relay       issue one relay its signing intermediates, as a bundle
@@ -93,27 +93,11 @@ func main() {
 		os.Exit(exitUsage)
 	}
 	cmd, args := os.Args[1], os.Args[2:]
-	var err error
-	switch cmd {
-	case "-h", "--help", "help":
+	if cmd == "-h" || cmd == "--help" || cmd == "help" {
 		io.WriteString(os.Stdout, usage)
 		return
-	case "init":
-		err = cmdInit(args)
-	case "relay":
-		err = cmdRelay(args)
-	case "kit":
-		err = cmdKit(args)
-	case "show":
-		err = cmdShow(args)
-	case "passphrase":
-		err = cmdPassphrase(args)
-	case "version":
-		fmt.Printf("auu-ca %s\n", buildinfo.Version())
-	default:
-		err = usageErrf("unknown command %q; run 'auu-ca help'", cmd)
 	}
-	if err != nil {
+	if err := dispatch(cmd, args); err != nil {
 		fmt.Fprintln(os.Stderr, "auu-ca: "+err.Error())
 		var u *usageError
 		if errors.As(err, &u) {
@@ -121,6 +105,37 @@ func main() {
 		}
 		os.Exit(exitFail)
 	}
+}
+
+// dispatch runs one command. It is main's switch, apart from main so that
+// the tests run every spelling main answers, --version among them.
+func dispatch(cmd string, args []string) error {
+	switch cmd {
+	case "init":
+		return cmdInit(args)
+	case "relay":
+		return cmdRelay(args)
+	case "kit":
+		return cmdKit(args)
+	case "show":
+		return cmdShow(args)
+	case "passphrase":
+		return cmdPassphrase(args)
+	case "version", "--version":
+		return cmdVersion(args)
+	default:
+		return usageErrf("unknown command %q; run 'auu-ca help'", cmd)
+	}
+}
+
+// cmdVersion says what this binary was built from, as `auu-ca vX`; a build
+// with no version control information behind it says unknown.
+func cmdVersion(args []string) error {
+	if len(args) > 0 {
+		return usageErrf("unexpected argument %q", args[0])
+	}
+	fmt.Printf("auu-ca %s\n", buildinfo.Version())
+	return nil
 }
 
 type usageError struct{ err error }

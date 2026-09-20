@@ -61,7 +61,7 @@ Usage:
   auu-admin certs ls [FP] [--all]
   auu-admin certs revoke SERIAL [--reason TEXT] [--yes]
 
-  auu-admin version
+  auu-admin version | --version
 
 Every command takes --json, and --relay NAME|URL to choose the relay. Without
 it the relay is AUU_RELAY, and then your auu home's default.
@@ -140,7 +140,10 @@ func run(args []string) error {
 		return cmdCerts(rest)
 	case "token":
 		return cmdToken(rest)
-	case "version":
+	case "version", "--version":
+		if len(rest) > 0 {
+			return usageErrf("unexpected argument %q", rest[0])
+		}
 		fmt.Printf("auu-admin %s\n", buildinfo.Version())
 		return nil
 	default:

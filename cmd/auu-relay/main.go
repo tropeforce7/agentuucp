@@ -446,13 +446,17 @@ func logClientCerts(parts *clientCertParts, lifetime time.Duration, log *slog.Lo
 }
 
 // logStartup states the settings once, at startup. admins is the set the
-// relay was handed, so the count logged is the count served.
+// relay was handed, so the count logged is the count served. The "relay
+// starting" line leads with what the binary is, its version and the
+// schema it speaks, since a journal is what an operator has when asking
+// which relay is running, and `--version` needs a shell on the host.
 func logStartup(cfg Config, admins *relay.Admins, log *slog.Logger) {
 	logEnrolment(cfg, admins, log)
 	logLimits(cfg, log)
 	switch cfg.TLS.Mode {
 	case ModeOff:
-		log.Info("relay starting", "addr", cfg.Listen, "tls", "off", "db", cfg.DB,
+		log.Info("relay starting", "version", buildinfo.Version(), "schema", relay.SchemaVersion,
+			"addr", cfg.Listen, "tls", "off", "db", cfg.DB,
 			"max_bytes", cfg.MaxBytes, "messages", cfg.MessagesDir)
 		log.Warn("serving plain HTTP: for a try on one machine, not for a relay anybody reaches over a network")
 	case ModeFiles:
@@ -462,7 +466,8 @@ func logStartup(cfg Config, admins *relay.Admins, log *slog.Logger) {
 		if bundle, ok, err := cfg.BundlePath(); ok && err == nil {
 			where = bundle
 		}
-		log.Info("relay starting", "addr", cfg.Listen, "tls", "files", "db", cfg.DB,
+		log.Info("relay starting", "version", buildinfo.Version(), "schema", relay.SchemaVersion,
+			"addr", cfg.Listen, "tls", "files", "db", cfg.DB,
 			"cert", where, "bundle_source", cfg.bundleSource(),
 			"max_bytes", cfg.MaxBytes, "messages", cfg.MessagesDir)
 	}

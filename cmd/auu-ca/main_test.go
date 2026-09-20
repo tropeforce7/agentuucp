@@ -80,22 +80,9 @@ func runCapturing(t *testing.T, dir string, args ...string) (stdout, stderr stri
 	go func() { defer wg.Done(); io.Copy(&outBuf, outR) }()
 	go func() { defer wg.Done(); io.Copy(&errBuf, errR) }()
 
-	var runErr error
-	switch args[0] {
-	case "init":
-		runErr = cmdInit(args[1:])
-	case "relay":
-		runErr = cmdRelay(args[1:])
-	case "kit":
-		runErr = cmdKit(args[1:])
-	case "show":
-		runErr = cmdShow(args[1:])
-	case "passphrase":
-		runErr = cmdPassphrase(args[1:])
-	default:
-		os.Stdout, os.Stderr = realOut, realErr
-		t.Fatalf("unknown command %q", args[0])
-	}
+	// Through main's own switch, so a spelling main answers is one the
+	// tests run.
+	runErr := dispatch(args[0], args[1:])
 
 	outW.Close()
 	errW.Close()

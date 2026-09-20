@@ -108,6 +108,11 @@ func TestABareRelayRefusesAndOffIsSaidOut(t *testing.T) {
 			seen = append(seen, line)
 			if strings.Contains(line, `msg="relay starting"`) && strings.Contains(line, "tls=off") {
 				started = true
+				// The line the journal shows leads with the version and
+				// the schema, from the binary itself.
+				if !regexp.MustCompile(`msg="relay starting" version=\S+ schema=` + strconv.Itoa(relay.SchemaVersion) + ` addr=`).MatchString(line) {
+					t.Errorf("the starting line does not lead with version and schema:\n%s", line)
+				}
 			}
 			if strings.Contains(line, "serving plain HTTP: for a try on one machine, not for a relay anybody reaches over a network") {
 				plain = true

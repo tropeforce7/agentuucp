@@ -220,6 +220,33 @@ func TestAnAuthorityFromBeforeEncryptionIsRefused(t *testing.T) {
 	}
 }
 
+// auu-ca version and --version say what this binary was built from, as
+// `auu-ca vX`, with no directory opened and no passphrase asked; the
+// version is whatever the tree the test binary was built from says, so
+// the assertion is the name and that one is carried.
+func TestVersionSaysWhatThisBinaryIs(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "never-made")
+	out, err := runWithStdin(t, dir, "", "version")
+	if err != nil {
+		t.Fatalf("auu-ca version: %v", err)
+	}
+	if !strings.HasPrefix(out, "auu-ca ") || strings.TrimSpace(strings.TrimPrefix(out, "auu-ca ")) == "" {
+		t.Fatalf("auu-ca version said %q", out)
+	}
+	flag, err := runWithStdin(t, dir, "", "--version")
+	if err != nil || flag != out {
+		t.Fatalf("auu-ca --version said %q (%v), auu-ca version %q", flag, err, out)
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Error("version made the authority's directory")
+	}
+	for _, spelling := range []string{"version", "--version"} {
+		if _, err := runWithStdin(t, dir, "", spelling, "extra"); err == nil || !strings.Contains(err.Error(), `unexpected argument "extra"`) {
+			t.Errorf("auu-ca %s extra: %v; want the usage error naming it", spelling, err)
+		}
+	}
+}
+
 // TestThePassphraseIsReadFromStandardInput drives the real path a script
 // without a secret manager takes.
 func TestThePassphraseIsReadFromStandardInput(t *testing.T) {

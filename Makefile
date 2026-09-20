@@ -32,8 +32,13 @@ limits:
 e2e:
 	docker/testing/run.sh
 
+# gofmt over the module's own directories, not the whole tree: reviews/ is
+# git-ignored, the maintainers' and never part of the module, and it may
+# hold archived Go files (earlier sessions' probes and overlays) that
+# gofmt would read and go vet, which stops at reviews/worker's own go.mod,
+# would not.
 vet:
-	@out="$$(gofmt -l . )"; \
+	@out="$$(gofmt -l cmd internal docker skill *.go)"; \
 	if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	$(GO) vet ./...
 

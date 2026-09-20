@@ -61,6 +61,7 @@ Later ones win. A flag you do not type never overrides the file.
 | `--max-waiting N` | `limits.max_waiting` | 64 |
 | `--access-log full\|minimal` | `access_log` | `full` |
 | `--print-config` | | print the merged settings and exit |
+| `--version` | | print `auu-relay vX (schema N)` and exit; needs no settings |
 
 The TLS mode is `files` unless you set it to `off`. `files` with no bundle
 and no certificate is refused at startup, in a sentence that names the two
@@ -68,6 +69,14 @@ and no certificate is refused at startup, in a sentence that names the two
 relay's first lines, and exists for a try on one machine. `off` with a
 bundle is refused. A bundle is what the relay serves TLS from, and nothing
 stands in front of the relay to terminate for it.
+
+The relay's first lines say what it is and how it is set. The `relay
+starting` line leads with `version=`, the version the binary was built
+from, and `schema=`, the database schema it speaks, then the address, the
+TLS mode, the database, and for `files` the certificate and where the
+bundle came from. So a journal answers which relay is running without a
+shell on the host; `auu-relay --version` answers the same of a binary in
+hand.
 
 `tls.bundle` and `tls.bundle_credential` name the same file two ways, and
 you give one of them. The first is a path. The second is the name of a
