@@ -13,7 +13,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/testutil"
@@ -905,11 +904,10 @@ func TestAFinalChunkThatDoesNotOpenIsNotATruncation(t *testing.T) {
 }
 
 // A manifest carries the channel it was opened for under the signature,
-// and one from before channels, which has no field, opens as it did. The
-// decode stays strict, so a receiver from before channels refuses a
-// manifest that carries the field as malformed rather than filing the
-// stream somewhere it was not sent; that is the cost of a signed format two
-// builds cannot silently disagree about.
+// and one for default, which has no field, opens as default. The decode
+// stays strict, so a manifest carrying a field this build does not know
+// is malformed rather than filed somewhere it was not sent; that is the
+// cost of a signed format two builds cannot silently disagree about.
 func TestAManifestCarriesItsChannel(t *testing.T) {
 	from, to := pair(t)
 	sources := []Source{source("f.bin", []byte("x"))}
@@ -945,57 +943,5 @@ func TestAManifestCarriesItsChannel(t *testing.T) {
 	named, _ := json.Marshal(m)
 	if !bytes.Contains(named, []byte(`"channel":"bug reports"`)) {
 		t.Fatalf("a manifest for a channel does not name it: %s", named)
-	}
-}
-
-// A receiver from before channels reads a manifest strictly, into the
-// shape it knew, so one that carries channel is refused there as malformed
-// and one that does not opens as it always did. The old shape is written
-// out here, not derived, so that the edge is what it is on record: a
-// stream sent with --channel to an old receiver is kept under damaged/
-// there, and the cure is to upgrade the receiver, not to resend.
-func TestAReceiverFromBeforeChannelsRefusesAManifestWithOne(t *testing.T) {
-	type oldAttachment struct {
-		Name   string `json:"name"`
-		Media  string `json:"media"`
-		Size   int64  `json:"size"`
-		SHA256 string `json:"sha256"`
-	}
-	type oldManifest struct {
-		V            int             `json:"v"`
-		ID           string          `json:"id"`
-		From         string          `json:"from"`
-		FromBundle   []byte          `json:"from_bundle"`
-		To           string          `json:"to"`
-		Time         time.Time       `json:"time"`
-		ChunkSize    int             `json:"chunk_size"`
-		Chunks       int64           `json:"chunks"`
-		PayloadBytes int64           `json:"payload_bytes"`
-		Body         Body            `json:"body"`
-		Attachments  []oldAttachment `json:"attachments"`
-	}
-	from, to := pair(t)
-	sources := []Source{source("f.bin", []byte("x"))}
-	m, err := BuildManifest(from, to.Public(), strings.Repeat("a", 32), body(), sources, MinChunkSize)
-	if err != nil {
-		t.Fatal(err)
-	}
-	decodeOld := func(m *Manifest) error {
-		raw, err := json.Marshal(m)
-		if err != nil {
-			t.Fatal(err)
-		}
-		dec := json.NewDecoder(bytes.NewReader(raw))
-		dec.DisallowUnknownFields()
-		var old oldManifest
-		return dec.Decode(&old)
-	}
-	if err := decodeOld(m); err != nil {
-		t.Fatalf("an old receiver refuses a manifest for default: %v", err)
-	}
-	m.Channel = "bug reports"
-	err = decodeOld(m)
-	if err == nil || !strings.Contains(err.Error(), `unknown field "channel"`) {
-		t.Fatalf("an old receiver took a manifest with a channel: %v", err)
 	}
 }

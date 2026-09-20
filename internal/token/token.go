@@ -27,17 +27,19 @@ import (
 )
 
 const (
-	// Prefix names the token format that is written. The version lives here,
-	// like ccx2 on an export line, so an old verifier refuses a new token
-	// outright rather than misreading it.
+	// Prefix names the token format, the one there is. The version lives
+	// here, like ccx2 on an export line, so a verifier refuses a token of
+	// another form outright rather than misreading it.
 	//
-	// ccxt2 added the trust anchor a machine pins when it redeems the token.
-	// A field could not simply be added, because the payload is decoded
-	// strictly on purpose.
+	// ccxt2 carries the trust anchor a machine pins when it redeems the
+	// token. A field could not simply be added, because the payload is
+	// decoded strictly on purpose.
 	Prefix = "ccxt2"
-	// LegacyPrefix is still read. A ccxt1 token pins no anchor, which is
-	// what a relay with a publicly trusted certificate wants anyway.
-	LegacyPrefix = "ccxt1"
+	// olderPrefix is the form before the anchor, which pinned none. It is
+	// not read: nothing on the wire is from before, and a token of that
+	// form is refused in a sentence that says a new one must be issued,
+	// which is the one thing the holder can do about it.
+	olderPrefix = "ccxt1"
 
 	// signDomain separates token signatures from the other five things an
 	// identity key signs: requests (ccx-http-v1), messages (ccx-sig-v1),
@@ -182,7 +184,11 @@ func Parse(s string) (*Unverified, error) {
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("%w: expected three dot-separated parts, got %d", ErrForm, len(parts))
 	}
-	if parts[0] != Prefix && parts[0] != LegacyPrefix {
+	if parts[0] == olderPrefix {
+		return nil, fmt.Errorf("%w: this token is of an older form, %s, which pins no trust anchor; "+
+			"ask for a new one to be issued", ErrForm, olderPrefix)
+	}
+	if parts[0] != Prefix {
 		return nil, fmt.Errorf("%w: unknown token type %q, expected %q", ErrForm, parts[0], Prefix)
 	}
 	// Length before decode, both times. Decoding allocates the whole output

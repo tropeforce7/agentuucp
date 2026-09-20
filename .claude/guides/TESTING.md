@@ -565,6 +565,31 @@ asserting the sentence and the exit code; a panic fails the test by
 itself. The same rule holds for a value from a peer: the thread id was
 sliced to twelve characters in `auu reply` before it had any rule at all.
 
+**Nothing on the wire is from before, and every required field's absence
+has a test that leaves the field out.** A field an end always sends is
+required by the other end and refused by name when absent (the rule in
+DEVELOPMENT.md); the test for each such field feeds the answer with the
+field absent from the JSON — not zero, not the empty string, since those
+are what a Go decoder writes for absence and a test that sets them proves
+only the decoder — and asserts the malformed-answer sentence naming the
+field, the shape it should have and the relay, with nothing of the
+answer used, having first fed the answer whole and seen it taken, so the
+refusal is the absence and nothing else. A row's fields are left out of
+the row; a listing asked for as stubs is fed a row with an envelope. The
+client's `TestAnAnswerWithoutARequiredFieldIsRefusedByName` walks the
+listing's `allow`, `kind` and `channel`, the stubs envelope, the status
+words and the lookup's `created`; `TestARelayWithoutMaxBytesIsRefusedByName`
+in `internal/auu` is the health answer through a whole command, and
+`TestAListingWithoutAChannelIsRefusedByName` a fetch, with the mail left
+on the relay unacknowledged. A count whose zero the relay sends
+(`queued`) has no absence test, since absence and zero decode to one
+number and the same code runs; its test says so. Formats have the same
+rule at the parser: a `ccxt1` token and a `ccx1` export line are refused
+by name with the one thing their holder can do, and a test feeds each
+well formed. There is no fake old relay in the tree to test against, and
+a test that needs a relay that answers otherwise than this one writes a
+handler that answers otherwise, for that test.
+
 **What a filesystem folds is refused at the sender and settled at the
 write, and the test skips only where it cannot fold.** Two attachment
 names equal under case folding are refused by the sender's rule, so a

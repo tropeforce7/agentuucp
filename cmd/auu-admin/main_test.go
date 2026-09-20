@@ -827,8 +827,8 @@ func TestADamagedFileInAnAdministratorsHomeExitsFive(t *testing.T) {
 	}
 }
 
-// TestMailboxesPrintAHostileNameEscaped: a relay from before names had a
-// rule can still hold a name with a terminal escape in it, and it reaches
+// TestMailboxesPrintAHostileNameEscaped: a relay that is not ours can
+// answer a name with a terminal escape in it, and it reaches
 // the operator's terminal through the mailbox listing and the one-mailbox
 // view. Both print it with every byte outside the printable set escaped.
 func TestMailboxesPrintAHostileNameEscaped(t *testing.T) {
@@ -939,8 +939,8 @@ func TestAShortFieldInAnAnswerIsRefusedNotSliced(t *testing.T) {
 		field  string
 		answer any
 	}{
-		{[]string{"status"}, "/v1/admin/status", "ca_fingerprint", relayapi.AdminStatusResponse{CAFingerprint: "ab"}},
-		{[]string{"status"}, "/v1/admin/status", "token_max_age_seconds", relayapi.AdminStatusResponse{TokenMaxAgeSecs: relayapi.MaxDurationSeconds + 1}},
+		{[]string{"status"}, "/v1/admin/status", "ca_fingerprint", relayapi.AdminStatusResponse{CAFingerprint: "ab", Registration: relayapi.RegistrationOpen, ClientCerts: relayapi.ClientCertsOff}},
+		{[]string{"status"}, "/v1/admin/status", "token_max_age_seconds", relayapi.AdminStatusResponse{TokenMaxAgeSecs: relayapi.MaxDurationSeconds + 1, Registration: relayapi.RegistrationOpen, ClientCerts: relayapi.ClientCertsOff}},
 		{[]string{"mailboxes", "ls"}, "/v1/admin/mailboxes", "fp", relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{{FP: "ab"}}}},
 		{[]string{"mailboxes", "show", fp}, "/v1/admin/mailboxes/" + fp, "fp", relayapi.MailboxRecord{FP: "ab"}},
 		{[]string{"blocks", "ls"}, "/v1/admin/blocks", "by_fp", relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{{FP: fp, ByFP: "ab"}}}},
@@ -970,7 +970,7 @@ func TestAShortFieldInAnAnswerIsRefusedNotSliced(t *testing.T) {
 // naming the field, rather than sliced.
 func TestStatusRendersAPebibyteAndAShortIssuerIsRefused(t *testing.T) {
 	srv := fakeRelay(t, map[string]any{
-		"/v1/admin/status": relayapi.AdminStatusResponse{QueuedBytes: 1 << 50, TokenMaxAgeSecs: 3600},
+		"/v1/admin/status": relayapi.AdminStatusResponse{QueuedBytes: 1 << 50, TokenMaxAgeSecs: 3600, Registration: relayapi.RegistrationOpen, ClientCerts: relayapi.ClientCertsOff},
 	})
 	p := newPersona(t, "boss", srv.URL)
 	out := p.run("status")
@@ -1038,6 +1038,14 @@ func TestStatusEscapesTheRelaysWordsAndHoldsItsEnums(t *testing.T) {
 		{"client_certs", true, relayapi.AdminStatusResponse{ClientCerts: "off" + escapeSeq}},
 	} {
 		tc.answer.CAFingerprint = boss.Fingerprint()
+		// The two words the relay always sends, unless the case is about
+		// one of them.
+		if tc.answer.Registration == "" {
+			tc.answer.Registration = relayapi.RegistrationOpen
+		}
+		if tc.answer.ClientCerts == "" {
+			tc.answer.ClientCerts = relayapi.ClientCertsOff
+		}
 		srv := fakeRelay(t, map[string]any{"/v1/admin/status": tc.answer})
 		p := newPersona(t, "boss", srv.URL)
 		out, err := p.tryRun("status")

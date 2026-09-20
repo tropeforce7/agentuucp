@@ -36,13 +36,15 @@ const (
 
 	fingerprintDomain = "ccx-id-v1"
 
-	// Export line prefixes. ccx2 is the form that is written: one token with
-	// no spaces, so a line can be pasted unquoted and selected with a
-	// double-click. ccx1, the original space-separated form, is still read,
-	// because lines in that form have been handed around.
-	exportPrefix       = "ccx2"
-	legacyExportPrefix = "ccx1"
-	exportSep          = "."
+	// Export line prefixes. ccx2 is the form, the one there is: one token
+	// with no spaces, so a line can be pasted unquoted and selected with a
+	// double-click. ccx1, the original space-separated form, is not read:
+	// nothing on the wire is from before, and a line of that form is
+	// refused in a sentence that says the identity must be exported again
+	// by the current auu, which is the one thing its owner can do.
+	exportPrefix      = "ccx2"
+	olderExportPrefix = "ccx1"
+	exportSep         = "."
 
 	// MaxNameBytes bounds a name, the one free-text field an export line
 	// carries.
@@ -447,13 +449,9 @@ func ParseExportLine(line string) (*Public, error) {
 	case strings.HasPrefix(trimmed, exportPrefix+exportSep):
 		enc = base64.RawURLEncoding
 		encoded, name, _ = strings.Cut(trimmed[len(exportPrefix)+len(exportSep):], exportSep)
-	case strings.HasPrefix(trimmed, legacyExportPrefix+" "):
-		enc = base64.StdEncoding
-		fields := strings.SplitN(trimmed, " ", 3)
-		encoded = fields[1]
-		if len(fields) == 3 {
-			name = strings.TrimSpace(fields[2])
-		}
+	case trimmed == olderExportPrefix || strings.HasPrefix(trimmed, olderExportPrefix+" "):
+		return nil, fmt.Errorf("identity: this is a %s export line, an older form; "+
+			"ask its owner to run 'auu id export' with the current auu and paste that line", olderExportPrefix)
 	default:
 		kind := trimmed
 		if i := strings.IndexAny(trimmed, " ."); i >= 0 {

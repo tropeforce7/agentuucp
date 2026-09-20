@@ -110,9 +110,10 @@ default channel; choose one with --channel:` (ask the user which), and
 `channel "x" is not open: opens T` or `closed T` (tell the user; do not
 send to another channel instead). If a colleague reports that a stream you
 sent with `--channel` arrived as `malformed` and was kept under `damaged/`,
-their `auu` is from before channels and reads manifests strictly: advise
-them to upgrade; do not resend it, and do not resend it without the
-channel. Never run `auu channel create`, `update`,
+their `auu` is not this one — a manifest is read strictly, and a field it
+does not know is malformed there — so advise them to run the current
+`auu`; do not resend it, and do not resend it without the channel. Never
+run `auu channel create`, `update`,
 `close`, `delete`, `push` or `pull` unless the user asked for exactly that:
 they define the user's own channels, and pushing one is a change every
 sender sees.

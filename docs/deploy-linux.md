@@ -660,17 +660,9 @@ line through. Take the backup below before an upgrade that mentions a
 schema change — `update` takes one of the database itself, but not of
 the message files, which an update does not touch.
 
-The release that signs allow lists, v0.5.0, takes the database from schema
-version 6 to 7. It converts every user's allow list into one signed-list
-row with no signature, which the relay does not honour: a row it cannot
-verify is `broken` in `auu-admin mailboxes ls`, and every post to that
-mailbox is refused until its owner runs `auu allow push`, which their own
-`auu inbox` tells them to on every fetch until they do. A restricted
-mailbox is closed across the upgrade, not opened; a mailbox that had no
-list is untouched. No relay outside this project ran before v0.5.0, so
-nobody meets this. After the upgrade, a list showing `broken` in the same
-listing is an incident on the host and not a user error: the row no longer
-verifies against its owner's key, so it was changed by something other
+A list showing `broken` in `auu-admin mailboxes ls` is an incident on the
+host and not a user error: the row no longer verifies against its owner's
+key, so it was changed by something other
 than that owner's push, and the relay refuses every post to the mailbox
 until the owner pushes again — the journal says
 `allow list for FP does not verify; refusing every post to it until the

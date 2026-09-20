@@ -1,7 +1,6 @@
 package auu
 
 import (
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -314,44 +313,6 @@ func TestAFetchRefusesADamagedSettingsFile(t *testing.T) {
 	}
 	if in := bob.inboxJSON("--no-fetch"); len(in.Messages) != 0 {
 		t.Fatalf("the refused fetch delivered: %+v", in.Messages)
-	}
-}
-
-// A relay from before stubs answers the refresh with the envelopes, which
-// are read and dropped: the marks are still refreshed, and the fetch costs
-// one extra listing rather than failing.
-func TestTheRefreshWorksAgainstARelayFromBeforeStubs(t *testing.T) {
-	old := &v5Relay{}
-	srv := httptest.NewServer(old)
-	defer srv.Close()
-	alice := newUser(t, "alice", srv.URL)
-	bob := newUser(t, "bob", srv.URL)
-	alice.run("peers", "add", bob.exportLine())
-	bob.run("peers", "add", alice.exportLine())
-
-	alice.run("send", "--to", "bob", "--subject", "kept", "one")
-	bob.run("inbox")
-	if m := recordOf(t, bob, store.Inbox, "kept"); !m.OnRelay {
-		t.Fatalf("the record against an old relay: %+v", m)
-	}
-	old.mu.Lock()
-	listings := append([]string(nil), old.listings...)
-	old.mu.Unlock()
-	var asked int
-	for _, q := range listings {
-		if strings.Contains(q, "stubs=1") {
-			asked++
-		}
-	}
-	if asked != 1 {
-		t.Fatalf("the old relay saw %d stubs listings in %v, want the one the refresh made", asked, listings)
-	}
-	// The message removed there, and the next fetch clears the mark from
-	// an answer full of envelopes it does not want.
-	old.drop(1)
-	bob.run("inbox")
-	if m := recordOf(t, bob, store.Inbox, "kept"); m.OnRelay {
-		t.Fatalf("the mark survived against an old relay: %+v", m)
 	}
 }
 

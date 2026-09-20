@@ -313,8 +313,7 @@ func TestAStreamIsFiledUnderTheChannelItWasOpenedFor(t *testing.T) {
 
 // The listing says which channel each message is under, for an envelope and
 // for a stream, and says it for default too: the field is always present
-// from this relay, so a listing without it is from a relay from before
-// channels.
+// from this relay, and a client refuses a listing without it by name.
 func TestTheListingSaysWhichChannel(t *testing.T) {
 	h := newHarness(t, Config{})
 	people := ids(t, "alice", "bob")
@@ -359,7 +358,7 @@ func TestTheListingSaysWhichChannel(t *testing.T) {
 		}
 	}
 	// On the wire, named channel, and present for default rather than
-	// omitted: absent is what an old relay says.
+	// omitted: the client requires it.
 	if strings.Count(string(raw), `"channel":"`) != 3 || !strings.Contains(string(raw), `"channel":"default"`) {
 		t.Fatalf("the listing does not carry channel on every message:\n%s", raw)
 	}
@@ -367,7 +366,7 @@ func TestTheListingSaysWhichChannel(t *testing.T) {
 	// omitempty is checked on the type itself: the zero message still says
 	// channel, as it still says queued on the response.
 	if zero, _ := json.Marshal(relayapi.StoredMessage{}); !strings.Contains(string(zero), `"channel":""`) {
-		t.Fatalf("StoredMessage omits an empty channel; absent must mean an old relay: %s", zero)
+		t.Fatalf("StoredMessage omits an empty channel; the field has no omitempty: %s", zero)
 	}
 }
 
@@ -432,77 +431,5 @@ func TestTheAdministratorCountsChannelsAndNeverNamesThem(t *testing.T) {
 	}
 	if strings.Contains(string(body), "xylophone") {
 		t.Fatalf("the page names a channel: %s", body)
-	}
-}
-
-// A client from before channels reads this relay's listing and its
-// open-stream answer with plain json.Unmarshal, which ignores a field it
-// has never heard of: the shapes it knew decode from what this relay says,
-// and a relay reads an old client's open-stream request, which names no
-// channel, as default. The old shapes are written out here rather than
-// derived from the current types, so a change that would break an old
-// client fails here.
-func TestAnOldClientReadsThisRelaysAnswers(t *testing.T) {
-	h := newHarness(t, Config{})
-	people := ids(t, "alice", "bob")
-	alice, bob := people[0], people[1]
-	for _, id := range people {
-		h.register(id)
-	}
-	fp := bob.Fingerprint()
-	if status, body, _ := h.pushDirectory(bob, bob, h.clock.Now(), dflt, bugs); status != http.StatusNoContent {
-		t.Fatalf("push: %d %s", status, body)
-	}
-	if status, body := h.postTo(alice, bob, "bug reports"); status != http.StatusOK {
-		t.Fatalf("post: %d %s", status, body)
-	}
-	status, raw := h.do(bob, "GET", "/v1/mailbox/"+fp, nil, nil)
-	if status != http.StatusOK {
-		t.Fatalf("list: %d %s", status, raw)
-	}
-	// The v5 client's ListResponse and StoredMessage.
-	var old struct {
-		Messages []struct {
-			ID       int64           `json:"id"`
-			Received time.Time       `json:"received"`
-			Kind     string          `json:"kind,omitempty"`
-			Size     int64           `json:"size,omitempty"`
-			Envelope json.RawMessage `json:"envelope,omitempty"`
-		} `json:"messages"`
-		Queued int64 `json:"queued"`
-	}
-	if err := json.Unmarshal(raw, &old); err != nil {
-		t.Fatalf("an old client cannot read the listing: %v\n%s", err, raw)
-	}
-	if len(old.Messages) != 1 || old.Messages[0].ID == 0 || len(old.Messages[0].Envelope) == 0 || old.Queued != 1 {
-		t.Fatalf("an old client read %+v", old)
-	}
-	// The v5 client's outer envelope, from the bytes served: ch is ignored,
-	// and what it reads is what it would have sealed itself.
-	var env struct {
-		V  int    `json:"v"`
-		To string `json:"to"`
-		CT []byte `json:"ct"`
-	}
-	if err := json.Unmarshal(old.Messages[0].Envelope, &env); err != nil || env.To != fp || len(env.CT) == 0 {
-		t.Fatalf("an old client cannot read the envelope: %v", err)
-	}
-	// An old client's open-stream request has no channel: this relay reads
-	// that as default, and answers in the shape the old client knew.
-	status, body, _ := h.send(alice, "POST", "/v1/mailbox/"+fp+"/streams", []byte(`{"size":5000}`), nil)
-	if status != http.StatusCreated {
-		t.Fatalf("an old client's open: %d %s", status, body)
-	}
-	var opened struct {
-		Upload     string    `json:"upload"`
-		Expires    time.Time `json:"expires"`
-		MaxRequest int64     `json:"max_request"`
-	}
-	if err := json.Unmarshal(body, &opened); err != nil || opened.Upload == "" {
-		t.Fatalf("an old client cannot read the open answer: %v %s", err, body)
-	}
-	up, err := h.store.Upload(opened.Upload)
-	if err != nil || up.Channel != "default" {
-		t.Fatalf("an old client's upload is for %q, want default (%v)", up.Channel, err)
 	}
 }

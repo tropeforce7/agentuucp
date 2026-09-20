@@ -48,12 +48,12 @@ func TestExportLineEncodedLengthBoundaries(t *testing.T) {
 			t.Fatalf("an encoded length of %d was accepted", n)
 		}
 	}
-	// The legacy form has its own encoding and the same rule.
-	legacy := base64.StdEncoding.EncodedLen(BundleSize)
-	for _, n := range []int{legacy - 1, legacy + 1} {
-		line := legacyExportPrefix + " " + strings.Repeat("A", n) + exportSep + "name"
-		if _, err := ParseExportLine(line); err == nil {
-			t.Fatalf("a legacy encoded length of %d was accepted", n)
+	// The older form is refused before its length is read, at any length.
+	older := base64.StdEncoding.EncodedLen(BundleSize)
+	for _, n := range []int{older - 1, older, older + 1} {
+		line := olderExportPrefix + " " + strings.Repeat("A", n) + " name"
+		if _, err := ParseExportLine(line); err == nil || !strings.Contains(err.Error(), "an older form") {
+			t.Fatalf("an older line of encoded length %d: %v; want it refused by name", n, err)
 		}
 	}
 }

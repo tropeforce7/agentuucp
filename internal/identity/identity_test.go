@@ -81,34 +81,31 @@ func TestExportLineIsOneToken(t *testing.T) {
 	}
 }
 
-// The space-separated ccx1 form has been handed around, so it is still read.
-// It is never written.
-func TestLegacyExportLineStillParses(t *testing.T) {
+// The space-separated ccx1 form, the original, is refused by name: nothing
+// on the wire is from before, and the sentence says the one thing the
+// line's owner can do. A well-formed ccx1 line, one without a name, the
+// bare prefix, and a file of lines each get the sentence, the file's with
+// its line number in front.
+func TestAnOlderExportLineIsRefusedByName(t *testing.T) {
 	id, err := Generate("alice")
 	if err != nil {
 		t.Fatal(err)
 	}
 	pub := id.Public()
-	legacy := "ccx1 " + base64.StdEncoding.EncodeToString(pub.Bundle()) + " alice"
-	parsed, err := ParseExportLine(legacy)
-	if err != nil {
-		t.Fatalf("a legacy line was refused: %v", err)
+	const want = "identity: this is a ccx1 export line, an older form; ask its owner to run 'auu id export' with the current auu and paste that line"
+	older := "ccx1 " + base64.StdEncoding.EncodeToString(pub.Bundle()) + " alice"
+	for _, line := range []string{older, "ccx1 " + base64.StdEncoding.EncodeToString(pub.Bundle()), "ccx1"} {
+		_, err := ParseExportLine(line)
+		if err == nil || err.Error() != want {
+			t.Fatalf("ParseExportLine(%.20q…) = %v; want %q", line, err, want)
+		}
 	}
-	if parsed.Fingerprint() != pub.Fingerprint() || parsed.Name != "alice" {
-		t.Fatalf("legacy line parsed to %s %q", parsed.Fingerprint()[:12], parsed.Name)
+	if _, err := ParseExportLines("admins", []byte("# admins\n"+pub.ExportLine()+"\n"+older+"\n")); err == nil || err.Error() != "admins line 3: "+want {
+		t.Fatalf("a file with an older line: %v; want the sentence with its line number", err)
 	}
-	// Without a name, too.
-	if p, err := ParseExportLine("ccx1 " + base64.StdEncoding.EncodeToString(pub.Bundle())); err != nil || p.Name != "" {
-		t.Fatalf("nameless legacy line: %v, name %q", err, p.Name)
-	}
-	// A legacy name with a space is held to the same rule as a new one:
-	// nothing that reaches authorized_peers may carry whitespace.
-	if _, err := ParseExportLine(legacy + " lovelace"); err == nil {
-		t.Fatal("a legacy line with a space in its name was accepted")
-	}
-	// And whatever is written is the new form.
-	if strings.HasPrefix(pub.ExportLine(), "ccx1") {
-		t.Fatal("ExportLine still writes the legacy form")
+	// What is written is the one form there is.
+	if !strings.HasPrefix(pub.ExportLine(), "ccx2.") {
+		t.Fatalf("ExportLine writes %q, want the ccx2 form", pub.ExportLine())
 	}
 }
 
@@ -362,8 +359,8 @@ func TestParseExportLinesNumbersTheBadLine(t *testing.T) {
 
 // TestPrintableEscapesWhatANameMayNotCarry: a name under the rule is
 // printed as it is; anything else reaches a terminal with every byte
-// outside the printable set escaped, so a relay from before names had a
-// rule cannot hand a terminal a command.
+// outside the printable set escaped, so a relay that is not ours cannot
+// hand a terminal a command.
 func TestPrintableEscapesWhatANameMayNotCarry(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"bob", "bob"},

@@ -162,13 +162,7 @@ user thinks the relay has been compromised.
 **Upgrading** is the same: a new kit and `update`. The relay migrates its
 own database at start and says `database migrated` with `from=` and `to=`;
 `update` prints that line through, and takes a backup of the database
-first. The release that signs allow lists, v0.5.0, takes the database
-from 6 to 7 and converts every user's list into a row with no signature,
-which the relay refuses on: each is `broken` in `auu-admin mailboxes ls`,
-and its mailbox refuses every sender, until its owner runs `auu allow
-push`, which their own `auu inbox` tells them to. A restricted mailbox is
-closed across that upgrade, never opened; no relay outside the project
-ran before v0.5.0.
+first.
 
 **A `broken` allow list** in `auu-admin mailboxes ls` is an incident on
 the host, not a user error: the list no longer verifies against the

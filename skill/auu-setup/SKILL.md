@@ -125,9 +125,10 @@ stderr. Each sentence names what to do:
   relay's host, and the user tells the operator so. `auu allow show` prints
   what each relay holds, verified with the user's own key.
 
-A relay that answers `this relay needs a signed allow list; update auu to
-v0.5.0 or later` is newer than this `auu`; nothing was stored, and the
-user updates.
+A relay that answers `this relay takes a signed allow list; the request
+carries no document` was sent an allow request with no document in it,
+which this `auu` never sends: what is at that URL is not this relay, or
+the request was not `auu`'s. Nothing was stored.
 
 ## 4. Another relay
 

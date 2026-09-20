@@ -994,8 +994,7 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
 		return
 	}
-	created := mb.Created
-	s.writeJSON(w, http.StatusOK, relayapi.KeysResponse{Bundle: mb.Bundle, Name: mb.Name, Created: &created})
+	s.writeJSON(w, http.StatusOK, relayapi.KeysResponse{Bundle: mb.Bundle, Name: mb.Name, Created: mb.Created})
 }
 
 func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {
@@ -1106,8 +1105,8 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request, body []byte,
 	// stubs answers every row without its envelope, whatever its kind: a
 	// client checking which of the messages it kept are still queued needs
 	// the ids and nothing else, and a mailbox of kept mail would otherwise
-	// be downloaded again on every check. A relay from before it ignores
-	// the parameter and sends the envelopes, which that client discards.
+	// be downloaded again on every check; such a client refuses a stubs
+	// listing that carries an envelope.
 	stubs, err := boolParam(r, "stubs")
 	if err != nil {
 		s.fail(w, http.StatusBadRequest, "bad stubs parameter")

@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 // The relay's refusals, as a client must recognise them. They are constants
@@ -328,12 +326,4 @@ func ClassifyAnchorError(err error, pinned bool) error {
 func RelayExpired(err error) bool {
 	var invalid x509.CertificateInvalidError
 	return errors.As(err, &invalid) && invalid.Reason == x509.Expired
-}
-
-// TokenInHeader reports whether the relay refused a request because an
-// enrolment token arrived as a header. It means this client is older than the
-// relay, which is worth saying rather than leaving as a bare 400.
-func TokenInHeader(err error) bool {
-	var httpErr *HTTPError
-	return errors.As(err, &httpErr) && strings.Contains(httpErr.Message, relayapi.MsgTokenInHeader)
 }

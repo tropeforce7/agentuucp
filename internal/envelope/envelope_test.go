@@ -468,35 +468,6 @@ func TestSealForCarriesTheChannelUnderTheSignature(t *testing.T) {
 	}
 }
 
-// A receiver from before channels reads the sealed record with plain
-// json.Unmarshal, which ignores channel: the message opens and is filed as
-// it always was, under nothing. The old shape is written out, not derived.
-func TestAReceiverFromBeforeChannelsIgnoresTheInnerChannel(t *testing.T) {
-	alice, bob := pair(t)
-	_, inner, err := SealFor(alice, bob.Public(), "bug reports", body(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := json.Marshal(inner)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var old struct {
-		From       string       `json:"from"`
-		FromBundle []byte       `json:"from_bundle"`
-		To         string       `json:"to"`
-		ID         string       `json:"id"`
-		Time       time.Time    `json:"time"`
-		Body       message.Body `json:"body"`
-	}
-	if err := json.Unmarshal(raw, &old); err != nil {
-		t.Fatalf("an old receiver cannot read the record: %v", err)
-	}
-	if old.ID != inner.ID || old.From != alice.Fingerprint() || old.Body.Subject != inner.Body.Subject {
-		t.Fatalf("an old receiver read %+v", old)
-	}
-}
-
 // The message id becomes the record's file name, and Open is where the
 // receiver learns it. An inner whose id is a path, empty or the wrong
 // length is malformed here: signed by its sender, sealed to us, and still

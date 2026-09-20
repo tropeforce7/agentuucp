@@ -111,11 +111,11 @@ type Envelope struct {
 	CT []byte `json:"ct"`
 	// Ch is the recipient's channel the message is posted to, in the clear
 	// so the relay can route by it and refuse a name the recipient has not
-	// published or a period that is not open. Absent means default. It is
-	// not covered by the seal; the inner record carries the same name
-	// under the signature, and a receiver treats a disagreement as a
-	// message the relay misfiled. A relay from before channels stores it
-	// unread.
+	// published or a period that is not open. Absent means default: the
+	// sender's rule, a message for default carrying nothing. It is not
+	// covered by the seal; the inner record carries the same name under
+	// the signature, and a receiver treats a disagreement as a message
+	// the relay misfiled.
 	Ch string `json:"ch,omitempty"`
 }
 
@@ -129,8 +129,7 @@ type Inner struct {
 	Body       message.Body `json:"body"`
 	// Channel is the name the sender sealed the message for, absent for
 	// default; the receiver checks it against the outer Ch and the channel
-	// the relay listed the message under. A receiver from before channels
-	// ignores it.
+	// the relay listed the message under.
 	Channel string `json:"channel,omitempty"`
 }
 

@@ -200,14 +200,15 @@ func pinTransport(cfg *tls.Config) {
 	cfg.CurvePreferences = []tls.CurveID{tls.X25519MLKEM768}
 }
 
-// NoPQTransportError is a relay that would not make the pinned handshake:
-// one older than v0.7.0, or one behind a TLS terminator that does not offer
-// X25519MLKEM768 or TLS 1.3. Go's own words for it are an alert, "handshake
-// failure" or "protocol version not supported", and are kept in brackets.
+// NoPQTransportError is a far end that would not make the pinned
+// handshake: something that is not this relay, or a TLS terminator in
+// front of it that does not offer X25519MLKEM768 or TLS 1.3. Go's own
+// words for it are an alert, "handshake failure" or "protocol version not
+// supported", and are kept in brackets.
 type NoPQTransportError struct{ Err error }
 
 func (e *NoPQTransportError) Error() string {
-	return "no TLS 1.3 with the post-quantum key exchange; the relay is older than v0.7.0 or behind a TLS terminator that lacks X25519MLKEM768 (" + e.Err.Error() + ")"
+	return "no TLS 1.3 with the post-quantum key exchange; what answered is not this relay, or a TLS terminator in front of it lacks X25519MLKEM768 (" + e.Err.Error() + ")"
 }
 
 func (e *NoPQTransportError) Unwrap() error { return e.Err }
@@ -548,8 +549,7 @@ func (c *Client) MLDSA(ctx context.Context) (int, error) {
 // registered under, and when.
 type Lookup struct {
 	Public *identity.Public
-	// Registered is when the mailbox was created. Zero when the relay did
-	// not say, which a relay from before the field does not.
+	// Registered is when the mailbox was created, as the relay said.
 	Registered time.Time
 }
 
@@ -564,6 +564,9 @@ func (c *Client) Lookup(ctx context.Context, query string) (*Lookup, error) {
 	if err := c.do(ctx, "GET", "/v1/keys/"+query, nil, &resp, nil); err != nil {
 		return nil, err
 	}
+	if err := c.checkKeys(&resp); err != nil {
+		return nil, err
+	}
 	pub, err := identity.ParseBundle(resp.Bundle)
 	if err != nil {
 		return nil, fmt.Errorf("relay returned a malformed bundle: %w", err)
@@ -574,16 +577,12 @@ func (c *Client) Lookup(ctx context.Context, query string) (*Lookup, error) {
 		return nil, errors.New("relay returned a bundle for a different fingerprint")
 	}
 	// The relay's word for the name, made printable before it reaches
-	// anything that prints: a relay from before names had a rule could hold
-	// an escape sequence, and the export line built from this is what the
+	// anything that prints: a relay that is not ours could answer an
+	// escape sequence, and the export line built from this is what the
 	// person is shown to paste. A name that had to be escaped will not
 	// parse as an export line, which is right: it was never a name.
 	pub.Name = identity.Printable(resp.Name)
-	out := &Lookup{Public: pub}
-	if resp.Created != nil {
-		out.Registered = *resp.Created
-	}
-	return out, nil
+	return &Lookup{Public: pub, Registered: resp.Created}, nil
 }
 
 // FetchKey looks a bundle up on the relay by its whole fingerprint. The caller
@@ -665,17 +664,11 @@ func (c *Client) Directory(ctx context.Context, fp string) (*DirectoryResult, er
 }
 
 // SetAllowlist replaces this mailbox's allow list on the relay: the
-// document bytes as signed and the signature over them, which a relay of
-// this version verifies against this identity's registered key, and the
-// senders as a plain array beside them, which a relay from before signed
-// lists reads instead. The array is never left out: an old relay reading
-// none would clear the list in silence. A relay holding a list issued no
-// earlier answers 409, which comes back as an HTTPError.
-func (c *Client) SetAllowlist(ctx context.Context, senders []string, doc, sig []byte) error {
-	if senders == nil {
-		senders = []string{}
-	}
-	body, err := documentBody("the allow list", relayapi.AllowRequest{Allow: senders, Document: doc, Signature: sig})
+// document bytes as signed and the signature over them, which the relay
+// verifies against this identity's registered key. A relay holding a list
+// issued no earlier answers 409, which comes back as an HTTPError.
+func (c *Client) SetAllowlist(ctx context.Context, doc, sig []byte) error {
+	body, err := documentBody("the allow list", relayapi.AllowRequest{Document: doc, Signature: sig})
 	if err != nil {
 		return err
 	}
@@ -750,13 +743,9 @@ type Message struct {
 	// Raw is the envelope as the relay served it, byte for byte, for a
 	// receiver that keeps what it could not open. Nil for a stream.
 	Raw []byte
-	// Channel is the name the relay listed the message under, and
-	// ChannelKnown whether it said: a relay from before channels omits the
-	// field, and then the sealed record alone says where the message goes.
-	// A relay that has channels always names one, so an empty name is an
-	// omitted field and never a relay's answer.
-	Channel      string
-	ChannelKnown bool
+	// Channel is the name the relay listed the message under, always
+	// said: a listing whose row names none is refused before it is read.
+	Channel string
 }
 
 // IsStream reports whether this message must be fetched as a stream.
@@ -790,7 +779,7 @@ type ListRequest struct {
 	// after After, or a watched directory is replaced, or Wait elapses.
 	// Zero asks for no hold. Above relayapi.MaxWait it is clamped, here
 	// as on the relay, so the request says what the relay will do. A relay
-	// from before the hold ignores it and answers at once.
+	// over its cap on holds answers at once, and nothing here can tell.
 	Wait time.Duration
 	// Peers names the peers whose channel directories to watch, by
 	// fingerprint, each with the issue time of the directory held for
@@ -801,8 +790,8 @@ type ListRequest struct {
 	Peers map[string]time.Time
 	// Stubs asks for the rows without their envelopes, for a caller that
 	// wants the ids and nothing else — checking which of the messages it
-	// left on the relay are still queued. A relay from before it answers
-	// with the envelopes, which such a caller discards.
+	// left on the relay are still queued. A listing asked for as stubs
+	// whose row carries an envelope is refused by name.
 	Stubs bool
 }
 
@@ -857,18 +846,13 @@ func (c *Client) ListWait(ctx context.Context, req ListRequest) (Listing, error)
 	if err := c.doWithin(ctx, "GET", path, nil, &resp, nil, hold); err != nil {
 		return Listing{}, err
 	}
-	if err := c.checkListing(&resp); err != nil {
+	if err := c.checkListing(&resp, req.Stubs); err != nil {
 		return Listing{}, err
 	}
 	out := make([]Message, 0, len(resp.Messages))
 	for _, m := range resp.Messages {
-		kind := m.Kind
-		if kind == "" {
-			kind = relayapi.KindEnvelope
-		}
-		msg := Message{ID: m.ID, Received: m.Received, Kind: kind, Size: m.Size,
-			Channel: m.Channel, ChannelKnown: m.Channel != ""}
-		if kind != relayapi.KindStream {
+		msg := Message{ID: m.ID, Received: m.Received, Kind: m.Kind, Size: m.Size, Channel: m.Channel}
+		if m.Kind != relayapi.KindStream {
 			msg.Raw = []byte(m.Envelope)
 			var env envelope.Envelope
 			if err := json.Unmarshal(m.Envelope, &env); err == nil {

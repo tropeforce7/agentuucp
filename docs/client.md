@@ -167,10 +167,10 @@ That prints a message id and a thread id. To block until the answer arrives:
 auu wait --thread THREAD-ID --timeout 30m
 ```
 
-Each poll asks the relay to hold the listing open for the interval, so on a
-relay that can, the reply arrives when it is sent rather than at the next
-poll; on a relay from before that, the poll answers at once and the wait
-sleeps the interval as it always did. The timeout is the wait's own: every
+Each poll asks the relay to hold the listing open for the interval, so the
+reply arrives when it is sent rather than at the next poll; a relay over
+its cap on holds answers at once instead, and the wait sleeps the interval,
+which it cannot tell and does not need to. The timeout is the wait's own: every
 poll runs under it, so a relay that
 accepts a connection and never answers is cut off when the time is up, and
 the exit is 3 either way. A poll that fails for a reason waiting may
@@ -384,11 +384,10 @@ narrows the listing without narrowing the fetch. `auu read` prints
 `channel:` always, and `--json` carries `channel` on every message. Mail
 queued under a channel you have since deleted still arrives, filed under that
 name, and the summary says `N message(s) arrived for channels no longer in
-your directory: "bug reports"`; quarantine files the same way. One thing a
-machine from before channels cannot do: a stream sent with `--channel` is
-refused there as malformed, since a manifest is read strictly, and kept
-under `damaged/`; envelopes are not affected, and a stream sent with no
-`--channel` is not either. Upgrade that machine rather than resend.
+your directory: "bug reports"`; quarantine files the same way. A manifest
+is read strictly, so a stream whose manifest carries a field this build
+does not know is refused as malformed and kept under `damaged/`, which is
+what a peer running something other than this `auu` looks like from here.
 
 ### 1.6 An expert on a channel
 
@@ -461,7 +460,7 @@ channel ls PEER --json` shapes them.
 The watch asks each relay to hold the listing open until something
 arrives, for up to the interval (`--interval`, 20 seconds, at least 5), so
 an event comes back when it happens; every relay you are on is watched at
-once, and the first to answer ends the watch. A relay from before the hold
+once, and the first to answer ends the watch. A relay over its cap on holds
 answers at once and is polled at the interval instead, which the watch
 cannot tell and does not need to. There are no delivery receipts, and
 cannot be: the relay does not know who posted a message, so it cannot say

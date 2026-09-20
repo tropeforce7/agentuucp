@@ -3,7 +3,6 @@ package auu
 import (
 	"context"
 	"encoding/json"
-	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
@@ -395,50 +394,6 @@ func TestAWatchWithFetchDeliversAndWithoutItMovesNothing(t *testing.T) {
 	}
 }
 
-// A relay from before the hold answers at once, and the watch is a poller:
-// the post lands during the pause and is reported at the next interval.
-func TestAWatchPollsAnOldRelayAtItsInterval(t *testing.T) {
-	old := &v5Relay{}
-	srv := httptest.NewServer(old)
-	defer srv.Close()
-	alice := newUser(t, "alice", srv.URL)
-	bob := newUser(t, "bob", srv.URL)
-	alice.run("peers", "add", bob.exportLine())
-	bob.run("peers", "add", alice.exportLine())
-
-	var slept []time.Duration
-	watchSleep = func(_ context.Context, d time.Duration) {
-		slept = append(slept, d)
-		if len(slept) == 1 {
-			alice.run("send", "--to", "bob", "--subject", "later", "at the next poll")
-		}
-	}
-	t.Cleanup(func() { watchSleep = pauseUntil })
-	var out string
-	var err error
-	warning := captureStderr(t, func() { out, err = bob.tryRun("watch", "--json", "--interval", "20s", "--timeout", "1m") })
-	if err != nil || warning != "" {
-		t.Fatalf("watch against an old relay: %v\n%s", err, warning)
-	}
-	var got watchOut
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatal(err)
-	}
-	events := got.messages(t)
-	if len(events) != 1 || events[0].Channel != "default" || events[0].Kind != "envelope" {
-		t.Fatalf("events from an old relay: %s", got.Events)
-	}
-	if len(slept) != 1 || !aboutTheInterval(slept[0], 20*time.Second) {
-		t.Fatalf("slept %v, want the full interval once", slept)
-	}
-	old.mu.Lock()
-	listings := append([]string(nil), old.listings...)
-	old.mu.Unlock()
-	if len(listings) != 2 || !strings.HasSuffix(listings[0], "&wait=20s") || !strings.HasSuffix(listings[1], "&wait=20s") {
-		t.Fatalf("the old relay saw listings %v, want two asking for a hold it ignores", listings)
-	}
-}
-
 // Two relays are watched at once; a post on the second ends the watch and
 // the first's hold is cancelled, which the gate in front of it sees as its
 // context ending.
@@ -814,13 +769,14 @@ func TestWatchFlagsThatMeanNothingAreUsageErrors(t *testing.T) {
 }
 
 // --timeout 0 is no limit: a pause that outlasts a one-second timeout ends
-// a watch under it, and does not end one without.
+// a watch under it, and does not end one without. The interval is the
+// shortest there is, so the relay's hold on the first listing, which
+// nothing arrives during, is five seconds; the post lands in the pause
+// after it, and the next listing reports it.
 func TestAWatchWithNoTimeoutRunsOn(t *testing.T) {
-	old := &v5Relay{}
-	srv := httptest.NewServer(old)
-	defer srv.Close()
-	alice := newUser(t, "alice", srv.URL)
-	bob := newUser(t, "bob", srv.URL)
+	relayURL := startRelay(t)
+	alice := newUser(t, "alice", relayURL)
+	bob := newUser(t, "bob", relayURL)
 	alice.run("peers", "add", bob.exportLine())
 	bob.run("peers", "add", alice.exportLine())
 
@@ -835,14 +791,14 @@ func TestAWatchWithNoTimeoutRunsOn(t *testing.T) {
 	}
 	t.Cleanup(func() { watchSleep = pauseUntil })
 
-	got, err := watchJSONOf(t, bob, "--timeout", "1s", "--interval", "20s")
+	got, err := watchJSONOf(t, bob, "--timeout", "1s", "--interval", "5s")
 	var e *exitError
 	if !asExit(err, &e) || e.code != exitTimeout || len(got.Events) != 0 {
 		t.Fatalf("a 1s timeout outlasted by the pause: %v %s", err, got.Events)
 	}
 	bob.run("inbox")
 	pauses.Store(0)
-	got, err = watchJSONOf(t, bob, "--timeout", "0", "--interval", "20s")
+	got, err = watchJSONOf(t, bob, "--timeout", "0", "--interval", "5s")
 	if err != nil || len(got.messages(t)) != 1 {
 		t.Fatalf("no timeout: %v %s", err, got.Events)
 	}

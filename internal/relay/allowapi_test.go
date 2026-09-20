@@ -13,9 +13,8 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
-// allowReq is what a client of this version sends: the senders as an
-// array for a relay from before signed lists, and the signed document
-// beside it, issued now.
+// allowReq is what a client sends: the signed document and its signature,
+// issued now.
 func (h *harness) allowReq(owner *identity.Identity, senders ...string) relayapi.AllowRequest {
 	h.t.Helper()
 	return h.allowReqAt(owner, time.Now(), senders...)
@@ -24,10 +23,7 @@ func (h *harness) allowReq(owner *identity.Identity, senders ...string) relayapi
 func (h *harness) allowReqAt(owner *identity.Identity, at time.Time, senders ...string) relayapi.AllowRequest {
 	h.t.Helper()
 	_, doc, sig := signedList(h.t, owner, at, senders...)
-	if senders == nil {
-		senders = []string{}
-	}
-	return relayapi.AllowRequest{Allow: senders, Document: doc, Signature: sig}
+	return relayapi.AllowRequest{Document: doc, Signature: sig}
 }
 
 // pushAllow signs a list for owner and PUTs it as the caller.
@@ -59,7 +55,7 @@ func signRawAllow(t *testing.T, id *identity.Identity, d *allowlist.Document) re
 	if err != nil {
 		t.Fatal(err)
 	}
-	return relayapi.AllowRequest{Allow: d.Senders, Document: doc, Signature: mustSign(t, id, append([]byte("ccx-allow-v1"), doc...))}
+	return relayapi.AllowRequest{Document: doc, Signature: mustSign(t, id, append([]byte("ccx-allow-v1"), doc...))}
 }
 
 // listState is what the owner's own listing says the allow list is.
@@ -172,36 +168,41 @@ func TestOnlyTheOwnerPushesAnAllowlist(t *testing.T) {
 		t.Fatalf("a malformed body: %d %s", status, body)
 	}
 
-	// The array alone, as a client from before signed lists sends it: the
-	// sentence that says to update, and nothing stored — not the array,
-	// which would have been the old behaviour, and not an empty list.
-	status, body = h.do(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow",
-		relayapi.AllowRequest{Allow: []string{alice.Fingerprint()}}, nil)
-	if status != http.StatusBadRequest || errorText(t, body) != relayapi.MsgNeedSignedAllowlist {
-		t.Fatalf("an old client's push: %d %s", status, body)
+	// A request with no document: a plain array of senders, which is not
+	// a field the request has, an empty array, and an empty object — each
+	// the sentence saying what was missing, and nothing stored, not the
+	// array and not an empty list.
+	// The sentence is pinned as a person reads it: it names no version.
+	const noDocument = "this relay takes a signed allow list; the request carries no document"
+	if relayapi.MsgNeedSignedAllowlist != noDocument {
+		t.Fatalf("the no-document sentence is %q, want %q", relayapi.MsgNeedSignedAllowlist, noDocument)
 	}
-	if stored() {
-		t.Fatal("an old client's array was stored")
-	}
-	// The old client's clear, likewise.
-	status, body = h.do(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow",
-		relayapi.AllowRequest{Allow: []string{}}, nil)
-	if status != http.StatusBadRequest || errorText(t, body) != relayapi.MsgNeedSignedAllowlist {
-		t.Fatalf("an old client's clear: %d %s", status, body)
+	for _, req := range []string{
+		`{"allow":["` + alice.Fingerprint() + `"]}`,
+		`{"allow":[]}`,
+		`{}`,
+	} {
+		status, body = h.do(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow", []byte(req), nil)
+		if status != http.StatusBadRequest || errorText(t, body) != noDocument {
+			t.Fatalf("a request with no document, %s: %d %s", req, status, body)
+		}
+		if stored() {
+			t.Fatalf("a request with no document, %s, was stored", req)
+		}
 	}
 
 	// Signed by bob's mailbox but under alice's key.
 	doc, _ := json.Marshal(&allowlist.Document{V: 1, Owner: bob.Fingerprint(), Issued: at, Senders: []string{alice.Fingerprint()}})
 	wrongKey := mustSign(t, alice, append([]byte("ccx-allow-v1"), doc...))
 	status, body = h.do(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow",
-		relayapi.AllowRequest{Allow: []string{alice.Fingerprint()}, Document: doc, Signature: wrongKey}, nil)
+		relayapi.AllowRequest{Document: doc, Signature: wrongKey}, nil)
 	if status != http.StatusUnauthorized || errorText(t, body) != "allow list signature does not verify" {
 		t.Fatalf("a list under the wrong key: %d %s", status, body)
 	}
-	// A document with no signature at all: not the old client's sentence,
+	// A document with no signature at all: not the no-document sentence,
 	// since a document was sent, and not stored.
 	status, body = h.do(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow",
-		relayapi.AllowRequest{Allow: []string{alice.Fingerprint()}, Document: doc}, nil)
+		relayapi.AllowRequest{Document: doc}, nil)
 	if status != http.StatusUnauthorized || errorText(t, body) != "allow list signature does not verify" {
 		t.Fatalf("a document with no signature: %d %s", status, body)
 	}
@@ -241,10 +242,15 @@ func TestOnlyTheOwnerPushesAnAllowlist(t *testing.T) {
 		t.Fatal("a refused list was stored")
 	}
 
-	// The good one, stored verbatim; the array beside it is not read.
+	// The good one, stored verbatim; a field the request does not have,
+	// an array of senders beside the pair, is not read.
 	req := h.allowReqAt(bob, at, alice.Fingerprint())
-	req.Allow = []string{strings.Repeat("f", 64)}
-	status, body = h.do(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow", req, nil)
+	withArray, err := json.Marshal(map[string]any{
+		"allow": []string{strings.Repeat("f", 64)}, "document": req.Document, "signature": req.Signature})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, body = h.do(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow", withArray, nil)
 	if status != http.StatusNoContent {
 		t.Fatalf("the owner's push: %d %s", status, body)
 	}
@@ -430,8 +436,8 @@ func TestAnEditedAllowlistRefusesRatherThanAdmits(t *testing.T) {
 	})
 
 	t.Run("the signature blanked", func(t *testing.T) {
-		// The edit that used to read as a list from before signing: it
-		// is refused at once on the relay, not found later on the
+		// The edit that once read as an unsigned list and was honoured:
+		// it is refused at once on the relay, not found later on the
 		// owner's machine.
 		if _, err := h.store.db.Exec(`UPDATE allowlists SET sig = X'' WHERE fp = ?`, fp); err != nil {
 			t.Fatal(err)

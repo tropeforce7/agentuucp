@@ -90,9 +90,9 @@ func keepDamaged(s *store.Store, r *store.Relay, id int64, received time.Time, d
 // the relay filed it where it was sealed for. sealed is the name inside the
 // signature (the inner record's, or the manifest's), outer the name on the
 // envelope the relay read, empty for a stream, which has none; the listing
-// says where the relay put it, when the relay is one that says. Absent
-// means default everywhere. A disagreement is a message the relay filed
-// elsewhere: not obeyed, and said to be.
+// says where the relay put it, and always says. Absent means default for
+// the sealed and the outer names. A disagreement is a message the relay
+// filed elsewhere: not obeyed, and said to be.
 func filedUnder(sealed, outer string, m client.Message) (channel, filedAs string, agrees bool) {
 	name := func(s string) string {
 		if s == "" {
@@ -105,10 +105,10 @@ func filedUnder(sealed, outer string, m client.Message) (channel, filedAs string
 		channel = ""
 	}
 	sealedName := name(sealed)
-	// The listing first, when the relay gave one: it is where the relay
-	// says it put the message. Then the outer name, which is what the
-	// relay routed by; a stream has none.
-	if m.ChannelKnown && m.Channel != sealedName {
+	// The listing first: it is where the relay says it put the message.
+	// Then the outer name, which is what the relay routed by; a stream
+	// has none.
+	if m.Channel != sealedName {
 		return channel, m.Channel, false
 	}
 	if (outer != "" || !m.IsStream()) && name(outer) != sealedName {

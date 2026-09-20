@@ -153,8 +153,8 @@ func TestAStreamWhoseManifestOverstatesItsPayloadIsKeptAndAcknowledged(t *testin
 	}
 }
 
-// TestLookupPrintsAHostileNameEscaped: a relay from before names had a
-// rule can still hold a name with a terminal escape in it. What 'auu
+// TestLookupPrintsAHostileNameEscaped: a relay that is not ours can
+// answer a name with a terminal escape in it. What 'auu
 // lookup' prints — the name, and the export line built from it — carries
 // no byte a terminal would obey, and the export line it prints is not one
 // that parses, since that was never a name.

@@ -19,23 +19,18 @@ func (r *recorder) last() (request string, body []byte) {
 	return r.requests[len(r.requests)-1], r.bodies[len(r.bodies)-1]
 }
 
-// A listing from a relay that names the channel says so; one from a relay
-// from before channels leaves ChannelKnown false, and the sealed record
-// alone decides where the message goes.
-func TestListSaysWhetherTheRelayNamedTheChannel(t *testing.T) {
-	newRelay := map[string]any{
+// A listing names each message's channel, and the name comes back as the
+// relay said it.
+func TestListCarriesTheChannelTheRelayNamed(t *testing.T) {
+	page := map[string]any{
 		"messages": []map[string]any{
 			{"id": 1, "received": "2026-09-13T01:19:29Z", "kind": "envelope", "size": 3, "channel": "bug reports", "envelope": map[string]any{"v": 1, "to": "x", "ct": "AAA"}},
 			{"id": 2, "received": "2026-09-13T01:19:30Z", "kind": "stream", "size": 5000, "channel": "default"},
 		},
 		"queued": 2,
+		"allow":  "none",
 	}
-	oldRelay := map[string]any{
-		"messages": []map[string]any{
-			{"id": 1, "received": "2026-09-13T01:19:29Z", "kind": "envelope", "size": 3, "envelope": map[string]any{"v": 1, "to": "x", "ct": "AAA"}},
-		},
-	}
-	rec := &recorder{replies: []reply{{status: http.StatusOK, body: newRelay}, {status: http.StatusOK, body: oldRelay}}}
+	rec := &recorder{replies: []reply{{status: http.StatusOK, body: page}}}
 	c, _ := newTestClient(t, rec)
 
 	l, err := c.List(context.Background(), 0, 10)
@@ -45,18 +40,11 @@ func TestListSaysWhetherTheRelayNamedTheChannel(t *testing.T) {
 	if len(l.Messages) != 2 {
 		t.Fatalf("listed %d messages, want 2", len(l.Messages))
 	}
-	if m := l.Messages[0]; !m.ChannelKnown || m.Channel != "bug reports" {
+	if m := l.Messages[0]; m.Channel != "bug reports" {
 		t.Fatalf("a named channel came back as %+v", m)
 	}
-	if m := l.Messages[1]; !m.ChannelKnown || m.Channel != "default" || !m.IsStream() {
+	if m := l.Messages[1]; m.Channel != "default" || !m.IsStream() {
 		t.Fatalf("a stream under default came back as %+v", m)
-	}
-	l, err = c.List(context.Background(), 0, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if m := l.Messages[0]; m.ChannelKnown || m.Channel != "" {
-		t.Fatalf("an old relay's message came back as %+v; the relay said nothing", m)
 	}
 }
 

@@ -17,11 +17,10 @@ import (
 // The listing's hold. GET /v1/mailbox/{fp}?wait=D asks the relay to hold
 // the listing open until a message arrives after the id asked from, or a
 // directory the listing watches (peers=FP:ISSUED,...) is replaced, or D
-// elapses, and then to answer the ordinary listing. A relay from before
-// the parameter ignores it and answers at once, so a client that asks is a
-// poller there and never knows it; a client that does not ask sees no
-// change. Over either cap on holds the relay answers at once too: the hold
-// degrades and never refuses.
+// elapses, and then to answer the ordinary listing. A client that does
+// not ask sees no change. Over either cap on holds the relay answers at
+// once: the hold degrades and never refuses, and the client cannot tell a
+// listing answered at once from one whose hold ended with nothing.
 
 // holds counts the listings held open, across the relay and per identity,
 // so both caps are checked and a hold taken in one step.

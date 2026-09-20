@@ -31,10 +31,6 @@ const (
 	// token as a header. The token now travels inside the certificate
 	// request, where the signature covers it.
 	MsgTokenInHeader = "enrolment tokens travel inside the certificate request"
-	// legacyTokenHeader is not read. It is named only so the relay can
-	// recognise a client of the earlier protocol and say so plainly instead
-	// of ignoring the token and refusing for a missing one.
-	legacyTokenHeader = "X-CCX-Token"
 
 	authVersion = "v1"
 	httpDomain  = "ccx-http-v1"
@@ -97,22 +93,19 @@ type (
 	KeysResponse struct {
 		Bundle []byte `json:"bundle"`
 		Name   string `json:"name"`
-		// Created is when the mailbox was registered. Absent from a relay
-		// that predates the field.
-		Created *time.Time `json:"created,omitempty"`
+		// Created is when the mailbox was registered. Always sent; a
+		// client refuses an answer without it by name.
+		Created time.Time `json:"created"`
 	}
 	// AllowRequest carries an owner's allow list: the signed document
 	// bytes exactly as the owner signed them and the signature over them
 	// under the allow list's own domain, which a relay verifies against
-	// the mailbox's registered bundle and stores verbatim. Allow is the
-	// same senders as a plain array, which a relay from before signed
-	// lists reads and a relay of this version ignores: it is still sent
-	// so that an old relay is told the list rather than an empty one,
-	// which would have cleared the mailbox's list in silence.
+	// the mailbox's registered bundle and stores verbatim. A request with
+	// no document is refused with MsgNeedSignedAllowlist and nothing is
+	// stored.
 	AllowRequest struct {
-		Allow     []string `json:"allow"`
-		Document  []byte   `json:"document,omitempty"`
-		Signature []byte   `json:"signature,omitempty"`
+		Document  []byte `json:"document,omitempty"`
+		Signature []byte `json:"signature,omitempty"`
 	}
 	// AllowResponse is a mailbox's allow list as pushed, for its owner
 	// alone: the document and signature verbatim, to verify with the
@@ -151,14 +144,13 @@ type (
 	StoredMessage struct {
 		ID       int64     `json:"id"`
 		Received time.Time `json:"received"`
-		// Kind is envelope or stream. Absent means envelope, so the field is
-		// honest about a relay that predates streams.
-		Kind string `json:"kind,omitempty"`
+		// Kind is envelope or stream, always present; a client refuses a
+		// row without it, or with any other word, by name.
+		Kind string `json:"kind"`
 		Size int64  `json:"size,omitempty"`
-		// Channel is the name the message was posted under, always present
-		// from a relay that has channels, as queued is: absent means the
-		// listing came from a relay from before them, and the client files
-		// by the sealed record alone and says nothing.
+		// Channel is the name the message was posted under, always
+		// present, as queued is; a client holds it to the channel name
+		// rule and refuses a row without it by name.
 		Channel string `json:"channel"`
 		// Envelope is inline for an envelope and omitted for a stream, which
 		// is fetched from its own endpoint.
@@ -171,8 +163,8 @@ type (
 		// relay cannot serve, so an upload still open is not in it.
 		// Always present, so a client can tell an empty page beside a
 		// count above zero, which means its cursor has skipped mail, from
-		// a mailbox that is empty. A relay from before the field omits it,
-		// and a client reads that as nothing to say.
+		// a mailbox that is empty; zero is the count of an empty mailbox,
+		// and a client reads zero as nothing to say.
 		Queued int64 `json:"queued"`
 		// DirectoriesChanged names the watched peers whose directory the
 		// relay holds a newer issue of than the listing's peers parameter
@@ -181,17 +173,18 @@ type (
 		DirectoriesChanged []string `json:"directories_changed,omitempty"`
 		// Allow is the state of the mailbox's allow list as the relay
 		// holds it, one of the Allow* words, so the owner is told when it
-		// is unsigned, missing or no longer verifies. Absent from a relay
-		// that predates signed lists, and the client says nothing then.
-		Allow string `json:"allow,omitempty"`
+		// is unsigned, missing or no longer verifies. Always present; a
+		// client refuses a listing without it, or with any other word, by
+		// name.
+		Allow string `json:"allow"`
 	}
 	HealthResponse struct {
 		OK bool `json:"ok"`
 		// MaxBytes is the relay's max_bytes: the largest envelope it takes
 		// and the budget a listing page follows, so a client can size what
 		// it will hold of a page to the relay it talks to rather than to
-		// the ceiling. Always sent; a health answer without it is a relay
-		// from before this field, refused by name.
+		// the ceiling. Always sent; a health answer without it is refused
+		// by name.
 		MaxBytes int64 `json:"max_bytes"`
 		// MLDSA is the parameter set — 44, 65 or 87 — the relay requires of
 		// a client's certificate key, so a machine can generate the right
@@ -283,10 +276,10 @@ type (
 		QueuedBytes    int64     `json:"queued_bytes"`
 		AllowlistSize  int64     `json:"allowlist_size"`
 		// Allow is the state of the allow list, one of the Allow* words,
-		// or empty for a mailbox that has never pushed one. "broken" is
-		// the word to look for after an incident, and after an upgrade
-		// from before signed lists: a list that does not verify is a row
-		// the relay cannot vouch for, and refuses on.
+		// or empty for a mailbox that has never pushed one, which is a
+		// value and not an absence. "broken" is the word to look for
+		// after an incident: a list that does not verify is a row the
+		// relay cannot vouch for, and refuses on.
 		Allow string `json:"allow,omitempty"`
 		// Channels is how many channels the mailbox's directory lists, zero
 		// for a mailbox with none, which has default by that fact rather
@@ -410,7 +403,7 @@ const (
 // message arrives after the id it asked from, or a watched directory is
 // replaced, or D elapses; a longer D is clamped to MaxWait rather than
 // refused, and a relay already holding as many listings as it allows
-// answers at once, as one from before the hold would. MaxWatchPeers caps
+// answers at once, the hold degrading and never refusing. MaxWatchPeers caps
 // how many peers one listing may watch the directories of, a protocol
 // constant as MaxAllowlist is: the watcher has already fetched each one.
 const (
@@ -419,9 +412,8 @@ const (
 )
 
 // The states of a mailbox's allow list, as the owner's listing and the
-// administrator's record report it. A relay from before signed lists
-// reports none. There is no state for a list that merely lacks a
-// signature: authentication data is signed or it is broken.
+// administrator's record report it. There is no state for a list that
+// merely lacks a signature: authentication data is signed or it is broken.
 const (
 	// AllowSigned is a list the owner signed, which verifies.
 	AllowSigned = "signed"
@@ -434,10 +426,9 @@ const (
 	AllowBroken = "broken"
 )
 
-// MsgNeedSignedAllowlist is the 400 for a client from before signed lists,
-// which sends the array and no document: it says in one sentence what to
-// do, and nothing is stored.
-const MsgNeedSignedAllowlist = "this relay needs a signed allow list; update auu to v0.5.0 or later"
+// MsgNeedSignedAllowlist is the 400 for an allow request with no document:
+// a plain sentence saying what was missing, and nothing is stored.
+const MsgNeedSignedAllowlist = "this relay takes a signed allow list; the request carries no document"
 
 // MaxAllowlist caps the entries in one allow list.
 //
@@ -484,9 +475,9 @@ const FramingAllowance = 1 << 16
 //
 // and the request carries that document base64-encoded beside its
 // signature, 4/3 of it plus the envelope: 565,026 bytes measured. An allow
-// list is the smaller, MaxAllowlist fingerprints listed twice in the
-// request, once plain and once inside the signed document: a document of
-// 67,126 bytes and a request of 156,632. The cap is the round number
+// list is the smaller, MaxAllowlist fingerprints inside the signed
+// document: a document of 67,126 bytes and a request of 89,622. The cap
+// is the round number
 // above the larger, the room being for whitespace inside the signed
 // document — it is whatever bytes the signer's encoder produced, and the
 // signature covers them, so another client may indent it — while the

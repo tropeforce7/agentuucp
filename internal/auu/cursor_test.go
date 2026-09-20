@@ -45,8 +45,9 @@ func (u *user) setCursor(relayName, text string) {
 // A cursor past mail the relay still holds is said to be, with the relay's
 // count, the file and the command that starts again; nothing is acknowledged
 // and the cursor is not written, since only a person can decide the cursor
-// is wrong. A relay from before the count is silence. The container suite's
-// K17 found the mail sitting on the relay with nothing to say so.
+// is wrong. A listing whose count is absent decodes as zero, an empty
+// mailbox, and is silence: absent and zero are one number. The container
+// suite's K17 found the mail sitting on the relay with nothing to say so.
 func TestASkippedMailboxIsSaidToBe(t *testing.T) {
 	relayURL, gate, st := startGatedRelayStore(t)
 	alice := newUser(t, "alice", relayURL)
@@ -208,9 +209,11 @@ func TestASkippedMailboxIsSaidToBe(t *testing.T) {
 		t.Fatalf("payloads left on %s after the trust: %d (%v), want 0", name, n, err)
 	}
 
-	// A relay from before the count: the same mail behind the same cursor,
-	// and nothing to say, since an empty page beside no count is what an
-	// empty mailbox always looked like.
+	// The count left out of the listing: the same mail behind the same
+	// cursor, and nothing to say, since an absent count decodes as zero,
+	// which is an empty mailbox; a count is the one required field whose
+	// absence is not refused, being one number with a value the relay
+	// sends.
 	alice.run("send", "--to", "bob", "--subject", "third", "three")
 	bob.setCursor(name, "999999\n")
 	gate.set("old", -1)
@@ -218,14 +221,14 @@ func TestASkippedMailboxIsSaidToBe(t *testing.T) {
 	var out string
 	stderr = captureStderr(t, func() { out, err = bob.tryRun("inbox", "--json") })
 	if err != nil {
-		t.Fatalf("inbox against an old relay: %v", err)
+		t.Fatalf("inbox against a listing without the count: %v", err)
 	}
 	var in inboxJSON
 	if err := json.Unmarshal([]byte(out), &in); err != nil {
 		t.Fatal(err)
 	}
 	if in.Fetch.Delivered != 0 || in.Fetch.Quarantined != 0 || stderr != "" {
-		t.Fatalf("inbox against an old relay: fetched %+v, stderr %q", in.Fetch, stderr)
+		t.Fatalf("inbox against a listing without the count: fetched %+v, stderr %q", in.Fetch, stderr)
 	}
 	if left, err := st.List(bobFP, 0, 10); err != nil || len(left) != 1 {
 		t.Fatalf("the relay holds %d (%v) after the silent fetch, want 1", len(left), err)

@@ -73,7 +73,7 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 	callTokens := func(c *Client) error { _, err := c.AdminTokens(context.Background(), false); return err }
 	listing := func(set func(l *relayapi.ListResponse, n int64)) func(int64) any {
 		return func(n int64) any {
-			l := relayapi.ListResponse{Messages: []relayapi.StoredMessage{{ID: 1, Size: 10, Kind: relayapi.KindStream}}}
+			l := relayapi.ListResponse{Allow: relayapi.AllowNone, Messages: []relayapi.StoredMessage{{ID: 1, Size: 10, Kind: relayapi.KindStream, Channel: "default"}}}
 			set(&l, n)
 			return l
 		}
@@ -144,8 +144,8 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 			func(c *Client) error { return c.Health(context.Background()) }},
 	}
 	// The health answer's max_bytes: what a listing page follows, held to
-	// [1, MaxBytesCeiling]; zero is a relay from before the field, refused
-	// by name. Read by Health here, and by the first listing, which sizes
+	// [1, MaxBytesCeiling]; zero, which is what an absent field decodes
+	// to, is refused by name. Read by Health here, and by the first listing, which sizes
 	// what the client will hold of a page by it (TestLimitAnAnswerIsHeldToWhatItsRouteHolds).
 	maxBytes := []shape{
 		{"/v1/health", func(n int64) any { return relayapi.HealthResponse{OK: true, MaxBytes: n} },

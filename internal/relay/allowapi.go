@@ -22,13 +22,14 @@ import (
 // handleSetAllow is PUT /v1/mailbox/{fp}/allow, owner only.
 //
 // Order: the caller must be the owner, the body must decode, the body must
-// carry a document at all — a client from before signed lists sends the
-// array alone and is told in one sentence to update, before the mailbox or
-// its bundle is read and with nothing stored — the signature must verify
-// under the mailbox's own key, the document must pass every rule, its owner
-// must be this mailbox, and only then is the store asked, which refuses a
-// list no newer than the one it holds. The array is read by nothing: it is
-// there for a relay from before signed lists.
+// carry a document at all — one with none is told so in one sentence,
+// before the mailbox or its bundle is read and with nothing stored — the
+// signature must verify under the mailbox's own key, the document must
+// pass every rule, its owner must be this mailbox, and only then is the
+// store asked, which refuses a list no newer than the one it holds. The
+// request carries the document and the signature and nothing else; a
+// field the decoder does not know is ignored, and a request of only such
+// fields is one with no document.
 func (s *Server) handleSetAllow(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {
 	fp := r.PathValue("fp")
 	if fp != callerFP {

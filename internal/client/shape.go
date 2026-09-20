@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/clientca"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
@@ -40,7 +41,7 @@ func (c *Client) malformed(answer, field, want string) error {
 }
 
 const (
-	wantMaxBytes    = "the relay's max_bytes (from 1 to 1073741824; a relay from before this field sends none)"
+	wantMaxBytes    = "the relay's max_bytes (from 1 to 1073741824; a health answer without it is refused)"
 	wantFingerprint = "a fingerprint (64 lowercase hex characters)"
 	wantSerial      = "a certificate serial"
 	wantTokenID     = "a token id (32 lowercase hex characters)"
@@ -48,18 +49,25 @@ const (
 	wantCount       = "a count (zero or more)"
 	wantID          = "a message id (one or more)"
 	wantMLDSA       = "an ML-DSA parameter set (44, 65 or 87, or 0 for none)"
+	wantKind        = "a message kind (envelope or stream)"
+	wantChannelName = "a channel name"
+	wantTime        = "a time"
 )
 
 // The enumerated fields of an answer, each held to the set the protocol
 // defines, so that a command prints a word it knows rather than whatever
-// the relay sent. The empty string is allowed where a relay from before
-// the field sends nothing.
+// the relay sent. Nothing on the wire is from before: a field the relay
+// always sends is refused by name when it is absent, which for a word is
+// the empty string. The one empty word that is a value is a mailbox
+// record's allow, empty for a mailbox that has never pushed a list.
 var (
-	registrations = []string{"", relayapi.RegistrationOpen, relayapi.RegistrationToken, relayapi.RegistrationClosed}
-	certModes     = []string{"", relayapi.ClientCertsOff, relayapi.ClientCertsRequired}
-	allowWords    = []string{"", relayapi.AllowSigned, relayapi.AllowNone, relayapi.AllowBroken}
-	tokenUses     = []string{token.UseRegister, token.UseCert}
-	tokenStates   = []string{relayapi.TokenLive, relayapi.TokenSpent, relayapi.TokenRevoked, relayapi.TokenExpired}
+	registrations     = []string{relayapi.RegistrationOpen, relayapi.RegistrationToken, relayapi.RegistrationClosed}
+	certModes         = []string{relayapi.ClientCertsOff, relayapi.ClientCertsRequired}
+	allowWords        = []string{relayapi.AllowSigned, relayapi.AllowNone, relayapi.AllowBroken}
+	mailboxAllowWords = []string{"", relayapi.AllowSigned, relayapi.AllowNone, relayapi.AllowBroken}
+	kinds             = []string{relayapi.KindEnvelope, relayapi.KindStream}
+	tokenUses         = []string{token.UseRegister, token.UseCert}
+	tokenStates       = []string{relayapi.TokenLive, relayapi.TokenSpent, relayapi.TokenRevoked, relayapi.TokenExpired}
 )
 
 // oneOf reports whether v is in the set.
@@ -128,27 +136,54 @@ func (c *Client) checkHealth(h *relayapi.HealthResponse) error {
 	}
 	// max_bytes is what the client sizes a listing page to; a relay's own
 	// is positive and under the ceiling, and a health answer without it
-	// is a relay from before the field.
+	// is refused by name.
 	if h.MaxBytes < 1 || h.MaxBytes > relayapi.MaxBytesCeiling {
 		return c.malformed("the health answer", "max_bytes", wantMaxBytes)
 	}
 	return nil
 }
 
-// checkListing is a page of a mailbox: how much is queued, and each
-// message's id and size.
-func (c *Client) checkListing(page *relayapi.ListResponse) error {
+// checkListing is a page of a mailbox: how much is queued, the state of
+// the allow list as one of its words, and each message's id, size, kind
+// as one of its two words and channel held to the name rule, every one
+// of which the relay always sends and is refused by name when absent. A
+// page asked for as stubs carries no envelope: a row with one is a relay
+// that ignored the parameter, refused by name.
+func (c *Client) checkListing(page *relayapi.ListResponse, stubs bool) error {
 	const answer = "the listing"
 	if err := c.counts(answer, count{"queued", page.Queued}); err != nil {
 		return err
 	}
+	if !oneOf(page.Allow, allowWords) {
+		return c.malformed(answer, "allow", wantOneOf(allowWords))
+	}
 	for i := range page.Messages {
-		if page.Messages[i].ID <= 0 {
+		m := &page.Messages[i]
+		if m.ID <= 0 {
 			return c.malformed(answer, "id", wantID)
 		}
-		if page.Messages[i].Size < 0 {
+		if m.Size < 0 {
 			return c.malformed(answer, "size", wantCount)
 		}
+		if !oneOf(m.Kind, kinds) {
+			return c.malformed(answer, "kind", wantKind)
+		}
+		if err := channels.ValidName(m.Channel); err != nil {
+			return c.malformed(answer, "channel", wantChannelName)
+		}
+		if stubs && len(m.Envelope) != 0 {
+			return c.malformed(answer, "envelope", "absent: a stubs listing carries no envelope")
+		}
+	}
+	return nil
+}
+
+// checkKeys is a lookup's answer: when the mailbox was registered, which
+// the relay always says. The bundle is the caller's to parse, since what
+// it parses to is the answer.
+func (c *Client) checkKeys(k *relayapi.KeysResponse) error {
+	if k.Created.IsZero() {
+		return c.malformed("the lookup", "created", wantTime)
 	}
 	return nil
 }
@@ -225,8 +260,8 @@ func (c *Client) checkMailbox(answer string, m *relayapi.MailboxRecord) error {
 	if !identity.ValidFingerprint(m.FP) {
 		return c.malformed(answer, "fp", wantFingerprint)
 	}
-	if !oneOf(m.Allow, allowWords) {
-		return c.malformed(answer, "allow", wantOneOf(allowWords))
+	if !oneOf(m.Allow, mailboxAllowWords) {
+		return c.malformed(answer, "allow", wantOneOf(mailboxAllowWords))
 	}
 	return c.counts(answer, count{"queued_messages", m.QueuedMessages}, count{"queued_bytes", m.QueuedBytes},
 		count{"channels", m.Channels}, count{"allowlist_size", m.AllowlistSize})

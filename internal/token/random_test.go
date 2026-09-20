@@ -199,8 +199,8 @@ func TestKnownAnswer(t *testing.T) {
 	}
 	// Updated deliberately on 2026-09-08, when ccxt2 added the anchor field:
 	// the whole point of this test is that the format cannot change by
-	// accident, so a change here is a change somebody meant. A ccxt1 vector
-	// is below, and must go on parsing for as long as ccxt1 is read.
+	// accident, so a change here is a change somebody meant. The ccxt1
+	// vector below is the form before it, refused by name.
 	const want = "ccxt2.eyJpZCI6IjAwMDEwMjAzMDQwNTA2MDcwODA5MGEwYjBjMGQwZTBmIiwiaXNzdWVyIjoi"
 	if !strings.HasPrefix(raw, want) {
 		t.Fatalf("the token format has changed.\n got %s\nwant it to start %s", raw, want)
@@ -225,10 +225,11 @@ func TestKnownAnswer(t *testing.T) {
 	}
 }
 
-// TestALegacyKnownAnswerStillParses pins a ccxt1 token exactly as one handed
-// out before anchors existed. It must go on parsing for as long as ccxt1 is
-// read, which is what makes the format change additive rather than a break.
-func TestALegacyKnownAnswerStillParses(t *testing.T) {
+// TestAnOlderKnownAnswerIsRefused pins a ccxt1 token exactly as one was
+// handed out before the anchor, and shows it refused by name: nothing on
+// the wire is from before, and the sentence tells its holder to ask for a
+// new one.
+func TestAnOlderKnownAnswerIsRefused(t *testing.T) {
 	seed := make([]byte, 32)
 	for i := range seed {
 		seed[i] = byte(i)
@@ -242,22 +243,12 @@ func TestALegacyKnownAnswerStillParses(t *testing.T) {
 		`"issuer":"` + id.Fingerprint() + `",` +
 		`"relay":"https://relay.example.com","use":"register","subject":"",` +
 		`"note":"known answer","not_before":1700000000,"not_after":1700086400,"uses":1}`)
-	raw := LegacyPrefix + "." +
+	raw := "ccxt1." +
 		base64.RawURLEncoding.EncodeToString(payload) + "." +
 		base64.RawURLEncoding.EncodeToString(mustSign(t, id, signingBytes(payload)))
 
-	u, err := Parse(raw)
-	if err != nil {
-		t.Fatalf("a ccxt1 token no longer parses: %v", err)
-	}
-	c, err := u.Verify(id.Public(), time.Unix(1700000001, 0), relayapi.MaxSkew)
-	if err != nil {
-		t.Fatalf("a ccxt1 token no longer verifies: %v", err)
-	}
-	if c.Anchor != "" {
-		t.Errorf("a ccxt1 token produced anchor %q", c.Anchor)
-	}
-	if c.Note != "known answer" || c.Uses != 1 {
-		t.Errorf("claims did not survive: %+v", c)
+	_, err = Parse(raw)
+	if !errors.Is(err, ErrForm) || !strings.Contains(err.Error(), "this token is of an older form, ccxt1, which pins no trust anchor; ask for a new one to be issued") {
+		t.Fatalf("a ccxt1 token: %v; want it refused by name", err)
 	}
 }

@@ -280,7 +280,7 @@ own line for each round that did something, and nothing for a quiet one.
 `kept` and `channels_gone` (when set); `relays`, a list of `relay`, `url`,
 the same fetch counts, `queued` (what that relay still holds), `allow`
 (the state of your allow list there: `signed`, `none` or
-`broken`; absent from a relay from before signed lists) and `error` (when
+`broken`) and `error` (when
 set); and `messages`, each `id`, `thread`, `in_reply_to` (when set),
 `type`, `subject`, `from`, `from_name`, `time`, `received`, `read`, `box`,
 `thread_subject` (only where the whole message is printed: the subject the
@@ -413,10 +413,12 @@ A refused send names what to change, and nothing was queued:
   window; a stream has no other clock, and the next attempt asks the relay
   where its copy ends (`auu send --resume`), the next fetch resumes the
   download by range.
-- `malformed answer from the relay at URL: in the health answer, max_bytes
-  is not the relay's max_bytes (...)` — a relay from before this version,
-  which does not say its max_bytes; `auu` sizes a listing page by it and
-  refuses a relay that cannot say. Its operator updates the relay.
+- `malformed answer from the relay at URL: in ANSWER, FIELD is not ...;
+  nothing of the answer was used` — the relay's answer lacks a field every
+  relay sends, or carries one outside its shape; nothing on the wire is
+  from before, so `auu` refuses the answer whole rather than reading the
+  absence as an older relay. What is at URL is not this relay, or is
+  damaged; its operator looks.
 
 Anywhere:
 
@@ -447,14 +449,13 @@ about your own allow list on one relay; the exit code is the run's own:
 - `your allow list on RELAY does not verify, so nobody can post to you
   there; run auu allow push, and if you did not change it, tell the
   relay's operator` — the list on the relay is not what was signed, or has
-  no signature at all (a relay upgraded from before v0.5.0 converts a list
-  into such a row), and every post to the mailbox is refused until the
+  no signature at all, and every post to the mailbox is refused until the
   push; if the user did not
   change it, it was edited on the relay's host, which is the operator's
   incident.
-- `this relay needs a signed allow list; update auu to v0.5.0 or later` —
-  a relay refusing `allow push` or `allow clear` from an `auu` older than
-  the relay; nothing was stored, and the update is the whole fix.
+- `this relay takes a signed allow list; the request carries no document`
+  — a relay refusing an allow request with no signed document in it, which
+  no `auu` of this version sends; nothing was stored.
 
 Certificates, when a relay requires them:
 

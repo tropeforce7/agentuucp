@@ -165,9 +165,8 @@ func span(marked map[int64][]record, behind []int64) (from, to int64) {
 }
 
 // idsOnRelay is which of the ids in a span the relay still holds, listed
-// without the envelopes. A relay from before stubs answers with them,
-// which are read and dropped: correct, slower, and the only cost of an old
-// relay here.
+// without the envelopes; a listing that carries one anyway is refused by
+// the client as a relay that ignored the parameter.
 func idsOnRelay(ctx context.Context, c *client.Client, from, to int64) (map[int64]bool, error) {
 	there := map[int64]bool{}
 	for after := from; ; {

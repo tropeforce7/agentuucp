@@ -81,7 +81,7 @@ func cmdAllow(args []string) error {
 		if err != nil {
 			return err
 		}
-		err = c.SetAllowlist(ctx(), fps, doc, sig)
+		err = c.SetAllowlist(ctx(), doc, sig)
 		var httpErr *client.HTTPError
 		if errors.As(err, &httpErr) && httpErr.Status == http.StatusConflict {
 			// Another machine of this identity pushed a list issued later
@@ -236,8 +236,8 @@ func printAllowShow(one allowShowJSON) {
 // allowWarning is what an owner is told about the state of their list on
 // one relay, or nothing. signed is nothing; none is nothing unless this
 // machine pushed a list there, in which case the relay has lost it; broken
-// is a list that refuses everyone, a row from before signed lists included.
-// A word this build does not know is nothing to say.
+// is a list that refuses everyone. The listing's word is one of the three
+// by the time it reaches here, the client having refused any other.
 func allowWarning(relay, state string, pushed time.Time, wasPushed bool) string {
 	switch state {
 	case relayapi.AllowBroken:
@@ -252,10 +252,9 @@ func allowWarning(relay, state string, pushed time.Time, wasPushed bool) string 
 }
 
 // warnAllowState says, on stderr, what a fetch's listing said about this
-// identity's allow list on one relay, when there is something to say. A
-// relay from before signed lists says nothing, and so is nothing here.
+// identity's allow list on one relay, when there is something to say.
 func warnAllowState(s *store.Store, r *store.Relay, state string) error {
-	if state == "" || state == relayapi.AllowSigned {
+	if state == relayapi.AllowSigned {
 		return nil
 	}
 	pushed, wasPushed, err := s.AllowPushed(r)

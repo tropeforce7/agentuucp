@@ -219,8 +219,8 @@ func TestAnchorPinKeepsTheIdentity(t *testing.T) {
 	}
 }
 
-// A relay that will not make the pinned handshake — one older than v0.7.0,
-// or behind a terminator without the hybrid — is named in one sentence by
+// A far end that will not make the pinned handshake — not this relay, or
+// behind a terminator without the hybrid — is named in one sentence by
 // the first command a new user runs, and by any command after, rather
 // than by Go's alert alone.
 func TestARelayWithoutThePostQuantumHandshakeIsNamed(t *testing.T) {
@@ -235,7 +235,7 @@ func TestARelayWithoutThePostQuantumHandshakeIsNamed(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A relay serving only X25519: the shape of a terminator without the
-	// hybrid in front of a relay, or of a relay from before the pin.
+	// hybrid in front of a relay, or of something that is not this relay.
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216}`))
 	}))
@@ -244,7 +244,7 @@ func TestARelayWithoutThePostQuantumHandshakeIsNamed(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	u := &user{t: t, home: t.TempDir()}
-	const want = "no TLS 1.3 with the post-quantum key exchange; the relay is older than v0.7.0 or behind a TLS terminator that lacks X25519MLKEM768"
+	const want = "no TLS 1.3 with the post-quantum key exchange; what answered is not this relay, or a TLS terminator in front of it lacks X25519MLKEM768"
 	_, err = u.tryRun("init", "--name", "alice", "--relay", srv.URL, "--anchor", bundle.AnchorSPKI)
 	if err == nil || !strings.Contains(err.Error(), srv.URL+": "+want) {
 		t.Fatalf("init against a relay without the hybrid: %v", err)

@@ -762,11 +762,11 @@ func TestMoreThanMaxWatchPeersIsRefused(t *testing.T) {
 	}
 }
 
-// A listing that asks for nothing new is what it was: the same bytes as
-// the v5 client reads in TestAnOldClientReadsThisRelaysAnswers, but for
-// the one field every listing now carries, the state of the owner's allow
-// list, which a client from before it does not read; and a watch that
-// finds nothing changed adds nothing to them.
+// A listing that asks for nothing new is what it was: the same bytes
+// whether or not wait, stubs or peers is asked for as nothing, and a
+// watch that finds nothing changed adds nothing to them. The shape is
+// written out here rather than taken from relayapi, so a field added to
+// the response type cannot add itself to both sides of the comparison.
 func TestAListingWithoutWaitIsUnchanged(t *testing.T) {
 	h := newHarness(t, Config{})
 	people := ids(t, "alice", "bob")
@@ -780,23 +780,20 @@ func TestAListingWithoutWaitIsUnchanged(t *testing.T) {
 	if err != nil || len(row.Rows) != 1 {
 		t.Fatalf("the row: %v %+v", err, row)
 	}
-	// The shape as the client from before the hold reads it, written out
-	// here rather than taken from relayapi, so a field added to the
-	// response type cannot add itself to both sides of the comparison.
-	type v6Message struct {
+	type listedMessage struct {
 		ID       int64           `json:"id"`
 		Received time.Time       `json:"received"`
-		Kind     string          `json:"kind,omitempty"`
+		Kind     string          `json:"kind"`
 		Size     int64           `json:"size,omitempty"`
 		Channel  string          `json:"channel"`
 		Envelope json.RawMessage `json:"envelope,omitempty"`
 	}
 	want, err := json.Marshal(struct {
-		Messages []v6Message `json:"messages"`
-		Queued   int64       `json:"queued"`
-		Allow    string      `json:"allow"`
+		Messages []listedMessage `json:"messages"`
+		Queued   int64           `json:"queued"`
+		Allow    string          `json:"allow"`
 	}{
-		Messages: []v6Message{{
+		Messages: []listedMessage{{
 			ID: row.Rows[0].ID, Received: row.Rows[0].Received, Kind: row.Rows[0].Kind,
 			Size: row.Rows[0].Size, Channel: row.Rows[0].Channel, Envelope: json.RawMessage(row.Rows[0].Envelope),
 		}},

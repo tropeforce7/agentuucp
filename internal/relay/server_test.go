@@ -323,7 +323,7 @@ func TestCannotReadAnotherMailbox(t *testing.T) {
 		t.Fatalf("alice deleted from bob's mailbox: status %d", status)
 	}
 	if status, _ := h.do(alice, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow",
-		relayapi.AllowRequest{Allow: nil}, nil); status != http.StatusForbidden {
+		relayapi.AllowRequest{}, nil); status != http.StatusForbidden {
 		t.Fatalf("alice rewrote bob's allowlist: status %d", status)
 	}
 }
@@ -413,7 +413,7 @@ func TestKeysLookupAndHealth(t *testing.T) {
 	if pub.Fingerprint() != alice.Fingerprint() {
 		t.Fatal("keys lookup returned the wrong bundle")
 	}
-	if keys.Created == nil || time.Since(*keys.Created) > time.Minute {
+	if keys.Created.IsZero() || time.Since(keys.Created) > time.Minute {
 		t.Fatalf("the lookup does not say when the mailbox was registered: %v", keys.Created)
 	}
 

@@ -27,8 +27,8 @@ import (
 
 // waitGate sits in front of a real relay and misbehaves on the mailbox list
 // the way a relay in trouble does: it hangs without answering, drops the
-// connection, answers a status, or answers as a relay from before the list
-// carried a count. Everything else passes through, so the users behind it
+// connection, answers a status, or answers the listing with its count
+// taken out. Everything else passes through, so the users behind it
 // are real and so is the thread they wait on.
 type waitGate struct {
 	inner http.Handler
@@ -156,8 +156,8 @@ func (g *waitGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	case "old":
-		// The real relay's answer with the count taken out: exactly what a
-		// relay from before the field says, mail and all.
+		// The real relay's answer with the count taken out, mail and all;
+		// the client reads an absent count as zero.
 		rec := httptest.NewRecorder()
 		g.inner.ServeHTTP(rec, r)
 		var answer map[string]json.RawMessage
@@ -752,67 +752,6 @@ func TestWaitEndsWhenTheReplyArrivesDuringTheHold(t *testing.T) {
 	}
 	if held := time.Duration(gate.held.Load()); held < 150*time.Millisecond {
 		t.Fatalf("the relay answered the held listing in %s; it was not held", held)
-	}
-}
-
-// Against a relay from before the hold — the canned v5 relay, which reads
-// after and limit from a listing and nothing else — a wait is what it always
-// was: the poll answers at once and empty, the wait sleeps the interval,
-// and the reply is found at the next poll. The hold is asked for and
-// ignored, and nothing says so.
-func TestWaitPollsAnOldRelayAtItsInterval(t *testing.T) {
-	old := &v5Relay{}
-	srv := httptest.NewServer(old)
-	defer srv.Close()
-	alice := newUser(t, "alice", srv.URL)
-	bob := newUser(t, "bob", srv.URL)
-	alice.run("peers", "add", bob.exportLine())
-	bob.run("peers", "add", alice.exportLine())
-	var sent sentJSON
-	if err := json.Unmarshal([]byte(alice.run("send", "--to", "bob", "--subject", "waiting", "--json", "reply when you can")), &sent); err != nil {
-		t.Fatal(err)
-	}
-	var inbox inboxJSON
-	if err := json.Unmarshal([]byte(bob.run("inbox", "--json")), &inbox); err != nil {
-		t.Fatal(err)
-	}
-
-	// The reply lands during the pause, which is where a reply lands on a
-	// relay that answers at once.
-	var slept []time.Duration
-	waitSleep = func(d time.Duration) {
-		slept = append(slept, d)
-		if len(slept) == 1 {
-			bob.run("reply", inbox.Messages[0].ID, "here it is")
-		}
-	}
-	t.Cleanup(func() { waitSleep = time.Sleep })
-	var out string
-	warning := captureStderr(t, func() {
-		out = alice.run("wait", "--thread", sent.Thread, "--timeout", "1m", "--interval", "20s", "--json")
-	})
-	var got waitJSON
-	if err := json.Unmarshal([]byte(out), &got); err != nil || !got.Found || got.Message.Subject != "waiting" {
-		t.Fatalf("wait --json: %v %s", err, out)
-	}
-	if warning != "" {
-		t.Fatalf("a wait against an old relay said something:\n%s", warning)
-	}
-	if len(slept) != 1 || !aboutTheInterval(slept[0], 20*time.Second) {
-		t.Fatalf("slept %v, want the full 20s interval once, between the empty poll and the one that found the reply", slept)
-	}
-	old.mu.Lock()
-	listings := append([]string(nil), old.listings...)
-	old.mu.Unlock()
-	// After bob's inbox and its refresh: alice's two polls, each asking on
-	// its first page for the hold the relay does not know; the second
-	// poll's second page, which asks for no hold, since a page after the
-	// first has mail to fetch and nothing to wait for; and that poll's
-	// refresh of the reply it kept, which asks for stubs the relay does
-	// not know either, and reads the envelopes it sends instead.
-	if n := len(listings); n < 4 || strings.Join(listings[n-4:], " ") !=
-		"after=0&limit=200&wait=20s after=0&limit=200&wait=20s after=2&limit=200 after=1&limit=200&stubs=1" {
-		t.Fatalf("the old relay saw listings %v", listings)
 	}
 }
 

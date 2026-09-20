@@ -92,8 +92,7 @@ type relayFetch struct {
 	// which 'auu rm' is what removes.
 	Queued int64 `json:"queued"`
 	// Allow is the state of this identity's allow list on the relay, as
-	// the relay said it: signed, none or broken. Absent from a
-	// relay from before signed lists.
+	// the relay said it: signed, none or broken.
 	Allow string `json:"allow,omitempty"`
 	Error string `json:"error,omitempty"`
 }
@@ -124,7 +123,7 @@ type relaySaid struct {
 // the relay to hold that page open until something arrives, so a reply
 // comes back when it is sent rather than at the next poll; every page
 // after the first has mail to fetch, and a drain asks for no hold at all.
-// A relay from before the hold answers at once, and nothing here can tell.
+// A relay over its cap on holds answers at once, and nothing here can tell.
 func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay, hold time.Duration) (fetchResult, relaySaid, error) {
 	// The local directory, for saying which delivered mail was for a
 	// channel no longer in it. Read through the damaged path: a file this
@@ -198,9 +197,9 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 			// Nothing after the cursor, and yet the relay holds mail: the
 			// cursor is past it. The relay says how many, the sentence
 			// names the file, and nothing here is touched, since only a
-			// person can decide the cursor is wrong. A relay from before
-			// the count says zero, which is silence. The container suite's
-			// K17 found mail sitting on the relay with nothing to say so.
+			// person can decide the cursor is wrong. Zero is an empty
+			// mailbox, which is silence. The container suite's K17 found
+			// mail sitting on the relay with nothing to say so.
 			//
 			// Less what this machine left there on purpose: mail fetched
 			// from a channel set to keep, a stranger's stream quarantined
@@ -965,9 +964,8 @@ func cmdWait(args []string) error {
 		)
 		began := time.Now()
 		// Each poll asks the relay to hold its first listing open, so a
-		// reply arrives when it is sent; a relay from before the hold
-		// answers at once and the poll sleeps the interval as it always
-		// did.
+		// reply arrives when it is sent; a relay over its cap on holds
+		// answers at once and the poll sleeps the interval.
 		hold := holdFor(*interval, deadline)
 		for _, r := range relays {
 			c, err := dial(s, id, r)

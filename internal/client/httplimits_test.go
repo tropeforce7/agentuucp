@@ -159,6 +159,7 @@ func TestLimitAnAnswerIsHeldToWhatItsRouteHolds(t *testing.T) {
 			"messages": []map[string]any{{"id": 1, "received": "2026-09-20T00:00:00Z", "kind": "envelope",
 				"size": page.Load(), "channel": "default", "envelope": map[string]any{"v": 1, "to": "x", "ct": strings.Repeat("A", int(page.Load()))}}},
 			"queued": 1,
+			"allow":  "none",
 		})
 	}))
 	t.Cleanup(srv.Close)
@@ -268,7 +269,7 @@ func TestLimitAStreamAnswerIsHeldTo64KiB(t *testing.T) {
 // TestLimitADocumentIsHeldToTheCapBeforeThePut: the client holds the two
 // owner-signed documents' requests to relayapi.MaxDocumentBytes before a
 // byte goes on the wire. A directory and an allow list at every maximum,
-// marshalled as the client marshals them (565,026 and 156,632 bytes), are
+// marshalled as the client marshals them (565,026 and 89,622 bytes), are
 // sent; a request one byte over the cap is refused here with the bytes and
 // the cap in the sentence and the relay sees nothing of it.
 func TestLimitADocumentIsHeldToTheCapBeforeThePut(t *testing.T) {
@@ -315,7 +316,7 @@ func TestLimitADocumentIsHeldToTheCapBeforeThePut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.SetAllowlist(context.Background(), senders, adoc, asig); err != nil {
+	if err := c.SetAllowlist(context.Background(), adoc, asig); err != nil {
 		t.Fatalf("an allow list at every maximum: %v; want it sent", err)
 	}
 	if n := puts.Load(); n != 2 {
@@ -354,7 +355,7 @@ func TestLimitADocumentIsHeldToTheCapBeforeThePut(t *testing.T) {
 		}
 	}
 	over(t, "the directory", func(d []byte) error { return c.SetDirectory(context.Background(), d, []byte("s")) })
-	over(t, "the allow list", func(d []byte) error { return c.SetAllowlist(context.Background(), nil, d, []byte("s")) })
+	over(t, "the allow list", func(d []byte) error { return c.SetAllowlist(context.Background(), d, []byte("s")) })
 }
 
 // TestAStalledStreamIsCutInsideTheWindow: the stream routes run on a client
@@ -506,7 +507,7 @@ func TestAHeldListingCompletes(t *testing.T) {
 			return
 		}
 		time.Sleep(relayapi.MaxWait)
-		json.NewEncoder(w).Encode(map[string]any{"messages": []any{}, "queued": 0})
+		json.NewEncoder(w).Encode(map[string]any{"messages": []any{}, "queued": 0, "allow": "none"})
 	}))
 	t.Cleanup(srv.Close)
 	c, err := New(srv.URL, testIdentity(t, "alice"), nil)

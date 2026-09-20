@@ -1016,7 +1016,8 @@ func TestAFileLongerThanItsRowIsNotKept(t *testing.T) {
 // which moves only when a message is queued or acknowledged: an upload
 // still open is not in it, and a page after the last id is empty beside a
 // count that is not, which is the shape the client acts on. It is present
-// at zero, since absent is what a relay from before the field answers. The
+// at zero: the field has no omitempty, as no field this relay always
+// sends has. The
 // container suite's K17 found a cursor set ahead hiding mail with nothing
 // to say so.
 func TestTheListSaysHowManyAreQueued(t *testing.T) {

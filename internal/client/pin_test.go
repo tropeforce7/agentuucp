@@ -41,7 +41,7 @@ func relayOffering(t *testing.T, bundle *pki.Loaded, alter func(*tls.Config)) *h
 	return again
 }
 
-const noPQ = "no TLS 1.3 with the post-quantum key exchange; the relay is older than v0.7.0 or behind a TLS terminator that lacks X25519MLKEM768"
+const noPQ = "no TLS 1.3 with the post-quantum key exchange; what answered is not this relay, or a TLS terminator in front of it lacks X25519MLKEM768"
 
 func TestTheClientRefusesARelayWithoutTheHybridOverTLS13(t *testing.T) {
 	bundle := pki.TestHierarchy(t, []string{"127.0.0.1"}, mldsa.MLDSA65())

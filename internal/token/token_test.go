@@ -622,10 +622,11 @@ func TestAnAnchorMustBeAHashOrAbsent(t *testing.T) {
 	}
 }
 
-func TestALegacyTokenStillParsesAndPinsNothing(t *testing.T) {
-	// ccxt1 tokens were handed out before anchors existed. One still works
-	// and simply pins nothing, which is what a relay with a public
-	// certificate wants.
+// A token of the older form, ccxt1, which pinned no anchor, is refused by
+// name with the one thing its holder can do said: nothing on the wire is
+// from before, and a token read as pinning nothing would be a way to hand
+// a machine a relay with no anchor to hold it to.
+func TestAnOlderTokenFormIsRefusedByName(t *testing.T) {
 	id := admin(t)
 	c := Claims{
 		ID: strings.Repeat("c", 32), Issuer: id.Fingerprint(),
@@ -637,20 +638,23 @@ func TestALegacyTokenStillParsesAndPinsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := LegacyPrefix + "." +
+	old := "ccxt1." +
 		base64.RawURLEncoding.EncodeToString(payload) + "." +
 		base64.RawURLEncoding.EncodeToString(mustSign(t, id, signingBytes(payload)))
 
-	u, err := Parse(old)
-	if err != nil {
-		t.Fatalf("a ccxt1 token no longer parses: %v", err)
+	_, err = Parse(old)
+	if !errors.Is(err, ErrForm) {
+		t.Fatalf("a ccxt1 token parsed: %v", err)
 	}
-	claims, err := u.Verify(id.Public(), time.Now(), time.Minute)
-	if err != nil {
-		t.Fatalf("a ccxt1 token no longer verifies: %v", err)
+	const want = "this token is of an older form, ccxt1, which pins no trust anchor; ask for a new one to be issued"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("the refusal says %q; want it to say %q", err, want)
 	}
-	if claims.Anchor != "" {
-		t.Errorf("a ccxt1 token produced anchor %q", claims.Anchor)
+	// Every other unknown form is the plain refusal, naming what was
+	// expected.
+	_, err = Parse("ccxt3." + strings.Split(old, ".")[1] + "." + strings.Split(old, ".")[2])
+	if !errors.Is(err, ErrForm) || !strings.Contains(err.Error(), `unknown token type "ccxt3", expected "ccxt2"`) {
+		t.Fatalf("an unknown form: %v", err)
 	}
 }
 

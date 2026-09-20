@@ -160,9 +160,7 @@ type Manifest struct {
 	// Channel is the recipient's channel the stream was opened for, absent
 	// for default, signed with the rest so the receiver can check it
 	// against what the relay says. The manifest is decoded strictly, so a
-	// receiver from before channels refuses a manifest that carries it as
-	// malformed; a stream opened for default carries nothing and is read
-	// there as before.
+	// name is one this build knows or the manifest is malformed.
 	Channel string `json:"channel,omitempty"`
 }
 

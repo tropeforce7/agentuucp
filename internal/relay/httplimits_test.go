@@ -161,7 +161,7 @@ func fullAllowList(t *testing.T, owner *identity.Identity, at time.Time) relayap
 	if err != nil {
 		t.Fatal(err)
 	}
-	return relayapi.AllowRequest{Allow: senders, Document: doc, Signature: sig}
+	return relayapi.AllowRequest{Document: doc, Signature: sig}
 }
 
 // TestLimitBodyCapsPerRoute: every route that reads a body reads it under
@@ -170,7 +170,7 @@ func fullAllowList(t *testing.T, owner *identity.Identity, at time.Time) relayap
 // and the connection closed behind the answer. The post route takes
 // max_bytes + FramingAllowance; the two owner-signed documents take
 // MaxDocumentBytes, and a directory and an allow list built at every
-// maximum and marshalled as the client marshals them — 565,026 and 156,632
+// maximum and marshalled as the client marshals them — 565,026 and 89,622
 // bytes — are taken under it, one byte over refused with the hint to send
 // the document compact; every other body route takes FramingAllowance
 // alone, shown on the registration, the stream open and an admin token.
@@ -201,8 +201,8 @@ func TestLimitBodyCapsPerRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(wire) > relayapi.MaxDocumentBytes || len(wire) < 150_000 {
-		t.Fatalf("the full allow list is %d bytes on the wire; want under MaxDocumentBytes %d and above 150,000", len(wire), relayapi.MaxDocumentBytes)
+	if len(wire) > relayapi.MaxDocumentBytes || len(wire) < 85_000 {
+		t.Fatalf("the full allow list is %d bytes on the wire; want under MaxDocumentBytes %d and above 85,000", len(wire), relayapi.MaxDocumentBytes)
 	}
 	if status, body := h.do(alice, "PUT", "/v1/mailbox/"+alice.Fingerprint()+"/allow", list, nil); status/100 != 2 {
 		t.Fatalf("an allow list at every maximum, %d bytes: %d %.200s; want it taken", len(wire), status, body)

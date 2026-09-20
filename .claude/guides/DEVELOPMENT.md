@@ -262,16 +262,34 @@ the channels are for is the owner's business with their senders: the relay
 keeps the signed directory to serve it back verbatim and unpacks it only as
 far as a name and its period, which is what a post is checked against.
 
-**Absent means old, so a field this relay always sends has no `omitempty`.**
-`queued` on a listing and `channel` on every listed message are always
-present from a relay that has them, so a client reads their absence as a
-relay from before the field and says nothing, rather than as zero or as
-`default`. The fields a sender may leave out — the outer `ch`, the inner
-`channel`, the manifest's, the open-stream request's — are the other way:
-absent means `default`, and a message sent for `default` is byte for byte
-what it was before channels. Keep the two rules apart: one is about what a
-relay says, the other about what a sender says, and a test marshals the
-zero value to prove the tag.
+**Nothing on the wire is from before.** Every released version is
+retracted and no peer from before this batch is supported, so every
+tolerance for one is a path nobody tests and a place a wrong answer
+hides. A field an end always sends has no
+`omitempty` and is required by the other end, refused by name when it is
+absent, with nothing of the answer used: `queued`, `allow`, and each row's
+`kind` and `channel` on a listing, `created` on a lookup, `registration`
+and `client_certs` on the status answer, `max_bytes` on health; a stubs
+listing whose row carries an envelope is a relay that ignored the
+parameter, refused the same way. A count whose zero is a value the relay
+sends, `queued`, stays an `int64`: absent and zero are one number, and
+the code that runs for it is the code that runs for a real zero. Neither
+end carries a branch for an older peer — the client's `kind == ""` read
+as envelope, its `ChannelKnown` filing by the sealed record, the allow
+list's plain array sent beside the document for a relay that read the
+array, the `ccxt1` token and the `ccx1` export line still read — each
+went, and the fake old relay with them. A plain refusal that tells a
+person what happened may stay as a sentence: the legacy token header's
+`400`, the allow request with no document's `400`, the `ccxt1` and `ccx1`
+refusals that say what to do; a tolerance that changes behaviour goes.
+The fields a sender may leave out — the outer `ch`, the inner `channel`,
+the manifest's, the open-stream request's — are the other rule: absent
+means `default`, the sender's own word, and a message for `default`
+carries no name. Keep the two apart: one is about what an end always
+sends, the other about what a sender may leave out, and a test marshals
+the zero value to prove the tag. Local file formats are not the wire:
+a home's records from before a rule, an unencrypted key file, are files
+on this machine and have their own rules.
 
 **A listing held open is the owner's listing answered later, and over its
 cap the hold degrades rather than refusing.** `GET /v1/mailbox/{fp}?wait=D`

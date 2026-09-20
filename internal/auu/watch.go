@@ -369,15 +369,10 @@ func messageEvents(r *store.Relay, listing client.Listing, opts watchOptions) ([
 	var events []any
 	var ids []int64
 	for _, m := range listing.Messages {
-		channel := m.Channel
-		if !m.ChannelKnown {
-			// A relay from before channels files everything under default.
-			channel = channels.Default
-		}
-		if len(opts.channels) > 0 && !opts.channels[channel] {
+		if len(opts.channels) > 0 && !opts.channels[m.Channel] {
 			continue
 		}
-		events = append(events, &messageEvent{Type: eventMessage, Relay: r.Name, Channel: channel,
+		events = append(events, &messageEvent{Type: eventMessage, Relay: r.Name, Channel: m.Channel,
 			Kind: m.Kind, Size: m.Size, ID: m.ID, Received: m.Received})
 		ids = append(ids, m.ID)
 	}

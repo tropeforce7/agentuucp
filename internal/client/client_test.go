@@ -328,7 +328,7 @@ func TestResponseIsBounded(t *testing.T) {
 // peers as FP:ISSUED in Unix nanoseconds sorted by fingerprint; and it
 // reads directories_changed back. List asks for neither.
 func TestListWaitCarriesTheHoldAndThePeers(t *testing.T) {
-	answer := map[string]any{"messages": []any{}, "queued": 0, "directories_changed": []string{"bbbb", "aaaa"}}
+	answer := map[string]any{"messages": []any{}, "queued": 0, "allow": "none", "directories_changed": []string{"bbbb", "aaaa"}}
 	rec := &recorder{replies: []reply{{status: http.StatusOK, body: answer}}}
 	c, _ := newTestClient(t, rec)
 	box := "GET /v1/mailbox/" + c.id.Fingerprint()
@@ -409,12 +409,12 @@ func TestListWaitCarriesTheHoldAndThePeers(t *testing.T) {
 	if got, _ := rec.last(); got != box+"?after=7&limit=20" {
 		t.Fatalf("List: %s", got)
 	}
-	// A relay from before the field says nothing.
+	// A listing with nothing changed leaves the field out.
 	rec.mu.Lock()
-	rec.replies = []reply{{status: http.StatusOK, body: map[string]any{"messages": []any{}}}}
+	rec.replies = []reply{{status: http.StatusOK, body: map[string]any{"messages": []any{}, "queued": 0, "allow": "none"}}}
 	rec.mu.Unlock()
 	if l, err := c.ListWait(context.Background(), ListRequest{Wait: time.Second}); err != nil || l.DirectoriesChanged != nil {
-		t.Fatalf("an old relay's answer: %+v %v", l, err)
+		t.Fatalf("a listing with nothing changed: %+v %v", l, err)
 	}
 }
 
@@ -441,6 +441,7 @@ func TestARelayThatAnswersAfterTheHoldIsNotATransportError(t *testing.T) {
 			"messages": []map[string]any{{"id": 9, "received": "2026-09-14T00:00:00Z", "kind": "envelope",
 				"size": 3, "channel": "default", "envelope": map[string]any{"v": 1, "to": "x", "ct": "AAA"}}},
 			"queued": 1,
+			"allow":  "none",
 		})
 	}))
 	t.Cleanup(srv.Close)
@@ -488,8 +489,8 @@ func TestTheClientSignsOnlyWhatTheRelayVerifies(t *testing.T) {
 	rec := &recorder{replies: []reply{
 		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65, MaxBytes: relayapi.DefaultMaxBytes}},
 		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65, MaxBytes: relayapi.DefaultMaxBytes}},
-		{status: 200, body: relayapi.KeysResponse{Bundle: id.Public().Bundle(), Name: "peer"}},
-		{status: 200, body: relayapi.ListResponse{}},
+		{status: 200, body: relayapi.KeysResponse{Bundle: id.Public().Bundle(), Name: "peer", Created: time.Now()}},
+		{status: 200, body: relayapi.ListResponse{Allow: relayapi.AllowNone}},
 		{status: 200, body: relayapi.PostResponse{ID: 1}},
 	}}
 	c, _ := newTestClient(t, rec)
@@ -700,9 +701,9 @@ func TestAnAnswerIsCheckedForShapeBeforeItIsReturned(t *testing.T) {
 		path, field string
 		answer      any
 	}{
-		{"/v1/admin/status", "ca_fingerprint", relayapi.AdminStatusResponse{CAFingerprint: "ab"}},
-		{"/v1/admin/status", "token_max_age_seconds", relayapi.AdminStatusResponse{TokenMaxAgeSecs: relayapi.MaxDurationSeconds + 1}},
-		{"/v1/admin/status", "cert_lifetime_seconds", relayapi.AdminStatusResponse{CertLifetimeSecs: -1}},
+		{"/v1/admin/status", "ca_fingerprint", relayapi.AdminStatusResponse{CAFingerprint: "ab", Registration: relayapi.RegistrationOpen, ClientCerts: relayapi.ClientCertsOff}},
+		{"/v1/admin/status", "token_max_age_seconds", relayapi.AdminStatusResponse{TokenMaxAgeSecs: relayapi.MaxDurationSeconds + 1, Registration: relayapi.RegistrationOpen, ClientCerts: relayapi.ClientCertsOff}},
+		{"/v1/admin/status", "cert_lifetime_seconds", relayapi.AdminStatusResponse{CertLifetimeSecs: -1, Registration: relayapi.RegistrationOpen, ClientCerts: relayapi.ClientCertsOff}},
 		{"/v1/admin/mailboxes", "fp", relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{{FP: "ab"}}}},
 		{"/v1/admin/mailboxes", "next", relayapi.MailboxListResponse{Next: "ab"}},
 		{"/v1/admin/mailboxes/" + fp, "fp", relayapi.MailboxRecord{FP: "ab"}},
@@ -713,8 +714,8 @@ func TestAnAnswerIsCheckedForShapeBeforeItIsReturned(t *testing.T) {
 		{"/v1/admin/tokens", "subject", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: tokenID, Issuer: fp, Subject: "ab", Use: token.UseRegister, State: relayapi.TokenLive}}}},
 		{"/v1/admin/tokens", "use", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: tokenID, Issuer: fp, Use: "register\x1b", State: relayapi.TokenLive}}}},
 		{"/v1/admin/tokens", "state", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: tokenID, Issuer: fp, Use: token.UseRegister, State: "live\x1b"}}}},
-		{"/v1/admin/status", "registration", relayapi.AdminStatusResponse{Registration: "open\x1b"}},
-		{"/v1/admin/status", "client_certs", relayapi.AdminStatusResponse{ClientCerts: "off\x1b"}},
+		{"/v1/admin/status", "registration", relayapi.AdminStatusResponse{Registration: "open\x1b", ClientCerts: relayapi.ClientCertsOff}},
+		{"/v1/admin/status", "client_certs", relayapi.AdminStatusResponse{Registration: relayapi.RegistrationOpen, ClientCerts: "off\x1b"}},
 		{"/v1/admin/mailboxes", "allow", relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{{FP: fp, Allow: "signed\x1b"}}}},
 		{"/v1/admin/mailboxes/" + fp, "allow", relayapi.MailboxRecord{FP: fp, Allow: "broken\x1b"}},
 		{"/v1/admin/certs", "serial", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: "ab", FP: fp}}}},

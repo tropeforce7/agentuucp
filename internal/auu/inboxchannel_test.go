@@ -17,10 +17,10 @@ import (
 )
 
 // filingGate sits in front of a relay and rewrites what its listing says
-// about channels: "old" strips the field from every message, as a relay
-// from before channels answers; "relist" lists every message under
-// another name while leaving the envelope alone, as a relay that re-files
-// would; "reouter" rewrites the outer ch inside the envelope instead.
+// about channels: "old" strips the field from every message, an answer
+// no relay of ours gives; "relist" lists every message under another
+// name while leaving the envelope alone, as a relay that re-files would;
+// "reouter" rewrites the outer ch inside the envelope instead.
 type filingGate struct {
 	inner http.Handler
 	mu    sync.Mutex
@@ -45,12 +45,13 @@ func (g *filingGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	rec := httptest.NewRecorder()
 	g.inner.ServeHTTP(rec, r)
-	var answer struct {
-		Messages []map[string]json.RawMessage `json:"messages"`
-		Queued   int64                        `json:"queued"`
-	}
-	if rec.Code == http.StatusOK && json.Unmarshal(rec.Body.Bytes(), &answer) == nil {
-		for _, m := range answer.Messages {
+	// The answer's other fields travel as they came: the client requires
+	// every one the relay always sends.
+	var answer map[string]json.RawMessage
+	var messages []map[string]json.RawMessage
+	if rec.Code == http.StatusOK && json.Unmarshal(rec.Body.Bytes(), &answer) == nil &&
+		json.Unmarshal(answer["messages"], &messages) == nil {
+		for _, m := range messages {
 			switch mode {
 			case "old":
 				delete(m, "channel")
@@ -66,6 +67,7 @@ func (g *filingGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		answer["messages"], _ = json.Marshal(messages)
 		rec.Body.Reset()
 		json.NewEncoder(rec.Body).Encode(answer)
 	}
@@ -259,42 +261,38 @@ func TestAMisfiledMessageIsKeptAndAcknowledged(t *testing.T) {
 	}
 }
 
-// A relay from before channels lists no channel: the message is filed by
-// the sealed record alone, and nothing is said.
-func TestAnOldRelaysListingFilesByTheSealedRecord(t *testing.T) {
-	work, gate, _ := startFilingRelay(t)
+// A listing whose row names no channel is refused by name, the fetch
+// failing with the malformed-answer sentence and nothing delivered or
+// acknowledged: nothing on the wire is from before, and a relay that
+// says nothing about where it filed a message is not one this client
+// files by the sealed record for. The same mail, listed whole, arrives.
+func TestAListingWithoutAChannelIsRefusedByName(t *testing.T) {
+	work, gate, workStore := startFilingRelay(t)
 	alice := newUser(t, "alice", work)
 	bob := newUser(t, "bob", work)
 	alice.run("peers", "add", bob.exportLine())
 	bob.run("peers", "add", alice.exportLine())
 	bob.run("channel", "create", "bug reports")
+	_, bobID, _ := bob.opened()
 	alice.run("send", "--to", "bob", "--channel", "bug reports", "--subject", "a bug", "the bug")
 	alice.run("send", "--to", "bob", "--subject", "plain", "hello")
-	big := filepath.Join(t.TempDir(), "big.bin")
-	if err := os.WriteFile(big, make([]byte, 200<<10), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	alice.run("send", "--to", "bob", "--channel", "bug reports", "--subject", "a log", "--attach", big, "the log")
 
 	gate.set("old")
-	var out string
-	warning := captureStderr(t, func() { out = bob.run("inbox", "--json") })
-	var got inboxJSON
-	if err := json.Unmarshal([]byte(out), &got); err != nil {
-		t.Fatal(err)
+	out, err := bob.tryRun("inbox", "--json")
+	if err == nil || !strings.Contains(err.Error(), "in the listing, channel is not a channel name; nothing of the answer was used") {
+		t.Fatalf("a listing without channel: %v\n%s; want the refusal naming the field", err, out)
 	}
-	if warning != "" {
-		t.Fatalf("an old relay's listing drew a warning:\n%s", warning)
+	if u, _ := workStore.MailboxUsage(bobID.Fingerprint()); u.Messages != 2 {
+		t.Fatalf("%d messages queued after the refused listing, want both still there", u.Messages)
 	}
-	if got.Fetch.Delivered != 3 || got.Fetch.Kept != 0 || len(got.Messages) != 3 {
-		t.Fatalf("the fetch: %+v, %d messages", got.Fetch, len(got.Messages))
+	if in := bob.inboxJSON("--no-fetch"); len(in.Messages) != 0 {
+		t.Fatalf("the refused listing delivered: %+v", in.Messages)
 	}
-	byChannel := map[string]string{}
-	for _, m := range got.Messages {
-		byChannel[m.Subject] = m.Channel
-	}
-	if byChannel["a bug"] != "bug reports" || byChannel["plain"] != "default" || byChannel["a log"] != "bug reports" {
-		t.Fatalf("filed as %v", byChannel)
+
+	gate.set("")
+	got := bob.inboxJSON()
+	if got.Fetch.Delivered != 2 || got.Fetch.Kept != 0 || len(got.Messages) != 2 {
+		t.Fatalf("the fetch once the listing is whole: %+v, %d messages", got.Fetch, len(got.Messages))
 	}
 }
 

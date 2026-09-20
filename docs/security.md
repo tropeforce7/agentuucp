@@ -87,7 +87,7 @@ the protocol defines, refusing the answer whole otherwise, and escape its
 free text (a public URL, an uptime, an access-log mode, a block's reason,
 a note); a pasted token's relay and note are escaped when it is described;
 and the key proxy's log line escapes the path a caller sent. The
-same treatment covers a name from a relay older than the rule, and
+same treatment covers a name from a relay that is not this one, and
 `auu-admin`'s confirmation before it removes a mailbox, which prints the
 name at the one moment an administrator is reading carefully. And what
 the relay lists is checked for shape before it is used: every fingerprint,
@@ -203,8 +203,9 @@ exchange, and refuses less; there is no option to relax it, since every
 relay is built from this tree and there is nothing older to meet. So a
 recording of who talked to whom made today is protected by the same hybrid
 as the messages inside it. A relay that will not make that handshake — one
-from before v0.7.0, or one behind a TLS terminator that lacks the hybrid — is
-named by the client in one sentence rather than by Go's alert. A relay run
+behind a TLS terminator that lacks the hybrid, or something that is not
+this relay — is named by the client in one sentence rather than by Go's
+alert. A relay run
 with `tls.mode: "off"` behind somebody else's terminator is that
 terminator's TLS, not the relay's, and this says nothing about it.
 
@@ -233,12 +234,12 @@ it and again on every post, with no cache. A row edited in the relay's
 database therefore refuses every sender rather than admitting one — a
 sender is told what a refused sender is always told, your own listing says
 `broken`, `auu inbox` says so, and your next `auu allow push` is the whole
-repair. A row with no signature is broken too: a list converted from
-before v0.5.0 by the relay's upgrade, and a signed row with its signature
-removed, both refuse every sender at once — there is no state in which the
-relay honours a list it cannot verify, so an upgrade from before signed
-lists leaves a restricted mailbox closed until its owner pushes, and `auu
-inbox` tells them so on every fetch. Your own machine also remembers that
+repair. A row with no signature is broken too: a signed row with its
+signature removed refuses every sender at once, as a row the relay's own
+schema migration wrote without one would — there is no state in which the
+relay honours a list it cannot verify, so a restricted mailbox whose list
+does not verify is closed until its owner pushes, and `auu inbox` tells
+them so on every fetch. Your own machine also remembers that
 it pushed a signed list, and says so if the relay's row has gone
 altogether. What this does not cover is root on the relay's host, who can replace the relay itself, which is where *What
 is not protected* below draws the line: the signature moves the bar from
@@ -469,10 +470,20 @@ list is empty and the count still exceeds that, the cursor is past mail
 — set by hand, or copied from a machine that had fetched further — and `auu
 inbox` says so, with the count, the cursor file to delete and the `auu inbox
 --relay NAME` to run after, and exits 5 without acknowledging or writing
-anything. A relay from before the field omits it, and the client says
-nothing. Each message listed says which channel it is under (`channel`),
-always, `default` included; a listing without the field is from a relay
-from before channels, and the client files by the sealed record alone.
+anything. Each message listed says which channel it is under (`channel`),
+always, `default` included, held to the channel name rule as it is read,
+and its kind (`envelope` or `stream`); the listing says the state of the
+owner's allow list (`allow`) on every answer. **Nothing on the wire is
+from before**: every released version is retracted and no peer from
+before this batch is supported, so a field one end always sends is
+required by the other and refused by name when it is absent — a listing
+without
+`channel`, `kind` or `allow`, a health answer without `max_bytes`, a
+lookup without `created`, a status without `registration` or
+`client_certs` — with nothing of the answer used, rather than read as a
+peer from before the field. Neither end carries a branch for an older
+peer; the wire has one version, this one, and a peer from before it is
+refused by name at the first exchange.
 
 Two routes carry a mailbox's channel directory, the signed list of named
 sub-mailboxes an owner defines: the owner pushes it with `PUT
@@ -493,20 +504,18 @@ own fetch adds `queued`, how many messages wait under each channel; nobody
 else's does.
 
 The allow list travels the same way. `PUT /v1/mailbox/{fp}/allow` carries
-three fields: `document` and `signature`, the list as the owner signed it
-under its own domain, and `allow`, the same senders as a plain array, which
-a relay from before signed lists reads and one from after ignores — it is
-still sent so that an old relay is told the list rather than an empty one.
+two fields: `document` and `signature`, the list as the owner signed it
+under its own domain.
 The relay verifies the pair against the registered key before storing
 either, answering `401` for a signature that does not verify, `400` with
 the rule broken, `409` for a list issued no later than the one it holds,
-and `400 this relay needs a signed allow list; update auu to v0.5.0 or
-later` for a body with the array alone, which stores nothing. The owner
+and `400 this relay takes a signed allow list; the request carries no
+document` for a body with none, which stores nothing. The owner
 reads it back with `GET /v1/mailbox/{fp}/allow`: the pair verbatim and
 `state`, one of `signed`, `none` (never pushed; any registered sender may
 post) and `broken` (does not verify, a row with no signature included;
 every sender refused). The owner's own mailbox listing carries the same word as
-`allow` on every answer, and a relay from before it omits the field.
+`allow` on every answer.
 
 A message posted to a channel names it in the clear: `ch` on the outer
 envelope at step 3, `channel` on the request that opens a stream. The relay
@@ -519,8 +528,9 @@ does not hold (`default`, for a mailbox with no directory) and `403 channel
 "x" is not open: opens T` or `closed T` for one outside its period, judged
 by the relay's clock with both edges inclusive. The sealed record and the
 signed manifest carry the same name, so a message the relay filed elsewhere
-is found out on opening. Absent means `default` everywhere, and a message
-sent with no channel is byte for byte what it was before channels.
+is found out on opening. Absent means `default` everywhere: that is the
+sender's rule, a message for `default` carrying no name, and the one
+place on the wire where absence means something other than a refusal.
 
 The sealed record carries a time, and it is the sender's word alone: it is
 shown, labelled as theirs, and it orders nothing. A thread's order is the
@@ -547,9 +557,10 @@ word — never named, never woken on — since the directory fetch the caller
 made first has already told it `403`. `stubs=1` answers every row without
 its `envelope`, for a caller that wants the ids and nothing else — which is
 what checking whether mail it left on the relay is still there needs, and
-what stops a mailbox of such mail being downloaded again on every check. A
-relay from before any of the three ignores it and answers as it always did,
-and a listing that asks for none of them is byte for byte what it was.
+what stops a mailbox of such mail being downloaded again on every check; a
+stubs listing whose row carries an envelope is refused by the client by
+name, as a relay that ignored the parameter. A listing that asks for none
+of the three is byte for byte what it was.
 
 A large message changes step 7 only. Instead of arriving with the rest of the
 mailbox, it is listed as a stream and its body is fetched separately, in
@@ -569,8 +580,8 @@ relay listed it under. A disagreement is a message the relay filed elsewhere:
 it is kept under `damaged/` with the cause word `misfiled`, the warning says
 `relay message N was filed under "a" by relay.example.com but is sealed for
 "b"; it was kept as PATH`, and it is acknowledged like the other kept
-messages, so the mailbox is not blocked. A relay from before channels lists
-no channel, and the sealed record alone decides.
+messages, so the mailbox is not blocked. A listing that names no channel
+for a message is refused by name before anything is filed.
 
 ### 2.2 A large message
 
