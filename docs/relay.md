@@ -225,7 +225,7 @@ switch the lot off.
 | `mailbox_max_messages` | messages queued for one recipient | 1000 |
 | `mailbox_max_bytes` | queued bytes for one recipient | 1 GiB |
 | `relay_max_bytes` | queued bytes across the whole relay | unlimited |
-| `max_open_uploads` | uploads one sender may have open at once, across every mailbox it sends to; each is a file and a reservation the relay holds for that sender, which is why it is not a limit to switch off; at most 1000 | 4 |
+| `max_open_uploads` | uploads one sender may have open at once, across every mailbox it sends to; each is a file and a reservation the relay holds for that sender, so 0, unlimited like the rest, lets one sender hold as many as it likes; at most 1000 | 4 |
 | `max_inflight` | requests being handled at once | 256 |
 | `max_waiting` | listings held open at once for watchers; over it the next is answered at once rather than held, and each held listing keeps an in-flight slot, so keep this well under `max_inflight` | 64 |
 

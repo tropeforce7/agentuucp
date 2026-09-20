@@ -370,6 +370,12 @@ func (c *Client) doWithin(ctx context.Context, method, path string, payload any,
 	}
 }
 
+// errOverHold marks a malformed-answer refusal made for the answer's size
+// alone, so that a listing can tell a page over a hold it sized to a
+// max_bytes the relay may since have raised from any other malformed
+// answer.
+var errOverHold = errors.New("answer over the hold")
+
 // listingCap is the most the client holds of a listing page: twice the
 // relay's max_bytes plus the framing allowance. The relay ends a page
 // before an envelope that would take its inline bytes past max_bytes,
@@ -380,21 +386,27 @@ func (c *Client) doWithin(ctx context.Context, method, path string, payload any,
 // for the relay the client talks to rather than for the ceiling, which
 // is a gigabyte the client should never allocate. The relay's figure
 // comes from its health answer, fetched once per Client on the first
-// listing and kept.
-func (c *Client) listingCap(ctx context.Context) (int64, error) {
+// listing and kept; a page refused for its size asks once more, since an
+// operator may have raised the setting under a client that runs for
+// days, and grew reports whether the figure rose. A figure that fell is
+// not taken: the hold only ever widens to what the relay says now.
+func (c *Client) listingCap(ctx context.Context, again bool) (hold int64, grew bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.maxBytes == 0 {
+	if c.maxBytes == 0 || again {
 		var resp relayapi.HealthResponse
 		if err := c.do(ctx, "GET", "/v1/health", nil, &resp, nil); err != nil {
-			return 0, fmt.Errorf("asking the relay's max_bytes before a listing: %w", err)
+			return 0, false, fmt.Errorf("asking the relay's max_bytes before a listing: %w", err)
 		}
 		if err := c.checkHealth(&resp); err != nil {
-			return 0, err
+			return 0, false, err
 		}
-		c.maxBytes = resp.MaxBytes
+		if resp.MaxBytes > c.maxBytes {
+			c.maxBytes = resp.MaxBytes
+			grew = true
+		}
 	}
-	return 2*c.maxBytes + relayapi.FramingAllowance, nil
+	return 2*c.maxBytes + relayapi.FramingAllowance, grew, nil
 }
 
 // verifiedRoute says whether the relay verifies a signature on this
@@ -453,7 +465,7 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 		return fmt.Errorf("reading relay response: %w", err)
 	}
 	if int64(len(respBody)) > hold {
-		return c.malformed("the answer", "the body", fmt.Sprintf("under %d bytes, the most this route holds", hold))
+		return fmt.Errorf("%w: %w", errOverHold, c.malformed("the answer", "the body", fmt.Sprintf("under %d bytes, the most this route holds", hold)))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return httpError(resp, respBody)
@@ -839,11 +851,22 @@ func (c *Client) ListWait(ctx context.Context, req ListRequest) (Listing, error)
 		path += "&peers=" + strings.Join(entries, ",")
 	}
 	var resp relayapi.ListResponse
-	hold, err := c.listingCap(ctx)
+	hold, _, err := c.listingCap(ctx, false)
 	if err != nil {
 		return Listing{}, err
 	}
-	if err := c.doWithin(ctx, "GET", path, nil, &resp, nil, hold); err != nil {
+	err = c.doWithin(ctx, "GET", path, nil, &resp, nil, hold)
+	if errors.Is(err, errOverHold) {
+		// A page over the hold this client sized to the relay's max_bytes
+		// as it learned it. The relay's setting may have been raised
+		// since: ask once more, and take the page under the new hold
+		// when the figure grew; when it did not, the refusal stands, the
+		// page being over what the relay itself says it builds.
+		if wider, grew, herr := c.listingCap(ctx, true); herr == nil && grew {
+			err = c.doWithin(ctx, "GET", path, nil, &resp, nil, wider)
+		}
+	}
+	if err != nil {
 		return Listing{}, err
 	}
 	if err := c.checkListing(&resp, req.Stubs); err != nil {

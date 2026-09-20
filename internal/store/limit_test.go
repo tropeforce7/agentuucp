@@ -534,11 +534,20 @@ func TestLimitRelaysDirectoryEntries(t *testing.T) {
 	}
 	// Each directory that is not a relay name is said once, by its path,
 	// so that a person who can see it in the directory is told why it is
-	// not in the listing; the half-finished add and the file are not.
+	// not in the listing, and what to do is the shell's move — a name the
+	// rule refuses is one 'auu relay rename' cannot resolve either — and
+	// then the listing; the half-finished add and the file are not said.
 	for _, name := range []string{"CON", "..x", "a b", strings.Repeat("a", 200)} {
-		if !strings.Contains(stderr, "warning: "+filepath.Join(dir, name)+" is not a relay directory (") {
+		path := filepath.Join(dir, name)
+		if !strings.Contains(stderr, "warning: "+path+" is not a relay directory (") {
 			t.Errorf("no warning names %q:\n%s", name, stderr)
 		}
+		if !strings.Contains(stderr, "move it to a relay name by hand, as in: mv "+path+" "+filepath.Join(dir, "NAME")+", then run 'auu relay list'; or remove it") {
+			t.Errorf("the warning for %q does not give the shell's move:\n%s", name, stderr)
+		}
+	}
+	if strings.Contains(stderr, "rename it to a relay name") {
+		t.Errorf("the warning names a rename the tool refuses:\n%s", stderr)
 	}
 	if strings.Contains(stderr, "half") || strings.Contains(stderr, "stray") {
 		t.Errorf("the warning speaks of an entry the rule takes:\n%s", stderr)

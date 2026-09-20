@@ -302,7 +302,17 @@ from what was written. The file is made and the spooled bytes are read by
 their handle, not their name: an attachment that turns out not to be a
 regular file — a device the name reaches on this platform, a pipe or a
 link somebody planted in the spool — is refused with a sentence saying
-what was found, and nothing is written.
+what was found, and nothing is written. The bytes are written first to a
+hidden temporary of `auu`'s own name in the same directory, checked
+against the message's size and digest there, and the attachment's name
+is taken only then, by linking the temporary to it, so the name appears
+with the whole verified file or not at all: an extract killed part way
+leaves a `.auu-extract-*` file to delete and nothing under the name. On
+a filesystem that refuses hard links — FAT or exFAT on a stick, some
+network shares — the name is taken by an exclusive create and the
+verified temporary is copied into it; there a kill mid-copy can leave a
+partial file under the name, and the next extract writes beside it as
+`x-2.txt`.
 
 A thread id works there too. `auu reply THREAD-ID` answers whatever is latest
 on the thread — including your own last message, in which case it is a

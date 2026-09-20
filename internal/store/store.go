@@ -634,15 +634,18 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	return &m, nil
 }
 
-// warnedSpool is the spool files already warned about in this process, so
-// a command that lists a box more than once says it once.
-var warnedSpool sync.Map
+// warnedOnce is the paths already warned about in this process — a spool
+// file a box could not read (warnUnreadable) and a directory under
+// relays/ that is not a relay (warnSkippedRelay) — so a command that
+// lists a box or the relays more than once says each once. Keyed by the
+// full path, so the two uses cannot collide.
+var warnedOnce sync.Map
 
 // warnUnreadable says, once per file per command, that a record in a box
 // could not be read and is left out of the listing.
 func (s *Store) warnUnreadable(box Box, name string, err error) {
 	path := s.path(string(box), name)
-	if _, already := warnedSpool.LoadOrStore(path, true); already {
+	if _, already := warnedOnce.LoadOrStore(path, true); already {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "warning: %s could not be read (%v) and is not listed\n", path, err)

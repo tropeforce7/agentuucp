@@ -30,8 +30,9 @@ import (
 // The two sentences the gate refuses with when the command is wrong
 // before the index is looked at.
 const (
-	indexSentence = "commit from the index: stage with git add, run /rules-review, then git commit with no -a and no paths"
-	aloneSentence = "run git commit on its own: the gate reads the index when the call starts and the commit would read it later, so nothing but cd may come before it"
+	indexSentence   = "commit from the index: stage with git add, run /rules-review, then git commit with no -a and no paths"
+	aloneSentence   = "run git commit on its own: the gate reads the index when the call starts and the commit would read it later, so nothing but cd may come before it"
+	literalSentence = "the command, or git's subcommand, is not a literal word; the gate cannot read it"
 )
 
 // ready is a record the gate accepts; notReady is one it repeats.
@@ -151,6 +152,38 @@ func TestTheGateReadsTheCommandAsShDoes(t *testing.T) {
 		{name: "env in front", command: "env FOO=1 git commit -m x", want: 2, says: "no rules review"},
 		{name: "env with a GIT_ variable in front", command: "env GIT_AUTHOR_NAME=a git commit -m x", want: 2, says: "a GIT_ variable in front of git commit is refused"},
 		{name: "git --no-pager", command: "git --no-pager commit -m x", want: 2, says: "no rules review"},
+
+		// A word the gate cannot read as a command or a subcommand: the
+		// shell expands, the gate does not, and each of these ran a
+		// commit past the gate as "not a commit" before the rule.
+		{name: "the subcommand in a variable", command: "x=commit; git $x -m msg", record: ready, want: 2, says: literalSentence},
+		{name: "the subcommand from a substitution", command: "git $(echo commit) -m msg", record: ready, want: 2, says: literalSentence},
+		{name: "the subcommand from a backtick", command: "git `echo commit` -m msg", record: ready, want: 2, says: literalSentence},
+		{name: "the subcommand in an assignment's variable", command: "sub=commit git $sub -m x", record: ready, want: 2, says: literalSentence},
+		{name: "the command in a variable", command: "g=git; $g commit -m x", record: ready, want: 2, says: literalSentence},
+		{name: "both in variables", command: "g=git; x=commit; $g $x -m x", record: ready, want: 2, says: literalSentence},
+		{name: "the command from a substitution", command: "$(echo git) commit -m x", record: ready, want: 2, says: literalSentence},
+		{name: "half the subcommand from a substitution", command: "git com$(echo mit) -m x", record: ready, want: 2, says: literalSentence},
+		{name: "-C from a substitution", command: "git -C $(pwd) commit -m x", record: ready, want: 2, says: literalSentence},
+		{name: "--git-dir= from a substitution", command: "git --git-dir=$(pwd)/.git commit -m x", record: ready, want: 2, says: literalSentence},
+		{name: "the subcommand absent", command: "git", want: 2, says: literalSentence},
+		{name: "eval of a variable", command: `eval "$cmd"`, want: 2, says: literalSentence},
+		// A commit inside a substitution is the commit the shell runs, and
+		// is gated as one: inside double quotes too.
+		{name: "a commit inside a substitution", command: `echo "$(git commit -m x)"`, want: 2, says: "no rules review for the staged diff ({hash})"},
+		{name: "a commit inside an assigned substitution", command: `x="$(git commit -m x)"`, want: 2, says: "no rules review"},
+		{name: "a commit inside backticks", command: "x=`git commit -m x`", want: 2, says: "no rules review"},
+		{name: "a commit inside a substitution, with a record", command: `x=$(git commit -m x)`, record: ready, want: 0},
+		{name: "a commit whose message is a substitution runs another command", command: `git commit -m "$(cat msg.txt)"`, record: ready, want: 2, says: aloneSentence},
+		// A substitution elsewhere in a command is not the gate's concern.
+		{name: "a substitution as an argument", command: "echo $(date) world", want: 0},
+		{name: "a substitution in a path", command: "cat $(git rev-parse --git-dir)/HEAD", want: 0},
+		{name: "a substitution assigned", command: "x=$(git rev-parse HEAD); echo $x", want: 0},
+		{name: "a substitution in a for", command: "for f in $(ls); do echo $f; done", want: 0},
+		{name: "a variable as an argument", command: `git commit -m "fixes $bug"`, record: ready, want: 0},
+		{name: "a quoted parenthesis inside a substitution", command: `echo "$(echo "(")"`, want: 0},
+		{name: "the literal spellings are still read", command: `git "commit" -m x`, want: 2, says: "no rules review"},
+		{name: "a split literal is still read", command: "git 'co''mmit' -m x", want: 2, says: "no rules review"},
 
 		// A directory the gate cannot enter.
 		{name: "a variable names the directory", command: "cd $REPO && git commit -m x", record: ready, want: 2,

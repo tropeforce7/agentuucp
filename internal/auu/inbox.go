@@ -3,6 +3,7 @@ package auu
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -810,35 +811,114 @@ func extractInto(s *store.Store, box store.Box, m *store.Stored, dir string) ([]
 // gives up on a directory.
 const maxNameTries = 1000
 
+// hardLinks says whether an extract takes an attachment's name by linking
+// the verified temporary to it; false is the path a filesystem that
+// refuses hard links takes, and a test sets it to walk that path here.
+var hardLinks = true
+
+// beforeLink, when a test sets it, runs between the temporary's
+// verification and the link that takes the name, with the temporary's
+// path: the window in which a directory somebody else can write to could
+// change what stands under the temporary's name.
+var beforeLink func(tmp string)
+
 // writeUnique writes attachment i of m under dir as safe, a name SafeName
 // made, or as the first of safe-2, safe-3, … that nothing stands under,
-// and returns the path it made. Each candidate is cut to the safe cap, so
-// the loop's names are safe names too; after maxNameTries the directory
-// is refused by name.
+// and returns the path it made.
+//
+// The bytes are written once, to a temporary file of the program's own
+// name in the same directory, created exclusively by the handle, and
+// held to the record's size and digest there; only then is the name
+// taken, by linking the temporary to it. A link is an exclusive create:
+// whatever already stands under the name — a file, a device, a link — is
+// os.ErrExist and the next candidate is tried, nothing is renamed onto a
+// name from outside, and the name appears only with verified content, so
+// a process killed mid-copy leaves the hidden temporary and never a
+// partial file under the attachment's name. The link resolves the
+// temporary by its name, which a directory somebody else can write to
+// could have changed under the extract — a symbolic link put there is
+// followed by link on some platforms — so what the name now stands for
+// is compared with the handle the bytes were written through, and a name
+// that is not that file is removed and the extract refused. Each
+// candidate is cut to the safe cap, so the loop's names are safe names
+// too; after maxNameTries the directory is refused by name. The
+// temporary goes whether the name was taken or not.
+//
+// A filesystem that refuses hard links — FAT or exFAT on a stick, some
+// network shares — is met by the exclusive create of the name and a copy
+// from the verified temporary through the same handle, the path every
+// extract took before the link; on such a filesystem a kill mid-copy can
+// leave a partial file under the name, and the next extract writes
+// beside it.
 func writeUnique(s *store.Store, box store.Box, m *store.Stored, i int, a message.Attachment, dir, safe string) (string, error) {
+	f, tmp, err := writeTemp(s, box, m, i, a, dir)
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmp)
+	defer f.Close()
+	written, err := f.Stat()
+	if err != nil {
+		return "", fmt.Errorf("writing %q: %w", a.Name, err)
+	}
+	if beforeLink != nil {
+		beforeLink(tmp)
+	}
 	for n := 1; n <= maxNameTries; n++ {
-		target, err := writeAttachment(s, box, m, i, a, dir, message.Numbered(safe, n))
-		if err == nil || !os.IsExist(err) {
-			return target, err
+		target := filepath.Join(dir, message.Numbered(safe, n))
+		if !hardLinks {
+			return copyFromTemp(f, dir, safe, n)
 		}
+		err := os.Link(tmp, target)
+		if err == nil {
+			// The name stands for the file the bytes went into, or for
+			// something put under the temporary's name meanwhile, which
+			// is not the attachment and is not left under its name.
+			now, err := os.Lstat(target)
+			if err != nil || !os.SameFile(now, written) {
+				os.Remove(target)
+				return target, fmt.Errorf("refusing to write %q: the directory changed under the extract; nothing was written", a.Name)
+			}
+			return target, nil
+		}
+		if os.IsExist(err) {
+			continue
+		}
+		// Not a name that stands, but the filesystem's refusal of the
+		// link itself: the exclusive create and the copy from here on.
+		return copyFromTemp(f, dir, safe, n)
 	}
 	return "", fmt.Errorf("%s holds %d files named like %q already; choose another --out directory", dir, maxNameTries, safe)
 }
 
-// writeAttachment writes attachment i of m under dir as name, which
-// SafeName made, and returns the path it made. The create is exclusive
-// and by the handle: whatever already stood under the name — a file, a
-// device, a link — is os.ErrExist, returned as is for writeUnique to try
-// the next name, and a device the platform hands back under the name is
-// refused with nothing written. On any error after the create, what this
-// call made is removed, so a half-written file is not mistaken for the
-// real thing; the name was this call's to make.
-func writeAttachment(s *store.Store, box store.Box, m *store.Stored, i int, a message.Attachment, dir, name string) (string, error) {
-	target := filepath.Join(dir, name)
-	out, err := regular.Create(target, 0o600)
-	if err != nil {
-		return target, err
+// tempPrefix is what an extract's temporary file is called, a hidden name
+// of the program's own beside the attachment it becomes.
+const tempPrefix = ".auu-extract-"
+
+// writeTemp writes attachment i of m to a temporary file of the program's
+// own name under dir, created exclusively by the handle, synced, and held
+// to the record's size and digest, and returns the open handle, which is
+// the caller's to close and is the one thing the bytes are read back
+// through, and the path. On any error what it made is removed.
+func writeTemp(s *store.Store, box store.Box, m *store.Stored, i int, a message.Attachment, dir string) (*os.File, string, error) {
+	var out *os.File
+	var tmp string
+	for try := 0; ; try++ {
+		var suffix [8]byte
+		if _, err := rand.Read(suffix[:]); err != nil {
+			return nil, "", err
+		}
+		tmp = filepath.Join(dir, tempPrefix+hex.EncodeToString(suffix[:]))
+		f, err := regular.OpenFile(tmp, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			out = f
+			break
+		}
+		if !os.IsExist(err) || try >= 8 {
+			return nil, "", fmt.Errorf("writing %q: %w", a.Name, err)
+		}
 	}
+	var err error
 	if m.Streamed {
 		// A streamed attachment is already a file in the spool, kept by
 		// its position and never by its name, and may be far larger than
@@ -848,23 +928,51 @@ func writeAttachment(s *store.Store, box store.Box, m *store.Stored, i int, a me
 	} else {
 		_, err = out.Write(a.Data)
 	}
-	if closeErr := out.Close(); err == nil {
-		err = closeErr
+	if err == nil {
+		err = out.Sync()
 	}
 	if err != nil {
-		os.Remove(target)
-		return target, err
+		out.Close()
+		os.Remove(tmp)
+		return nil, "", err
 	}
-	return target, nil
+	return out, tmp, nil
 }
 
-// copyStreamed copies a delivered stream attachment from the spool into
-// out, the file extractInto made exclusively, without ever holding it in
-// memory, with the size and the digest taken as the bytes go past: a
-// mismatch is an error, and the caller removes what it made, so nothing
-// is left behind to be mistaken for the real thing. The source is opened
-// by its handle too: the spool is this home's own, but a link or a pipe
-// planted there under the attachment's name is not the attachment.
+// copyFromTemp takes the first of safe-n, safe-n+1, … that nothing stands
+// under by the exclusive create and copies the verified temporary into
+// it, read back through the handle it was written by: the path for a
+// filesystem that refuses hard links. On any error after the create,
+// what this call made is removed.
+func copyFromTemp(f *os.File, dir, safe string, n int) (string, error) {
+	for ; n <= maxNameTries; n++ {
+		target := filepath.Join(dir, message.Numbered(safe, n))
+		out, err := regular.Create(target, 0o600)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			return target, err
+		}
+		if _, err = f.Seek(0, io.SeekStart); err == nil {
+			_, err = io.Copy(out, f)
+		}
+		if closeErr := out.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			os.Remove(target)
+			return target, err
+		}
+		return target, nil
+	}
+	return "", fmt.Errorf("%s holds %d files named like %q already; choose another --out directory", dir, maxNameTries, safe)
+}
+
+// copyStreamed copies a streamed attachment from its spool file into out,
+// holding what arrives to the record's size and digest: a record whose
+// bytes are not what it says is refused, and out's caller removes what
+// was written.
 func copyStreamed(src string, out *os.File, a message.Attachment) error {
 	in, err := regular.Open(src)
 	if err != nil {

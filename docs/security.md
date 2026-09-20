@@ -419,7 +419,9 @@ capped at the same 32 KiB, and a relay whose answer runs past it is
 refused as a malformed answer; a JSON answer is read under twice the
 default `max_bytes`, and a listing page — the one answer that grows with
 the relay's setting — under twice the relay's own `max_bytes`, which the
-relay says in its health answer and the client learns once; the relay's
+relay says in its health answer and the client learns once, asking again
+only when a page is refused for its size, in case the setting was raised
+under a client that runs for days; the relay's
 page follows the same figure, so the two agree, and a relay that does not
 say its `max_bytes` is refused by name; a stream route's answer — the
 placed stream's id, or an error's sentence — is read under 64 KiB and

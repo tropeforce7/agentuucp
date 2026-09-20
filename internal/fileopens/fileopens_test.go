@@ -28,8 +28,11 @@ import (
 // tree or one of the two standard-library functions a type-level rule may
 // name, a network row or a directory-entry row that opens or creates by
 // the plain os call rather than through internal/regular, which asks the
-// handle, and a rename whose destination is such a row unless it says
-// the last name is the program's own or an id. A new call that opens
+// handle, a rename whose destination is such a row unless it says
+// the last name is the program's own or an id, and a link whose new name
+// is such a row unless it says the link is an exclusive create — which
+// os.Link is: a name that stands, a symbolic link included, is EEXIST,
+// and nothing is followed. A new call that opens
 // something by a path fails this test until its row is written, which is
 // the point: the row is where somebody has to say what the path is.
 
@@ -61,6 +64,11 @@ var plainOpens = map[string]bool{"os.Open": true, "os.OpenFile": true, "os.Creat
 // program's own constant, or an id held to hex or decimal.
 var lastNamePhrases = []string{"; the last name is the program's own", "; the last name is an id"}
 
+// linkPhrase is what a link's new-name row says when the name is from
+// outside: that the link is the exclusive create of that name, as
+// os.Link is, so the name appears only with the content already there.
+const linkPhrase = "; the link is an exclusive create"
+
 // importPaths is the import path each callee package is known by, so an
 // import under another name is still found.
 var importPaths = map[string]string{
@@ -69,11 +77,12 @@ var importPaths = map[string]string{
 }
 
 // site is one call of a path-taking function; dest says the argument is
-// a rename's destination.
+// a rename's destination, link that it is a link's new name.
 type site struct {
 	key  string
 	pos  token.Position
 	dest bool
+	link bool
 }
 
 // row is one ledger line.
@@ -286,7 +295,9 @@ func take(name string) error {
 // operator's row and a local one. Then the rename rule: a rename whose
 // destination is a network name fails unless the row says the last name
 // is the program's own or an id, and the source argument is not held to
-// the phrase.
+// the phrase; a link whose new name is a network name fails unless the
+// row says the link is an exclusive create, and its old name is not held
+// to it.
 func TestALedgerHoldsANameFromOutsideToTheHandle(t *testing.T) {
 	root := plantModule(t, `package planted
 
@@ -310,6 +321,8 @@ func take(name string) error {
 }
 
 func move(from, to string) error { return os.Rename(from, to) }
+
+func link(old, new string) error { return os.Link(old, new) }
 `)
 	if err := os.WriteFile(filepath.Join(root, "internal", "planted", "planted_test.go"),
 		[]byte("package planted\n\nimport \"testing\"\n\nfunc TestLimitPlanted(t *testing.T) {}\n"), 0o600); err != nil {
@@ -320,14 +333,20 @@ func move(from, to string) error { return os.Rename(from, to) }
 	readByHandle := "internal/planted/planted.go take regular.ReadFile(name)"
 	from := "internal/planted/planted.go move os.Rename(from)"
 	to := "internal/planted/planted.go move os.Rename(to)"
+	oldName := "internal/planted/planted.go link os.Link(old)"
+	newName := "internal/planted/planted.go link os.Link(new)"
 	handleSentence := "opens a name from outside without the handle check: use internal/regular"
 	renameSentence := "no rename onto a name from outside"
+	linkSentence := "a link's new name from outside is taken by the link's exclusive create, and the row says so"
 	wrong := []struct{ key, prov, want string }{
 		{open, "network: a name, take at take shown by TestLimitPlanted", handleSentence},
 		{open, "derived: an entry of its own directory, take at take shown by TestLimitPlanted", handleSentence},
 		{to, "network: a name, take at take shown by TestLimitPlanted", renameSentence},
 		{to, "derived: an entry of its own directory shown by TestLimitPlanted", renameSentence},
 		{to, "network: a name, take at take; the last name is nobody's shown by TestLimitPlanted", renameSentence},
+		{newName, "network: a name, take at take shown by TestLimitPlanted", linkSentence},
+		{newName, "derived: an entry of its own directory, take at take shown by TestLimitPlanted", linkSentence},
+		{newName, "network: a name, take at take; the last name is the program's own shown by TestLimitPlanted", linkSentence},
 	}
 	for _, tc := range wrong {
 		problems, _ := check(root, tc.key+" = "+tc.prov+"\n")
@@ -350,11 +369,14 @@ func move(from, to string) error { return os.Rename(from, to) }
 		{to, "network: a name, take at take; the last name is the program's own shown by TestLimitPlanted"},
 		{to, "network: a name, take at take; the last name is an id shown by TestLimitPlanted"},
 		{to, "derived: an entry of its own directory, take at take; the last name is an id shown by TestLimitPlanted"},
+		{oldName, "network: a name, take at take shown by TestLimitPlanted"},
+		{newName, "network: a name, take at take; the link is an exclusive create shown by TestLimitPlanted"},
+		{newName, "local"},
 	}
 	for _, tc := range right {
 		problems, _ := check(root, tc.key+" = "+tc.prov+"\n")
 		for _, p := range problems {
-			if strings.Contains(p, handleSentence) || strings.Contains(p, renameSentence) {
+			if strings.Contains(p, handleSentence) || strings.Contains(p, renameSentence) || strings.Contains(p, linkSentence) {
 				t.Errorf("%s = %q: %q", tc.key, tc.prov, p)
 			}
 		}
@@ -417,12 +439,16 @@ func check(root, ledger string) (problems []string, sites []site) {
 			if plainOpens[calleeOf(r.key)] && !strings.HasPrefix(r.key, "internal/regular/") {
 				problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s opens a name from outside without the handle check: use internal/regular", r.line, r.key))
 			}
-			dest := false
+			dest, link := false, false
 			for _, s := range sites {
 				dest = dest || s.dest
+				link = link || s.link
 			}
 			if dest && !saysLastName(r.provenance) {
 				problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s: no rename onto a name from outside: create it exclusively through internal/regular, or say what the last name is (%q or %q)", r.line, r.key, lastNamePhrases[0], lastNamePhrases[1]))
+			}
+			if link && !strings.HasSuffix(r.provenance, linkPhrase) {
+				problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s: a link's new name from outside is taken by the link's exclusive create, and the row says so (%q)", r.line, r.key, linkPhrase))
 			}
 		}
 		if strings.HasPrefix(r.provenance, "network:") {
@@ -518,6 +544,7 @@ func sitesIn(fset *token.FileSet, f *ast.File, rel string) []site {
 				key:  fmt.Sprintf("%s %s %s(%s)", rel, enclosing, callee, types.ExprString(call.Args[i])),
 				pos:  fset.Position(call.Pos()),
 				dest: callee == "os.Rename" && i == 1,
+				link: callee == "os.Link" && i == 1,
 			})
 		}
 		return true

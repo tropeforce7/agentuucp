@@ -132,7 +132,9 @@ func ValidName(name string) error {
 	// trailing dot, which Windows strips so that "bugs." and "bugs" would
 	// be one directory.
 	if i := strings.IndexAny(name, WindowsForbidden); i >= 0 {
-		return fmt.Errorf("name contains %q, which Windows forbids in a file name", name[i])
+		// The set is ASCII, so the byte is the character; %q of a byte
+		// would print a rune literal where the sentence quotes strings.
+		return fmt.Errorf("name contains %q, which Windows forbids in a file name", string(name[i]))
 	}
 	if strings.HasSuffix(name, ".") && name != "." && name != ".." {
 		return errors.New("name ends with a dot, which Windows strips")

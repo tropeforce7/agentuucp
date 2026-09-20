@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -205,3 +206,80 @@ func TestMigrationChecksTheSQLiteVersion(t *testing.T) {
 }
 
 func contains(s, sub string) bool { return bytes.Contains([]byte(s), []byte(sub)) }
+
+// A relay upgrading in place from version 7: the migration adds the
+// index the sender's count of open uploads reads under, and nothing else
+// — an upload in progress and a queued message come across as they were,
+// and the migrated database is the fresh database's shape. A version-7
+// database is the fresh schema less that index.
+func TestMigrationFromVersionSeven(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "v7.db")
+	msgs := filepath.Join(dir, "messages")
+	people := ids(t, "alice", "bob")
+	alice, bob := people[0], people[1]
+
+	fresh, err := OpenStore(dbPath, msgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fresh.Register(bob.Fingerprint(), bob.Public().Bundle(), "bob", RegisterOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	id, _ := NewUploadID()
+	if err := fresh.OpenUpload(id, bob.Fingerprint(), alice.Fingerprint(), "default", 5000, now, now.Add(time.Minute), Quotas{}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fresh.db.Exec(`DROP INDEX uploads_from_fp`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fresh.db.Exec(`PRAGMA user_version = 7`); err != nil {
+		t.Fatal(err)
+	}
+	fresh.Close()
+
+	migrated, err := OpenStore(dbPath, msgs)
+	if err != nil {
+		t.Fatalf("a version 7 database would not open: %v", err)
+	}
+	defer migrated.Close()
+	if migrated.MigratedFrom() != 7 {
+		t.Errorf("MigratedFrom is %d, want 7", migrated.MigratedFrom())
+	}
+	var version int
+	if err := migrated.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != schemaVersion {
+		t.Fatalf("version %d after migrating, want %d", version, schemaVersion)
+	}
+	var indexed int
+	if err := migrated.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'uploads_from_fp'`).Scan(&indexed); err != nil {
+		t.Fatal(err)
+	}
+	if indexed != 1 {
+		t.Error("the migration did not add uploads_from_fp")
+	}
+	u, err := migrated.Upload(id)
+	if err != nil || u.From != alice.Fingerprint() || u.Size != 5000 {
+		t.Fatalf("the upload after the migration: %+v %v", u, err)
+	}
+	// The count the index serves, and the plan that uses it.
+	var plan string
+	if err := migrated.db.QueryRow(`EXPLAIN QUERY PLAN SELECT COUNT(*), COALESCE(MIN(expires), 0) FROM uploads WHERE from_fp = ?`, alice.Fingerprint()).Scan(new(int), new(int), new(int), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan, "uploads_from_fp") {
+		t.Errorf("the sender's count does not use the index: %s", plan)
+	}
+
+	scratch, err := OpenStore(filepath.Join(dir, "fresh.db"), filepath.Join(dir, "fresh-messages"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scratch.Close()
+	if want, got := tableDDL(t, scratch), tableDDL(t, migrated); want != got {
+		t.Errorf("migrated DDL differs from fresh:\n%s\n---\n%s", got, want)
+	}
+}

@@ -676,7 +676,9 @@ the two tables that hold the directories owners push. Mail in flight, the
 counters and the message id sequence are untouched, and the change runs in
 one transaction, so a restart that dies part way leaves the old version to
 be migrated at the next start. Nothing changes for anyone until an owner
-pushes a directory.
+pushes a directory. The step from 7 to 8 adds one index, on the sender of
+each upload in progress, for the count `max_open_uploads` reads at every
+open; no row changes.
 
 **Backups** are small, because the relay holds only what is in transit and
 cannot read any of it. What is worth keeping is the `auu-ca` directory on your

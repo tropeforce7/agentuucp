@@ -829,8 +829,32 @@ func TestLimitProxyListenIsAnAddressNotAPath(t *testing.T) {
 // just made), which the test asks the disk. The contents
 // are by digest, the report lines say the sender's name where it
 // differs, a witness outside is untouched, the existing A.txt is as it
-// was, and nothing else is in the directory.
+// was, and nothing else is in the directory — no temporary left behind.
+// Shown on both write paths: the link, and the copy a filesystem that
+// refuses links gets.
 func TestLimitExtractionWritesSafeUniqueNames(t *testing.T) {
+	onEachWritePath(t, extractionWritesSafeUniqueNames)
+}
+
+// onEachWritePath runs body with the name taken by the link and then by
+// the exclusive create and copy, the path a filesystem that refuses hard
+// links takes.
+func onEachWritePath(t *testing.T, body func(t *testing.T)) {
+	t.Helper()
+	for _, links := range []bool{true, false} {
+		name := "by the link"
+		if !links {
+			name = "by the create and the copy"
+		}
+		t.Run(name, func(t *testing.T) {
+			hardLinks = links
+			t.Cleanup(func() { hardLinks = true })
+			body(t)
+		})
+	}
+}
+
+func extractionWritesSafeUniqueNames(t *testing.T) {
 	s, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -939,8 +963,13 @@ func rawAttachment(name string, data []byte) message.Attachment {
 // into a home's spool by position, saved as a streamed record with the
 // sender's names, and extracted into a directory that already holds
 // A.txt: every file under its safe name, unique at the write, with the
-// bytes the sender sent, and nothing beside the directory.
+// bytes the sender sent, and nothing beside the directory. On both write
+// paths.
 func TestLimitAStreamExtractsUnderSafeUniqueNames(t *testing.T) {
+	onEachWritePath(t, aStreamExtractsUnderSafeUniqueNames)
+}
+
+func aStreamExtractsUnderSafeUniqueNames(t *testing.T) {
 	alice, err := identity.Generate("alice")
 	if err != nil {
 		t.Fatal(err)

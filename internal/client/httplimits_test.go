@@ -183,6 +183,11 @@ func TestLimitAnAnswerIsHeldToWhatItsRouteHolds(t *testing.T) {
 	if !errors.Is(err, ErrMalformedAnswer) || !strings.Contains(err.Error(), fmt.Sprintf("under %d bytes", hold)) {
 		t.Fatalf("a page over the cap: %v; want the malformed answer naming the cap of %d", err, hold)
 	}
+	// A page refused for its size asks the relay's max_bytes once more,
+	// in case it was raised; it was not, and the refusal stands.
+	if n := healths.Load(); n != 2 {
+		t.Fatalf("the relay's max_bytes was asked %d times after a page over the cap; want once more, 2", n)
+	}
 
 	// The fixed hold, on the health answer: at it, taken; one over, refused.
 	fixed := int64(2 * relayapi.DefaultMaxBytes)
@@ -194,6 +199,92 @@ func TestLimitAnAnswerIsHeldToWhatItsRouteHolds(t *testing.T) {
 	err = c.Health(context.Background())
 	if !errors.Is(err, ErrMalformedAnswer) || !strings.Contains(err.Error(), fmt.Sprintf("under %d bytes", fixed)) {
 		t.Fatalf("a health answer one over the fixed hold: %v; want the malformed answer naming the hold of %d", err, fixed)
+	}
+}
+
+// TestARaisedMaxBytesIsLearnedWhenAPageIsRefusedForItsSize: a client
+// learns the relay's max_bytes once and holds it; an operator who raises
+// the setting under a client that runs for days would otherwise leave it
+// refusing every page the relay now builds larger, and a watch ending on
+// a malformed answer. So a page refused for its size asks health once
+// more: when the figure grew, the page is taken under the new hold; when
+// it did not, or when the page is over the new hold too, the refusal
+// stands. The health is asked once per refusal and never otherwise.
+func TestARaisedMaxBytesIsLearnedWhenAPageIsRefusedForItsSize(t *testing.T) {
+	var maxBytes atomic.Int64
+	maxBytes.Store(100 << 10)
+	var page, healths, listings atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/health" {
+			healths.Add(1)
+			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: maxBytes.Load()})
+			return
+		}
+		listings.Add(1)
+		json.NewEncoder(w).Encode(map[string]any{
+			"messages": []map[string]any{{"id": 1, "received": "2026-09-20T00:00:00Z", "kind": "envelope",
+				"size": page.Load(), "channel": "default", "envelope": map[string]any{"v": 1, "to": "x", "ct": strings.Repeat("A", int(page.Load()))}}},
+			"queued": 1,
+			"allow":  "none",
+		})
+	}))
+	t.Cleanup(srv.Close)
+	c, err := New(srv.URL, testIdentity(t, "alice"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	holdFor := func(m int64) int64 { return 2*m + relayapi.FramingAllowance }
+	old := holdFor(100 << 10)
+	page.Store(old - 200)
+	if _, err := c.List(context.Background(), 0, 10); err != nil {
+		t.Fatalf("a page under the hold: %v", err)
+	}
+	if healths.Load() != 1 || listings.Load() != 1 {
+		t.Fatalf("healths %d, listings %d after one page; want 1 and 1", healths.Load(), listings.Load())
+	}
+
+	// The operator raises max_bytes and the relay builds a larger page:
+	// refused under the old hold, health asked once more, the figure
+	// grew, the page taken under the new hold, all in one List.
+	maxBytes.Store(200 << 10)
+	page.Store(old + 1)
+	if _, err := c.List(context.Background(), 0, 10); err != nil {
+		t.Fatalf("a page over the old hold after max_bytes was raised: %v; want it taken under the new", err)
+	}
+	if healths.Load() != 2 || listings.Load() != 3 {
+		t.Fatalf("healths %d, listings %d; want 2 (asked once more) and 3 (the refused page and the retry)", healths.Load(), listings.Load())
+	}
+	// The new figure is kept: the next page of that size needs no asking.
+	if _, err := c.List(context.Background(), 0, 10); err != nil {
+		t.Fatal(err)
+	}
+	if healths.Load() != 2 || listings.Load() != 4 {
+		t.Fatalf("healths %d, listings %d; want 2 and 4", healths.Load(), listings.Load())
+	}
+
+	// A page over the new hold too: health asked once more, the figure
+	// did not grow, the refusal stands naming the new hold, and the
+	// listing is not tried again.
+	now := holdFor(200 << 10)
+	page.Store(now + 1)
+	_, err = c.List(context.Background(), 0, 10)
+	if !errors.Is(err, ErrMalformedAnswer) || !strings.Contains(err.Error(), fmt.Sprintf("under %d bytes", now)) {
+		t.Fatalf("a page over the new hold: %v; want the malformed answer naming %d", err, now)
+	}
+	if healths.Load() != 3 || listings.Load() != 5 {
+		t.Fatalf("healths %d, listings %d; want 3 and 5", healths.Load(), listings.Load())
+	}
+	// A figure that fell is not taken: a page over the hold asks once
+	// more, the relay now says less, and the refusal names the hold as it
+	// grew to, not the smaller figure.
+	maxBytes.Store(50 << 10)
+	_, err = c.List(context.Background(), 0, 10)
+	if !errors.Is(err, ErrMalformedAnswer) || !strings.Contains(err.Error(), fmt.Sprintf("under %d bytes", now)) {
+		t.Fatalf("a page over the hold after the relay's figure fell: %v; want the refusal naming %d, the hold as learned", err, now)
+	}
+	if healths.Load() != 4 || listings.Load() != 6 {
+		t.Fatalf("healths %d, listings %d; want 4 and 6", healths.Load(), listings.Load())
 	}
 }
 

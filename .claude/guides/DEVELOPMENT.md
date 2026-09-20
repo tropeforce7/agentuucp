@@ -1127,7 +1127,12 @@ guides by the `rules-review` skill, which writes a record under
 test that shows the value. The hook in `.claude/hooks/rules-gate.sh` refuses
 a commit with no record for the staged diff, or one that does not say ready.
 The record is the answer to "what did you check", and it is written before
-anyone has to ask.
+anyone has to ask. The gate reads the command as sh does and does not
+expand, so a command word or a git subcommand it cannot read as a literal
+word — a variable, or a word a `$( )` or a backtick is part of — is
+refused rather than guessed: the ultra review found `x=commit; git $x`
+and `git $(echo commit)` passing as "not a commit", and the gate is a
+guard against a commit made by habit, which such a spelling never is.
 
 **The specifications are not in the repository.** `reviews/` is git-ignored.
 Do not commit anything from it, and do not write anything there except

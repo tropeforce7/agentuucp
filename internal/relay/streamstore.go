@@ -361,10 +361,26 @@ func (s *Store) ReceiveUpload(id string, offset int64, threshold int64, now func
 			return Received{Gone: true}, s.fault(s.uploadPath(id), err)
 		}
 		messageID, err := s.placeUpload(u)
-		s.forgetUploadLock(id, unlock)
 		if err != nil {
+			// The row stands as it was, at received, and the file holds
+			// the whole stream under the upload's name, or is gone with a
+			// message file placeUpload removed. Left so, the sender's
+			// next attempt from received would append a second copy
+			// after the first and place a stream of twice its size,
+			// which the blob route drops as damaged: a busy database or
+			// a rename that failed would have lost the message. So the
+			// file is put back to what the row says, and the next
+			// attempt lands where the row does; where that cannot be
+			// done, the upload goes whole and the sender opens anew.
+			if terr := s.truncateUpload(id, u.Received); terr != nil {
+				s.abortLocked(id)
+				s.forgetUploadLock(id, unlock)
+				return Received{Gone: true}, err
+			}
+			unlock()
 			return Received{Offset: u.Received}, err
 		}
+		s.forgetUploadLock(id, unlock)
 		return Received{Placed: messageID, Offset: u.Size}, nil
 	}
 
@@ -427,11 +443,34 @@ func isFileError(err error) bool {
 	return errors.As(err, &pe) || errors.Is(err, syscall.ENOSPC) || errors.Is(err, syscall.EDQUOT)
 }
 
+// truncateUpload puts an upload's file back to n bytes, by the handle,
+// synced: what a failed placement leaves at full size is cut to the
+// length its row names, so the next attempt appends where the row says.
+func (s *Store) truncateUpload(id string, n int64) error {
+	f, err := regular.OpenFile(s.uploadPath(id), os.O_WRONLY, fileMode)
+	if err != nil {
+		return s.fault(s.uploadPath(id), err)
+	}
+	if err := f.Truncate(n); err != nil {
+		f.Close()
+		return s.fault(s.uploadPath(id), err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return s.fault(s.uploadPath(id), err)
+	}
+	return s.fault(s.uploadPath(id), f.Close())
+}
+
 // placeUpload turns a finished upload into a message, under the upload's
 // lock, which the caller holds.
 //
 // The file is renamed into place before the transaction commits, so the
-// invariant Put keeps holds here too: after a commit there is always a file.
+// invariant Put keeps holds here too: after a commit there is always a
+// file. On any failure it leaves no orphan: a message file left by a
+// failure after the rename — the directory's sync, the commit — is
+// removed, so that the caller finds the upload's file where it was or
+// gone, never a third thing.
 func (s *Store) placeUpload(u *Upload) (int64, error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -456,6 +495,7 @@ func (s *Store) placeUpload(u *Upload) (int64, error) {
 		return 0, err
 	}
 	if err := s.place(s.uploadPath(u.ID), u.To, messageID); err != nil {
+		s.removeMessage(u.To, messageID)
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {

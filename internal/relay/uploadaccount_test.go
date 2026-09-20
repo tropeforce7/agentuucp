@@ -3,11 +3,15 @@ package relay
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -335,20 +339,61 @@ func TestThePostBytesBudgetChargesWhatTheRelayHolds(t *testing.T) {
 		}
 		budget(t, h, burst-kept, "the resumed attempt that stopped short")
 	})
-	t.Run("a placement that failed keeps the row and gives nothing back", func(t *testing.T) {
+	t.Run("a placement that failed with the file gone aborts the upload and gives back the size", func(t *testing.T) {
 		h := fresh(t)
 		id := h.openOrFail(alice, to, size)
 		// The attempt reaches the end with the upload's file gone from
-		// under its name: the copy lands on the open handle, and the
-		// rename into the mailbox fails, so the row stays as it stood.
+		// under its name: the copy lands on the open handle, the rename
+		// into the mailbox fails, and there is no file to put back to
+		// what the row says, so the upload goes whole and the sender
+		// opens anew; what the relay never held comes back.
 		status, body := h.putRemovingTheFile(alice, id, blob, 100)
 		if status != http.StatusInternalServerError {
 			t.Fatalf("the attempt whose placement failed: %d %s; want 500", status, body)
 		}
-		if row, _ := h.uploadLeft(id); !row {
-			t.Fatal("the row went with a placement that failed")
+		if row, file := h.uploadLeft(id); row || file >= 0 {
+			t.Fatalf("after the failed placement with the file gone: row %v, file %d; want the upload gone", row, file)
 		}
-		budget(t, h, burst-size, "the failed placement")
+		budget(t, h, burst, "the failed placement with the file gone")
+	})
+	t.Run("a placement that failed with the file present keeps the row, the file at what the row says, and the charge", func(t *testing.T) {
+		h := fresh(t)
+		id := h.openOrFail(alice, to, size)
+		// The mailbox's directory cannot be made: a file stands where
+		// it would go, so the placement fails before the rename with
+		// the upload's file at full size under its name.
+		dir := h.store.mailboxDir(to)
+		if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dir, []byte("in the way"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if status, body, _ := h.putStream(alice, id, blob, 0); status != http.StatusInternalServerError {
+			t.Fatalf("the attempt whose placement failed: %d %s; want 500", status, body)
+		}
+		if row, file := h.uploadLeft(id); !row || file != 0 {
+			t.Fatalf("after the failed placement: row %v, file %d bytes; want the row and the file put back to 0, what the row says", row, file)
+		}
+		budget(t, h, burst-size, "the failed placement with the file kept")
+		// The way cleared, the sender's next attempt from zero places
+		// the stream whole, and the blob is served, not 410.
+		if err := os.Remove(dir); err != nil {
+			t.Fatal(err)
+		}
+		status, body, _ := h.putStream(alice, id, blob, 0)
+		if status != http.StatusCreated {
+			t.Fatalf("the attempt after the way was cleared: %d %s; want 201", status, body)
+		}
+		var done relayapi.PutStreamResponse
+		if err := json.Unmarshal(body, &done); err != nil {
+			t.Fatal(err)
+		}
+		status, got, _ := h.sendRaw(bob, "GET", "/v1/mailbox/"+to+"/"+strconv.FormatInt(done.ID, 10)+"/blob", nil, nil)
+		if status != http.StatusOK || !bytes.Equal(got, blob) {
+			t.Fatalf("the blob after the second attempt: %d, %d bytes; want 200 and the stream whole, %d bytes", status, len(got), len(blob))
+		}
+		budget(t, h, burst-size, "the placement")
 	})
 	t.Run("a return after the hour fills the budget and no more", func(t *testing.T) {
 		h := fresh(t)
@@ -504,7 +549,7 @@ func TestAnAttemptSaysWhetherTheUploadWent(t *testing.T) {
 			t.Fatalf("received %+v, %v; want Gone with the sync's error", received, err)
 		}
 	})
-	t.Run("a placement that failed keeps the row", func(t *testing.T) {
+	t.Run("a placement that failed with the file gone", func(t *testing.T) {
 		h, id := open(t)
 		received, err := receive(h, id, 0, func(f *os.File, want int64) (int64, error) {
 			n, werr := f.Write(blob)
@@ -512,14 +557,99 @@ func TestAnAttemptSaysWhetherTheUploadWent(t *testing.T) {
 				return int64(n), werr
 			}
 			// The file goes from under its name; the rename into the
-			// mailbox fails and the transaction rolls back.
+			// mailbox fails and the transaction rolls back, and there is
+			// no file to put back to what the row says: the upload goes.
 			return int64(n), os.Remove(h.store.uploadPath(id))
 		})
-		if err == nil || received.Gone || received.Placed != 0 {
-			t.Fatalf("received %+v, %v; want not Gone with the placement's error", received, err)
+		if err == nil || !received.Gone || received.Placed != 0 {
+			t.Fatalf("received %+v, %v; want Gone with the placement's error", received, err)
 		}
-		if row, _ := h.uploadLeft(id); !row {
-			t.Fatal("the row went with a placement that failed")
+		if row, file := h.uploadLeft(id); row || file >= 0 {
+			t.Fatalf("after the failed placement: row %v, file %d; want the upload gone", row, file)
+		}
+	})
+	t.Run("a placement that failed with the file present is put back to what the row says", func(t *testing.T) {
+		h, id := open(t)
+		dir := h.store.mailboxDir(bob.Fingerprint())
+		if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dir, []byte("in the way"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		received, err := receive(h, id, 0, func(f *os.File, want int64) (int64, error) {
+			n, werr := f.Write(blob)
+			return int64(n), werr
+		})
+		if err == nil || received.Gone || received.Placed != 0 || received.Offset != 0 {
+			t.Fatalf("received %+v, %v; want not Gone, at offset 0, with the placement's error", received, err)
+		}
+		if row, file := h.uploadLeft(id); !row || file != 0 {
+			t.Fatalf("after the failed placement: row %v, file %d bytes; want the row and the file at 0", row, file)
+		}
+		// The lock's entry is kept for the upload that is still there.
+		if !h.store.uploadLocked(id) {
+			t.Fatal("the lock's entry went with a placement that failed, the upload still there")
+		}
+		if err := os.Remove(dir); err != nil {
+			t.Fatal(err)
+		}
+		received, err = receive(h, id, 0, func(f *os.File, want int64) (int64, error) {
+			n, werr := f.Write(blob)
+			return int64(n), werr
+		})
+		if err != nil || received.Placed == 0 {
+			t.Fatalf("the attempt after the way was cleared: %+v, %v; want the stream placed", received, err)
+		}
+		_, size, err := h.store.MessageKind(bob.Fingerprint(), received.Placed)
+		info, serr := os.Stat(h.store.messagePath(bob.Fingerprint(), received.Placed))
+		if err != nil || serr != nil || size != int64(len(blob)) || info.Size() != size {
+			t.Fatalf("the placed message: row %d bytes (%v), file %v (%v); want both %d, one copy", size, err, info, serr, len(blob))
+		}
+	})
+	t.Run("a placement that failed after the rename leaves no message file", func(t *testing.T) {
+		if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+			t.Skip("the directory's sync cannot be made to fail here")
+		}
+		h, id := open(t)
+		// The mailbox's directory takes the rename but cannot be opened
+		// to sync: the placement fails after the rename, placeUpload
+		// removes the message file it left, and with the upload's file
+		// gone from under its name the upload goes whole.
+		dir := h.store.mailboxDir(bob.Fingerprint())
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(dir, 0o300); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(dir, 0o700) })
+		received, err := receive(h, id, 0, func(f *os.File, want int64) (int64, error) {
+			n, werr := f.Write(blob)
+			return int64(n), werr
+		})
+		if err == nil || !received.Gone || received.Placed != 0 {
+			t.Fatalf("received %+v, %v; want Gone with the placement's error", received, err)
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Fatalf("a message file was left after a placement that failed past the rename: %v", entries)
+		}
+		if row, file := h.uploadLeft(id); row || file >= 0 {
+			t.Fatalf("after the failed placement: row %v, file %d; want the upload gone", row, file)
+		}
+		var rows int
+		if err := h.store.db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		if rows != 0 {
+			t.Fatalf("%d message rows after a placement that failed; want none", rows)
 		}
 	})
 	t.Run("an offset that did not match", func(t *testing.T) {

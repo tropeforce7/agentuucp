@@ -124,13 +124,17 @@ func (s *Store) Relays() ([]*Relay, error) {
 }
 
 // warnSkippedRelay says once per process that a directory under relays/ is
-// not named as a relay and is not listed, with what to do about it.
+// not named as a relay and is not listed, with what to do about it: the
+// shell's move, since a name the rule refuses is one 'auu relay rename'
+// cannot resolve either, and then the listing to see it.
 func (s *Store) warnSkippedRelay(name string, err error) {
 	path := s.relayDir(name)
-	if _, already := warnedSpool.LoadOrStore(path, true); already {
+	if _, already := warnedOnce.LoadOrStore(path, true); already {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "warning: %s is not a relay directory (%v) and is not listed; rename it to a relay name, or remove it\n", path, err)
+	fmt.Fprintf(os.Stderr, "warning: %s is not a relay directory (%v) and is not listed; "+
+		"move it to a relay name by hand, as in: mv %s %s, then run 'auu relay list'; or remove it\n",
+		path, err, path, s.relayDir("NAME"))
 }
 
 func (s *Store) readRelay(name string) (*Relay, error) {

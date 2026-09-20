@@ -10,8 +10,10 @@
 # tool_name and tool_input.command. A tool that is not Bash passes. The
 # command is read the way sh reads it, not searched as text: words are
 # split on blanks; single quotes, double quotes and backslashes quote;
-# `;`, `&&`, `||`, `|`, `&`, a newline, `(`, `)`, `$(` and a backtick end
-# a simple command; `#` starts a comment; a here-document's body is
+# `;`, `&&`, `||`, `|`, `&`, a newline, `(` and `)` end a simple command;
+# a `$( )` or a backtick substitution is read as commands of its own,
+# inside double quotes too, and stands in its word as a mark the gate
+# cannot read past; `#` starts a comment; a here-document's body is
 # skipped up to its delimiter; a redirection is not a word. So
 # `echo "git commit"` is not a commit, a commit message that mentions -a
 # is not -a, and `git add x && git commit` is two commands. A string
@@ -31,6 +33,15 @@
 #   - Nothing but cd may run before the commit in the same call: the gate
 #     reads the index when the call starts, and the commit reads it later.
 #     A GIT_ variable in front of git is refused for the same reason.
+#   - The command word of a simple command, and git's subcommand, must be
+#     literal words: one that carries a $ or a backtick, or that a $( )
+#     or a backtick substitution is part of, or a git subcommand absent
+#     after git's options, or a -C, --git-dir or --work-tree whose value
+#     is not literal, is refused, since the gate does not expand and the
+#     shell does. `x=commit; git $x`, `git $(echo commit)`, `g=git; $g
+#     commit`, `$(echo git) commit` and `git -C $(pwd) commit` each ran a
+#     commit past the gate as "not a commit" before this, and
+#     `echo "$(git commit -m x)"` ran one the gate never read.
 #   - The command does not choose how the gate runs git: of git's own
 #     options only -C, --git-dir and --work-tree reach the gate's calls,
 #     and those calls turn off core.fsmonitor, external diff and textconv,
@@ -241,18 +252,68 @@ function isreserved(w) {
 }
 function isredir(w) { return w ~ /^[0-9]*[<>]/ || w ~ /^&>/ }
 function refuse(s) { if (verdict != "REFUSE") { verdict = "REFUSE"; reason = s } }
-function addword(w) { NWORD++; WORD[NWORD] = w }
-function flush(    A, k, i) {
+# addword records a word and whether it is literal: one carrying a $ or a
+# backtick is not, a substitution having left its mark in it or a
+# variable standing in it, and the gate does not expand either.
+function addword(w) { NWORD++; WORD[NWORD] = w; CUT[NWORD] = (w ~ /[$`]/) }
+function flush(    A, C, k, i) {
 	k = NWORD
-	for (i = 1; i <= k; i++) A[i] = WORD[i]
+	for (i = 1; i <= k; i++) { A[i] = WORD[i]; C[i] = CUT[i] }
 	NWORD = 0
-	if (k > 0) analyse(A, k)
+	if (k > 0) analyse(A, C, k)
+}
+
+# closeparen is the index of the ) that closes the $( at i, read as sh
+# reads it: quotes and backslashes skipped over, ( and ) nested; L + 1
+# when the text ends first, so an unclosed substitution runs to the end.
+function closeparen(s, i, L,    d, c, q, j) {
+	d = 1; q = ""; j = i + 2
+	while (j <= L) {
+		c = substr(s, j, 1)
+		if (q == "\047") { if (c == "\047") q = ""; j++; continue }
+		if (q == "\"") {
+			if (c == "\\") { j += 2; continue }
+			if (c == "\"") q = ""
+			j++; continue
+		}
+		if (c == "\\") { j += 2; continue }
+		if (c == "\047" || c == "\"") { q = c; j++; continue }
+		if (c == "(") d++
+		else if (c == ")") { d--; if (d == 0) return j }
+		j++
+	}
+	return L + 1
+}
+
+# closetick is the index of the backtick that closes the one at i, a
+# backslash escaping the next character; L + 1 when the text ends first.
+function closetick(s, i, L,    c, j) {
+	j = i + 1
+	while (j <= L) {
+		c = substr(s, j, 1)
+		if (c == "\\") { j += 2; continue }
+		if (c == "`") return j
+		j++
+	}
+	return L + 1
+}
+
+# inner reads the text of a substitution as commands of its own, in their
+# place in the sequence, with the words of the command around it put
+# aside and restored: a commit inside $( ) is the commit the shell runs.
+function inner(s,    SW, SC, sn, i) {
+	sn = NWORD
+	for (i = 1; i <= sn; i++) { SW[i] = WORD[i]; SC[i] = CUT[i] }
+	NWORD = 0
+	scan(s)
+	for (i = 1; i <= sn; i++) { WORD[i] = SW[i]; CUT[i] = SC[i] }
+	NWORD = sn
 }
 
 # scan reads s as sh would, handing each simple command to analyse as it
 # ends, in order. A string given to sh -c or eval is scanned from inside
 # analyse, so its commands take their place in the sequence.
-function scan(s,    i, L, c, d, q, w, inw, nh, hd, hs, k, t, line) {
+function scan(s,    i, L, c, d, q, w, inw, nh, hd, hs, k, t, line, j) {
 	L = length(s); i = 1; q = ""; w = ""; inw = 0; nh = 0
 	while (i <= L) {
 		c = substr(s, i, 1)
@@ -261,6 +322,16 @@ function scan(s,    i, L, c, d, q, w, inw, nh, hd, hs, k, t, line) {
 			i++; continue
 		}
 		if (q == "\"") {
+			if (c == "$" && substr(s, i + 1, 1) == "(") {
+				j = closeparen(s, i, L)
+				inner(substr(s, i + 2, j - i - 2))
+				w = w "$("; i = j + 1; continue
+			}
+			if (c == "`") {
+				j = closetick(s, i, L)
+				inner(substr(s, i + 1, j - i - 1))
+				w = w "`"; i = j + 1; continue
+			}
 			if (c == "\"") q = ""
 			else if (c == "\\") {
 				d = substr(s, i + 1, 1)
@@ -333,16 +404,24 @@ function scan(s,    i, L, c, d, q, w, inw, nh, hd, hs, k, t, line) {
 		}
 		if (c == "&" && substr(s, i + 1, 1) == ">") { w = w c; inw = 1; i++; continue }
 		if (c == "&" && w ~ /[<>]$/) { w = w c; inw = 1; i++; continue }
-		if (c == ";" || c == "|" || c == "&" || c == "(" || c == ")" || c == "`") {
+		if (c == ";" || c == "|" || c == "&" || c == "(" || c == ")") {
 			if (inw) { addword(w); w = ""; inw = 0 }
 			flush()
 			if ((c == "&" || c == "|") && substr(s, i + 1, 1) == c) i++
 			i++; continue
 		}
+		# A substitution: its text is read as commands of its own, and it
+		# leaves its mark in the word it is part of, which is then not a
+		# word the gate can read as a command or a subcommand.
 		if (c == "$" && substr(s, i + 1, 1) == "(") {
-			if (inw) { addword(w); w = ""; inw = 0 }
-			flush()
-			i += 2; continue
+			j = closeparen(s, i, L)
+			inner(substr(s, i + 2, j - i - 2))
+			w = w "$("; inw = 1; i = j + 1; continue
+		}
+		if (c == "`") {
+			j = closetick(s, i, L)
+			inner(substr(s, i + 1, j - i - 1))
+			w = w "`"; inw = 1; i = j + 1; continue
 		}
 		w = w c; inw = 1; i++
 	}
@@ -350,8 +429,9 @@ function scan(s,    i, L, c, d, q, w, inw, nh, hd, hs, k, t, line) {
 	flush()
 }
 
-# analyse is one simple command, A[1..k].
-function analyse(A, k,    i, j, name, str, gitvar) {
+# analyse is one simple command, A[1..k], with C[1..k] saying which of
+# its words are not literal.
+function analyse(A, C, k,    i, j, name, str, gitvar) {
 	i = 1
 	gitvar = 0
 	while (i <= k && (isreserved(A[i]) || A[i] ~ /^[A-Za-z_][A-Za-z0-9_]*=/)) {
@@ -372,6 +452,7 @@ function analyse(A, k,    i, j, name, str, gitvar) {
 		break
 	}
 	if (i > k) return
+	if (C[i]) { refuse(LITERAL); return }
 	name = base(A[i])
 	if (name == "cd") {
 		if (verdict != "COMMIT") dir = (i + 1 <= k) ? A[i + 1] : ""
@@ -390,7 +471,7 @@ function analyse(A, k,    i, j, name, str, gitvar) {
 	}
 	if (name != "git") { others++; return }
 	if (gitvar) { others++; refuse(GITVAR); return }
-	gitcommand(A, k, i + 1)
+	gitcommand(A, C, k, i + 1)
 }
 
 # gitcommand is a git command: its own options, then the subcommand. Of
@@ -399,15 +480,15 @@ function analyse(A, k,    i, j, name, str, gitvar) {
 # -c can name a command for git to run (core.fsmonitor, diff.external),
 # and --exec-path another git, and the gate does not let the command
 # choose how the gate runs git.
-function gitcommand(A, k, i,    w, name, j, ch, g, isamend) {
+function gitcommand(A, C, k, i,    w, name, j, ch, g, isamend) {
 	g = 0
 	while (i <= k) {
 		w = A[i]
 		if (w == "-C" || w == "--git-dir" || w == "--work-tree") {
-			if (i + 1 > k) { others++; return }
+			if (i + 1 > k || C[i + 1]) { refuse(LITERAL); return }
 			GG[++g] = w; GG[++g] = A[i + 1]; i += 2; continue
 		}
-		if (w ~ /^--(git-dir|work-tree)=/) { GG[++g] = w; i++; continue }
+		if (w ~ /^--(git-dir|work-tree)=/) { if (C[i]) { refuse(LITERAL); return } GG[++g] = w; i++; continue }
 		if (w == "-c" || w == "--namespace" || w == "--super-prefix" || w == "--config-env") {
 			if (i + 1 > k) { others++; return }
 			i += 2; continue
@@ -415,7 +496,8 @@ function gitcommand(A, k, i,    w, name, j, ch, g, isamend) {
 		if (w ~ /^-/) { i++; continue }
 		break
 	}
-	if (i > k || A[i] != "commit") { others++; return }
+	if (i > k || C[i]) { refuse(LITERAL); return }
+	if (A[i] != "commit") { others++; return }
 	if (others > 0) { refuse(ALONE); return }
 	others++
 	isamend = 0
@@ -462,6 +544,7 @@ END {
 	INDEX = "commit from the index: stage with git add, run /rules-review, then git commit with no -a and no paths"
 	ALONE = "run git commit on its own: the gate reads the index when the call starts and the commit would read it later, so nothing but cd may come before it"
 	GITVAR = "a GIT_ variable in front of git commit is refused: the gate reads the repository the command names with cd or -C, not one a variable points at"
+	LITERAL = "the command, or git\047s subcommand, is not a literal word; the gate cannot read it"
 	n = length(S); p = 1; jbad = 0; tool = ""; cmd = ""; havecmd = 0
 	jvalue("")
 	if (jbad || tool == "") { print "NOINPUT"; exit }

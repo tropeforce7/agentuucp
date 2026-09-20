@@ -108,7 +108,9 @@ func ValidAttachmentName(name string) error {
 		return fmt.Errorf("attachment %q: name must not contain a colon, which names a drive or a stream on Windows", name)
 	}
 	if i := strings.IndexAny(name, channels.WindowsForbidden); i >= 0 {
-		return fmt.Errorf("attachment %q: name must not contain %q, which Windows forbids in a file name, so the name is refused for every receiver", name, name[i])
+		// The set is ASCII, so the byte is the character; %q of a byte
+		// would print a rune literal where the sentence quotes strings.
+		return fmt.Errorf("attachment %q: name must not contain %q, which Windows forbids in a file name, so the name is refused for every receiver", name, string(name[i]))
 	}
 	if strings.HasSuffix(name, ".") || strings.HasSuffix(name, " ") {
 		return fmt.Errorf("attachment %q: name ends in a dot or a space, which Windows strips, so the name is refused for every receiver", name)

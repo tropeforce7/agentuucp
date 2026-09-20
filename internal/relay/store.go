@@ -57,7 +57,7 @@ var (
 // schemaVersion is the shape this build understands. Version zero means a
 // database from before any of this, which is refused rather than migrated:
 // nothing was ever deployed, so no migration path back that far is owed.
-const schemaVersion = 7
+const schemaVersion = 8
 
 // SchemaVersion is schemaVersion for the start-up log.
 const SchemaVersion = schemaVersion
@@ -169,7 +169,11 @@ CREATE INDEX IF NOT EXISTS messages_to ON messages(to_fp, id);`
 	// uploads is the one place the relay records who sent a message, because
 	// it must know who may append to a half-finished one. The row is deleted
 	// when the upload completes or is abandoned; the message it becomes
-	// carries no sender at all.
+	// carries no sender at all. The index on from_fp is what makes the
+	// sender's count at an open a range and not a scan, as messages_to
+	// does for a mailbox's page; it is its own constant so that the
+	// migration that adds it to an existing database and the fresh schema
+	// write one text.
 	uploadsTable = `CREATE TABLE IF NOT EXISTS uploads (
 	id       TEXT PRIMARY KEY,
 	to_fp    TEXT NOT NULL REFERENCES mailboxes(fp) ON DELETE CASCADE,
@@ -180,7 +184,10 @@ CREATE INDEX IF NOT EXISTS messages_to ON messages(to_fp, id);`
 	expires  INTEGER NOT NULL,
 	channel  TEXT NOT NULL DEFAULT 'default'
 );
-CREATE INDEX IF NOT EXISTS uploads_expires ON uploads(expires);`
+CREATE INDEX IF NOT EXISTS uploads_expires ON uploads(expires);
+` + uploadsFromIndex
+	uploadsFromIndex = `CREATE INDEX IF NOT EXISTS uploads_from_fp ON uploads(from_fp);`
+
 	noncesTable = `CREATE TABLE IF NOT EXISTS nonces (
 	nonce   TEXT PRIMARY KEY,
 	expires INTEGER NOT NULL
@@ -342,6 +349,10 @@ DROP TABLE uploads_v5;
 	// DDL the same text, and the old table goes.
 	6: allowlistsTable + `
 DROP TABLE allowlist;`,
+	// The index for the sender's count of open uploads, which the cap on
+	// them reads at every open. A new index and nothing else: no row
+	// changes, and IF NOT EXISTS makes a repeated run a no-op.
+	7: uploadsFromIndex,
 }
 
 // OpenStore opens or creates the relay database at dbPath, with message bodies
