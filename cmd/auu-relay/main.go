@@ -67,6 +67,7 @@ type flagValues struct {
 	mailboxMaxMessages   int64
 	mailboxMaxBytes      int64
 	relayMaxBytes        int64
+	maxOpenUploads       int64
 	maxInflight          int64
 	maxWaiting           int64
 	accessLog            string
@@ -129,6 +130,8 @@ func registerFlags(fs *flag.FlagSet) *flagValues {
 		"most queued bytes for one recipient (0: unlimited)")
 	fs.Int64Var(&f.relayMaxBytes, "relay-max-bytes", d.Limits.RelayMaxBytes,
 		"most queued bytes across the whole relay (0: unlimited)")
+	fs.Int64Var(&f.maxOpenUploads, "max-open-uploads", d.Limits.MaxOpenUploads,
+		"most uploads one sender may have open at once, at most 1000 (0: unlimited)")
 	fs.Int64Var(&f.maxInflight, "max-inflight", d.Limits.MaxInflight,
 		"requests handled at once before answering 503 (0: unlimited)")
 	fs.Int64Var(&f.maxWaiting, "max-waiting", d.Limits.MaxWaiting,
@@ -504,6 +507,7 @@ func logLimits(cfg Config, log *slog.Logger) {
 		"mailbox_max_messages", l.MailboxMaxMessages,
 		"mailbox_max_bytes", l.MailboxMaxBytes,
 		"relay_max_bytes", l.RelayMaxBytes,
+		"max_open_uploads", l.MaxOpenUploads,
 		"max_inflight", l.MaxInflight,
 		"max_waiting", l.MaxWaiting,
 		"access_log", cfg.AccessLog)

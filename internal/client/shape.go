@@ -116,8 +116,8 @@ func (c *Client) checkStatus(st *relayapi.AdminStatusResponse) error {
 		count{"limits.post_bytes_per_hour", l.PostBytesPerHour}, count{"limits.unauthenticated_per_minute", l.UnauthenticatedPerMinute},
 		count{"limits.registrations_per_hour", l.RegistrationsPerHour}, count{"limits.max_mailboxes", l.MaxMailboxes},
 		count{"limits.mailbox_max_messages", l.MailboxMaxMessages}, count{"limits.mailbox_max_bytes", l.MailboxMaxBytes},
-		count{"limits.relay_max_bytes", l.RelayMaxBytes}, count{"limits.max_inflight", l.MaxInflight},
-		count{"limits.max_waiting", l.MaxWaiting})
+		count{"limits.relay_max_bytes", l.RelayMaxBytes}, count{"limits.max_open_uploads", l.MaxOpenUploads},
+		count{"limits.max_inflight", l.MaxInflight}, count{"limits.max_waiting", l.MaxWaiting})
 }
 
 // checkHealth is the shape of a relay's health: the parameter set it

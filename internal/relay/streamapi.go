@@ -23,9 +23,14 @@ import (
 // handleOpenStream reserves room for a stream and hands back an upload to
 // append to.
 //
-// Every check happens before a byte is written, and the byte budget is charged
-// with the whole declared size: a sender who cannot afford the stream is told
-// so now rather than after uploading most of it.
+// Every check happens before a byte is written, and the byte budget is
+// charged with the whole declared size: a sender who cannot afford the
+// stream is told so now rather than after uploading most of it. What the
+// store then refuses — the mailbox or the relay full, no mailbox, the
+// sender's count of open uploads at the cap, a storage error — is an
+// upload the relay never made a row for, and the charge comes back: the
+// budget charges what the relay ends up holding, and a refused open costs
+// a post and no bytes.
 func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {
 	if !s.cfg.Streams {
 		s.fail(w, http.StatusForbidden, "this relay does not accept streams; ask the operator to set streams")
@@ -118,9 +123,45 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 	// upload nobody puts a byte to within the window is gone.
 	now := s.cfg.Now()
 	expires := now.Add(relayapi.ResumeWindow)
-	switch err := s.store.OpenUpload(id, fp, callerFP, channel, req.Size, now, expires,
-		s.cfg.Limits.Quotas(), s.cfg.MaxStreamBytes); {
+	open := func() error {
+		return s.store.OpenUpload(id, fp, callerFP, channel, req.Size, now, expires,
+			s.cfg.Limits.Quotas(), s.cfg.MaxStreamBytes)
+	}
+	err = open()
+	var capped *OpenUploadsError
+	if errors.As(err, &capped) && !capped.Soonest.After(now) {
+		// The sender's count is at the cap and its soonest expiry has
+		// passed: an upload the relay still holds past its promised end,
+		// untouched since and not yet purged, or mid-attempt with its
+		// lock held. The open meets it the way every upload route meets
+		// an expired upload, by letting it go: the purge, which skips a
+		// locked row, and then the count once more. Without this a
+		// sender who waited the Retry-After of the last refusal would be
+		// refused again with a Retry-After of one second until the
+		// hundredth request purged for it.
+		s.purgeUploads(now)
+		err = open()
+	}
+	if err != nil {
+		s.lim.postBytes.Return(callerFP, req.Size)
+	}
+	switch {
 	case err == nil:
+	case errors.As(err, &capped):
+		// Retry-After is the seconds to the sender's soonest expiry on
+		// the relay's clock, rounded up so the sender is not invited
+		// back a fraction early, and at least one: a row whose expiry
+		// has passed is mid-attempt, its lock held, and the relay cannot
+		// say when a transfer ends.
+		wait := capped.Soonest.Sub(now)
+		if part := wait % time.Second; part > 0 {
+			wait += time.Second - part
+		}
+		s.rateLimited(w, limitOpenUploads, wait, fmt.Sprintf(
+			"; you have %d uploads open, the most this relay allows one sender at once; "+
+				"an unfinished upload goes within %d seconds of its last byte",
+			capped.Open, relayapi.ResumeWindowSeconds))
+		return
 	case errors.Is(err, ErrMailboxFull):
 		setLimit(w, limitMailboxFull)
 		s.fail(w, http.StatusInsufficientStorage, relayapi.MsgMailboxFull)
@@ -203,7 +244,11 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, callerFP string)
 	}
 	// The edge is inclusive: at exactly expires the upload is still here.
 	if now := s.cfg.Now(); now.After(u.Expires) {
-		if _, err := s.store.AbortUpload(u.ID); err != nil {
+		gone, err := s.store.AbortUpload(u.ID)
+		if gone != nil {
+			s.returnUnheld(gone)
+		}
+		if err != nil {
 			s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
 			return nil, false
 		}
@@ -304,6 +349,12 @@ func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerF
 			}
 			return io.Copy(f, io.LimitReader(body, want))
 		})
+	if received.Gone {
+		// The attempt deleted the upload whole, with the row as it stood
+		// before the attempt: received at the offset, since the row is
+		// written only on the kept path, which keeps.
+		s.returnUnheld(&Upload{From: callerFP, Size: u.Size, Received: offset})
+	}
 	// The answer is written under a window of its own: the stall that
 	// ended a read has spent the write's deadline too, and what the relay
 	// kept is said to anyone still listening.
@@ -411,7 +462,11 @@ func (s *Server) handleAbortStream(w http.ResponseWriter, r *http.Request, calle
 	if !ok {
 		return
 	}
-	if _, err := s.store.AbortUpload(u.ID); err != nil {
+	gone, err := s.store.AbortUpload(u.ID)
+	if gone != nil {
+		s.returnUnheld(gone)
+	}
+	if err != nil {
 		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
 		return
 	}

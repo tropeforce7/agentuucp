@@ -52,7 +52,8 @@ func TestLimitMaxBytesBoundaries(t *testing.T) {
 	}
 }
 
-// Every numeric limit at the extremes of its type.
+// Every numeric limit at the extremes of its type; max_open_uploads, the
+// one with a ceiling, is TestLimitRelaySettings' at its own edges.
 func TestLimitsAtTypeExtremes(t *testing.T) {
 	flags := []string{
 		"--limit-requests", "--limit-posts", "--limit-post-bytes",

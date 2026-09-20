@@ -394,15 +394,15 @@ func TestLimitTheResumeWindowIsSixtySeconds(t *testing.T) {
 	t.Run("a partial nobody resumes is purged past its window", func(t *testing.T) {
 		id := kept(t)
 		clock.advance(60 * time.Second)
-		if purged, _, err := h.store.PurgeUploads(clock.Now()); err != nil || purged != 0 {
-			t.Fatalf("a purge at the edge: purged %d (%v); want none, the edge being inclusive", purged, err)
+		if purged, _, err := h.store.PurgeUploads(clock.Now()); err != nil || len(purged) != 0 {
+			t.Fatalf("a purge at the edge: purged %d (%v); want none, the edge being inclusive", len(purged), err)
 		}
 		if row, file := h.uploadLeft(id); !row || file != 3000 {
 			t.Fatalf("at the edge: row %v, file %d bytes; want the partial still there", row, file)
 		}
 		clock.advance(time.Second)
-		if purged, _, err := h.store.PurgeUploads(clock.Now()); err != nil || purged != 1 {
-			t.Fatalf("a purge one past the edge: purged %d (%v); want the one partial", purged, err)
+		if purged, _, err := h.store.PurgeUploads(clock.Now()); err != nil || len(purged) != 1 {
+			t.Fatalf("a purge one past the edge: purged %d (%v); want the one partial", len(purged), err)
 		}
 		if row, file := h.uploadLeft(id); row || file >= 0 {
 			t.Fatalf("after the purge: row %v, file %d bytes; want neither", row, file)

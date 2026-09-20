@@ -34,7 +34,28 @@ var (
 	// Received beside it says what, if anything, is kept.
 	ErrShortAttempt = errors.New("relay: upload attempt stopped short of the end")
 	ErrStreamTooBig = errors.New("relay: stream is larger than this relay accepts")
+	// ErrOpenUploads is an open refused because the sender has as many
+	// uploads open as the quotas allow. The error returned is an
+	// *OpenUploadsError, which says how many and when the soonest expires.
+	ErrOpenUploads = errors.New("relay: the sender has as many uploads open as this relay allows")
 )
+
+// OpenUploadsError is ErrOpenUploads with the count and the sender's
+// soonest expiry, on the relay's clock, for the refusal to say when to
+// come back. An expiry not after now is an upload the relay still holds
+// past its promised end: mid-attempt, its lock held, or untouched since
+// and not yet purged.
+type OpenUploadsError struct {
+	Open    int64
+	Soonest time.Time
+}
+
+func (e *OpenUploadsError) Error() string {
+	return fmt.Sprintf("%v (%d open, the soonest expiring %s)", ErrOpenUploads, e.Open,
+		e.Soonest.UTC().Format(time.RFC3339))
+}
+
+func (e *OpenUploadsError) Unwrap() error { return ErrOpenUploads }
 
 const uploadsName = "uploads"
 
@@ -75,7 +96,17 @@ func NewUploadID() (string, error) {
 func ValidUploadID(s string) bool { return len(s) == 32 && isLowerHex(s) }
 
 // OpenUpload reserves room for a stream and creates its file. Whether
-// there is room is roomFor's answer, the same one Put gets.
+// there is room is roomFor's answer, the same one Put gets; before it,
+// the sender's own count: at q.MaxOpenUploads rows of the sender's, in
+// the same transaction so two opens cannot both be the last under the
+// cap, the open is ErrOpenUploads, carrying the count and the soonest
+// expiry among them. Every row counts, whatever its expiry: a first
+// attempt of a large stream runs for as long as its bytes take, with its
+// row's expiry — the open's plus the window, never moved during the copy
+// — in the past for most of that, so a count of unexpired rows would not
+// count an upload in flight, and four in flight would be no cap at all.
+// The caller meets an expired row the way every upload route does, by
+// letting it go, and asks again.
 func (s *Store) OpenUpload(id, toFP, fromFP, channel string, size int64, now, expires time.Time,
 	q Quotas, maxStream int64) error {
 
@@ -92,6 +123,17 @@ func (s *Store) OpenUpload(id, toFP, fromFP, channel string, size int64, now, ex
 	}
 	defer tx.Rollback()
 
+	if q.MaxOpenUploads > 0 {
+		var open, soonest int64
+		if err := tx.QueryRow(
+			`SELECT COUNT(*), COALESCE(MIN(expires), 0) FROM uploads WHERE from_fp = ?`, fromFP).
+			Scan(&open, &soonest); err != nil {
+			return err
+		}
+		if open >= q.MaxOpenUploads {
+			return &OpenUploadsError{Open: open, Soonest: time.Unix(soonest, 0)}
+		}
+	}
 	if err := roomFor(tx, toFP, size, q); err != nil {
 		return err
 	}
@@ -212,6 +254,15 @@ type Received struct {
 	Kept bool
 	// Expires is when a kept partial goes, on the relay's clock.
 	Expires time.Time
+	// Gone says this attempt deleted the upload whole, its file, its row
+	// and its reservation: an attempt that stopped short and left
+	// nothing, or a kept partial or a finished copy the disk or the
+	// database would not take, with the row as it stood before the
+	// attempt. It is false when the row survives the attempt's failure
+	// — a sync that failed with the file put back, a placement that
+	// failed — and when the row was already gone. The caller charged the
+	// sender for the row and gives back on Gone what the row never held.
+	Gone bool
 }
 
 // ReceiveUpload is one attempt: it copies the stream's bytes from offset
@@ -298,7 +349,7 @@ func (s *Store) ReceiveUpload(id string, offset int64, threshold int64, now func
 				f.Close()
 				s.abortLocked(id)
 				s.forgetUploadLock(id, unlock)
-				return Received{}, s.fault(s.uploadPath(id), err)
+				return Received{Gone: true}, s.fault(s.uploadPath(id), err)
 			}
 			f.Close()
 			unlock()
@@ -307,7 +358,7 @@ func (s *Store) ReceiveUpload(id string, offset int64, threshold int64, now func
 		if err := f.Close(); err != nil {
 			s.abortLocked(id)
 			s.forgetUploadLock(id, unlock)
-			return Received{}, s.fault(s.uploadPath(id), err)
+			return Received{Gone: true}, s.fault(s.uploadPath(id), err)
 		}
 		messageID, err := s.placeUpload(u)
 		s.forgetUploadLock(id, unlock)
@@ -328,7 +379,7 @@ func (s *Store) ReceiveUpload(id string, offset int64, threshold int64, now func
 			f.Close()
 			s.abortLocked(id)
 			s.forgetUploadLock(id, unlock)
-			return Received{}, s.fault(s.uploadPath(id), err)
+			return Received{Gone: true}, s.fault(s.uploadPath(id), err)
 		}
 		if _, err := s.db.Exec(`UPDATE uploads SET received = ?, expires = ? WHERE id = ?`, held, expires.Unix(), id); err != nil {
 			// A partial the row cannot name is not kept: a file longer
@@ -337,7 +388,7 @@ func (s *Store) ReceiveUpload(id string, offset int64, threshold int64, now func
 			f.Close()
 			s.abortLocked(id)
 			s.forgetUploadLock(id, unlock)
-			return Received{}, err
+			return Received{Gone: true}, err
 		}
 		f.Close()
 		unlock()
@@ -345,12 +396,12 @@ func (s *Store) ReceiveUpload(id string, offset int64, threshold int64, now func
 	}
 	f.Truncate(u.Received)
 	f.Close()
-	_, abortErr := s.abortLocked(id)
+	gone, abortErr := s.abortLocked(id)
 	s.forgetUploadLock(id, unlock)
 	if abortErr != nil {
-		return Received{}, abortErr
+		return Received{Gone: gone != nil}, abortErr
 	}
-	return Received{}, s.shortCause(id, copyErr)
+	return Received{Gone: true}, s.shortCause(id, copyErr)
 }
 
 // shortCause is the error an attempt that stopped short is answered with:
@@ -414,32 +465,45 @@ func (s *Store) placeUpload(u *Upload) (int64, error) {
 	return messageID, nil
 }
 
-// AbortUpload drops an upload and releases its reservation. Under the
-// upload's lock, as CompleteUpload is, and the lock's entry goes with the
+// AbortUpload drops an upload and releases its reservation, and hands
+// back the row as it stood, nil when there was none, so the caller can
+// give back what the row was charged for and never held. Under the
+// upload's lock, as an attempt is, and the lock's entry goes with the
 // upload.
-func (s *Store) AbortUpload(id string) (bool, error) {
+func (s *Store) AbortUpload(id string) (*Upload, error) {
 	unlock := s.uploadLock(id)
 	defer s.forgetUploadLock(id, unlock)
 	return s.abortLocked(id)
 }
 
-// abortLocked is AbortUpload with the upload's lock already held.
-func (s *Store) abortLocked(id string) (bool, error) {
+// abortLocked is AbortUpload with the upload's lock already held. The
+// row is read before it is deleted: under the lock nothing else writes
+// it, so what is read is what goes. A row deleted whose file would not
+// go is returned with the fault, since the row is gone and its charge
+// with it.
+func (s *Store) abortLocked(id string) (*Upload, error) {
+	u, err := s.Upload(id)
+	if errors.Is(err, ErrNoUpload) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
 	res, err := s.db.Exec(`DELETE FROM uploads WHERE id = ?`, id)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if n == 0 {
-		return false, nil
+		return nil, nil
 	}
 	if err := os.Remove(s.uploadPath(id)); err != nil && !os.IsNotExist(err) {
-		return true, s.fault(s.uploadPath(id), err)
+		return u, s.fault(s.uploadPath(id), err)
 	}
-	return true, nil
+	return u, nil
 }
 
 // uploadLock takes the lock for one upload, making it if this is the first
@@ -501,7 +565,9 @@ func (s *Store) forgetUploadLock(id string, unlock func()) {
 
 // PurgeUploads abandons uploads nobody finished. Their reservations go with
 // them, which is what stops a forgotten upload holding a mailbox's quota for
-// ever. It says how many it removed and how many it left for next time.
+// ever. It hands back the rows it removed, as each stood, so the caller
+// can give back what each was charged for and never held, and says how
+// many it left for next time.
 //
 // Housekeeping never waits on a sender. The purge runs inside an unrelated
 // caller's request, and an attempt holds its upload's lock across the copy
@@ -510,23 +576,23 @@ func (s *Store) forgetUploadLock(id string, unlock func()) {
 // with that caller's slot held and its answer unsent. An upload whose lock
 // is held is skipped and met at the next purge; by then the attempt has
 // ended, or the expiry has refused it and aborted the row itself.
-func (s *Store) PurgeUploads(now time.Time) (purged, skipped int, err error) {
+func (s *Store) PurgeUploads(now time.Time) (purged []Upload, skipped int, err error) {
 	rows, err := s.db.Query(`SELECT id FROM uploads WHERE expires < ?`, now.Unix())
 	if err != nil {
-		return 0, 0, err
+		return nil, 0, err
 	}
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
-			return 0, 0, err
+			return nil, 0, err
 		}
 		ids = append(ids, id)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
-		return 0, 0, err
+		return nil, 0, err
 	}
 	for _, id := range ids {
 		unlock, ok := s.tryUploadLock(id)
@@ -536,11 +602,11 @@ func (s *Store) PurgeUploads(now time.Time) (purged, skipped int, err error) {
 		}
 		gone, err := s.abortLocked(id)
 		s.forgetUploadLock(id, unlock)
+		if gone != nil {
+			purged = append(purged, *gone)
+		}
 		if err != nil {
 			return purged, skipped, err
-		}
-		if gone {
-			purged++
 		}
 	}
 	return purged, skipped, nil

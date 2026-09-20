@@ -268,7 +268,7 @@ func TestTheUploadLockIsHeldNoLongerThanTheAttempt(t *testing.T) {
 		t.Fatal("the lock entry outlived the upload's placement")
 	}
 	// An abort of an upload that is gone takes and drops a fresh entry too.
-	if aborted, err := h.store.AbortUpload(id); err != nil || aborted {
+	if aborted, err := h.store.AbortUpload(id); err != nil || aborted != nil {
 		t.Fatalf("abort of a placed upload: %v %v", aborted, err)
 	}
 	h.store.uploadsMu.Lock()

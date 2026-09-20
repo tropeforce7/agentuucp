@@ -29,6 +29,13 @@ type Limits struct {
 	MailboxMaxMessages int64
 	MailboxMaxBytes    int64
 	RelayMaxBytes      int64
+	// MaxOpenUploads caps the uploads one sender may have open at once,
+	// across every mailbox it sends to: an upload is open from its 201
+	// until it is placed, aborted or purged, and each is a file and a
+	// reservation the relay holds for the sender. Over it an open is
+	// answered 429 with a Retry-After of the seconds to the sender's
+	// soonest expiry.
+	MaxOpenUploads int64
 
 	// MaxInflight caps requests being handled at once.
 	MaxInflight int64
@@ -54,6 +61,7 @@ func DefaultLimits() Limits {
 		MailboxMaxMessages:       1000,
 		MailboxMaxBytes:          1 << 30,
 		RelayMaxBytes:            0,
+		MaxOpenUploads:           4,
 		MaxInflight:              256,
 		MaxWaiting:               64,
 	}
@@ -65,6 +73,7 @@ func (l Limits) Quotas() Quotas {
 		MailboxMaxMessages: l.MailboxMaxMessages,
 		MailboxMaxBytes:    l.MailboxMaxBytes,
 		RelayMaxBytes:      l.RelayMaxBytes,
+		MaxOpenUploads:     l.MaxOpenUploads,
 	}
 }
 
@@ -89,6 +98,7 @@ const (
 	limitInflight        = "inflight"
 	limitMailboxFull     = "mailbox"
 	limitRelayFull       = "relay storage"
+	limitOpenUploads     = "open uploads"
 	// limitWaiting is logged on a listing that asked to be held and was
 	// answered at once because a cap on holds was reached. The request
 	// was not refused; the field says why a held request was not held.

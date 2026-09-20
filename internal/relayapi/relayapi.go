@@ -268,6 +268,7 @@ type (
 		MailboxMaxMessages       int64 `json:"mailbox_max_messages"`
 		MailboxMaxBytes          int64 `json:"mailbox_max_bytes"`
 		RelayMaxBytes            int64 `json:"relay_max_bytes"`
+		MaxOpenUploads           int64 `json:"max_open_uploads"`
 		MaxInflight              int64 `json:"max_inflight"`
 		MaxWaiting               int64 `json:"max_waiting"`
 	}

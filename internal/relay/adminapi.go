@@ -167,6 +167,7 @@ func (s *Server) handleAdminStatus(w http.ResponseWriter, r *http.Request, body 
 			MailboxMaxMessages:       l.MailboxMaxMessages,
 			MailboxMaxBytes:          l.MailboxMaxBytes,
 			RelayMaxBytes:            l.RelayMaxBytes,
+			MaxOpenUploads:           l.MaxOpenUploads,
 			MaxInflight:              l.MaxInflight,
 			MaxWaiting:               l.MaxWaiting,
 		},

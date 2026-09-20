@@ -334,3 +334,104 @@ func TestExtremeConfiguration(t *testing.T) {
 		}
 	})
 }
+
+// TestLimitReturnNeverFillsPastTheBurst: a return gives a bucket at most
+// what fills it. n at what was taken restores the bucket whole; n past
+// it, one over and the type's maximum, fills it and no more, since a
+// bucket cannot be fuller than a new one; a return after a refill adds to
+// the refilled bucket and is bounded the same way. An unlimited limiter,
+// n of zero or less, and a key with no bucket — never seen, or swept
+// since — are each nothing done: the first has nothing to fill, the
+// second nothing to give, and the third starts full when next seen.
+func TestLimitReturnNeverFillsPastTheBurst(t *testing.T) {
+	// holds asserts a key has exactly n tokens, by taking them and being
+	// refused one more; the clock does not move, so nothing refills.
+	holds := func(t *testing.T, l *Limiter, key string, n int64) {
+		t.Helper()
+		if n > 0 {
+			if ok, _ := l.AllowN(key, n); !ok {
+				t.Fatalf("%s does not hold %d", key, n)
+			}
+		}
+		if ok, _ := l.Allow(key); ok {
+			t.Fatalf("%s holds more than %d", key, n)
+		}
+	}
+
+	t.Run("at what was taken, the bucket is whole", func(t *testing.T) {
+		c := newClock()
+		l := New(1000, time.Hour, time.Hour, c.Now)
+		if ok, _ := l.AllowN("a", 600); !ok {
+			t.Fatal("the charge was refused")
+		}
+		l.Return("a", 600)
+		holds(t, l, "a", 1000)
+	})
+	t.Run("past what was taken, the bucket fills and no more", func(t *testing.T) {
+		for _, n := range []int64{601, 1000, 1001, math.MaxInt64} {
+			c := newClock()
+			l := New(1000, time.Hour, time.Hour, c.Now)
+			if ok, _ := l.AllowN("a", 600); !ok {
+				t.Fatal("the charge was refused")
+			}
+			l.Return("a", n)
+			holds(t, l, "a", 1000)
+		}
+	})
+	t.Run("a return adds to the refilled bucket, bounded the same way", func(t *testing.T) {
+		c := newClock()
+		l := New(1000, time.Hour, time.Hour, c.Now)
+		if ok, _ := l.AllowN("a", 1000); !ok {
+			t.Fatal("the charge was refused")
+		}
+		// Half an hour refills 500, and a return of 300 makes 800.
+		c.advance(30 * time.Minute)
+		l.Return("a", 300)
+		holds(t, l, "a", 800)
+		// Empty again; a return of more than the burst fills it and no more.
+		l.Return("a", 1500)
+		holds(t, l, "a", 1000)
+	})
+	t.Run("an unlimited limiter does nothing", func(t *testing.T) {
+		l := New(0, time.Hour, time.Hour, nil)
+		l.Return("a", 1)
+		l.Return("a", math.MaxInt64)
+		if l.Keys() != 0 {
+			t.Fatal("a return made an unlimited limiter track a key")
+		}
+	})
+	t.Run("zero or less gives nothing", func(t *testing.T) {
+		c := newClock()
+		l := New(1000, time.Hour, time.Hour, c.Now)
+		if ok, _ := l.AllowN("a", 600); !ok {
+			t.Fatal("the charge was refused")
+		}
+		for _, n := range []int64{0, -1, math.MinInt64} {
+			l.Return("a", n)
+		}
+		holds(t, l, "a", 400)
+	})
+	t.Run("a key with no bucket gets none", func(t *testing.T) {
+		c := newClock()
+		l := New(1000, time.Hour, time.Minute, c.Now)
+		l.Return("never", 500)
+		if l.Keys() != 0 {
+			t.Fatal("a return made a bucket for a key never seen")
+		}
+		// Seen, then swept idle: the bucket is gone, and a return makes
+		// no new one; the key starts full when it is next seen.
+		if ok, _ := l.AllowN("swept", 600); !ok {
+			t.Fatal("the charge was refused")
+		}
+		c.advance(2 * time.Minute)
+		l.AllowN("other", 1) // the sweep runs on a spend
+		if l.Keys() != 1 {
+			t.Fatalf("%d keys after the sweep, want other alone", l.Keys())
+		}
+		l.Return("swept", 600)
+		if l.Keys() != 1 {
+			t.Fatal("a return made a bucket for a swept key")
+		}
+		holds(t, l, "swept", 1000)
+	})
+}

@@ -103,6 +103,30 @@ func (l *Limiter) AllowN(key string, n int64) (bool, time.Duration) {
 	return false, roundUp(time.Duration(deficit / l.rate * float64(l.interval)))
 }
 
+// Return gives n tokens back to key's bucket, for a cost that was charged
+// and then not incurred: the relay charges a stream's declared size when
+// the upload is opened, and gives back what it never held when the upload
+// goes unplaced. The bucket is refilled to now first and then given at
+// most what fills it, burst minus what it holds, so a return never makes
+// a bucket fuller than a new one: what the sender could not have had is
+// not created here. Nothing is done for an unlimited limiter, for n of
+// zero or less, or for a key with no bucket, since a key never seen, or
+// evicted or swept since it was, starts full when it is next seen.
+func (l *Limiter) Return(key string, n int64) {
+	if l.Unlimited() || n <= 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if _, ok := l.buckets[key]; !ok {
+		return
+	}
+	now := l.now()
+	e := l.touch(key, now)
+	e.tokens = min(e.tokens+float64(n), l.rate)
+}
+
 // Peek reports whether Allow would succeed, without taking anything.
 func (l *Limiter) Peek(key string) bool {
 	if l.Unlimited() {

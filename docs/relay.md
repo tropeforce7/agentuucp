@@ -56,6 +56,7 @@ flag you do not type never overrides the file.
 | `--mailbox-max-messages N` | `limits.mailbox_max_messages` | 1000 |
 | `--mailbox-max-bytes N` | `limits.mailbox_max_bytes` | 1 GiB |
 | `--relay-max-bytes N` | `limits.relay_max_bytes` | 0, unlimited |
+| `--max-open-uploads N` | `limits.max_open_uploads` | 4, at most 1000 |
 | `--max-inflight N` | `limits.max_inflight` | 256 |
 | `--max-waiting N` | `limits.max_waiting` | 64 |
 | `--access-log full\|minimal` | `access_log` | `full` |
@@ -217,13 +218,14 @@ switch the lot off.
 |---|---|---|
 | `requests_per_minute` | authenticated requests, per identity | 120 |
 | `posts_per_minute` | posts, per identity | 30 |
-| `post_bytes_per_hour` | posted bytes, per identity | 256 MiB |
+| `post_bytes_per_hour` | posted bytes, per identity: an envelope's size, and a stream's declared size when it is opened, of which what the relay never ends up holding — the size less what it received — comes back when the upload goes unplaced | 256 MiB |
 | `unauthenticated_per_minute` | registrations, key lookups and failed authentications, per source address | 30 |
 | `registrations_per_hour` | registrations, per source address | 5 |
 | `max_mailboxes` | mailboxes on the relay | unlimited |
 | `mailbox_max_messages` | messages queued for one recipient | 1000 |
 | `mailbox_max_bytes` | queued bytes for one recipient | 1 GiB |
 | `relay_max_bytes` | queued bytes across the whole relay | unlimited |
+| `max_open_uploads` | uploads one sender may have open at once, across every mailbox it sends to; each is a file and a reservation the relay holds for that sender, which is why it is not a limit to switch off; at most 1000 | 4 |
 | `max_inflight` | requests being handled at once | 256 |
 | `max_waiting` | listings held open at once for watchers; over it the next is answered at once rather than held, and each held listing keeps an in-flight slot, so keep this well under `max_inflight` | 64 |
 
@@ -234,6 +236,29 @@ an envelope posted beside it and for another stream alike, so a sender
 cannot fill a mailbox to its quota under an open reservation and then
 complete the stream on top. The reservation is released when the upload
 completes, is abandoned, or expires.
+
+The sender's byte budget is charged the same way at the open, with the
+whole declared size, so a sender cannot open past it; but the budget
+charges what the relay ends up holding, and what it never held comes back.
+An upload that goes unplaced — aborted, expired, purged, or an attempt that
+stopped short and left nothing — gives back its size less what the relay
+had received; a partial kept for a resume stays charged while it is kept
+and gives back the rest when it expires unplaced; a placed stream gives
+nothing back; and an open the relay refuses after the charge, for a full
+mailbox or the sender's own count, gives back the whole size, so a refused
+open costs a post and no bytes. A sender whose link drops three times on
+a 100 MB stream has spent 100 MB of its hour, not 300.
+
+`max_open_uploads` bounds the count: a sender at it is refused `429 rate
+limited: open uploads` with `Retry-After` set to the seconds until its
+soonest upload expires, and the sentence says that an unfinished upload
+goes within sixty seconds of its last byte. The refusal is one the client
+waits out: `auu send` sleeps the `Retry-After` and asks again, and the
+open that asks again meets the sender's expired uploads and lets them go,
+so a sender who waited is not refused for a slot the purge had not yet
+freed. An upload in flight, its bytes still arriving, holds its slot for
+as long as they do, and the relay cannot say when that ends; a sender at
+the cap over such uploads is asked back in a second.
 
 Two limits are not settings: an allow list may name at most 1000 senders,
 and a channel directory may hold at most 64 channels, each with a name of at

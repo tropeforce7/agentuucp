@@ -98,6 +98,7 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.Limits.MailboxMaxMessages = n }), callStatus},
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.Limits.MailboxMaxBytes = n }), callStatus},
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.Limits.RelayMaxBytes = n }), callStatus},
+		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.Limits.MaxOpenUploads = n }), callStatus},
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.Limits.MaxInflight = n }), callStatus},
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.Limits.MaxWaiting = n }), callStatus},
 		{"/v1/admin/mailboxes/" + fp, mailbox(func(m *relayapi.MailboxRecord, n int64) { m.QueuedMessages = n }), callMailbox},

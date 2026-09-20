@@ -32,10 +32,13 @@ func pauseRelay(t *testing.T) func() {
 }
 
 // n01Bytes is the size of the upload the relay is frozen under: a hundred
-// megabytes, so that the stream opened twice — which the resume does when
-// the relay kept nothing — fits a sender's post_bytes_per_hour budget of
-// 256 MiB, which an open charges whole and an abandoned upload never gives
-// back. The gigabyte the row tried first was refused at the open for that.
+// megabytes, under a sender's post_bytes_per_hour budget of 256 MiB, which
+// an open charges whole; the gigabyte the row tried first was refused at
+// the open for being over the whole budget. A kept partial stays charged
+// while it is kept, and an upload that goes unplaced gives back what the
+// relay never held, so the resume here — on the kept partial's own id —
+// charges nothing more, and one opened anew after nothing was kept would
+// be charged against a budget the first open's charge had come back to.
 const n01Bytes = 100000000
 
 // n01Quota is the relay's share of a processor while the upload runs, as a

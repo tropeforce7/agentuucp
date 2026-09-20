@@ -24,6 +24,7 @@ func TestLimitDefaults(t *testing.T) {
 		got.MailboxMaxMessages != want.MailboxMaxMessages ||
 		got.MailboxMaxBytes != want.MailboxMaxBytes ||
 		got.RelayMaxBytes != want.RelayMaxBytes ||
+		got.MaxOpenUploads != want.MaxOpenUploads ||
 		got.MaxInflight != want.MaxInflight ||
 		got.MaxWaiting != want.MaxWaiting {
 		t.Fatalf("the command's defaults have drifted from the relay's:\n got %+v\nwant %+v", got, want)
@@ -45,6 +46,7 @@ func TestLimitsFromFile(t *testing.T) {
 	    "mailbox_max_messages": 7,
 	    "mailbox_max_bytes": 2048,
 	    "relay_max_bytes": 4096,
+	    "max_open_uploads": 6,
 	    "max_inflight": 9,
 	    "max_waiting": 8
 	  },
@@ -69,6 +71,7 @@ func TestLimitsFromFile(t *testing.T) {
 		{"mailbox_max_messages", l.MailboxMaxMessages, 7},
 		{"mailbox_max_bytes", l.MailboxMaxBytes, 2048},
 		{"relay_max_bytes", l.RelayMaxBytes, 4096},
+		{"max_open_uploads", l.MaxOpenUploads, 6},
 		{"max_inflight", l.MaxInflight, 9},
 		{"max_waiting", l.MaxWaiting, 8},
 	} {
@@ -93,6 +96,7 @@ func TestEveryLimitFlagOverridesTheFile(t *testing.T) {
 	    "mailbox_max_messages": 10,
 	    "mailbox_max_bytes": 10,
 	    "relay_max_bytes": 10,
+	    "max_open_uploads": 10,
 	    "max_inflight": 10,
 	    "max_waiting": 10
 	  },
@@ -108,6 +112,7 @@ func TestEveryLimitFlagOverridesTheFile(t *testing.T) {
 		"--mailbox-max-messages", "7",
 		"--mailbox-max-bytes", "8",
 		"--relay-max-bytes", "9",
+		"--max-open-uploads", "13",
 		"--max-inflight", "12",
 		"--max-waiting", "11",
 		"--access-log", "minimal")
@@ -129,6 +134,7 @@ func TestEveryLimitFlagOverridesTheFile(t *testing.T) {
 		{"mailbox_max_messages", l.MailboxMaxMessages, 7},
 		{"mailbox_max_bytes", l.MailboxMaxBytes, 8},
 		{"relay_max_bytes", l.RelayMaxBytes, 9},
+		{"max_open_uploads", l.MaxOpenUploads, 13},
 		{"max_inflight", l.MaxInflight, 12},
 		{"max_waiting", l.MaxWaiting, 11},
 	} {
@@ -153,6 +159,7 @@ func TestZeroLimitsSurviveTheFile(t *testing.T) {
 	    "registrations_per_hour": 0,
 	    "mailbox_max_messages": 0,
 	    "mailbox_max_bytes": 0,
+	    "max_open_uploads": 0,
 	    "max_inflight": 0,
 	    "max_waiting": 0
 	  }
@@ -164,7 +171,8 @@ func TestZeroLimitsSurviveTheFile(t *testing.T) {
 	l := cfg.Limits.Relay()
 	if l.RequestsPerMinute != 0 || l.PostsPerMinute != 0 || l.PostBytesPerHour != 0 ||
 		l.UnauthenticatedPerMinute != 0 || l.RegistrationsPerHour != 0 ||
-		l.MailboxMaxMessages != 0 || l.MailboxMaxBytes != 0 || l.MaxInflight != 0 || l.MaxWaiting != 0 {
+		l.MailboxMaxMessages != 0 || l.MailboxMaxBytes != 0 || l.MaxOpenUploads != 0 ||
+		l.MaxInflight != 0 || l.MaxWaiting != 0 {
 		t.Fatalf("a limit the file set to zero came back with a default: %+v", l)
 	}
 }
@@ -184,6 +192,8 @@ func TestBadLimitsAreRefused(t *testing.T) {
 		{"negative mailbox messages", []string{"--mailbox-max-messages", "-1"}, "mailbox_max_messages"},
 		{"negative mailbox bytes", []string{"--mailbox-max-bytes", "-1"}, "mailbox_max_bytes"},
 		{"negative relay bytes", []string{"--relay-max-bytes", "-1"}, "relay_max_bytes"},
+		{"negative open uploads", []string{"--max-open-uploads", "-1"}, "max_open_uploads"},
+		{"open uploads over the ceiling", []string{"--max-open-uploads", "1001"}, "max_open_uploads must be at most 1000"},
 		{"negative inflight", []string{"--max-inflight", "-1"}, "max_inflight"},
 		{"negative waiting", []string{"--max-waiting", "-1"}, "max_waiting"},
 		{"unknown access log", []string{"--access-log", "verbose"}, "access_log"},

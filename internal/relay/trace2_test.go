@@ -294,7 +294,7 @@ func TestThePurgeWaitsOnNoSender(t *testing.T) {
 	purged := make(chan result, 1)
 	go func() {
 		p, s, err := h.store.PurgeUploads(time.Now())
-		purged <- result{p, s, err}
+		purged <- result{len(p), s, err}
 	}()
 	select {
 	case r := <-purged:
@@ -323,8 +323,8 @@ func TestThePurgeWaitsOnNoSender(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p != 0 || s != 0 {
-		t.Errorf("the next purge removed %d and skipped %d; want nothing, the stream having been placed", p, s)
+	if len(p) != 0 || s != 0 {
+		t.Errorf("the next purge removed %d and skipped %d; want nothing, the stream having been placed", len(p), s)
 	}
 	if _, err := h.store.Upload(id); !errors.Is(err, ErrNoUpload) {
 		t.Errorf("the upload is still there after the attempt placed it: %v", err)

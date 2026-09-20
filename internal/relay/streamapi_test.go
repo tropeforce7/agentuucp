@@ -413,12 +413,12 @@ func TestStreamLimitsAndSettings(t *testing.T) {
 			time.Now().Add(-time.Hour).Unix()); err != nil {
 			t.Fatal(err)
 		}
-		n, _, err := h.store.PurgeUploads(time.Now())
+		purged, _, err := h.store.PurgeUploads(time.Now())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if n != 1 {
-			t.Fatalf("swept %d uploads, want 1", n)
+		if len(purged) != 1 {
+			t.Fatalf("swept %d uploads, want 1", len(purged))
 		}
 		var left int
 		if err := h.store.db.QueryRow(`SELECT COUNT(*) FROM uploads`).Scan(&left); err != nil {
@@ -989,8 +989,8 @@ func TestAFileLongerThanItsRowIsNotKept(t *testing.T) {
 	if err == nil || errors.Is(err, ErrShortAttempt) || !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("error %v, want the sync's own, the handle being closed", err)
 	}
-	if received != (Received{}) {
-		t.Fatalf("received %+v; want nothing kept", received)
+	if received != (Received{Gone: true}) {
+		t.Fatalf("received %+v; want nothing kept and the upload gone", received)
 	}
 	if _, err := h.store.Upload(opened.Upload); !errors.Is(err, ErrNoUpload) {
 		t.Fatalf("the row after the failed end: %v; want gone", err)

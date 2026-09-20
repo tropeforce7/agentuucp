@@ -104,6 +104,7 @@ cmd/auu-relay/config.go LimitsConfig int MailboxMaxBytes int64 = >= 0 shown by T
 cmd/auu-relay/config.go LimitsConfig int MailboxMaxMessages int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MaxInflight int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MaxMailboxes int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/config.go LimitsConfig int MaxOpenUploads int64 = 0 or [1, 1000] shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MaxWaiting int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int PostBytesPerHour int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int PostsPerMinute int64 = >= 0 shown by TestLimitRelaySettings
@@ -122,6 +123,7 @@ cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.mailboxMaxMessages) = >= 
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxBytes) = [1, 1073741824] shown by TestLimitMaxBytesBoundaries
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxInflight) = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxMailboxes) = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxOpenUploads) = 0 or [1, 1000] shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxStreamBytes) = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxWaiting) = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.relayMaxBytes) = >= 0 shown by TestLimitRelaySettings
@@ -303,6 +305,7 @@ internal/relayapi/relayapi.go LimitsView int MailboxMaxBytes int64 = >= 0 shown 
 internal/relayapi/relayapi.go LimitsView int MailboxMaxMessages int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int MaxInflight int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int MaxMailboxes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go LimitsView int MaxOpenUploads int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int MaxWaiting int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int PostBytesPerHour int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int PostsPerMinute int64 = >= 0 shown by TestLimitRelayAnswerIntegers

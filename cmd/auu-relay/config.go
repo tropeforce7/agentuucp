@@ -137,9 +137,16 @@ type LimitsConfig struct {
 	MailboxMaxMessages       int64 `json:"mailbox_max_messages"`
 	MailboxMaxBytes          int64 `json:"mailbox_max_bytes"`
 	RelayMaxBytes            int64 `json:"relay_max_bytes"`
-	MaxInflight              int64 `json:"max_inflight"`
-	MaxWaiting               int64 `json:"max_waiting"`
+	// MaxOpenUploads is the one limit with a ceiling, maxOpenUploadsCeiling:
+	// it is a count of files and rows the relay holds for one sender, and
+	// a thousand of them is more than any sender has a use for.
+	MaxOpenUploads int64 `json:"max_open_uploads"`
+	MaxInflight    int64 `json:"max_inflight"`
+	MaxWaiting     int64 `json:"max_waiting"`
 }
+
+// maxOpenUploadsCeiling is the most max_open_uploads may be set to.
+const maxOpenUploadsCeiling = 1000
 
 // TLSConfig selects how the relay obtains its certificate.
 type TLSConfig struct {
@@ -264,6 +271,7 @@ func Defaults() Config {
 			MailboxMaxMessages:       d.MailboxMaxMessages,
 			MailboxMaxBytes:          d.MailboxMaxBytes,
 			RelayMaxBytes:            d.RelayMaxBytes,
+			MaxOpenUploads:           d.MaxOpenUploads,
 			MaxInflight:              d.MaxInflight,
 			MaxWaiting:               d.MaxWaiting,
 		},
@@ -467,6 +475,8 @@ func (c *Config) Merge(fs *flag.FlagSet, f *flagValues) {
 			c.Limits.MailboxMaxBytes = f.mailboxMaxBytes
 		case "relay-max-bytes":
 			c.Limits.RelayMaxBytes = f.relayMaxBytes
+		case "max-open-uploads":
+			c.Limits.MaxOpenUploads = f.maxOpenUploads
 		case "max-inflight":
 			c.Limits.MaxInflight = f.maxInflight
 		case "max-waiting":
@@ -699,12 +709,17 @@ func (l LimitsConfig) validate() error {
 		{"mailbox_max_messages", l.MailboxMaxMessages},
 		{"mailbox_max_bytes", l.MailboxMaxBytes},
 		{"relay_max_bytes", l.RelayMaxBytes},
+		{"max_open_uploads", l.MaxOpenUploads},
 		{"max_inflight", l.MaxInflight},
 		{"max_waiting", l.MaxWaiting},
 	} {
 		if f.value < 0 {
 			return fmt.Errorf("%s must not be negative, got %d (use 0 for unlimited)", f.name, f.value)
 		}
+	}
+	if l.MaxOpenUploads > maxOpenUploadsCeiling {
+		return fmt.Errorf("max_open_uploads must be at most %d, got %d (use 0 for unlimited)",
+			maxOpenUploadsCeiling, l.MaxOpenUploads)
 	}
 	// A held listing keeps an in-flight slot for as long as it is held, so
 	// holds allowed up to the in-flight cap could take every slot and the
@@ -729,6 +744,7 @@ func (l LimitsConfig) Relay() relay.Limits {
 		MailboxMaxMessages:       l.MailboxMaxMessages,
 		MailboxMaxBytes:          l.MailboxMaxBytes,
 		RelayMaxBytes:            l.RelayMaxBytes,
+		MaxOpenUploads:           l.MaxOpenUploads,
 		MaxInflight:              l.MaxInflight,
 		MaxWaiting:               l.MaxWaiting,
 	}

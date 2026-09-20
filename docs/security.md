@@ -35,7 +35,12 @@ only place the relay writes down who is sending something, and nothing survives
 it. While it lives, the reservation counts against the recipient's quotas
 and the relay's as though the stream were already queued, for an envelope
 posted beside it as much as for another stream: one arithmetic answers
-both, so neither can be filled into the other's reservation.
+both, so neither can be filled into the other's reservation. What bounds
+one identity's uploads is the count, `max_open_uploads` (four, across
+every mailbox it sends to), beside its byte budget: the open charges the
+declared size, and what the relay never ends up holding comes back when
+the upload goes unplaced, so the budget charges what the relay holds and
+an abandoned upload does not spend the hour.
 
 **What the relay sees.** More than it stores, and this is worth being plain
 about. Posting is authenticated, so at the moment a message is accepted the
@@ -601,7 +606,10 @@ Three things fall out of that shape:
 
 On the wire the upload is three routes. `POST /v1/mailbox/{fp}/streams` opens
 it: the signed size and channel charge the recipient's quota and the sender's
-byte budget, and the answer is an upload id, when it expires, and two numbers
+byte budget, the sender's count of open uploads is held to the relay's
+`max_open_uploads` — at it the open is `429` with a `Retry-After` of the
+seconds to the sender's soonest expiry, which the client waits out — and
+the answer is an upload id, when it expires, and two numbers
 the sender needs, `resume_threshold` (bytes, the relay's `max_bytes`) and
 `resume_window` (seconds, sixty). `PUT /v1/uploads/{id}` is one attempt: the
 sealed stream from an offset to the end in one request, with `Upload-Offset`
@@ -618,10 +626,13 @@ An attempt that stops short — the sender's link dropped, or its bytes stopped
 coming — is judged by one rule: if it was the first attempt and what the relay
 holds is at least the threshold, the partial is kept for one resume, for sixty
 seconds from that moment and no longer; otherwise nothing is kept, and the
-upload, its file, its row and its reservation go together. So the relay never
+upload, its file, its row and its reservation go together, and the sender's
+budget is given back what the row never held, the size less what was
+received; a kept partial stays charged while it is kept. So the relay never
 holds less than a threshold's worth of an upload that did not finish, a stream
-is placed by at most two attempts on one id, and a sender that trickles a byte
-at a time builds nothing up. The sender learns what the relay kept the way this
+is placed by at most two attempts on one id, a sender that trickles a byte
+at a time builds nothing up, and a budget is spent on what the relay holds
+or places and on nothing else. The sender learns what the relay kept the way this
 wire tells it, by the next attempt: one from zero on the same id is `409` with
 the kept offset, from which it resumes once; `404` or `410` when the relay has
 let the upload go, on which it opens anew; and it is simply the fresh attempt

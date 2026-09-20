@@ -107,6 +107,9 @@ type Quotas struct {
 	MailboxMaxMessages int64
 	MailboxMaxBytes    int64
 	RelayMaxBytes      int64
+	// MaxOpenUploads is the most uploads one sender may have open at
+	// once; zero is no cap.
+	MaxOpenUploads int64
 }
 
 // connectionPragmas apply to the connection, not the file, so they run on

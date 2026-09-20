@@ -277,19 +277,47 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err := s.store.PurgeCerts(now.Add(-expiredTokenRetention)); err != nil {
 			s.log.Warn("certificate purge failed", "err", err)
 		}
-		purged, skipped, err := s.store.PurgeUploads(now)
-		if err != nil {
-			s.log.Warn("upload purge failed", "err", err)
-		}
-		if purged > 0 {
-			s.log.Info("abandoned uploads removed", "count", purged)
-		}
-		if skipped > 0 {
-			// Mid-append, or being completed or aborted as the purge ran:
-			// met again at the next one.
-			s.log.Debug("expired uploads left for the next purge, their locks held", "count", skipped)
-		}
+		s.purgeUploads(now)
 	}
+}
+
+// purgeUploads lets go of every upload past its expiry whose lock is not
+// held, and gives each sender back what its rows were charged for and
+// never held. It runs every hundredth request, and at an open refused
+// for the sender's count when the soonest of that sender's expiries has
+// passed, so that the count the refusal promised would fall by then has.
+// Failures are logged and not answered: it runs inside an unrelated
+// caller's request, or one that will be answered by its own count.
+func (s *Server) purgeUploads(now time.Time) {
+	purged, skipped, err := s.store.PurgeUploads(now)
+	if err != nil {
+		s.log.Warn("upload purge failed", "err", err)
+	}
+	for i := range purged {
+		s.returnUnheld(&purged[i])
+	}
+	if len(purged) > 0 {
+		s.log.Info("abandoned uploads removed", "count", len(purged))
+	}
+	if skipped > 0 {
+		// Mid-append, or being completed or aborted as the purge ran:
+		// met again at the next one.
+		s.log.Debug("expired uploads left for the next purge, their locks held", "count", skipped)
+	}
+}
+
+// returnUnheld gives a sender back the post bytes an upload was charged
+// for and the relay never held, when its row goes unplaced: the declared
+// size less what the relay received, as the row stood when it went. The
+// budget charges what the relay ends up holding or placing; the open
+// charged the whole declared size, so a sender cannot open past its
+// budget, and this is the other half. A kept partial's bytes were held,
+// so they stay charged while it is kept and come back with the rest when
+// it expires unplaced; a placed stream gives nothing back. n is a
+// difference of two values the relay wrote, and a return never fills a
+// bucket past its burst.
+func (s *Server) returnUnheld(u *Upload) {
+	s.lim.postBytes.Return(u.From, u.Size-u.Received)
 }
 
 // acquire takes an in-flight slot without waiting for one.
