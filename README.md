@@ -105,7 +105,7 @@ written for someone else.
 
 Messages larger than 64 KiB go as a stream of sealed chunks under one HPKE
 context. A large attachment, up to the limits the relay's operator sets,
-crosses a relay that never holds more than a chunk of it in memory. On disk
+crosses a relay that never holds more than a buffer of it in memory. On disk
 it is one file until it is collected. The [security model](docs/security.md)
 says exactly what the relay stores, sees, and cannot do.
 
