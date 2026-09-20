@@ -415,8 +415,12 @@ default `max_bytes`, and a listing page — the one answer that grows with
 the relay's setting — under twice the relay's own `max_bytes`, which the
 relay says in its health answer and the client learns once; the relay's
 page follows the same figure, so the two agree, and a relay that does not
-say its `max_bytes` is refused by name. A directory or an allow list is
-held to the 1 MiB cap before a byte is sent. The stream routes run on a
+say its `max_bytes` is refused by name; a stream route's answer — the
+placed stream's id, or an error's sentence — is read under 64 KiB and
+the trust anchor answer under 1 MiB, each refused by name over it, the
+same rule and not a cut that fails later as JSON. A directory or an
+allow list is held to the 1 MiB cap before a byte is sent. The stream
+routes run on a
 client with no whole-exchange timeout — a two-minute one, under the
 one-request wire, meant a stream needing more than about four minutes on
 the link could never be placed — and a stall rule of the relay's sixty

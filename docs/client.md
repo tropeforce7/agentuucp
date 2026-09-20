@@ -321,9 +321,10 @@ reply's own indented beneath it, and `--json` adds `thread_subject` beside
 `subject`, which is always the message's own.
 
 A fetch reads the mailbox in pages of up to 200 messages, and a page is
-also bounded in bytes by the relay: it carries envelopes until the next
-would take it past the relay's `max_bytes`, one at least, so a page is
-never more than `max_bytes` plus one envelope. `auu` learns the relay's
+also bounded in bytes by the relay: it ends before an envelope that would
+take it past the relay's `max_bytes`, admitting the first whatever its
+size, so a page's envelopes never exceed `max_bytes` unless the first
+alone does. `auu` learns the relay's
 `max_bytes` from its health answer the first time it lists and holds a
 page to twice that; a relay that does not say its `max_bytes` is one from
 before this version and is refused by name.

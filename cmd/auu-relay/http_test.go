@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,5 +112,55 @@ func TestTheProxyKeepsTheRelaysTimeouts(t *testing.T) {
 	}
 	if proxy.Write != 0 {
 		t.Errorf("the proxy's write timeout is %s; want none, the model's answer being the response", proxy.Write)
+	}
+}
+
+// TestLimitTheListenerCapsHeaders: the server newHTTPServer builds, the
+// one the relay listens with, carries relayapi.MaxHeaderBytes as its
+// header cap, and net/http holds a request to it before any handler: a
+// header block at the cap plus net/http's 4096 bytes of slop is served,
+// one byte more is 431. The relay package's own test shows the same edge
+// on the harness's server; this one shows the deployed server has the
+// cap at all.
+func TestLimitTheListenerCapsHeaders(t *testing.T) {
+	const slop = 4096
+	srv := newHTTPServer("127.0.0.1:0", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), nil, DefaultTimeouts())
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go srv.Serve(ln)
+	defer srv.Close()
+
+	frame := len("GET /v1/health HTTP/1.1\r\nHost: \r\nX-Junk: \r\n\r\n") + len(ln.Addr().String())
+	for _, tc := range []struct {
+		name  string
+		total int
+		want  int
+	}{
+		{"a block at the cap plus net/http's slop", relayapi.MaxHeaderBytes + slop, http.StatusOK},
+		{"one byte over", relayapi.MaxHeaderBytes + slop + 1, http.StatusRequestHeaderFieldsTooLarge},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			conn, err := net.Dial("tcp", ln.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			conn.SetDeadline(time.Now().Add(10 * time.Second))
+			fmt.Fprintf(conn, "GET /v1/health HTTP/1.1\r\nHost: %s\r\nX-Junk: %s\r\n\r\n",
+				ln.Addr().String(), strings.Repeat("j", tc.total-frame))
+			resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != tc.want {
+				t.Fatalf("a header block of %d bytes: %d; want %d", tc.total, resp.StatusCode, tc.want)
+			}
+		})
 	}
 }

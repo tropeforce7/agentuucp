@@ -371,12 +371,15 @@ func (c *Client) doWithin(ctx context.Context, method, path string, payload any,
 
 // listingCap is the most the client holds of a listing page: twice the
 // relay's max_bytes plus the framing allowance. The relay ends a page
-// before an envelope that would take it past max_bytes, always with one
-// at least, so a page is at most max_bytes plus one envelope plus its
-// framing, and this holds it for the relay the client talks to rather
-// than for the ceiling, which is a gigabyte the client should never
-// allocate. The relay's figure comes from its health answer, fetched once
-// per Client on the first listing and kept.
+// before an envelope that would take its inline bytes past max_bytes,
+// admitting the first whatever its size, so a page's envelopes never
+// exceed max_bytes unless the first alone does, which only one posted
+// under a larger earlier max_bytes can; in the answer they travel as
+// base64, four thirds of their bytes, under twice. This holds the page
+// for the relay the client talks to rather than for the ceiling, which
+// is a gigabyte the client should never allocate. The relay's figure
+// comes from its health answer, fetched once per Client on the first
+// listing and kept.
 func (c *Client) listingCap(ctx context.Context) (int64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

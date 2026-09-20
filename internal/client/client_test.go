@@ -86,7 +86,7 @@ func newTestClient(t *testing.T, rec *recorder) (*Client, *[]time.Duration) {
 	}
 	// The relay's max_bytes as if learned from its health answer, so a
 	// scripted listing is not preceded by an unscripted health request;
-	// the learning itself is TestAListingIsHeldToTheRelaysPage.
+	// the learning itself is TestLimitAnAnswerIsHeldToWhatItsRouteHolds.
 	c.maxBytes = relayapi.DefaultMaxBytes
 	var slept []time.Duration
 	c.sleep = func(ctx context.Context, d time.Duration) error {

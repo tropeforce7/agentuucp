@@ -431,9 +431,10 @@ func TestLimitABlobReaderThatStopsIsCutInsideTheWindow(t *testing.T) {
 // bytes — up to MaxListLimit envelopes of up to max_bytes each, which a
 // client sized to hold a page cannot hold, and a mailbox nobody could list
 // is one nobody could acknowledge. Now the relay ends a page before the
-// envelope that would take its inline bytes past max_bytes, and always
-// carries one, so a page is at most max_bytes plus one envelope plus its
-// framing, and the rows the budget left off are the next page's. With
+// envelope that would take its inline bytes past max_bytes, admitting the
+// first whatever its size, so a page's envelopes never exceed max_bytes
+// unless the first alone does, and the rows the budget left off are the
+// next page's. With
 // max_bytes 16 KiB and five envelopes of about 10 KiB each (a sealed
 // envelope carries about 4.3 KiB of keys and signature before its text),
 // every page holds one and the five come over five pages in order, queued

@@ -836,8 +836,9 @@ response's headers at the wire constant; every JSON answer is read
 under a hold, and the one answer that grows with a relay's setting — a
 listing page, which had no byte bound at all, up to 200 envelopes of
 `max_bytes` each, a page nobody could hold and so a mailbox nobody could
-acknowledge — is bounded at the relay to `max_bytes` plus one envelope
-and held at the client to twice the relay's `max_bytes`, learned from
+acknowledge — is bounded at the relay to `max_bytes` of envelopes, the
+first admitted whatever its size so a page is never empty, and held at
+the client to twice the relay's `max_bytes`, learned from
 the health answer, which carries it always; and the stream routes, whose
 length is the transfer's, run with no whole-exchange timeout and a stall
 rule of the relay's own window on both bodies, since a two-minute

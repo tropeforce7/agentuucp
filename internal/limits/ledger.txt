@@ -9,7 +9,7 @@
 #
 #   <file> <enclosing function or struct> <kind> <site as written> = <range> shown by <TestLimit...>
 #
-# where the kind is int or string. An int site is a field of integer,
+# where the kind is int, string or cap. An int site is a field of integer,
 # duration or integer-valued map or slice type in a struct with a json
 # tag, wherever the struct is declared; a strconv.Atoi or Parse*; a
 # time.ParseDuration; a binary.*.Uint* read; a FlagSet's integer or
@@ -43,8 +43,31 @@
 #   <why> shown by <TestLimit...>
 #                  a cut with no rule upstream, shown by its own test
 #
-# The sweep that wrote this file found 285 sites; that is the floor in
-# the test.
+# A cap site is a reader bounded by http.MaxBytesReader or io.LimitReader,
+# written as the callee with the reader and the bound, or a header cap set
+# on an http.Server or an http.Transport, MaxHeaderBytes or
+# MaxResponseHeaderBytes, written as the field and its value (with the
+# receiver when set by assignment). Its row says the bound as the site
+# reads under it — a reader bounded one over its route's hold, so that an
+# answer over the hold is known to be over it, says the hold plus one —
+# and is one of
+#
+#   <= n           the bound; where the site's bound is a constant the
+#                  test holds n to it, and where it is not, n is the
+#                  name the code gives it with its arithmetic, as
+#                  "hold + 1"
+#   one of a, b    the bound is a parameter and the callers give it
+#                  these
+#   local: <why>   the bound is the program's own arithmetic on values
+#                  it already holds, with no edge from outside to feed;
+#                  the why says which values, and the row may name the
+#                  test of what made them equal
+#
+# and names the TestLimit test that feeds the reader at the bound and one
+# over.
+#
+# The sweep that wrote this file found 285 sites, and the cap kind added
+# twelve; 297 is the floor in the test.
 
 cmd/auu-admin/commands.go blockAdd string fp[:16] #2 = local: ValidFingerprint at oneFingerprint shown by TestLimitFingerprintAndSerialArgsOneShort
 cmd/auu-admin/commands.go blockAdd string fp[:16] = local: ValidFingerprint at oneFingerprint shown by TestLimitFingerprintAndSerialArgsOneShort
@@ -339,3 +362,18 @@ internal/token/token.go Claims int NotAfter int64 = > 0 shown by TestLimitClaims
 internal/token/token.go Claims int NotBefore int64 = > 0 shown by TestLimitClaimsIntegers
 internal/token/token.go Claims int Uses int = [1, 1000] shown by TestLimitClaimsIntegers
 internal/token/token.go short string s[:16] = local: len(s) > 16 by the check before
+
+# Caps: readers bounded and header blocks capped, the HTTP layer's bounds
+# of PLAN-HTTP.
+cmd/auu-relay/main.go newHTTPServer cap MaxHeaderBytes: relayapi.MaxHeaderBytes = <= 32768 shown by TestLimitTheListenerCapsHeaders
+internal/auu/serveproxy.go (*keyProxy).ServeHTTP cap http.MaxBytesReader(r.Body, proxyMaxRequestBytes) = <= 33554432 shown by TestLimitTheProxyCapsHeadersAndBodies
+internal/auu/serveproxy.go startKeyProxy cap MaxHeaderBytes: relayapi.MaxHeaderBytes = <= 32768 shown by TestLimitTheProxyCapsHeadersAndBodies
+internal/auu/stream.go uploadStream cap io.LimitReader(f, n) = local: n is the sealed copy's size less the attempt's offset, both the program's, and f is that copy
+internal/client/anchor.go FetchTrustAnchor cap io.LimitReader(resp.Body, anchorAnswerHold + 1) = <= 1048577 shown by TestLimitAnAnchorAnswerIsHeldToAMebibyte
+internal/client/client.go (*Client).attempt cap io.LimitReader(resp.Body, hold + 1) = <= hold + 1 shown by TestLimitAnAnswerIsHeldToWhatItsRouteHolds
+internal/client/client.go boundTransport cap t.MaxResponseHeaderBytes: relayapi.MaxHeaderBytes = <= 32768 shown by TestLimitResponseHeadersAreCapped
+internal/client/stream.go (*Client).Blob cap io.LimitReader(resp.Body, streamAnswerHold + 1) = <= 65537 shown by TestLimitAStreamAnswerIsHeldTo64KiB
+internal/client/stream.go (*Client).PutStream cap io.LimitReader(resp.Body, streamAnswerHold + 1) = <= 65537 shown by TestLimitAStreamAnswerIsHeldTo64KiB
+internal/relay/server.go (*Server).readBody cap http.MaxBytesReader(r.Body, limit) = one of max_bytes + 65536, 1048576, 65536 shown by TestLimitBodyCapsPerRoute
+internal/relay/streamapi.go (*Server).handlePutStream cap io.LimitReader(body, want - int64(n)) = local: want is the row's size less the offset, which Content-Length was held equal to before a byte, less the header's n already read shown by TestLimitAnAttemptRunsToTheEndOrKeepsNothing
+internal/relay/streamapi.go (*Server).handlePutStream cap io.LimitReader(body, want) = local: want is the row's size less the offset, which Content-Length was held equal to before a byte shown by TestLimitAnAttemptRunsToTheEndOrKeepsNothing

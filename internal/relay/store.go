@@ -939,14 +939,17 @@ func (s *Store) Listing(toFP string, after int64, limit int, stubs bool) (Listin
 	return s.ListingWithin(toFP, after, limit, stubs, 0)
 }
 
-// ListingWithin is Listing under a byte budget: inline envelopes are added
-// to the page while the next would take the page past budget, and always
-// at least one, so a page is at most the budget plus one envelope plus
-// its framing, and the rows the budget left off are the next page's. A
-// page had no bound in bytes before: up to MaxListLimit envelopes of up
-// to max_bytes each, which is a page a client cannot hold, and a mailbox
-// nobody could list is one nobody could acknowledge. Zero is no budget.
-// Stubs carry no body and are not counted.
+// ListingWithin is Listing under a byte budget: the page ends before an
+// envelope that would take its inline bytes past budget, except the
+// first, which is admitted whatever its size so that a page is never
+// empty. So a page's inline bytes never exceed the budget unless its
+// first envelope alone does, and with the budget max_bytes only an
+// envelope posted under a larger earlier max_bytes can; the rows the
+// budget left off are the next page's. A page had no bound in bytes
+// before: up to MaxListLimit envelopes of up to max_bytes each, which is
+// a page a client cannot hold, and a mailbox nobody could list is one
+// nobody could acknowledge. Zero is no budget. Stubs carry no body and
+// are not counted.
 func (s *Store) ListingWithin(toFP string, after int64, limit int, stubs bool, budget int64) (Listing, error) {
 	var l Listing
 	tx, err := s.db.Begin()

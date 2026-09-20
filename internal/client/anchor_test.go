@@ -5,9 +5,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -192,6 +194,43 @@ func TestFetchTrustAnchorIsUnverifiedAndItsAnswerIsRecomputed(t *testing.T) {
 	}
 	if spki != pki.SPKI(bundle.Anchor) {
 		t.Errorf("spki = %q; the relay's own claim was believed", spki)
+	}
+}
+
+// TestLimitAnAnchorAnswerIsHeldToAMebibyte: the trust anchor answer is
+// read under anchorAnswerHold, at it taken — the anchor survives the
+// padding — and one byte over refused by name, not read short and failed
+// as JSON.
+func TestLimitAnAnchorAnswerIsHeldToAMebibyte(t *testing.T) {
+	bundle := pki.TestHierarchy(t, []string{"127.0.0.1"}, mldsa.MLDSA65())
+	var size atomic.Int64
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		head := `{"trust_anchor":"` + b64(bundle.Anchor.Raw) + `","spki":"` + strings.Repeat("f", 64) + `"`
+		_, _ = w.Write(paddedJSON(head, size.Load()))
+	}))
+	server, err := clientca.NewServer(bundle, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := server.GetCertificate(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{*leaf}, MinVersion: tls.VersionTLS13}
+	srv.StartTLS()
+	defer srv.Close()
+
+	size.Store(anchorAnswerHold)
+	cert, _, err := FetchTrustAnchor(t.Context(), srv.URL)
+	if err != nil || !cert.Equal(bundle.Anchor) {
+		t.Fatalf("an answer at the hold: %v; want the anchor taken", err)
+	}
+	size.Store(anchorAnswerHold + 1)
+	_, _, err = FetchTrustAnchor(t.Context(), srv.URL)
+	want := fmt.Sprintf("the relay's trust anchor answer is over %d bytes, the most this client holds; nothing of it was used", anchorAnswerHold)
+	if err == nil || err.Error() != want {
+		t.Fatalf("an answer one over the hold: %v; want %q", err, want)
 	}
 }
 

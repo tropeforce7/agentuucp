@@ -65,6 +65,9 @@ func (e *ReplayedAuthority) Unwrap() error { return ErrReplayedAuthority }
 // X" read as nonsense.
 const StampFormat = "2006-01-02 15:04:05"
 
+// anchorAnswerHold is the most of the trust anchor answer the client holds.
+const anchorAnswerHold = 1 << 20
+
 // FetchTrustAnchor asks a relay for its trust anchor over a connection nothing
 // has verified.
 //
@@ -103,9 +106,15 @@ func FetchTrustAnchor(ctx context.Context, base string) (*x509.Certificate, stri
 		return nil, "", fmt.Errorf("fetching the relay's trust anchor: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// The answer is held to a mebibyte, room for any anchor certificate
+	// many times over; one over it is refused by name rather than read
+	// short and failed as JSON.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, anchorAnswerHold+1))
 	if err != nil {
 		return nil, "", err
+	}
+	if int64(len(body)) > anchorAnswerHold {
+		return nil, "", fmt.Errorf("the relay's trust anchor answer is over %d bytes, the most this client holds; nothing of it was used", anchorAnswerHold)
 	}
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, "", fmt.Errorf("this relay does not use a private trust anchor, " +

@@ -129,22 +129,28 @@ func TestLimitResponseHeadersAreCapped(t *testing.T) {
 	}
 }
 
-// TestAListingIsHeldToTheRelaysPage: a listing page follows the relay's
-// max_bytes, so the client sizes what it holds of one to that relay — twice
-// max_bytes plus the framing allowance — learning max_bytes from the health
-// answer once per Client on the first listing. A page within the cap is
-// taken; one over it is refused as a malformed answer naming the cap
-// rather than read short and failed as JSON; and every other answer keeps
-// the fixed hold of twice the default max_bytes, since none scales with
-// max_bytes.
-func TestAListingIsHeldToTheRelaysPage(t *testing.T) {
+// TestLimitAnAnswerIsHeldToWhatItsRouteHolds: every JSON answer is read
+// under its route's hold, at the hold taken and one byte over refused as
+// a malformed answer naming the hold rather than read short and failed
+// as JSON. A listing page follows the relay's max_bytes, so the client
+// sizes what it holds of one to that relay — twice max_bytes plus the
+// framing allowance — learning max_bytes from the health answer once per
+// Client on the first listing; every other answer keeps the fixed hold
+// of twice the default max_bytes, since none scales with max_bytes, shown
+// on the health answer itself.
+func TestLimitAnAnswerIsHeldToWhatItsRouteHolds(t *testing.T) {
 	const maxBytes = 100 << 10
 	var page atomic.Int64
 	var healths atomic.Int64
+	var healthSize atomic.Int64 // when set, the health answer is padded to this many bytes
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/v1/health" {
 			healths.Add(1)
+			if n := healthSize.Load(); n > 0 {
+				w.Write(paddedJSON(fmt.Sprintf(`{"ok":true,"max_bytes":%d`, maxBytes), n))
+				return
+			}
 			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: maxBytes})
 			return
 		}
@@ -175,6 +181,87 @@ func TestAListingIsHeldToTheRelaysPage(t *testing.T) {
 	_, err = c.List(context.Background(), 0, 10)
 	if !errors.Is(err, ErrMalformedAnswer) || !strings.Contains(err.Error(), fmt.Sprintf("under %d bytes", hold)) {
 		t.Fatalf("a page over the cap: %v; want the malformed answer naming the cap of %d", err, hold)
+	}
+
+	// The fixed hold, on the health answer: at it, taken; one over, refused.
+	fixed := int64(2 * relayapi.DefaultMaxBytes)
+	healthSize.Store(fixed)
+	if err := c.Health(context.Background()); err != nil {
+		t.Fatalf("a health answer at the fixed hold of %d: %v; want it taken", fixed, err)
+	}
+	healthSize.Store(fixed + 1)
+	err = c.Health(context.Background())
+	if !errors.Is(err, ErrMalformedAnswer) || !strings.Contains(err.Error(), fmt.Sprintf("under %d bytes", fixed)) {
+		t.Fatalf("a health answer one over the fixed hold: %v; want the malformed answer naming the hold of %d", err, fixed)
+	}
+}
+
+// paddedJSON is an object that begins with head, an object's opening and
+// its first members without the closing brace, padded with one more
+// member to exactly n bytes.
+func paddedJSON(head string, n int64) []byte {
+	const frame = `,"pad":""}`
+	pad := int(n) - len(head) - len(frame)
+	if pad < 0 {
+		panic(fmt.Sprintf("paddedJSON: %d bytes is under the frame", n))
+	}
+	return []byte(head + `,"pad":"` + strings.Repeat("A", pad) + `"}`)
+}
+
+// TestLimitAStreamAnswerIsHeldTo64KiB: the two stream routes' answers —
+// the placed stream's id from a PUT, and an error's sentence from a blob
+// GET — are read under streamAnswerHold, at it taken and one byte over
+// refused as a malformed answer naming the hold, the same rule as every
+// other answer's and not a cut that fails later as JSON.
+func TestLimitAStreamAnswerIsHeldTo64KiB(t *testing.T) {
+	var size atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == "PUT":
+			w.WriteHeader(http.StatusCreated)
+			w.Write(paddedJSON(`{"id":7`, size.Load()))
+		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/blob"):
+			w.WriteHeader(http.StatusNotFound)
+			w.Write(paddedJSON(`{"error":"no such message"`, size.Load()))
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c, err := New(srv.URL, testIdentity(t, "alice"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := strings.Repeat("a", 64)
+	upload := strings.Repeat("b", 32)
+	body := func() io.Reader { return bytes.NewReader([]byte("sealed")) }
+
+	size.Store(streamAnswerHold)
+	if id, err := c.PutStream(context.Background(), upload, 0, body(), 6); err != nil || id != 7 {
+		t.Fatalf("a PUT answer at the hold: id %d, %v; want 7 and no error", id, err)
+	}
+	rc, _, err := c.Blob(context.Background(), fp, 7, 0, -1)
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) || httpErr.Status != http.StatusNotFound || httpErr.Message != "no such message" {
+		t.Fatalf("a blob error at the hold: %v; want the 404 with its sentence", err)
+	}
+	if rc != nil {
+		rc.Close()
+	}
+
+	size.Store(streamAnswerHold + 1)
+	want := fmt.Sprintf("under %d bytes, the most this route holds", streamAnswerHold)
+	_, err = c.PutStream(context.Background(), upload, 0, body(), 6)
+	if !errors.Is(err, ErrMalformedAnswer) || !strings.Contains(err.Error(), want) {
+		t.Fatalf("a PUT answer one over the hold: %v; want the malformed answer saying %q", err, want)
+	}
+	rc, _, err = c.Blob(context.Background(), fp, 7, 0, -1)
+	if !errors.Is(err, ErrMalformedAnswer) || !strings.Contains(err.Error(), want) {
+		t.Fatalf("a blob error one over the hold: %v; want the malformed answer saying %q", err, want)
+	}
+	if rc != nil {
+		rc.Close()
 	}
 }
 

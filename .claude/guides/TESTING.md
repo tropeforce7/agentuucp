@@ -841,7 +841,7 @@ rolled over. Its name starts with `TestLimit`, so that `go test ./... -run
 a site with no row, a row with no site, and a row naming a test that does
 not exist each fail it.
 
-There are four kinds.
+There are five kinds.
 
 **An integer with a range.** For every integer from outside that the code
 holds to a range (`lo <= n <= hi`, `n <= max`, `n > 0`), the test feeds
@@ -917,6 +917,25 @@ start on one of them. The relay's sweep once failed the whole start on a
 directory somebody had made inside a mailbox, because `os.Remove` of it
 was an error; the reader's rule is the fix, not a broader remove.
 
+**A cap on what is read.** Every reader the program bounds —
+`http.MaxBytesReader` on a request body, `io.LimitReader` on an answer,
+`MaxHeaderBytes` on a server and `MaxResponseHeaderBytes` on a transport
+— has a row in the ledger saying the bound, and a test that feeds the
+reader a body or a header block at the bound and one byte over, and
+asserts the refusal by name at one over: the 413 with the cap in its
+sentence, the 431, the answer refused as malformed naming the hold. A
+reader that is cut at its bound and fails later as something else — an
+answer read short and refused as JSON, an error body read short and
+reported as an empty sentence — is the finding, and the fix is the
+refusal by name where the bound is: the client's stream-route answers
+and its trust anchor fetch were three such cuts, found the day the walk
+first looked for caps. A bound that is the program's own arithmetic on
+values it already holds, with no edge from outside to feed — the sealed
+copy's size less the offset, the row's size less the offset that
+Content-Length was held equal to — says so in its row as `local:` and
+needs no test of its own, though it may name the test of what made the
+values equal.
+
 A name list is one guard, and a name list is never complete. The other is
 the handle: a device is a device whatever it is called, and so is a named
 pipe, a socket or a directory, and the open file knows. So every file the
@@ -960,7 +979,11 @@ anonymous type (`cmdShow.struct`); a call to `strconv.Atoi`,
 which in this tree is always a `*flag.FlagSet` method; a slice
 expression on a string or a byte slice, whatever its bound, and on any
 other slice with a bound that is not a constant (an array's bounds are
-checked at compile time). The range is `[lo, hi]`, a floor or a ceiling
+checked at compile time); and a cap, a reader bounded by
+`http.MaxBytesReader` or `io.LimitReader`, written as the callee with
+the reader and the bound, or `MaxHeaderBytes` set on an `http.Server`
+or `MaxResponseHeaderBytes` on an `http.Transport`, written as the field
+and its value. The range is `[lo, hi]`, a floor or a ceiling
 (`>= 0`, `> 0`, `<= n`), a set (`one of 44, 65, 87`), or `open`; a
 duration's bound carries its unit (`>= 5s`), and `0 or` in front says
 zero is a sentinel the range does not otherwise hold, the default or
@@ -983,7 +1006,15 @@ holds the rule to the tree, the function must exist, and the row names
 the rule's test, one per rule, shared. `local: <why>` of any other form
 is the operand's own arithmetic (`local: len(s)-1 of s`, a length the
 code checked, an index a loop or `Index` gave, a rune boundary), and
-names no function and no test.
+names no function and no test. A cap's row says the bound as the site
+reads under it: `<= n` where the bound is a constant, and the walk holds
+`n` to the constant's value in the tree (a reader bounded one over its
+route's hold, so an answer over the hold is known to be over it, says
+the hold plus one); `<= hold + 1`, the name the code gives it with its
+arithmetic, where it is not; `one of a, b` where the bound is a
+parameter and the callers give it more than one; or `local: <why>`
+where the bound is the program's own arithmetic, which may name a test
+and need not.
 The test holds the file to the tree the way the file-open ledger does: no
 site without a row, no row without a site, no test named that does not
 exist, and a floor on the count, so that a walk that finds nothing is

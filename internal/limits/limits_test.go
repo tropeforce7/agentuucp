@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/build"
+	"go/constant"
 	"go/importer"
 	"go/parser"
 	"go/token"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -30,11 +32,15 @@ import (
 // the program decodes, a site in a file the host's build constraints
 // leave out, a non-test import of internal/testutil, and a count under
 // the floor. A new integer from outside fails this test until its row
-// and its test exist, which is the point.
+// and its test exist, which is the point. A third kind of site is a cap:
+// a reader bounded by http.MaxBytesReader or io.LimitReader, or a header
+// cap set on an http.Server or an http.Transport; its row says the
+// bound, held to the tree where the bound is a constant, and the
+// TestLimit test that shows it at the bound and one over.
 
 // floor is what the sweep that wrote the ledger found. A walk that finds
 // fewer is not reaching the tree.
-const floor = 285
+const floor = 297
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.
@@ -50,6 +56,18 @@ var flagMethods = map[string]bool{
 // zero is a sentinel the range does not otherwise hold.
 var ranges = regexp.MustCompile(`^(0 or )?(\[-?\d+[a-z]*, -?\d+[a-z]*\]|>= -?\d+[a-z]*|> -?\d+[a-z]*|<= -?\d+[a-z]*|< -?\d+[a-z]*|one of -?\d+(, -?\d+)+|open|output)$`)
 
+// capRanges is every shape a cap row's bound may take: "<= n" for one
+// bound, or "one of a, b" where the site's bound is a parameter and the
+// callers give it more than one; a bound is a number, or a name with the
+// arithmetic that reaches it, as "max_bytes + 65536" or "hold + 1". A
+// cap whose bound the program's own arithmetic fixes says "local: <why>"
+// instead, and may name a test.
+var capRanges = regexp.MustCompile(`^(<= |one of )(([a-z_]+|\d+)( [+*] ([a-z_]+|\d+))*)(, ([a-z_]+|\d+)( [+*] ([a-z_]+|\d+))*)*$`)
+
+// capFields are the net/http fields whose value caps a header block: the
+// server's, and the transport's for a response.
+var capFields = map[string]bool{"MaxHeaderBytes": true, "MaxResponseHeaderBytes": true}
+
 // localRule is the form of a string row that names the rule which fixed
 // the operand's length and the point it ran: "local: ValidFingerprint at
 // checkMailbox". Such a row names a test as well, one per rule and shared
@@ -63,9 +81,11 @@ var localRule = regexp.MustCompile(`^local: ([A-Za-z_][A-Za-z0-9_.]*) at (\S.*)$
 // cut by a slice expression.
 type site struct {
 	key      string // <file> <enclosing> <kind> <as written>
-	kind     string // int or string
+	kind     string // int, string or cap
 	pos      token.Position
 	typeName string // for a field, the struct's type by full path; "" otherwise
+	bound    int64  // for a cap whose bound is a constant, its value
+	constant bool   // whether bound is known
 }
 
 // row is one ledger line.
@@ -230,6 +250,79 @@ func TestShapeSize(t *testing.T) {}
 	}
 }
 
+// TestALedgerFindsACapAndHoldsItsBoundToTheTree plants the four forms of
+// a cap — a MaxBytesReader, a LimitReader, a server's MaxHeaderBytes in a
+// literal and a transport's MaxResponseHeaderBytes by assignment, one more
+// LimitReader with a good row — and asserts the sentence for a cap with
+// no row, and then, row by row, a number that is not the constant in the
+// tree, a name where the bound is a constant, a one of where it is a
+// constant, a number where it is not a constant, and a bound of no known
+// shape; the good row draws no sentence.
+func TestALedgerFindsACapAndHoldsItsBoundToTheTree(t *testing.T) {
+	root := plantModule(t, `package planted
+
+import (
+	"io"
+	"net/http"
+)
+
+const hold = 1 << 16
+
+func serve(w http.ResponseWriter, r *http.Request) { r.Body = http.MaxBytesReader(w, r.Body, 1<<20) }
+
+func read(r io.Reader, n int64) ([]byte, error) { return io.ReadAll(io.LimitReader(r, n+1)) }
+
+func server() *http.Server { return &http.Server{MaxHeaderBytes: hold} }
+
+func transport(t *http.Transport) { t.MaxResponseHeaderBytes = hold }
+
+func small(r io.Reader) io.Reader { return io.LimitReader(r, 512) }
+`)
+	if err := os.WriteFile(filepath.Join(root, "internal", "planted", "planted_test.go"), []byte(`package planted
+
+import "testing"
+
+func TestLimitCap(t *testing.T) {}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	problems, sites := check(t, root, "")
+	if len(sites) != 5 {
+		t.Fatalf("found %d sites, want 5: %+v", len(sites), sites)
+	}
+	const add = " has no row in ledger.txt; add one saying the bound it reads under, as <= n, and the TestLimit test that shows it at the bound and one over, or the program's own arithmetic as local:"
+	want := []string{
+		"internal/planted/planted.go read cap io.LimitReader(r, n + 1)" + add,
+		"internal/planted/planted.go serve cap http.MaxBytesReader(r.Body, 1 << 20)" + add,
+		"internal/planted/planted.go server cap MaxHeaderBytes: hold" + add,
+		"internal/planted/planted.go small cap io.LimitReader(r, 512)" + add,
+		"internal/planted/planted.go transport cap t.MaxResponseHeaderBytes: hold" + add,
+	}
+	if strings.Join(problems, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("problems:\n%s\nwant:\n%s", strings.Join(problems, "\n"), strings.Join(want, "\n"))
+	}
+	ledger := strings.Join([]string{
+		"internal/planted/planted.go serve cap http.MaxBytesReader(r.Body, 1 << 20) = <= 1048575 shown by TestLimitCap",
+		"internal/planted/planted.go server cap MaxHeaderBytes: hold = <= hold shown by TestLimitCap",
+		"internal/planted/planted.go transport cap t.MaxResponseHeaderBytes: hold = one of 65536, 1 shown by TestLimitCap",
+		"internal/planted/planted.go read cap io.LimitReader(r, n + 1) = <= 65537 shown by TestLimitCap",
+		"internal/planted/planted.go read cap io.LimitReader(r, n + 1) = about n shown by TestLimitCap",
+		"internal/planted/planted.go small cap io.LimitReader(r, 512) = <= 512 shown by TestLimitCap",
+	}, "\n")
+	problems, _ = check(t, root, ledger)
+	want = []string{
+		"ledger.txt:1: internal/planted/planted.go serve cap http.MaxBytesReader(r.Body, 1 << 20) says <= 1048575, but the bound in the tree is 1048576",
+		"ledger.txt:2: internal/planted/planted.go server cap MaxHeaderBytes: hold says \"<= hold\", but the bound in the tree is the constant 65536; say <= 65536",
+		"ledger.txt:3: internal/planted/planted.go transport cap t.MaxResponseHeaderBytes: hold says one of, but the bound in the tree is the constant 65536; say <= 65536",
+		"ledger.txt:4: internal/planted/planted.go read cap io.LimitReader(r, n + 1) says <= 65537, but the bound in the tree is not a constant; name it",
+		"ledger.txt:5: internal/planted/planted.go read cap io.LimitReader(r, n + 1) is written twice",
+		"ledger.txt:5: internal/planted/planted.go read cap io.LimitReader(r, n + 1) has the bound \"about n\", which is not <= n, one of a, b or local:, a bound being a number or a name with its arithmetic",
+	}
+	if strings.Join(problems, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("problems:\n%s\nwant:\n%s", strings.Join(problems, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 // TestADecodeTargetIsFollowedThroughAHelper plants the client's shape, a
 // helper that takes any and unmarshals into it, and asserts that the
 // struct its caller passes counts as decoded.
@@ -315,6 +408,37 @@ func check(t *testing.T, root, ledger string) (problems []string, sites []site) 
 				problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s is a cut with no local reason and no test", r.line, r.key))
 				continue
 			}
+		} else if s.kind == "cap" {
+			// A cap row says the bound as the site reads it: a constant
+			// bound as its number, held to the tree; a bound that is a
+			// parameter or a sum by name; or the program's own arithmetic
+			// as local:, which may name a test and need not.
+			if strings.HasPrefix(r.rng, "local:") {
+				if r.test == "" {
+					continue
+				}
+			} else {
+				m := capRanges.FindStringSubmatch(r.rng)
+				if m == nil {
+					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s has the bound %q, which is not <= n, one of a, b or local:, a bound being a number or a name with its arithmetic", r.line, r.key, r.rng))
+					continue
+				}
+				n, isNumber := parseBound(m[2])
+				switch {
+				case s.constant && m[1] == "one of ":
+					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says one of, but the bound in the tree is the constant %d; say <= %d", r.line, r.key, s.bound, s.bound))
+					continue
+				case s.constant && !isNumber:
+					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says %q, but the bound in the tree is the constant %d; say <= %d", r.line, r.key, r.rng, s.bound, s.bound))
+					continue
+				case s.constant && n != s.bound:
+					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says <= %d, but the bound in the tree is %d", r.line, r.key, n, s.bound))
+					continue
+				case !s.constant && isNumber && m[1] == "<= ":
+					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says <= %d, but the bound in the tree is not a constant; name it", r.line, r.key, n))
+					continue
+				}
+			}
 		} else if !ranges.MatchString(r.rng) {
 			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s has the range %q, which is not [lo, hi], >= n, > n, <= n, < n, one of a, b, open or output, with 0 or in front where zero is a sentinel", r.line, r.key, r.rng))
 			continue
@@ -348,9 +472,20 @@ func check(t *testing.T, root, ledger string) (problems []string, sites []site) 
 			problems = append(problems, fmt.Sprintf("%s has no row in ledger.txt; add one naming the rule that fixed the operand's length and the point it ran, or the operand's own arithmetic, as local:, or the TestLimit test that cuts it short", s.key))
 			continue
 		}
+		if s.kind == "cap" {
+			problems = append(problems, fmt.Sprintf("%s has no row in ledger.txt; add one saying the bound it reads under, as <= n, and the TestLimit test that shows it at the bound and one over, or the program's own arithmetic as local:", s.key))
+			continue
+		}
 		problems = append(problems, fmt.Sprintf("%s has no row in ledger.txt; add one saying the range the code holds it to, or open, and the TestLimit test that shows it", s.key))
 	}
 	return problems, sites
+}
+
+// parseBound reads a bound written as a number; a bound written by
+// name is not one.
+func parseBound(s string) (int64, bool) {
+	n, err := strconv.ParseInt(s, 10, 64)
+	return n, err == nil
 }
 
 // functions is every function and method declared in the non-test tree,
@@ -486,8 +621,19 @@ func (tr *tree) leftOut(path, rel string) {
 			}
 		case *ast.CallExpr:
 			s := types.ExprString(x.Fun)
-			if strings.HasPrefix(s, "strconv.Atoi") || strings.HasPrefix(s, "strconv.Parse") || strings.HasPrefix(s, "binary.") || strings.HasPrefix(s, "flag.") {
+			if strings.HasPrefix(s, "strconv.Atoi") || strings.HasPrefix(s, "strconv.Parse") || strings.HasPrefix(s, "binary.") || strings.HasPrefix(s, "flag.") ||
+				s == "http.MaxBytesReader" || s == "io.LimitReader" {
 				tr.problems = append(tr.problems, fmt.Sprintf("%s calls %s, and the host's build constraints leave the file out; the walk does not see it", rel, s))
+			}
+		case *ast.KeyValueExpr:
+			if key, ok := x.Key.(*ast.Ident); ok && capFields[key.Name] {
+				tr.problems = append(tr.problems, fmt.Sprintf("%s sets %s, and the host's build constraints leave the file out; the walk does not see it", rel, key.Name))
+			}
+		case *ast.AssignStmt:
+			for _, lhs := range x.Lhs {
+				if sel, ok := lhs.(*ast.SelectorExpr); ok && capFields[sel.Sel.Name] {
+					tr.problems = append(tr.problems, fmt.Sprintf("%s sets %s, and the host's build constraints leave the file out; the walk does not see it", rel, sel.Sel.Name))
+				}
 			}
 		}
 		return true
@@ -563,6 +709,33 @@ func (tr *tree) sites() []site {
 							kind: "int",
 							pos:  tr.fset.Position(x.Pos()),
 						})
+					}
+					if text, bound, is := tr.capCall(p, x); is {
+						out = append(out, tr.capSite(p, rel, stack, x.Pos(), text, bound))
+					}
+				case *ast.KeyValueExpr:
+					// A header cap set in a composite literal: MaxHeaderBytes
+					// on an http.Server, MaxResponseHeaderBytes on a Transport.
+					if key, ok := x.Key.(*ast.Ident); ok && capField(p.info.Uses[key]) {
+						out = append(out, tr.capSite(p, rel, stack, x.Pos(), key.Name+": "+types.ExprString(x.Value), x.Value))
+					}
+				case *ast.AssignStmt:
+					// The same caps set by assignment, written as the literal's
+					// form with the receiver, t.MaxResponseHeaderBytes: n, since
+					// " = " is what parts a row's key from its range.
+					for i, lhs := range x.Lhs {
+						sel, ok := lhs.(*ast.SelectorExpr)
+						if !ok {
+							continue
+						}
+						if sn := p.info.Selections[sel]; sn == nil || !capField(sn.Obj()) {
+							continue
+						}
+						rhs := x.Rhs[0]
+						if len(x.Rhs) == len(x.Lhs) {
+							rhs = x.Rhs[i]
+						}
+						out = append(out, tr.capSite(p, rel, stack, x.Pos(), types.ExprString(sel)+": "+types.ExprString(rhs), rhs))
 					}
 				case *ast.SliceExpr:
 					// A slice expression on a string or a byte slice, whatever
@@ -705,6 +878,52 @@ func (tr *tree) integerCall(p *pkg, call *ast.CallExpr) (string, bool) {
 		return types.ExprString(call.Fun) + "()", true
 	}
 	return types.ExprString(call.Fun) + "(" + types.ExprString(call.Args[0]) + ")", true
+}
+
+// capCall says whether a call bounds a reader — http.MaxBytesReader or
+// io.LimitReader — and how the ledger writes it: the callee, the reader
+// and the bound; and returns the bound's expression.
+func (tr *tree) capCall(p *pkg, call *ast.CallExpr) (string, ast.Expr, bool) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return "", nil, false
+	}
+	fn, ok := p.info.Uses[sel.Sel].(*types.Func)
+	if !ok || fn.Pkg() == nil {
+		return "", nil, false
+	}
+	var reader, bound ast.Expr
+	switch {
+	case fn.Pkg().Path() == "net/http" && fn.Name() == "MaxBytesReader" && len(call.Args) == 3:
+		reader, bound = call.Args[1], call.Args[2]
+	case fn.Pkg().Path() == "io" && fn.Name() == "LimitReader" && len(call.Args) == 2:
+		reader, bound = call.Args[0], call.Args[1]
+	default:
+		return "", nil, false
+	}
+	return types.ExprString(call.Fun) + "(" + types.ExprString(reader) + ", " + types.ExprString(bound) + ")", bound, true
+}
+
+// capField says whether an object is one of net/http's header caps.
+func capField(obj types.Object) bool {
+	v, ok := obj.(*types.Var)
+	return ok && v.IsField() && v.Pkg() != nil && v.Pkg().Path() == "net/http" && capFields[v.Name()]
+}
+
+// capSite is a cap's site, with its bound's value when the bound is a
+// constant, so that the row's number is held to the tree.
+func (tr *tree) capSite(p *pkg, rel string, stack []ast.Node, pos token.Pos, text string, bound ast.Expr) site {
+	s := site{
+		key:  fmt.Sprintf("%s %s cap %s", rel, enclosingName(enclosingFunc(stack)), text),
+		kind: "cap",
+		pos:  tr.fset.Position(pos),
+	}
+	if tv, ok := p.info.Types[bound]; ok && tv.Value != nil {
+		if n, exact := constant.Int64Val(constant.ToInt(tv.Value)); exact {
+			s.bound, s.constant = n, true
+		}
+	}
+	return s
 }
 
 // decoded is every named type the program decodes JSON into, directly

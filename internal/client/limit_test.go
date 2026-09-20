@@ -145,7 +145,7 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 	// The health answer's max_bytes: what a listing page follows, held to
 	// [1, MaxBytesCeiling]; zero is a relay from before the field, refused
 	// by name. Read by Health here, and by the first listing, which sizes
-	// what the client will hold of a page by it (TestAListingIsHeldToTheRelaysPage).
+	// what the client will hold of a page by it (TestLimitAnAnswerIsHeldToWhatItsRouteHolds).
 	maxBytes := []shape{
 		{"/v1/health", func(n int64) any { return relayapi.HealthResponse{OK: true, MaxBytes: n} },
 			func(c *Client) error { return c.Health(context.Background()) }},

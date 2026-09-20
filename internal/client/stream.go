@@ -38,6 +38,13 @@ func (c *Client) OpenStream(ctx context.Context, toFP, channel string, size int6
 	return &out, nil
 }
 
+// streamAnswerHold is the most of a stream route's answer the client
+// holds: the placed stream's id, or an error's sentence, neither of which
+// a relay of ours writes at a hundredth of this. An answer over it is
+// refused by name, as doWithin refuses one over its route's hold, rather
+// than read short and failed as JSON.
+const streamAnswerHold = 1 << 16
+
 // PutStream is one attempt at an upload: the sealed stream from offset to
 // the end, streamed from body with its length declared, in one request.
 // It answers the message's id when the attempt reached the end. When it
@@ -70,7 +77,10 @@ func (c *Client) PutStream(ctx context.Context, upload string, offset int64, bod
 		return 0, watch.wrap(fmt.Errorf("contacting relay: %w", err))
 	}
 	defer resp.Body.Close()
-	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	payload, _ := io.ReadAll(io.LimitReader(resp.Body, streamAnswerHold+1))
+	if int64(len(payload)) > streamAnswerHold {
+		return 0, c.malformed("the answer", "the body", fmt.Sprintf("under %d bytes, the most this route holds", streamAnswerHold))
+	}
 
 	if resp.StatusCode == http.StatusCreated {
 		var out relayapi.PutStreamResponse
@@ -168,7 +178,10 @@ func (c *Client) Blob(ctx context.Context, fp string, id int64, from, to int64) 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		defer resp.Body.Close()
 		defer watch.stop()
-		payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		payload, _ := io.ReadAll(io.LimitReader(resp.Body, streamAnswerHold+1))
+		if int64(len(payload)) > streamAnswerHold {
+			return nil, 0, c.malformed("the answer", "the body", fmt.Sprintf("under %d bytes, the most this route holds", streamAnswerHold))
+		}
 		return nil, 0, httpError(resp, payload)
 	}
 	return &stallBody{ReadCloser: resp.Body, watch: watch}, resp.ContentLength, nil
