@@ -21,6 +21,16 @@ import (
 // type's maximum, a sign inside the digits, a leading space and a digit
 // outside ASCII are not numbers; the floor, a plus sign and the ceiling
 // are taken.
+//
+// --expires is the one flag whose floor is not taken here: a token issued
+// here goes through a TLS handshake and a round trip to the relay, which
+// refuses it as expired when the trip took longer than the token lives,
+// and under the whole tree's parallel load a one-second token lost that
+// race once. The values taken carry hours of slack and keep the text
+// forms; the edge itself, a second taken and a nanosecond under refused
+// at every phase of the clock, is
+// TestLimitTheTokenWindowIsWholeSecondsFromNow's, at the parser, where
+// no round trip stands between the value and the rule.
 func TestLimitAdminFlags(t *testing.T) {
 	f := newFixture(t, relay.Config{})
 	refused := func(t *testing.T, want string, args ...string) {
@@ -69,7 +79,7 @@ func TestLimitAdminFlags(t *testing.T) {
 		for _, v := range []string{"9223372036854775808ns", "1", "\u0661s", ""} {
 			refused(t, `invalid value "`+v+`" for flag -expires`, "token", "issue", "--note", "x", "--expires", v)
 		}
-		for _, v := range []string{"1s", "+1s", "1000ms"} {
+		for _, v := range []string{"1h", "+1h", "3600000ms"} {
 			taken(t, "token", "issue", "--note", "x", "--expires", v)
 		}
 	})

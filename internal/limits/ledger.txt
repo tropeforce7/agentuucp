@@ -85,7 +85,7 @@ cmd/auu-admin/commands.go mailboxRemove string m.FP[:16] #2 = local: ValidFinger
 cmd/auu-admin/commands.go mailboxRemove string m.FP[:16] = local: ValidFingerprint at checkMailbox shown by TestLimitAnswerShapesOneShort
 cmd/auu-admin/commands.go mailboxesList int fs.Int("limit") = > 0 shown by TestLimitAdminFlags
 cmd/auu-admin/commands.go mailboxesList string m.FP[:16] = local: ValidFingerprint at checkMailboxes shown by TestLimitAnswerShapesOneShort
-cmd/auu-admin/commands.go tokenIssue int fs.Duration("expires") = >= 1s shown by TestLimitAdminFlags
+cmd/auu-admin/commands.go tokenIssue int fs.Duration("expires") = >= 1s shown by TestLimitTheTokenWindowIsWholeSecondsFromNow
 cmd/auu-admin/commands.go tokenIssue int fs.Int("uses") = [1, 1000] shown by TestLimitAdminFlags
 cmd/auu-admin/commands.go tokenList string t.ID[:12] = local: ValidID at checkToken shown by TestLimitAnswerShapesOneShort
 cmd/auu-admin/commands.go tokenList string t.Subject[:8] = local: ValidFingerprint at checkToken shown by TestLimitAnswerShapesOneShort

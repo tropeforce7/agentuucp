@@ -527,8 +527,8 @@ func TestTokenIssueArgumentExtremes(t *testing.T) {
 	// seconds, and it still has to survive a TLS handshake and a round trip
 	// to the relay before the relay checks whether it has expired. That made
 	// this test fail about one race run in four under load. The edge itself
-	// is TestTheTokenWindowIsWholeSecondsFromNow, which walks it without a
-	// relay.
+	// is TestLimitTheTokenWindowIsWholeSecondsFromNow, which walks it
+	// without a relay.
 	for _, args := range [][]string{
 		{"token", "issue", "--note", "x", "--uses", "1"},
 		{"token", "issue", "--note", "x", "--uses", "1000"},
@@ -541,9 +541,12 @@ func TestTokenIssueArgumentExtremes(t *testing.T) {
 	}
 }
 
-// TestTheTokenWindowIsWholeSecondsFromNow walks the boundary the command
-// enforces on --expires and --not-after, in the arithmetic the token actually
-// carries, and at every phase of the second now might fall in.
+// TestLimitTheTokenWindowIsWholeSecondsFromNow walks the boundary the
+// command enforces on --expires and --not-after, in the arithmetic the
+// token actually carries, and at every phase of the second now might fall
+// in: the ledger's test for --expires, since a round trip cannot show a
+// one-second token taken without racing the clock (TestLimitAdminFlags
+// carries the flag's text forms, with hours of slack).
 //
 // A token records two whole seconds, so a sub-second duration left to the
 // truncation would be accepted or refused according to where in the current
@@ -551,8 +554,9 @@ func TestTokenIssueArgumentExtremes(t *testing.T) {
 // none at phase .001. It is refused at every phase instead, and the phases
 // below are what proves that, since no end-to-end test can choose when now
 // is. This is what TestTokenIssueArgumentExtremes used to reach for with a
-// one-second token and a round trip, and lose about one race run in four.
-func TestTheTokenWindowIsWholeSecondsFromNow(t *testing.T) {
+// one-second token and a round trip, and lose about one race run in four,
+// and what TestLimitAdminFlags reached for again and lost once.
+func TestLimitTheTokenWindowIsWholeSecondsFromNow(t *testing.T) {
 	// A whole second, so the phase below is the only thing varying.
 	base := time.Date(2026, 9, 10, 12, 0, 0, 0, time.UTC)
 
