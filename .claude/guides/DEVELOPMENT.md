@@ -287,9 +287,32 @@ the manifest's, the open-stream request's — are the other rule: absent
 means `default`, the sender's own word, and a message for `default`
 carries no name. Keep the two apart: one is about what an end always
 sends, the other about what a sender may leave out, and a test marshals
-the zero value to prove the tag. Local file formats are not the wire:
-a home's records from before a rule, an unencrypted key file, are files
-on this machine and have their own rules.
+the zero value to prove the tag.
+
+**Nothing on this machine is from before.** The same reasoning, for the
+files a version from before a rule wrote: there are no users, so a file
+from before is not supported, and every tolerance for one is a path
+nobody tests. A file from before a rule is refused by name with a
+sentence saying what to do — re-create it, delete it — never migrated
+and never read under the old rule. The relay's database is at
+`schemaVersion` or refused, with no migration (see "Storage"); a home's
+`config.json` of the shape from before a home could know more than one
+relay, and a relay's file loose in the home's root, are refused at
+`Open`, and `Config` is a strict decode that refuses a key it does not
+write; a spool record names its relay and is held at `Load` to every
+rule `Open` held it to; an outbox record without its relay is broken; a
+ledger entry that counts an attempt with no time is refused; an `auu-ca`
+key file that is a plain `PRIVATE KEY` block is refused, as is a relay
+record without `bundle_path`. Each refusal has its test, the file made in
+its old form. The tolerances that went — the home's move to `relays/`,
+the relay's seven migrations, `legacyWarning` and the first-time
+encryption of an authority, the empty relay name read as the default,
+the sweep's "entry from before there were timestamps" — each carried a
+lesson worth keeping, and those stay below in the past tense: they are
+about a migration that no longer exists, but what they taught about
+ordering a one-way move, a struct written back, and a state marker is
+general. The terminal escapers stay, as the last line under a rule and
+not the rule.
 
 **A listing held open is the owner's listing answered later, and over its
 cap the hold degrades rather than refusing.** `GET /v1/mailbox/{fp}?wait=D`
@@ -501,40 +524,35 @@ table on a hot path. `OpenStore` reconciles the counters from the messages
 table every time and reports how many were wrong, so a crash between two
 statements self-heals; that reconciliation is a backstop, not the mechanism.
 
-**Version the schema and refuse what you do not understand.** `PRAGMA
-user_version` is the contract. A version above the current one is refused; a
-version-zero database with tables in it is from before versioning and is
-refused with a message saying to delete it. Migrations are an ordered list,
-each in its own transaction, each setting the version on the way out, so an
-interrupted upgrade resumes rather than half-applies.
+**A database is at `schemaVersion` or is refused; there is no migration.**
+`PRAGMA user_version` is the contract. A version above this build's is
+refused as written by a newer release; any other — below it, or zero with
+tables in it, which is a database from before the version was recorded —
+is refused with the sentence naming the file and the message directory
+beside it and saying to delete both, since a new database beside old mail
+is the lost database the next start refuses over. The schema is one text,
+one `const` per table, and a change to any of them is a new version at
+which every database from before is refused. Migrations were dropped when
+the wire's rule reached the files: every released version is retracted,
+so a database at an older version is one nobody runs, and each migration
+was a path nobody tested. The failure that taught it was found before the
+migrations went: the plan that took the schema from 6 to 7 wrote
+`preMigrations[7]`, and code that followed the plan would have refused to
+open a version 6 database, wanting a migration from 6 that was not there;
+a pre-migration's idempotence, its `CREATE TABLE IF NOT EXISTS` from the
+shared constant, the old DDL written out as a literal so the test built
+the right past — each was a rule about code that only a database from
+before exercised. A test plants each version from 0 to 7 and asserts the
+sentence and that the file was left as found.
 
-**A migration is keyed by the version it starts from, and a pre-migration
-creates what it fills.** `migrations[5]` takes a database from 5 to 6; the
-plan that took it from 6 to 7 wrote `preMigrations[7]`, and code that
-followed the plan would have refused to open a version 6 database, wanting
-a migration from 6 that was not there. A pre-migration runs outside and
-before its transaction, so the table the Go half writes into does not
-exist yet: it creates it from the same constant the fresh path uses
-(`CREATE TABLE IF NOT EXISTS`, so `sqlite_master` still matches) and
-writes with `ON CONFLICT DO UPDATE`, and the SQL half repeats the constant
-as a no-op and drops the old table. Both halves are idempotent because a
-crash between them leaves the old version, and the next start runs both
-again. The old migration tests built the past from the table constant;
-when the constant became the new table they would have built the wrong
-past, so the old DDL is written out as a literal, as every earlier
-schema's is.
-
-**A time the relay wrote orders nothing the owner did.** An unsigned allow
-list converted by the migration carries the migration's clock as its
-issue time; had the 409 rule applied to it, an owner whose machine clock
-ran behind the relay's could never push over it. A signed document
-replaces an unsigned row whatever its time, and the newer-issued rule
-holds only between two documents the owner signed.
-
-**Share DDL between the fresh-create path and the migration that introduces a
-table.** Each table is one `const` used by both, so a database created from
-nothing and one migrated forward store byte-identical `CREATE` text. A test
-compares `sqlite_master` between the two.
+**A row that does not verify says nothing about when the owner issued
+it.** A signed document replaces a row with no signature — one somebody
+blanked, since nothing writes one without — whatever that row's `issued`
+says, and the newer-issued rule holds only between two documents the
+owner signed. This began as the rule for rows the migration from before
+signed lists converted, whose issue time was the migration's clock: had
+the 409 rule applied to them, an owner whose machine clock ran behind
+the relay's could never have pushed over one.
 
 **Do not store what the relay does not need.** There is deliberately no
 column recording which token created which mailbox. That link appears once in
@@ -594,9 +612,7 @@ An outside reader called that what it was: a compatibility state for
 authentication data, with a window in it, kept for users who did not
 exist, since no relay outside the project ran before signed lists. Now a
 row with no signature is broken before anything is parsed, refuses every
-sender at once, and is replaced by the owner's next push; the migration
-is unchanged and what it writes is read as broken, which closes a
-restricted mailbox across the upgrade rather than opening it. When the
+sender at once, and is replaced by the owner's next push. When the
 question is whether to honour authentication data that cannot be
 verified, the answer is no, and a state that says "not yet" is a hole.
 
@@ -630,12 +646,10 @@ constants.** Every `Query`, `QueryRow`, `Exec` and `Prepare` in the tree
 takes its text from string constants, joined by `+` where a clause is
 optional (`certRows`, `Tokens`), and every value goes in `args`, `?` for
 `?`, and a parameter that carries a query is one every caller passes a
-constant for. The exceptions are three, allowlisted in the test by site
-and reason: the two `PRAGMA user_version = %d` writes, because a PRAGMA
-takes no placeholder and the operand is the schema version the store
-owns; and the migration's statements, chosen from the `migrations` map
-by the version the store read from itself, each a `+` of the schema
-constants. A `LIKE` takes
+constant for. The one exception is allowlisted in the test by site and
+reason: the `PRAGMA user_version = %d` write, because a PRAGMA takes no
+placeholder and the operand is the schema version the store owns. A
+`LIKE` takes
 its pattern as a parameter too, and the value's own rule is what keeps
 `%` and `_` out of it (a short id is hex before it is a prefix). A test
 parses the tree for those calls and fails on a query argument that is
@@ -897,9 +911,11 @@ subject and a text reached the terminal as they came, and `Validate`
 held the subject to a length only: a subject is one line, an attachment
 name is one name, and neither carries a control, format, private-use or
 separator character; text keeps a line break and a tab and nothing else
-from those classes; and every print of them escapes all the same,
-because a record from before the rule, or written by hand, is still in
-the spool. The stamp inside a message is the sender's word: `FindThread`
+from those classes; a record read back from the spool is held to the
+same rule at `Load` and refused by name if it fails, since a record
+written by hand, or by a version from before the rule, is not one this
+program wrote; and every print of them escapes all the same, as the last
+line under the rule. The stamp inside a message is the sender's word: `FindThread`
 ordered by it first, so a peer stamping year 9999 was the latest on a
 thread for as long as the message was kept and drew every reply by
 thread. Order by arrival here, then the relay's counter, and use the
@@ -1258,24 +1274,29 @@ that part first and writes once everything has succeeded, so an error leaves
 the home as it was.
 
 **A one-way move of somebody's files writes the thing that says it happened
-last, and every step before it is safe to repeat.** Moving a home from one
-relay to `relays/<name>/` renames three files, writes a record, and only then
-rewrites `config.json`, whose old fields are what say the move has not
-happened. Crash anywhere before the last step and the home still looks
-unmigrated, so the next open finishes it; each step checks for its own result
-first, so finishing is not doing it twice. And move the files rather than
-re-encoding them: a pinned anchor that comes out of a migration with different
-bytes is a different file to reason about at exactly the moment somebody is
-least able to check it, so the test compares them byte for byte.
+last, and every step before it is safe to repeat.** The home's move from
+one relay to `relays/<name>/`, which went when nothing on this machine was
+from before any more, renamed three files, wrote a record, and only then
+rewrote `config.json`, whose old fields were what said the move had not
+happened. A crash anywhere before the last step left a home that still
+looked unmoved, so the next open finished it; each step checked for its
+own result first, so finishing was not doing it twice. And it moved the
+files rather than re-encoding them: a pinned anchor that comes out of a
+move with different bytes is a different file to reason about at exactly
+the moment somebody is least able to check it, so the test compared them
+byte for byte. The rule outlives the move: any one-way change to
+somebody's files is ordered the same way.
 
 **Do not declare a field for a migration to read on a struct that is written
-back.** `store.Config` no longer has `relay`, `trust_anchor_spki` and the
-rest; the migration reads them through a private struct of its own, which
-makes writing `Config` back the thing that removes them, and leaves no field
-for a later caller to reach for by accident. The first attempt kept them on
+back.** `store.Config` has no `relay`, `trust_anchor_spki` and the rest; the
+home's move read them through a private struct of its own, which made
+writing `Config` back the thing that removed them, and left no field for a
+later caller to reach for by accident. The first attempt kept them on
 `Config` marked "do not add a caller" — and `time.Time` ignores `omitempty`,
-so the zeroed field was written out again anyway and the migration test
-caught it.
+so the zeroed field was written out again anyway and the test caught it.
+Today `Config` is a strict decode and those keys are refused by name, which
+is the same rule from the other side: a field that is not on the struct is
+not read, and a key that is not written is not accepted.
 
 **A state marker must be written by the thing that makes it true, not by a
 side effect that usually follows.** "Is this identity registered on that
@@ -1283,8 +1304,9 @@ relay" is recorded by a cursor file, which was only ever written when a
 message arrived. A mailbox somebody had joined and never received anything
 in therefore looked unjoined — and `auu inbox`, which drains every relay
 with a cursor, skipped it. Registration writes it now, and so does a
-successful drain, so the state repairs itself. It was found by migrating a
-real home, not by a test; the tests came after.
+successful drain, so the state repairs itself. It was found by moving a
+real home to `relays/`, when the move existed, not by a test; the tests
+came after.
 
 **A check made "again inside the transaction" has to be handed the value to
 check.** `RegisterOptions.TokenUse` was documented as re-verified beside

@@ -48,9 +48,9 @@ type ledgerEntry struct {
 	// failure. It is what the sweep ages a thread by and what 'serve ls'
 	// shows as a thread's last activity: a message that has only ever
 	// failed, or that gave up, has no Handled to be aged by, and its state
-	// is exactly what the next attempt needs. An entry written before this
-	// field existed reads as zero, which the sweep treats as "no time of
-	// its own".
+	// is exactly what the next attempt needs. Every attempt writes it, so
+	// an entry that counts an attempt and has no time for it is from
+	// before there were timestamps, and loadLedger refuses it.
 	Tried time.Time `json:"tried"`
 	// Reply is the id of what serve sent back, empty when the handler had
 	// nothing to say or when nothing has been sent yet.
@@ -108,6 +108,14 @@ func loadLedger(path string) (*ledger, error) {
 			return nil, fmt.Errorf("%s counts %d failures for %s, which is not a count; it is the record of what "+
 				"has been answered, so fix it or move it aside knowing that everything in the inbox becomes new mail",
 				path, e.Failures, id)
+		}
+		// An attempt has a time. An entry that counts one and has none
+		// was written before there were timestamps, and nothing on this
+		// machine is from before.
+		if (e.Failures > 0 || e.GaveUp) && e.Tried.IsZero() {
+			return nil, fmt.Errorf("%s has an attempt with no time for %s, which is how a ledger from before v0.11.0 "+
+				"was written; it is the record of what has been answered, so fix it or move it aside knowing that "+
+				"everything in the inbox becomes new mail", path, id)
 		}
 	}
 	l.path = path

@@ -332,12 +332,11 @@ func (s *Store) AddRelay(name, rawURL string) (*Relay, error) {
 // a host the rule refuses — an IPv6 literal, which begins with a colon; a
 // hostname over the sixty-four bytes a name may be — was refused with
 // every suffix too, so the loop never returned: 'auu relay add
-// https://[::1]:8443', an enrolment token naming such a relay, and Open of
-// a legacy home that did spun for ever. Now the base keeps the characters
-// the rule allows, so every candidate is valid and the loop ends on the
-// first name not taken; and it has a ceiling all the same, after which it
-// returns an error rather than a name, so no later change to the rule can
-// bring the hang back.
+// https://[::1]:8443' and an enrolment token naming such a relay spun for
+// ever. Now the base keeps the characters the rule allows, so every
+// candidate is valid and the loop ends on the first name not taken; and
+// it has a ceiling all the same, after which it returns an error rather
+// than a name, so no later change to the rule can bring the hang back.
 func defaultRelayName(normalised string, existing []*Relay) (string, error) {
 	base := "relay"
 	var port string

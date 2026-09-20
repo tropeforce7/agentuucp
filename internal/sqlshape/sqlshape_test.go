@@ -44,21 +44,17 @@ var handles = map[string]bool{"db": true, "tx": true, "conn": true}
 // allowed are the sites whose query is not a constant expression on
 // purpose, keyed as the ledger keys a site, each with why. PRAGMA takes
 // no placeholder, and the number formatted is the schema version the
-// store itself owns, never a value from the wire; and the migration's
-// statements are the values of the migrations map, each a + of the
-// schema constants, chosen by the version the store read from itself.
+// store itself owns, never a value from the wire.
 var allowed = map[string]string{
-	`internal/relay/store.go migrate tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", from + 1))`: "PRAGMA takes no placeholder; from is the store's own schema version",
-	`internal/relay/store.go setVersion db.Exec(fmt.Sprintf("PRAGMA user_version = %d", v))`:     "PRAGMA takes no placeholder; v is the store's own schema version",
-	`internal/relay/store.go migrate tx.Exec(stmts)`:                                             "stmts is a value of the migrations map, each a + of the schema constants, chosen by the version the store read from itself",
+	`internal/relay/store.go setVersion db.Exec(fmt.Sprintf("PRAGMA user_version = %d", v))`: "PRAGMA takes no placeholder; v is the store's own schema version",
 }
 
 // TestEveryQueryIsAConstant is the rule against the tree as it stands.
 func TestEveryQueryIsAConstant(t *testing.T) {
 	root := moduleRoot(t)
 	problems, sites := check(root, allowed)
-	if sites < 90 {
-		t.Fatalf("found %d query sites; the sweep that wrote this test found more than 90, so the parse is not reaching the tree", sites)
+	if sites < 80 {
+		t.Fatalf("found %d query sites; the tree has more than 80, so the parse is not reaching it", sites)
 	}
 	for _, p := range problems {
 		t.Error(p)

@@ -267,18 +267,32 @@ func TestAReplyGoesBackTheWayTheMessageCame(t *testing.T) {
 		t.Errorf("work delivered %d replies after --relay work, want 1", got)
 	}
 
-	// A message stored before a home could know more than one relay has no
-	// relay recorded. It is taken to have come through the default, which is
-	// where it did come from.
+	// A record with no relay recorded is how a build from before a home
+	// could know more than one wrote it, and nothing on this machine is
+	// from before: the record is refused at Load, named once by the
+	// listing, and a reply finds no message rather than guessing the
+	// default.
 	stripRelay(t, alice, store.Inbox, id)
-	alice.run("reply", id, "from the old days")
-	if got := bob.inboxJSON("--relay", "work").Fetch.Delivered; got != 1 {
-		t.Errorf("a message with no relay recorded did not go to the default: %d", got)
+	var err error
+	warning := captureStderr(t, func() { _, err = alice.tryRun("reply", id, "from the old days") })
+	if err == nil || !strings.Contains(err.Error(), "no message or thread matches") {
+		t.Errorf("a reply to a record with no relay recorded: %v; want no message found", err)
+	}
+	want := "warning: " + filepath.Join(alice.home, "inbox", id+".json") +
+		" could not be read (the record names no relay, which is how a record from before v0.11.0 was written; delete the file) and is not listed\n"
+	if warning != want {
+		t.Errorf("reply said:\n%q\nwant:\n%q", warning, want)
+	}
+	if out := alice.run("inbox", "--no-fetch"); strings.Contains(out, id[:12]) {
+		t.Errorf("inbox listed the record with no relay:\n%s", out)
+	}
+	if got := bob.inboxJSON("--relay", "work").Fetch.Delivered; got != 0 {
+		t.Errorf("work delivered %d messages after a refused reply", got)
 	}
 }
 
-// stripRelay rewrites a stored message as an older build would have written
-// it, with no relay recorded.
+// stripRelay rewrites a stored message as a build from before a home could
+// know more than one relay wrote it, with no relay recorded.
 func stripRelay(t *testing.T, u *user, box store.Box, id string) {
 	t.Helper()
 	path := filepath.Join(u.home, string(box), id+".json")

@@ -244,7 +244,9 @@ func TestShowWarnsAboutABundleStillOnDisk(t *testing.T) {
 	}
 
 	// A record from before the path was kept, written out as it was then:
-	// it loads, and there is nothing to say.
+	// refused by name, with the file, the key, and what to do; show reads
+	// nothing of it, and neither does a reissue, which finds the record
+	// first.
 	record := filepath.Join(dir, "relays", "relay.example.com", "issued.json")
 	raw, err := os.ReadFile(record)
 	if err != nil {
@@ -269,15 +271,19 @@ func TestShowWarnsAboutABundleStillOnDisk(t *testing.T) {
 	if err := os.WriteFile(record, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr, err = runCapturing(t, dir, "show")
-	if err != nil {
-		t.Fatalf("show refuses a record from before bundle_path: %v", err)
+	refusal := record + " has no bundle_path: it was written by an auu-ca from before v0.11.0; " +
+		"delete " + filepath.Dir(record) + " and issue the relay again, after which every machine enrolled on it enrols again"
+	for _, args := range [][]string{
+		{"show"},
+		{"relay", "--host", "relay.example.com", "--out", "-"},
+	} {
+		_, _, err = runCapturing(t, dir, args...)
+		if err == nil || err.Error() != refusal {
+			t.Errorf("%s over a record from before bundle_path: %v\nwant %s", args[0], err, refusal)
+		}
 	}
-	if !strings.Contains(stdout, "relay.example.com") {
-		t.Errorf("show does not list the relay from an old record:\n%s", stdout)
-	}
-	if strings.Contains(stderr, "still at") {
-		t.Errorf("show warns from a record that holds no path:\n%s", stderr)
+	if after, err := os.ReadFile(record); err != nil || string(after) != old {
+		t.Errorf("the refused record was touched: %v", err)
 	}
 }
 

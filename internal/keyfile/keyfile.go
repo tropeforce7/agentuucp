@@ -58,8 +58,8 @@ import (
 
 const (
 	// BlockType is the PEM type of an encrypted key. A plain PKCS#8 key is
-	// "PRIVATE KEY", which is how a file from before encryption is told
-	// apart from one that has been.
+	// "PRIVATE KEY", which is how a home that is not under a passphrase
+	// writes its keys and what IsEncrypted tells this from.
 	BlockType = "AUU ENCRYPTED PRIVATE KEY"
 
 	// DefaultTime, DefaultMemory and DefaultThreads are Argon2id's

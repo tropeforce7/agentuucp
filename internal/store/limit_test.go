@@ -180,10 +180,15 @@ func TestLimitCursor(t *testing.T) {
 }
 
 // TestLimitStoredRecordShapes: a message record read back is held at Load
-// to the shapes a print slices: its id, its thread and its reply are
-// message ids, its from and to are fingerprints, and each attachment's
-// digest is 64 hex characters; each one character short is refused
-// naming what it is, and the record as written loads.
+// to the shapes a print slices and the words a print shows: its id, its
+// thread and its reply are message ids, its from and to are fingerprints,
+// its relay is a relay name, each attachment's digest is 64 hex
+// characters; its type is one the rule knows, its subject one line of
+// text, its text lines of text, each attachment's name any text, its
+// media type not empty. Each one character short, or with the one rune
+// the rule refuses, is refused naming what it is; a record that names no
+// relay is refused as a record from before v0.11.0; and the record as
+// written loads.
 func TestLimitStoredRecordShapes(t *testing.T) {
 	s := newStore(t)
 	now := time.Now().UTC().Truncate(time.Second)
@@ -220,21 +225,45 @@ func TestLimitStoredRecordShapes(t *testing.T) {
 		{"digest one short", func(m *Stored) { m.Inner.Body.Attachments[0].SHA256 = strings.Repeat("0", 63) }, "digest is 63 characters, not 64"},
 		{"digest not lowercase hex", func(m *Stored) { m.Inner.Body.Attachments[0].SHA256 = strings.Repeat("G", 64) }, "digest is not lowercase hex"},
 		{"size negative", func(m *Stored) { m.Inner.Body.Attachments[0].Size = -1 }, "size -1 is negative"},
+		{"no relay", func(m *Stored) { m.Relay = "" }, "the record names no relay, which is how a record from before v0.11.0 was written; delete the file"},
+		{"relay not a name", func(m *Stored) { m.Relay = "../x" }, `the record's relay: relay name "../x"`},
+		{"type unknown", func(m *Stored) { m.Inner.Body.Type = "asks" }, `unknown type "asks"`},
+		{"subject with an escape", func(m *Stored) { m.Inner.Body.Subject = "a\x1bb" }, "subject contains U+001B"},
+		{"subject of two lines", func(m *Stored) { m.Inner.Body.Subject = "a\nb" }, "subject contains U+000A"},
+		{"text with a carriage return", func(m *Stored) { m.Inner.Body.Text = "a\rb" }, "text contains U+000D"},
+		{"text with a bidi override", func(m *Stored) { m.Inner.Body.Text = "a\u202eb" }, "text contains U+202E"},
+		{"name of two lines", func(m *Stored) { m.Inner.Body.Attachments[0].Name = "a\nb" }, "name is more than one line"},
+		{"name with a NUL", func(m *Stored) { m.Inner.Body.Attachments[0].Name = "a\x00b" }, "name contains a null byte"},
+		{"media empty", func(m *Stored) { m.Inner.Body.Attachments[0].Media = "" }, "empty media type"},
 	} {
 		err := write(t, tc.mutate)
 		if err == nil || !strings.Contains(err.Error(), tc.says) {
 			t.Errorf("%s: %v; want %q", tc.name, err, tc.says)
 		}
 	}
-	// An attachment's name is not a reason to refuse a record: the write
-	// uses SafeName of it and the terminal escapes it.
-	for _, name := range []string{"CON", "a/b", "a<b>.txt", ""} {
+	// A text keeps its lines and its tab; an attachment's name is held to
+	// what any text is, and no further: what it would do as a path is
+	// SafeName's at the write, and the terminal escapes it.
+	if err := write(t, func(m *Stored) { m.Inner.Body.Text = "one\n\ttwo" }); err != nil {
+		t.Errorf("a record whose text has a line break and a tab: %v; want it loaded", err)
+	}
+	for _, name := range []string{"CON", "a/b", "a<b>.txt", "", "a\x1bb"} {
 		if err := write(t, func(m *Stored) { m.Inner.Body.Attachments[0].Name = name }); err != nil {
 			t.Errorf("a record with an attachment named %q: %v; want it loaded", name, err)
 		}
 	}
 	if err := write(t, func(m *Stored) {}); err != nil {
 		t.Errorf("the record as written: %v", err)
+	}
+	// The relay's key is always written, even for the zero value, since
+	// Load requires it: a record with none is from before, not a record
+	// with the default.
+	data, err := json.Marshal(&Stored{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte(`"relay":""`)) {
+		t.Errorf("the zero record marshals without its relay key: %s", data)
 	}
 }
 

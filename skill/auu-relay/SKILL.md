@@ -159,10 +159,13 @@ bundle over the old credential and restarts; every machine already enrolled
 keeps working, and nobody re-enrols. Do the same, without waiting, if the
 user thinks the relay has been compromised.
 
-**Upgrading** is the same: a new kit and `update`. The relay migrates its
-own database at start and says `database migrated` with `from=` and `to=`;
-`update` prints that line through, and takes a backup of the database
-first.
+**Upgrading** is the same: a new kit and `update`, which takes a backup of
+the database first. The relay's database is at this version's schema or is
+refused, never migrated: a database from before v0.11.0 is deleted, with
+the message directory beside it, and the relay recreates both at the next
+start, after which every machine enrolled on the relay enrols again. The
+refusal in the journal says exactly that, naming both paths, and `update`
+stops at it.
 
 **A `broken` allow list** in `auu-admin mailboxes ls` is an incident on
 the host, not a user error: the list no longer verifies against the

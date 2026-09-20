@@ -169,9 +169,8 @@ func mailboxShow(args []string) error {
 
 // allowColumn is a mailbox's allow list in the listing: the count and the
 // state word, or "-" for a mailbox that has never pushed one. "broken" is
-// the word to look for after an incident, and after an upgrade from before
-// signed lists: a list that does not verify is refused on until its owner
-// pushes again.
+// the word to look for after an incident: a list that does not verify is
+// refused on until its owner pushes again.
 func allowColumn(m relayapi.MailboxRecord) string {
 	if m.Allow == "" {
 		return "-"

@@ -194,9 +194,10 @@ func ValidSubject(subject string) error {
 // ValidText applies the rules for a message's text: valid UTF-8, and of
 // the characters a channel name may not hold, only a line break and a tab.
 // Everything else a terminal would obey rather than show is refused here,
-// on both ends and on both paths, which is what makes the terminal safe by
-// rule rather than by every printer remembering; the printers escape all
-// the same, for a record from before the rule.
+// on both ends and on both paths, and again at Load of a record, which is
+// what makes the terminal safe by rule rather than by every printer
+// remembering; the printers escape all the same, as the last line and
+// not the rule.
 func ValidText(text string) error {
 	if !utf8.ValidString(text) {
 		return errors.New("message: text is not valid UTF-8")
@@ -252,28 +253,34 @@ func ValidDigest(s string) error {
 	return nil
 }
 
-// ValidShape is the part of Validate a print or a path relies on and
-// that reads no data: the ids, the thread's and the reply's, and each
-// attachment's digest and size. A record read back from the store is held
-// to it at Load, so that a print that slices an id or a digest meets the
-// shape it expects without hashing every attachment on every listing;
-// Validate, at Open, has already hashed them once. The free text, the
-// subject, the text and the names, is not held here: a record from before
-// a rule, or written by hand, is still shown, and the terminal escaper is
-// what stands between its words and the screen.
+// ValidShape is the part of Validate that reads no attachment data: the
+// header, the type, the ids and the subject; the text; and each
+// attachment's name, media type, digest and size. A record read back from
+// the store is held to it at Load, so that a print meets the shape and
+// the words it expects without hashing every attachment on every listing;
+// Validate, at Open, has already hashed them once. A record that fails it
+// was written by hand, or by a version from before a rule, and nothing on
+// this machine is from before: it is refused by name and not shown. The
+// terminal escaper stands between every word and the screen all the same,
+// as the last line and not the rule.
 func (b *Body) ValidShape() error {
-	if err := ValidID(b.Thread); err != nil {
-		return fmt.Errorf("thread is %v", err)
+	if err := ValidHeader(b.Type, b.Thread, b.InReplyTo, b.Subject); err != nil {
+		return err
 	}
-	if b.InReplyTo != "" {
-		if err := ValidID(b.InReplyTo); err != nil {
-			return fmt.Errorf("in_reply_to is %v", err)
-		}
+	if err := ValidText(b.Text); err != nil {
+		return err
 	}
 	for i := range b.Attachments {
 		a := &b.Attachments[i]
-		// The name is not a reason to refuse a record: the write uses
-		// SafeName of it and the terminal escapes it, as for a subject.
+		// The name to what any text is held to, as at Open: the write
+		// uses SafeName of it and the terminal escapes it, as for a
+		// subject.
+		if err := ValidAttachmentText(a.Name); err != nil {
+			return err
+		}
+		if a.Media == "" {
+			return fmt.Errorf("attachment %q: empty media type", a.Name)
+		}
 		if err := ValidDigest(a.SHA256); err != nil {
 			return fmt.Errorf("attachment %d: %v", i, err)
 		}

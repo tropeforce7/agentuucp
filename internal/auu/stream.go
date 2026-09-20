@@ -257,12 +257,10 @@ func resumeStreams(s *store.Store, id *identity.Identity, asJSON bool, relay str
 }
 
 // resumeRelay is the relay an interrupted upload has to be finished on.
+// Every record names it; listPending refused one that does not.
 func resumeRelay(s *store.Store, p *pending, flag string) (*store.Relay, error) {
 	if strings.TrimSpace(flag) != "" {
 		return selectRelay(s, flag)
-	}
-	if p.Relay == "" {
-		return selectRelay(s, "")
 	}
 	r, err := s.Relay(p.Relay)
 	if errors.Is(err, store.ErrNoSuchRelay) {

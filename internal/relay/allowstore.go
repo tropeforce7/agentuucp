@@ -3,7 +3,6 @@ package relay
 import (
 	"bytes"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -42,10 +41,10 @@ func (e *AllowlistOlderError) Unwrap() error { return ErrAllowlistOlder }
 // different bytes, is ErrAllowlistOlder. The same bytes at the same instant
 // are the list the relay already holds, and pushing them again is not an
 // error: a machine catching a relay up after an outage must be able to push
-// what it has without first asking what the relay has. An unsigned row —
-// one the migration converted, with no signature, which the relay reads
-// as broken — is replaced whatever its issue time, since that time is the
-// relay's clock and orders nothing the owner did. It reports whether
+// what it has without first asking what the relay has. A row with no
+// signature — one somebody blanked, which the relay reads as broken — is
+// replaced whatever its issued says, since a row that does not verify
+// says nothing about when the owner issued it. It reports whether
 // anything was written; the repeated push is the one success that writes
 // nothing.
 func (s *Store) SetAllowlist(fp string, d *allowlist.Document, doc, sig []byte) (stored bool, err error) {
@@ -164,10 +163,10 @@ func (s *Store) MayPost(fp, sender string) (bool, error) {
 // allowDecision reads a stored list as the relay enforces it: verified
 // against the mailbox's registered key, and broken otherwise, with no
 // document, so the caller refuses everyone. A row with no signature is
-// broken before anything is parsed — the rows the migration from before
-// signed lists wrote, and a signed row somebody blanked the signature of,
-// read the same: there is no compatibility state for authentication data,
-// and anything malformed fails closed until the owner pushes again.
+// broken before anything is parsed: nothing writes one, so it is a signed
+// row somebody blanked the signature of, and there is no compatibility
+// state for authentication data — anything malformed fails closed until
+// the owner pushes again.
 func allowDecision(bundle, doc, sig []byte) (state string, d *allowlist.Document) {
 	if len(sig) == 0 {
 		return relayapi.AllowBroken, nil
@@ -180,66 +179,4 @@ func allowDecision(bundle, doc, sig []byte) (state string, d *allowlist.Document
 		return relayapi.AllowBroken, nil
 	}
 	return relayapi.AllowSigned, d
-}
-
-// convertAllowlists is the Go half of migrating 6 to 7. It creates the
-// allowlists table from its constant, since the transaction that would
-// has not run yet, and writes one row per mailbox that has rows in the old
-// table: a document naming its senders, sorted, without the owner, who is
-// always admitted and may not be listed; no signature, since nobody signed
-// it, which the relay reads as broken until the owner pushes — a mailbox
-// that was restricted refuses every sender after the upgrade rather than
-// admitting anyone on the strength of a row the relay cannot verify; and
-// the migration's own time as issued. It can be interrupted and repeated:
-// the old table is still there until the transaction drops it, and a row
-// already written is written again the same, but for the time.
-func convertAllowlists(s *Store) error {
-	if _, err := s.db.Exec(allowlistsTable); err != nil {
-		return fmt.Errorf("relay: creating allowlists: %w", err)
-	}
-	rows, err := s.db.Query(`SELECT fp, sender_fp FROM allowlist ORDER BY fp, sender_fp`)
-	if err != nil {
-		return fmt.Errorf("relay: reading the allow lists: %w", err)
-	}
-	defer rows.Close()
-	// The query is drained before any writing: one connection, and a write
-	// while a read is open would deadlock.
-	senders := map[string][]string{}
-	var order []string
-	for rows.Next() {
-		var fp, sender string
-		if err := rows.Scan(&fp, &sender); err != nil {
-			return err
-		}
-		if _, seen := senders[fp]; !seen {
-			order = append(order, fp)
-		}
-		if sender != fp {
-			senders[fp] = append(senders[fp], sender)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	now := time.Now().UTC()
-	for _, fp := range order {
-		d := &allowlist.Document{V: allowlist.Version, Owner: fp, Issued: now, Senders: senders[fp]}
-		if d.Senders == nil {
-			d.Senders = []string{}
-		}
-		if err := d.Validate(); err != nil {
-			return fmt.Errorf("relay: the allow list for %s cannot be converted: %v", fp, err)
-		}
-		doc, err := json.Marshal(d)
-		if err != nil {
-			return err
-		}
-		if _, err := s.db.Exec(`INSERT INTO allowlists (fp, doc, sig, issued, count) VALUES (?, ?, X'', ?, ?)
-			ON CONFLICT (fp) DO UPDATE SET doc = excluded.doc, sig = excluded.sig,
-				issued = excluded.issued, count = excluded.count`,
-			fp, doc, now.Format(time.RFC3339Nano), len(d.Senders)); err != nil {
-			return fmt.Errorf("relay: converting the allow list for %s: %w", fp, err)
-		}
-	}
-	return nil
 }

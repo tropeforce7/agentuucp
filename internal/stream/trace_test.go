@@ -211,13 +211,13 @@ func TestValidateRefusesSizesThatWrap(t *testing.T) {
 // with a large attachment was sealed, sent and handed to an expert host.
 func TestValidateHoldsTheManifestBodyToTheMessageRules(t *testing.T) {
 	from, to := pair(t)
-	build := func(body Body) error {
+	buildWith := func(body Body) error {
 		_, err := BuildManifest(from, to.Public(), "0123456789abcdef0123456789abcdef", body,
 			sourcesOf(memSource{"a", []byte("x")}), MinChunkSize)
 		return err
 	}
 	good := Body{Type: "ask", Thread: "0123456789abcdef0123456789abcdef", Subject: "s", Text: "hello"}
-	if err := build(good); err != nil {
+	if err := buildWith(good); err != nil {
 		t.Fatalf("a manifest whose body meets the rules was refused: %v", err)
 	}
 	for _, tc := range []struct {
@@ -231,9 +231,22 @@ func TestValidateHoldsTheManifestBodyToTheMessageRules(t *testing.T) {
 		{"a type nobody knows", Body{Type: "exec", Thread: good.Thread, Text: "hello"}},
 		{"a subject over the limit", Body{Type: "ask", Thread: good.Thread, Subject: strings.Repeat("s", 4097), Text: "hello"}},
 	} {
-		if err := build(tc.body); !errors.Is(err, ErrForm) {
+		if err := buildWith(tc.body); !errors.Is(err, ErrForm) {
 			t.Errorf("%s: %v, want ErrForm", tc.name, err)
 		}
+	}
+	// An attachment's media type, which an envelope's Open refuses empty
+	// and the sender never writes empty: crafted past BuildManifest, as a
+	// stranger's client would, and refused where the manifest is read, so
+	// that no stream is taken whose record Load would then refuse.
+	_, m := build(t, from, to, MinChunkSize, map[string][]byte{"a.bin": []byte("hello")})
+	m.Attachments[0].Media = ""
+	if err := m.Validate(); !errors.Is(err, ErrForm) || !strings.Contains(err.Error(), `attachment "a.bin" has no media type`) {
+		t.Errorf("a received manifest with an empty media type: %v, want ErrForm naming it", err)
+	}
+	m.Attachments[0].Media = "application/octet-stream"
+	if err := m.Validate(); err != nil {
+		t.Errorf("the manifest with its media type back: %v", err)
 	}
 }
 

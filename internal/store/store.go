@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -168,10 +170,45 @@ func Open(root string) (*Store, error) {
 	for _, dir := range []string{inboxDir, sentDir, quarantineDir} {
 		warnWritable(filepath.Join(root, dir), "your mail", true)
 	}
-	if err := s.migrateRelays(); err != nil {
+	if err := s.refuseHomeFromBefore(); err != nil {
 		return nil, err
 	}
 	return s, nil
+}
+
+// looseRelayFiles are the files a home kept in its root before it could
+// know more than one relay, when it held the one relay's URL in config.json
+// and its anchor, certificate and cursor beside it. Each now lives under
+// relays/NAME/, and one in the root is a home from before.
+var looseRelayFiles = []string{anchorFile, certFile, cursorFile}
+
+// refuseHomeFromBefore refuses, at Open, a home from before it could know
+// more than one relay: a config.json of the old shape, which Config refuses
+// by the key, or a relay's file loose in the root. Nothing on this machine
+// is from before, so the home is not moved to the new shape, which is a
+// path nobody tests; the sentence names the file and says what to do.
+func (s *Store) refuseHomeFromBefore() error {
+	if _, err := s.Config(); err != nil {
+		return err
+	}
+	for _, file := range looseRelayFiles {
+		if _, err := os.Stat(s.path(file)); err == nil {
+			return s.fromBefore(s.path(file), "is a relay's file in the home's root")
+		}
+	}
+	return nil
+}
+
+// fromBefore is the sentence for a file a home held before it could know
+// more than one relay. It names every file such a home kept, since a home
+// that has one may have the others and each would be refused in turn;
+// deleting them costs the relay's record, which 'auu relay add' makes
+// again, and nothing else.
+func (s *Store) fromBefore(path, fact string) error {
+	return damaged(path, fact+", which is how a home from before v0.11.0 kept its one relay", nil,
+		"this auu reads none of it; delete config.json and any of trust_anchor.pem, cert.json and cursor "+
+			"in the home's root, then add the relay again with 'auu relay add', "+
+			"or delete the home and run 'auu init' again")
 }
 
 // OpenDefault opens the store at DefaultRoot.
@@ -271,7 +308,33 @@ func (s *Store) SaveConfig(c Config) error {
 	return writeFileAtomic(s.path(configFile), append(data, '\n'), fileMode)
 }
 
-// Config loads the local configuration. A missing file is not an error.
+// configKeys is every key config.json may hold: the keys Config writes,
+// read from its tags, so the two cannot drift.
+var configKeys = jsonKeys(Config{})
+
+// configKeysFromBefore are the keys config.json held before a home could
+// know more than one relay: the one relay's URL and what was pinned for
+// it. Config carries no field for them, so nothing reads them; a file
+// that has one is refused by the key, as a home from before.
+var configKeysFromBefore = []string{"relay", "trust_anchor_spki", "server_int_spki", "server_int_not_before"}
+
+// jsonKeys is the JSON key of every field of a struct, from its tags.
+func jsonKeys(v any) map[string]bool {
+	keys := map[string]bool{}
+	t := reflect.TypeOf(v)
+	for i := 0; i < t.NumField(); i++ {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			keys[name] = true
+		}
+	}
+	return keys
+}
+
+// Config loads the local configuration. A missing file is not an error. A
+// file this program wrote is read to its shape: a key Config does not
+// write is refused by name, and one of the keys from before a home could
+// know more than one relay is refused as that, with the fix.
 func (s *Store) Config() (Config, error) {
 	var c Config
 	data, err := os.ReadFile(s.path(configFile))
@@ -281,15 +344,39 @@ func (s *Store) Config() (Config, error) {
 	if err != nil {
 		return c, err
 	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(data, &keys); err != nil {
+		return Config{}, s.configDamaged(err)
+	}
+	for _, key := range sortedKeys(keys) {
+		if configKeys[key] {
+			continue
+		}
+		if slices.Contains(configKeysFromBefore, key) {
+			return Config{}, s.fromBefore(s.path(configFile), fmt.Sprintf("has a key %q", key))
+		}
+		return Config{}, damaged(s.path(configFile), fmt.Sprintf("has a key this auu does not know, %q", key), nil,
+			"remove it, or delete the file and set the default relay again with 'auu relay default NAME'; "+
+				"it holds only that, the stream settings and your editor")
+	}
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Config{}, s.configDamaged(err)
 	}
 	return c, nil
 }
 
-// configDamaged is a config.json nothing can read, met by Config and by
-// the migration that reads it first, at Open. Deleting it costs the
-// default relay and the settings, and nothing that cannot be set again.
+func sortedKeys(m map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// configDamaged is a config.json nothing can read, met by Config, which
+// Open calls first. Deleting it costs the default relay and the settings,
+// and nothing that cannot be set again.
 func (s *Store) configDamaged(cause error) error {
 	return damaged(s.path(configFile), "is not valid JSON", cause,
 		"delete it and set the default relay again with 'auu relay default NAME'; "+
@@ -542,10 +629,9 @@ func writeCursor(path string, n int64) error {
 type Stored struct {
 	RelayID int64 `json:"relay_id"`
 	// Relay is the name of the relay this message arrived through, which is
-	// what a reply goes back the way of. A message stored before a home
-	// could know more than one relay has none, and is taken to have come
-	// through the default, which is where it did come from.
-	Relay      string          `json:"relay,omitempty"`
+	// what a reply goes back the way of. Every record names one, so the
+	// key is always written, and Load refuses a record without it.
+	Relay      string          `json:"relay"`
 	Received   time.Time       `json:"received"`
 	Read       bool            `json:"read"`
 	Inner      *envelope.Inner `json:"inner"`
@@ -558,9 +644,8 @@ type Stored struct {
 	PayloadOnRelay bool `json:"payload_on_relay,omitempty"`
 	// OnRelay says the message is still queued on the relay it came
 	// through: this machine fetched it from a channel set to keep, and it
-	// stays there until somebody removes it with 'auu rm'. A record
-	// written before the setting existed has it false, which is true of
-	// it: everything was acknowledged away then.
+	// stays there until somebody removes it with 'auu rm'. False, the
+	// zero the key is left out for, is a message acknowledged away.
 	OnRelay bool `json:"on_relay,omitempty"`
 	// Channel is the channel the message was sent to, or filed under on
 	// receipt; empty is default.
@@ -619,9 +704,20 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	if m.RelayID < 0 {
 		return nil, fmt.Errorf("the record's relay id %d is negative", m.RelayID)
 	}
+	// Every record names the relay it came through. One that names none
+	// is from before a home could know more than one, and nothing on this
+	// machine is from before; one that names something that is not a
+	// relay name was not written by this program.
+	if m.Relay == "" {
+		return nil, errors.New("the record names no relay, which is how a record from before v0.11.0 was written; delete the file")
+	}
+	if err := ValidRelayName(m.Relay); err != nil {
+		return nil, fmt.Errorf("the record's relay: %v", err)
+	}
 	// The record was written after Open ran every rule; a record that
-	// says otherwise was not written by this program, and every print
-	// that slices its id, its sender or a digest expects the shape.
+	// says otherwise was not written by this program, or was written by
+	// one from before a rule, and every print that slices its id, its
+	// sender or a digest, or shows its words, expects what the rule holds.
 	if err := message.ValidID(m.Inner.ID); err != nil {
 		return nil, fmt.Errorf("the record's message id: %v", err)
 	}
@@ -696,10 +792,6 @@ func (s *Store) List(box Box) ([]*Stored, error) {
 // 'auu rm --local-only', which has no record left to say so and is
 // remembered in the relay's own left-behind file. A fetch that finds the
 // relay counting more than these has a cursor past mail.
-//
-// A record from before a home could know more than one relay names none,
-// and counts against every relay: the mistake that allows is silence,
-// never a sentence about mail that is not there.
 func (s *Store) LeftOn(relay string) (int64, error) {
 	var n int64
 	for _, box := range []Box{Inbox, Quarantine} {
@@ -708,7 +800,7 @@ func (s *Store) LeftOn(relay string) (int64, error) {
 			return 0, err
 		}
 		for _, m := range msgs {
-			if (m.OnRelay || m.PayloadOnRelay) && (m.Relay == relay || m.Relay == "") {
+			if (m.OnRelay || m.PayloadOnRelay) && m.Relay == relay {
 				n++
 			}
 		}

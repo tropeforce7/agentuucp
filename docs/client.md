@@ -110,8 +110,11 @@ character a terminal would obey rather than show: a control character
 as a bidi override, a private-use character, a line or paragraph
 separator. `auu send` refuses one before anything leaves, naming the
 character, and a receiver refuses the same when it opens a message, so
-what reaches a listing or `auu read` is text; every print escapes the
-rest all the same, for a record from before the rule.
+what reaches a listing or `auu read` is text. A record in the spool is
+held to the rule again when it is read back, and one that fails it — a
+file edited by hand, or written by a version from before the rule — is
+not shown: the listing says once, naming the file, that it could not be
+read. Every print escapes the rest all the same.
 
 `--attach` repeats, and each file travels under its base name: no
 directory, and no two names that are one file where case does not count.
@@ -690,7 +693,7 @@ Unix's; on Windows, Go's file modes say nothing about who can read.
 | `identity.json` | your secret keys; with a passphrase set, only your name and public bundle |
 | `home.key` | with a passphrase set: the home key, encrypted under the passphrase |
 | `identity.key` | with a passphrase set: your secret keys, sealed under the home key |
-| `config.json` | your name, the default relay, and optionally your editor |
+| `config.json` | your name, the default relay, and optionally your editor; a key `auu` does not write is refused by name with exit 5, and one of the keys a home from before v0.11.0 held its one relay under — `relay`, `trust_anchor_spki` — is refused as that, with the fix |
 | `COMPOSE_MSG` | the last message composed in the editor |
 | `authorized_peers` | one export line per peer, the trust anchor |
 | `channels.json` | your channel directory as this machine last signed it, `issued` included; `auu channel push` signs it under that time again, and a file that will not read, or that breaks a rule, is refused by name with exit 5 |
@@ -716,7 +719,17 @@ which fetches nothing until the file is fixed; and `auu peers add` given a
 line with a break in it says to paste it as one line.
 
 Everything about one relay is in that relay's own directory, so removing a
-relay is removing a directory and backing one up is copying one.
+relay is removing a directory and backing one up is copying one. A home
+from before v0.11.0, which held its one relay's URL in `config.json` and
+that relay's anchor, certificate and cursor loose in the root, is refused
+by name at every command, exit 5, and is not moved to this shape: nothing
+on this machine is from before. The sentence names the file and says what
+to do — delete `config.json` and whichever of `trust_anchor.pem`,
+`cert.json` and `cursor` are in the root, then add the relay again with
+`auu relay add`, or delete the home and run `auu init` again. A record in
+the spool that
+names no relay, as every record from before did, is refused the same way
+when it is read.
 
 `cert.json` is the one file you should **not** copy to another machine, nor
 between relay directories: one that records a different relay from the

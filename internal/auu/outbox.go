@@ -38,10 +38,9 @@ type pending struct {
 	ToName    string `json:"to_name,omitempty"`
 	// Relay is the name of the relay the upload was opened on. It cannot be
 	// finished anywhere else: the relay holds a prefix of these exact bytes
-	// under an identifier that is its own. A record written before a home
-	// could know more than one relay names none, and is resumed on the
-	// default, which is where it was opened.
-	Relay  string `json:"relay,omitempty"`
+	// under an identifier that is its own. Every record names one, so the
+	// key is always written, and a record without it is broken.
+	Relay  string `json:"relay"`
 	Upload string `json:"upload,omitempty"`
 	// Channel is the recipient's channel the stream is for, so a resumed
 	// upload is opened for the same one; empty is default.
@@ -142,8 +141,12 @@ func listPending(s *store.Store) ([]*pending, []string, error) {
 			continue
 		}
 		// The id and the recipient are what the sender wrote, an id and
-		// a fingerprint; a label shows the first twelve of each.
-		if message.ValidID(p.MessageID) != nil || !identity.ValidFingerprint(p.To) {
+		// a fingerprint; a label shows the first twelve of each. The
+		// relay is a name this home gave; a record that names none is
+		// from before a home could know more than one relay, and
+		// nothing on this machine is from before.
+		if message.ValidID(p.MessageID) != nil || !identity.ValidFingerprint(p.To) ||
+			store.ValidRelayName(p.Relay) != nil {
 			broken = append(broken, p.MessageID)
 			continue
 		}

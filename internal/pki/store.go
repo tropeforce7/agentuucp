@@ -3,6 +3,7 @@ package pki
 import (
 	"crypto/mldsa"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -43,21 +44,16 @@ const (
 // all: each Key's Key field is nil. That is what show wants, and it is why
 // printing what an authority holds never asks for a passphrase.
 type Store struct {
-	dir       string
-	Anchor    *Key
-	Server    *Key
-	Client    *Key
-	Params    mldsa.Parameters
-	encrypted bool
-	locked    bool
+	dir    string
+	Anchor *Key
+	Server *Key
+	Client *Key
+	Params mldsa.Parameters
+	locked bool
 }
 
 // Dir is where this store lives.
 func (s *Store) Dir() string { return s.dir }
-
-// Encrypted says whether the key files are under a passphrase. It is false
-// only for a directory made before encryption existed.
-func (s *Store) Encrypted() bool { return s.encrypted }
 
 // Locked says whether this store was opened without its passphrase, and so
 // holds no private key and can issue nothing.
@@ -126,7 +122,7 @@ func Create(dir, name string, params mldsa.Parameters, pass keyfile.Passphrase, 
 		return nil, err
 	}
 	return &Store{dir: dir, Anchor: anchor, Server: server, Client: client,
-		Params: params, encrypted: true}, nil
+		Params: params}, nil
 }
 
 // keyPairs is every private key in a store, and the certificate that goes
@@ -143,9 +139,9 @@ func keyPairs() []struct{ keyFile, certFile string } {
 // refusing a directory other people can read: it holds the keys everything
 // else depends on.
 //
-// A directory from before key files were encrypted opens with any secret,
-// including none, so that auu-ca keeps working on one and can be pointed at
-// the command that encrypts it.
+// Every key file is encrypted. A directory from before key files were
+// encrypted is refused by name, never opened: nothing on this machine is
+// from before, and the sentence says to re-create the authority.
 func Open(dir string, secret []byte) (*Store, error) {
 	return open(dir, secret, false)
 }
@@ -166,31 +162,13 @@ func open(dir string, secret []byte, locked bool) (*Store, error) {
 	}
 	s := &Store{dir: dir, locked: locked}
 	into := []**Key{&s.Anchor, &s.Server, &s.Client}
-	var encrypted, plain []string
 	for i, l := range keyPairs() {
-		k, wasEncrypted, err := readKey(filepath.Join(dir, l.keyFile), filepath.Join(dir, l.certFile),
-			secret, locked)
+		k, err := readKey(filepath.Join(dir, l.keyFile), filepath.Join(dir, l.certFile), secret, locked)
 		if err != nil {
 			return nil, err
 		}
-		if wasEncrypted {
-			encrypted = append(encrypted, l.keyFile)
-		} else {
-			plain = append(plain, l.keyFile)
-		}
 		*into[i] = k
 	}
-	// A store half-way through a passphrase change: three renames, and the
-	// power went off between two of them. Say which files are which way,
-	// because the fix is to run the command again and the operator needs to
-	// know which passphrase it will want.
-	if len(encrypted) > 0 && len(plain) > 0 {
-		return nil, fmt.Errorf("%s is part encrypted and part not: %s %s encrypted, %s %s not. "+
-			"A passphrase change was interrupted; run 'auu-ca passphrase' again to finish it",
-			dir, strings.Join(encrypted, " and "), were(len(encrypted)),
-			strings.Join(plain, " and "), were(len(plain)))
-	}
-	s.encrypted = len(encrypted) > 0
 	// From the certificate, not the key: a locked store has no key and the
 	// parameter set is a fact about the public half either way.
 	pub, ok := s.Anchor.Cert.PublicKey.(*mldsa.PublicKey)
@@ -205,20 +183,12 @@ func open(dir string, secret []byte, locked bool) (*Store, error) {
 	return s, nil
 }
 
-func were(n int) string {
-	if n == 1 {
-		return "is"
-	}
-	return "are"
-}
-
-// SetPassphrase rewrites every key file under pass. It is how a directory
-// from before encryption is encrypted, and how a passphrase is changed.
+// SetPassphrase rewrites every key file under pass: it is how a passphrase
+// is changed.
 //
 // All three files are written beside their targets and only then renamed, so
-// the window in which a crash could leave the directory half-converted is
-// three renames wide and has no I/O in it. Open reports that state precisely
-// if it ever happens, and running this again fixes it.
+// the window in which a crash could leave the directory half under each
+// passphrase is three renames wide and has no I/O in it.
 func SetPassphrase(dir string, oldSecret []byte, pass keyfile.Passphrase) error {
 	if len(pass.Secret) == 0 {
 		return keyfile.ErrEmptyPassphrase
@@ -262,8 +232,9 @@ type RelayRecord struct {
 	Updated    time.Time `json:"updated"`
 	// BundlePath is the absolute path the last bundle for this relay was
 	// written to, and empty when it went to standard output. show uses it to
-	// notice a bundle still lying on the machine that made it. A record from
-	// before the field existed has none, which means unknown.
+	// notice a bundle still lying on the machine that made it. Every record
+	// carries the key; one without it is from before the path was kept and
+	// is refused by name.
 	BundlePath string `json:"bundle_path"`
 }
 
@@ -445,6 +416,20 @@ func (s *Store) relayRecord(host string) (*RelayRecord, error) {
 	if err := unmarshalStrict(raw, &rec); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
+	// Every key present, as the strict decode holds every key known: a
+	// record that leaves one out was written by an auu-ca from before the
+	// key was kept, and nothing of it is read.
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	for _, want := range []string{"hosts", "client_intermediates", "updated", "bundle_path"} {
+		if _, ok := keys[want]; !ok {
+			return nil, fmt.Errorf("%s has no %s: it was written by an auu-ca from before v0.11.0; "+
+				"delete %s and issue the relay again, after which every machine enrolled on it enrols again",
+				path, want, filepath.Dir(path))
+		}
+	}
 	return &rec, nil
 }
 
@@ -500,78 +485,81 @@ func writeCert(path string, cert *x509.Certificate) error {
 	return writeFile(path, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}), keyMode)
 }
 
-// readKey reads one key file and the certificate that goes with it, and says
-// whether the key file was encrypted.
+// readKey reads one key file and the certificate that goes with it.
 //
-// With locked set the key file is opened only far enough to learn that, and
-// the Key comes back holding the certificate alone.
-func readKey(keyPath, certPath string, secret []byte, locked bool) (*Key, bool, error) {
-	key, encrypted, err := readPrivateKey(keyPath, secret, locked)
+// With locked set the key file is opened only far enough to see that it is
+// an encrypted key, and the Key comes back holding the certificate alone.
+func readKey(keyPath, certPath string, secret []byte, locked bool) (*Key, error) {
+	key, err := readPrivateKey(keyPath, secret, locked)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	certDER, err := readPEM(certPath, "CERTIFICATE")
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	cert, err := x509.ParseCertificate(certDER)
 	if err != nil {
-		return nil, false, fmt.Errorf("%s: %w", certPath, err)
+		return nil, fmt.Errorf("%s: %w", certPath, err)
 	}
 	pub, ok := cert.PublicKey.(*mldsa.PublicKey)
 	if !ok {
-		return nil, false, fmt.Errorf("%s is %T, not ML-DSA", certPath, cert.PublicKey)
+		return nil, fmt.Errorf("%s is %T, not ML-DSA", certPath, cert.PublicKey)
 	}
 	if key != nil && !pub.Equal(key.PublicKey()) {
-		return nil, false, fmt.Errorf("%s does not match the key in %s", certPath, keyPath)
+		return nil, fmt.Errorf("%s does not match the key in %s", certPath, keyPath)
 	}
-	return &Key{Cert: cert, Key: key}, encrypted, nil
+	return &Key{Cert: cert, Key: key}, nil
 }
 
-// readPrivateKey reads a key file, decrypting it when it is encrypted. It
-// returns a nil key when locked is set and the file is encrypted, which is
-// the only case in which a store carries a certificate and no key.
-func readPrivateKey(path string, secret []byte, locked bool) (*mldsa.PrivateKey, bool, error) {
+// readPrivateKey reads an encrypted key file and decrypts it. It returns a
+// nil key when locked is set, which is the only case in which a store
+// carries a certificate and no key.
+//
+// A plain "PRIVATE KEY" block is how a key file was written before auu-ca
+// encrypted them. It is refused by name and never read: nothing on this
+// machine is from before, and the sentence says to re-create the
+// authority.
+func readPrivateKey(path string, secret []byte, locked bool) (*mldsa.PrivateKey, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	block, rest := pem.Decode(raw)
 	if block == nil {
-		return nil, false, fmt.Errorf("%s holds no PEM block", path)
+		return nil, fmt.Errorf("%s holds no PEM block", path)
 	}
 	if b, _ := pem.Decode(rest); b != nil {
-		return nil, false, fmt.Errorf("%s holds more than one PEM block", path)
+		return nil, fmt.Errorf("%s holds more than one PEM block", path)
 	}
-	var der []byte
-	encrypted := block.Type == keyfile.BlockType
-	switch {
-	case encrypted && locked:
-		return nil, true, nil
-	case encrypted:
-		if len(secret) == 0 {
-			return nil, true, fmt.Errorf("%s is encrypted: a passphrase is required", path)
-		}
-		if der, err = keyfile.DecryptBlock(block, secret); err != nil {
-			return nil, true, fmt.Errorf("%s: %w", path, err)
-		}
-	case block.Type == "PRIVATE KEY":
-		// A directory from before key files were encrypted. It still
-		// works; auu-ca says so and names what to run.
-		der = block.Bytes
+	switch block.Type {
+	case keyfile.BlockType:
+	case "PRIVATE KEY":
+		return nil, fmt.Errorf("%s holds an unencrypted private key, from before auu-ca encrypted its keys, "+
+			"and there is no reading it: delete %s and re-create the authority with 'auu-ca init'",
+			path, filepath.Dir(path))
 	default:
-		return nil, false, fmt.Errorf("%s holds a %q block, want %q or %q",
-			path, block.Type, "PRIVATE KEY", keyfile.BlockType)
+		return nil, fmt.Errorf("%s holds a %q block, want %q", path, block.Type, keyfile.BlockType)
+	}
+	if locked {
+		return nil, nil
+	}
+	if len(secret) == 0 {
+		return nil, fmt.Errorf("%s is encrypted: a passphrase is required", path)
+	}
+	der, err := keyfile.DecryptBlock(block, secret)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	parsed, err := x509.ParsePKCS8PrivateKey(der)
 	if err != nil {
-		return nil, encrypted, fmt.Errorf("%s: %w", path, err)
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	key, ok := parsed.(*mldsa.PrivateKey)
 	if !ok {
-		return nil, encrypted, fmt.Errorf("%s is %T, not ML-DSA", path, parsed)
+		return nil, fmt.Errorf("%s is %T, not ML-DSA", path, parsed)
 	}
-	return key, encrypted, nil
+	return key, nil
 }
 
 func readPEM(path, want string) ([]byte, error) {

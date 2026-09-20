@@ -242,9 +242,6 @@ func cmdRelay(args []string) error {
 	if err != nil {
 		return err
 	}
-	if !store.Encrypted() {
-		fmt.Fprintln(os.Stderr, "auu-ca: "+legacyWarning(store.Dir()))
-	}
 	bundle, err := store.IssueRelay(hosts, *years, time.Now())
 	if err != nil {
 		return err
@@ -351,21 +348,20 @@ func cmdShow(args []string) error {
 		Retired int       `json:"retired_client_intermediates"`
 		// BundleOnDisk is the path of the last bundle written for this
 		// relay when that file is still on this machine, and empty when
-		// there is nothing to say: it was deleted, it went to standard
-		// output, or the record is from before the path was kept.
+		// there is nothing to say: it was deleted, or it went to standard
+		// output.
 		BundleOnDisk string `json:"bundle_on_disk"`
 		updated      time.Time
 	}
 	out := struct {
-		Dir       string     `json:"dir"`
-		Anchor    string     `json:"anchor"`
-		MLDSA     int        `json:"mldsa"`
-		Encrypted bool       `json:"keys_encrypted"`
-		Expires   time.Time  `json:"anchor_expires"`
-		Relays    []relayOut `json:"relays"`
+		Dir     string     `json:"dir"`
+		Anchor  string     `json:"anchor"`
+		MLDSA   int        `json:"mldsa"`
+		Expires time.Time  `json:"anchor_expires"`
+		Relays  []relayOut `json:"relays"`
 	}{
 		Dir: store.Dir(), Anchor: pki.SPKI(store.Anchor.Cert),
-		MLDSA: pki.ParameterNumberOf(store.Params), Encrypted: store.Encrypted(),
+		MLDSA:   pki.ParameterNumberOf(store.Params),
 		Expires: store.Anchor.Cert.NotAfter,
 	}
 	for _, h := range hosts {
@@ -398,13 +394,7 @@ func cmdShow(args []string) error {
 
 	fmt.Printf("directory:    %s\n", out.Dir)
 	fmt.Printf("trust anchor: %s\n", out.Anchor)
-	keys := fmt.Sprintf("ML-DSA-%d", out.MLDSA)
-	if out.Encrypted {
-		keys += ", encrypted"
-	} else {
-		keys += ", NOT ENCRYPTED"
-	}
-	fmt.Printf("keys:         %s\n", keys)
+	fmt.Printf("keys:         ML-DSA-%d\n", out.MLDSA)
 	for _, tc := range []struct {
 		label string
 		when  time.Time
@@ -414,9 +404,6 @@ func cmdShow(args []string) error {
 		{"client CA", store.Client.Cert.NotAfter},
 	} {
 		fmt.Printf("%-14s%s (%s)\n", tc.label+":", tc.when.Format(time.DateOnly), until(tc.when))
-	}
-	if !out.Encrypted {
-		fmt.Fprintln(os.Stderr, "auu-ca: "+legacyWarning(out.Dir))
 	}
 	if len(out.Relays) == 0 {
 		fmt.Printf("\nno relays issued yet; run 'auu-ca relay --host NAME --out FILE'\n")
@@ -444,9 +431,7 @@ func cmdShow(args []string) error {
 	return nil
 }
 
-// cmdPassphrase changes the passphrase every key file is encrypted under,
-// and is how a directory from before encryption is encrypted for the first
-// time.
+// cmdPassphrase changes the passphrase every key file is encrypted under.
 func cmdPassphrase(args []string) error {
 	fs := flag.NewFlagSet("passphrase", flag.ContinueOnError)
 	fs.Usage = func() { io.WriteString(os.Stdout, usage) }
@@ -466,14 +451,9 @@ func cmdPassphrase(args []string) error {
 	if err != nil {
 		return err
 	}
-	var old []byte
-	if store.Encrypted() {
-		if old, err = readPassphrase("Current passphrase: ", *oldFile); err != nil {
-			return err
-		}
-	} else if *oldFile != "" {
-		return usageErrf("the keys in %s are not encrypted, so there is no current passphrase to read from %s",
-			store.Dir(), *oldFile)
+	old, err := readPassphrase("Current passphrase: ", *oldFile)
+	if err != nil {
+		return err
 	}
 	fresh, err := readNewPassphrase("New passphrase: ", *newFile)
 	if err != nil {
@@ -482,11 +462,7 @@ func cmdPassphrase(args []string) error {
 	if err := pki.SetPassphrase(store.Dir(), old, withSecret(fresh)); err != nil {
 		return err
 	}
-	if store.Encrypted() {
-		fmt.Printf("changed the passphrase on %s\n", store.Dir())
-	} else {
-		fmt.Printf("encrypted the private keys in %s\n", store.Dir())
-	}
+	fmt.Printf("changed the passphrase on %s\n", store.Dir())
 	fmt.Printf("\nThe passphrase is not recoverable and is not stored anywhere: without it\n")
 	fmt.Printf("these keys are lost.\n")
 	return nil

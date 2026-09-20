@@ -497,11 +497,10 @@ parameter for which every call of the function in its package passes
 one (`certRows` takes its query from two callers that build it by `+=`).
 A `fmt.Sprintf`, a `strings.Join`, a function call, a map lookup or a
 parameter with a caller that passes anything else fails the test with
-the site and the expression; three sites are the allowlist, by key, each
-with its reason: the two PRAGMA writes, and the migration's `tx.Exec(stmts)`,
-whose text is a value of the `migrations` map, each a `+` of the schema
-constants, chosen by the version the store read from itself. An
-allowlisted site that is gone is a problem of its own. Two self-tests
+the site and the expression; one site is the allowlist, by key, with
+its reason: the PRAGMA write, whose operand is the schema version the
+store owns. An allowlisted site that is gone is a problem of its own,
+which is how the migration's two rows left with the migrations. Two self-tests
 plant a `Sprintf` query and a parameter with a non-constant caller and
 assert the sentences. A SQL call is told from `url.Values.Query` by its
 receiver, an identifier named `db`, `tx` or `conn`, since a type-checker
@@ -590,6 +589,30 @@ well formed. There is no fake old relay in the tree to test against, and
 a test that needs a relay that answers otherwise than this one writes a
 handler that answers otherwise, for that test.
 
+**Nothing on this machine is from before, and every refusal of a file
+from before has a test that makes the file in its old form.** A file a
+version from before a rule wrote is refused by name, never migrated (the
+rule in DEVELOPMENT.md), and the test for each refusal writes the file as
+that version wrote it — the key absent from the JSON, the old key
+present, the plain `PRIVATE KEY` block, the database at the old
+`user_version` — asserts the sentence whole, with the file and the fix
+in it, and asserts that the refusal left the file as it found it, since
+a refusal that wrote something is a migration in disguise.
+`TestADatabaseAtAnotherVersionIsRefusedNotMigrated` walks versions 0 to 7
+and reads the version back; `TestAHomeFromBeforeIsRefusedByNameAndNotMoved`
+plants each of the four old config keys and each of the three loose
+files and snapshots the home; `TestLimitStoredRecordShapes` leaves the
+relay out of a record, and `TestLimitPendingRecordShapes` out of an
+outbox record; `TestLimitServeLedgerIntegers` counts an attempt with no
+`tried`; `TestADirectoryFromBeforeEncryptionIsRefusedByName` writes the
+plain block over one key file and over all three; the bundle test in
+`cmd/auu-ca` writes a record without `bundle_path`. A key that is
+required is proven required by a marshal of the zero value that shows the
+key, as the wire's tests do, so absence and the zero cannot be one
+thing. The tolerance tests went with the tolerances: the migration tests,
+the home's move, the unencrypted authority that still opened, the reply
+that guessed the default relay.
+
 **What a filesystem folds is refused at the sender and settled at the
 write, and the test skips only where it cannot fold.** Two attachment
 names equal under case folding are refused by the sender's rule, so a
@@ -660,16 +683,21 @@ plan as this rule. For any new number from the wire, the socket or a
 file, the test drives the bound, one over it and the type's MaxInt64,
 and asserts the refusal or the clamp, never the wrapped value.
 
-**A message's own words are held to a rule at Validate and escaped again
-where they are shown.** A subject is one line: no control, format,
-private-use or separator rune, refused at both ends on both paths. Text
-keeps newline and tab and nothing else from those classes. An attachment
-name is held at Validate to one line, UTF-8, no NUL and a size, and the
-rest of that set is the sender's rule and `SafeName`'s `_` at the write,
-never a refusal of the message. And because a record from before a rule,
-or written by hand, is still in the spool, every print of a subject,
-text, name or sender goes through an escaper all the same; `--json` is
-encoding/json's.
+**A message's own words are held to a rule at Validate, again at Load,
+and escaped again where they are shown.** A subject is one line: no
+control, format, private-use or separator rune, refused at both ends on
+both paths. Text keeps newline and tab and nothing else from those
+classes. An attachment name is held at Validate to one line, UTF-8, no
+NUL and a size, and the rest of that set is the sender's rule and
+`SafeName`'s `_` at the write, never a refusal of the message. A record
+read back from the spool is held to the same rule at `Load`, and one that
+fails it — written by hand, or by a version from before the rule — is
+refused by name and said once by the listing, not shown
+(`TestLimitStoredRecordShapes` plants each rune;
+`TestWhatASenderWroteReachesTheTerminalEscaped` shows the listing's
+warning and that nothing of the record is printed). And every print of a
+subject, text, name or sender goes through an escaper all the same, as
+the last line under the rule; `--json` is encoding/json's.
 The test for a rule is a table at `Body.Validate` and `Manifest.Validate`
 with ESC, `\r`, a bidi override, a private-use rune, U+2028, a newline, a
 tab and invalid UTF-8, saying for each field whether it is refused or
@@ -1065,16 +1093,20 @@ a clamp but the contract: the row names the cap and the test shows a
 value over it served at it and says so. The test keeps the name that
 says what it proves, and the ledger row points at it.
 
-## Storage and migrations
+## Storage
 
-**Write the old schema out by hand.** `TestMigrationFromVersionOne` contains
-the version-1 DDL as a literal, not derived from the current constants. That
-is the point: changing an existing table without a migration fails here, and
-nowhere else.
-
-**Compare `sqlite_master` between a fresh database and a migrated one.** They
-must be identical after whitespace normalisation. This is what keeps the
-fresh-create path and the migration path from drifting apart.
+**A database at any version but this build's is refused, and the test
+plants every one.** `TestADatabaseAtAnotherVersionIsRefusedNotMigrated`
+opens a fresh store, writes each `user_version` from 0 to one under
+`schemaVersion` with the store's own handle, closes it, opens it again,
+and asserts the sentence whole — the file, the version found, the version
+written, the message directory beside it, and what the deletion costs —
+and then reads the version back through a raw handle to show the refusal
+wrote nothing. `TestNewerDatabaseIsRefused` is the version above. The two
+rules that stood here before, the old schema written out by hand and
+`sqlite_master` compared between a fresh database and a migrated one, went
+with the migrations: there is one schema, and a change to it is a new
+version at which every database from before is refused.
 
 **Corrupt the counters and reopen.** Set `queued_messages` to nonsense
 directly, close, `OpenStore` again, assert `Reconciled()` is non-zero and the

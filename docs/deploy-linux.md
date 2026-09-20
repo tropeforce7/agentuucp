@@ -654,11 +654,15 @@ install -o root -g root -m 0755 auu-relay /usr/local/bin/auu-relay
 systemctl restart auu-relay
 ```
 
-Either way the relay migrates its own database on start and says so in the
-log, as `database migrated` with `from=` and `to=`; the script prints that
-line through. Take the backup below before an upgrade that mentions a
-schema change — `update` takes one of the database itself, but not of
-the message files, which an update does not touch.
+Either way the relay's database is at this version's schema or is refused,
+never migrated: nothing on this machine is from before. A database from
+before v0.11.0 is deleted, with the message directory beside it, and the
+relay recreates both at the next start; every machine enrolled on the
+relay enrols again. The refusal in the journal says exactly that, naming
+both paths, and `update` stops at it with the backup lines, since the
+relay did not start. Take the backup below before an upgrade all the same
+— `update` takes one of the database itself, but not of the message
+files, which an update does not touch.
 
 A list showing `broken` in `auu-admin mailboxes ls` is an incident on the
 host and not a user error: the row no longer verifies against its owner's
@@ -668,17 +672,6 @@ until the owner pushes again — the journal says
 `allow list for FP does not verify; refusing every post to it until the
 owner pushes again`, once a minute while it goes on. Look at who could
 write `relay.db` before asking the owner to push.
-
-The release that added channels takes the database from schema version 5 to
-6. It rebuilds the `messages` and `uploads` tables to record the channel a
-message was posted to, filing every existing row under `default`, and adds
-the two tables that hold the directories owners push. Mail in flight, the
-counters and the message id sequence are untouched, and the change runs in
-one transaction, so a restart that dies part way leaves the old version to
-be migrated at the next start. Nothing changes for anyone until an owner
-pushes a directory. The step from 7 to 8 adds one index, on the sender of
-each upload in progress, for the count `max_open_uploads` reads at every
-open; no row changes.
 
 **Backups** are small, because the relay holds only what is in transit and
 cannot read any of it. What is worth keeping is the `auu-ca` directory on your

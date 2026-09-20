@@ -234,7 +234,7 @@ func TestLimitNothingTheNetworkNamesIsAPath(t *testing.T) {
 					memSource("a"), stream.MinChunkSize); !errors.Is(err, stream.ErrForm) {
 					return ""
 				}
-				if err := home.Save(store.Inbox, &store.Stored{Inner: &envelope.Inner{ID: v, Body: body(anID)}}); err == nil {
+				if err := home.Save(store.Inbox, &store.Stored{Relay: "relay", Inner: &envelope.Inner{ID: v, Body: body(anID)}}); err == nil {
 					return ""
 				}
 				return "refused"

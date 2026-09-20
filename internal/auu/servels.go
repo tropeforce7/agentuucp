@@ -203,9 +203,10 @@ func (r *serveRun) sweep() error {
 //
 // A thread with anything unsettled is work: a message being tried again, or
 // one whose reply is written and waiting for a relay to come back, needs
-// exactly the state this would delete. A thread the ledger says nothing
-// about — an entry from before there were timestamps, a directory left by
-// hand — is aged by the directory's own time, which is the best there is.
+// exactly the state this would delete. A thread the ledger has no time for
+// — a directory left by hand, or one from a ledger since moved aside, whose
+// entries are only skipped — is aged by the directory's own time, which is
+// the best there is.
 // The ttl is the channel's that answered it, and the default for a channel
 // that has since left the file, since state under the home should not grow
 // for ever because somebody stopped serving something.

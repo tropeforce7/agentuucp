@@ -79,7 +79,9 @@ a control character (a line break and a tab in the text excepted), a
 format character, a private-use character or a line or paragraph
 separator, and every print of one — the inbox listing, `read`,
 quarantine, watch, serve's console lines, completion — escapes it all the
-same, for a record from before the rule; sender names, which come from
+same, as the last line under the rule and not the rule; a record in the
+spool is held to the rule again when it is read back, and one that fails
+it is not shown. Sender names, which come from
 this machine's own peer list, go through the same escaper. `auu-admin`'s
 listings hold the relay's enumerated words — a registration mode, a
 certificate mode, an allow state, a token's use and state — to the set
@@ -235,11 +237,10 @@ database therefore refuses every sender rather than admitting one — a
 sender is told what a refused sender is always told, your own listing says
 `broken`, `auu inbox` says so, and your next `auu allow push` is the whole
 repair. A row with no signature is broken too: a signed row with its
-signature removed refuses every sender at once, as a row the relay's own
-schema migration wrote without one would — there is no state in which the
-relay honours a list it cannot verify, so a restricted mailbox whose list
-does not verify is closed until its owner pushes, and `auu inbox` tells
-them so on every fetch. Your own machine also remembers that
+signature removed refuses every sender at once — there is no state in
+which the relay honours a list it cannot verify, so a restricted mailbox
+whose list does not verify is closed until its owner pushes, and `auu
+inbox` tells them so on every fetch. Your own machine also remembers that
 it pushed a signed list, and says so if the relay's row has gone
 altogether. What this does not cover is root on the relay's host, who can replace the relay itself, which is where *What
 is not protected* below draws the line: the signature moves the bar from
@@ -489,7 +490,13 @@ lookup without `created`, a status without `registration` or
 `client_certs` — with nothing of the answer used, rather than read as a
 peer from before the field. Neither end carries a branch for an older
 peer; the wire has one version, this one, and a peer from before it is
-refused by name at the first exchange.
+refused by name at the first exchange. **Nothing on this machine is from
+before** either: a file a version from before a rule wrote — a relay's
+database at another schema version, a home's `config.json` of the shape
+from before it could know more than one relay, a record with no relay
+name, an `auu-ca` key file that is not encrypted — is refused by name
+with a sentence saying what to do, never migrated and never read under
+the old rule.
 
 Two routes carry a mailbox's channel directory, the signed list of named
 sub-mailboxes an owner defines: the owner pushes it with `PUT

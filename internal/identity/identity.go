@@ -381,8 +381,8 @@ func PrintableText(s string) string { return printable(s, false) }
 // PrintableLines is PrintableText with the line break kept as well, for a
 // message's text, which is prose of many lines: what a terminal shows and
 // a line break are kept, and everything else is escaped. The rule at
-// Validate refuses a text with anything else in it; this is for a record
-// from before the rule, or written by hand.
+// Validate, and again at Load, refuses a text with anything else in it;
+// this is the last line under the rule, not the rule.
 func PrintableLines(s string) string { return printable(s, true) }
 
 func printable(s string, keepNewline bool) string {

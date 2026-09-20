@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -142,8 +143,8 @@ func TestOpenLockedReadsCertificatesAndNoKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenLocked: %v", err)
 	}
-	if !s.Locked() || !s.Encrypted() {
-		t.Errorf("locked=%v encrypted=%v, want both true", s.Locked(), s.Encrypted())
+	if !s.Locked() {
+		t.Error("the store does not report itself locked")
 	}
 	for i, k := range []*Key{s.Anchor, s.Server, s.Client} {
 		if k.Key != nil {
@@ -189,8 +190,8 @@ func TestSetPassphraseChangesWhatOpensIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the new passphrase does not open it: %v", err)
 	}
-	if !s.Encrypted() || s.Locked() {
-		t.Error("the store does not report itself encrypted and unlocked")
+	if s.Locked() {
+		t.Error("the store reports itself locked")
 	}
 	// The certificates are untouched, byte for byte: only the keys were
 	// rewritten, and a hash somebody pinned must not move.
@@ -233,84 +234,63 @@ func TestSetPassphraseRefusesAnEmptyOne(t *testing.T) {
 	}
 }
 
-// TestADirectoryFromBeforeEncryptionStillOpens, and says so, and can be
-// encrypted. Nothing is deployed that has one, but an operator who upgrades
-// mid-way must not find their authority unreadable.
-func TestADirectoryFromBeforeEncryptionStillOpens(t *testing.T) {
-	dir := t.TempDir()
-	s, err := Create(dir, "Test", mldsa.MLDSA65(), keyfile.TestPassphrase(testSecret), time.Now())
+// TestADirectoryFromBeforeEncryptionIsRefusedByName: a key file written
+// before auu-ca encrypted them is a plain "PRIVATE KEY" block, and nothing
+// on this machine is from before. Open and OpenLocked refuse it naming the
+// file and saying to re-create the authority, whether all three files are
+// plain or one is — the one being what an interrupted change to the
+// encrypted form would once have left — and with any passphrase or none;
+// SetPassphrase, which opens first, refuses the same way, so there is no
+// encrypting it in place; and the files are not touched.
+func TestADirectoryFromBeforeEncryptionIsRefusedByName(t *testing.T) {
+	made := t.TempDir()
+	s, err := Create(made, "Test", mldsa.MLDSA65(), keyfile.TestPassphrase(testSecret), time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	writePlainKeys(t, dir, s)
-
-	old, err := Open(dir, nil)
-	if err != nil {
-		t.Fatalf("an unencrypted authority did not open: %v", err)
-	}
-	if old.Encrypted() {
-		t.Error("an unencrypted authority reports itself encrypted")
-	}
-	if _, err := old.IssueRelay([]string{"relay.example.com"}, 1, time.Now()); err != nil {
-		t.Errorf("an unencrypted authority cannot issue: %v", err)
-	}
-	// A passphrase given for one is ignored rather than refused: there is
-	// nothing for it to be wrong about.
-	if _, err := Open(dir, []byte("anything at all")); err != nil {
-		t.Errorf("a passphrase for an unencrypted authority was refused: %v", err)
-	}
-
-	if err := SetPassphrase(dir, nil, keyfile.TestPassphrase(testSecret)); err != nil {
-		t.Fatalf("encrypting an unencrypted authority: %v", err)
-	}
-	now, err := Open(dir, []byte(testSecret))
-	if err != nil {
-		t.Fatalf("after encrypting: %v", err)
-	}
-	if !now.Encrypted() {
-		t.Error("after encrypting, the store does not say so")
-	}
-	if !now.Anchor.Key.Equal(s.Anchor.Key) {
-		t.Error("the key changed when it was encrypted")
-	}
-}
-
-// TestAHalfConvertedDirectoryIsDiagnosed. SetPassphrase writes all three
-// files and then renames all three, so this needs a crash between two
-// renames; it is built by hand because that window is too small to hit.
-func TestAHalfConvertedDirectoryIsDiagnosed(t *testing.T) {
-	dir := t.TempDir()
-	s, err := Create(dir, "Test", mldsa.MLDSA65(), keyfile.TestPassphrase(testSecret), time.Now())
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The anchor stays encrypted; the other two go back to plain.
-	der, err := x509.MarshalPKCS8PrivateKey(s.Server.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	plain := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
-	if err := os.WriteFile(filepath.Join(dir, serverKeyFile), plain, keyMode); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, open := range []struct {
-		name string
-		fn   func() (*Store, error)
+	for _, tc := range []struct {
+		name  string
+		plain []string
+		named string
 	}{
-		{"Open", func() (*Store, error) { return Open(dir, []byte(testSecret)) }},
-		{"OpenLocked", func() (*Store, error) { return OpenLocked(dir) }},
+		{"all three", keyFiles, anchorKeyFile},
+		{"the server CA alone", []string{serverKeyFile}, serverKeyFile},
 	} {
-		t.Run(open.name, func(t *testing.T) {
-			_, err := open.fn()
-			if err == nil {
-				t.Fatal("a half-converted authority opened")
+		t.Run(tc.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "ca")
+			if err := copyDir(t, made, dir); err != nil {
+				t.Fatal(err)
 			}
-			// It names both sides and what to run, because the operator has
-			// to know which passphrase the fix will ask for.
-			for _, want := range []string{anchorKeyFile, serverKeyFile, "auu-ca passphrase"} {
-				if !strings.Contains(err.Error(), want) {
-					t.Errorf("error %q does not mention %q", err, want)
+			writePlainKeys(t, dir, s, tc.plain...)
+			before := readAll(t, dir, keyFiles...)
+			want := filepath.Join(dir, tc.named) + " holds an unencrypted private key, from before auu-ca encrypted its keys, " +
+				"and there is no reading it: delete " + dir + " and re-create the authority with 'auu-ca init'"
+			opens := []struct {
+				name string
+				fn   func() error
+			}{
+				{"Open with the passphrase", func() error { _, err := Open(dir, []byte(testSecret)); return err }},
+				{"OpenLocked", func() error { _, err := OpenLocked(dir); return err }},
+				{"SetPassphrase", func() error { return SetPassphrase(dir, []byte(testSecret), keyfile.TestPassphrase("another")) }},
+			}
+			if len(tc.plain) == len(keyFiles) {
+				// With an encrypted file before the plain one, no
+				// passphrase is refused first, for that file; with
+				// none encrypted, the plain file is the refusal.
+				opens = append(opens, struct {
+					name string
+					fn   func() error
+				}{"Open with none", func() error { _, err := Open(dir, nil); return err }})
+			}
+			for _, open := range opens {
+				err := open.fn()
+				if err == nil || err.Error() != want {
+					t.Errorf("%s: %v\nwant %s", open.name, err, want)
+				}
+			}
+			for name, was := range before {
+				if now := readAll(t, dir, name)[name]; !bytes.Equal(was, now) {
+					t.Errorf("%s was rewritten by a refusal", name)
 				}
 			}
 		})
@@ -349,11 +329,14 @@ func TestAKeyFileThatIsNeitherIsRefusedByName(t *testing.T) {
 	}
 }
 
-// writePlainKeys puts the store's keys back the way they were written before
+// writePlainKeys writes the named key files the way they were written before
 // they were encrypted.
-func writePlainKeys(t *testing.T, dir string, s *Store) {
+func writePlainKeys(t *testing.T, dir string, s *Store, names ...string) {
 	t.Helper()
 	for i, name := range keyFiles {
+		if !slices.Contains(names, name) {
+			continue
+		}
 		key := []*Key{s.Anchor, s.Server, s.Client}[i].Key
 		der, err := x509.MarshalPKCS8PrivateKey(key)
 		if err != nil {

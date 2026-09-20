@@ -3,7 +3,6 @@ package relay
 import (
 	"encoding/json"
 	"errors"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,15 +11,6 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
-
-// The version 6 allow list table, written out as it shipped rather than
-// derived from a constant that no longer exists, so that the migration
-// tests build the past as it was.
-const schemaV6Allowlist = `CREATE TABLE IF NOT EXISTS allowlist (
-	fp        TEXT NOT NULL REFERENCES mailboxes(fp) ON DELETE CASCADE,
-	sender_fp TEXT NOT NULL,
-	PRIMARY KEY (fp, sender_fp)
-);`
 
 // signedList signs a list for owner, issued at, naming the senders.
 func signedList(t *testing.T, owner *identity.Identity, at time.Time, senders ...string) (*allowlist.Document, []byte, []byte) {
@@ -33,207 +23,16 @@ func signedList(t *testing.T, owner *identity.Identity, at time.Time, senders ..
 	return d, doc, sig
 }
 
-// A relay upgrading in place with allow lists in the old table: every
-// list comes across as an unsigned row whose document decodes and names
-// the same senders, sorted, without the owner, and which the relay reads
-// as broken — refusing every sender to that mailbox until its owner pushes
-// — since nobody signed it; a mailbox with no list has no row; the old
-// table is gone; and the migrated database is the fresh database's shape.
-func TestMigrationFromVersionSix(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "v6.db")
-	msgs := filepath.Join(dir, "messages")
-	people := ids(t, "alice", "bob", "carol", "dave")
-	alice, bob, carol, dave := people[0], people[1], people[2], people[3]
-
-	db := openRaw(t, dbPath)
-	stmts := mailboxesTable + "\n" + schemaV6Allowlist + "\n" + messagesTable + "\n" +
-		noncesTable + "\n" + statsTable + "\n" + tokensTable + "\n" + blocksTable + "\n" +
-		uploadsTable + "\n" + certsTable + "\n" + directoriesTable + "\n" + channelsTable
-	if _, err := db.Exec(stmts); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	for _, id := range people {
-		if _, err := db.Exec(`INSERT INTO mailboxes (fp, bundle, name, created) VALUES (?, ?, ?, ?)`,
-			id.Fingerprint(), id.Public().Bundle(), id.Name, now); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// alice admits carol and bob, in that order; bob has no list; carol's
-	// list names carol herself, which the old table allowed and the
-	// document may not hold, beside dave.
-	for _, row := range [][2]string{
-		{alice.Fingerprint(), carol.Fingerprint()},
-		{alice.Fingerprint(), bob.Fingerprint()},
-		{carol.Fingerprint(), carol.Fingerprint()},
-		{carol.Fingerprint(), dave.Fingerprint()},
-	} {
-		if _, err := db.Exec(`INSERT INTO allowlist (fp, sender_fp) VALUES (?, ?)`, row[0], row[1]); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := db.Exec(`PRAGMA user_version = 6`); err != nil {
-		t.Fatal(err)
-	}
-	db.Close()
-
-	before := time.Now().Add(-time.Second)
-	migrated, err := OpenStore(dbPath, msgs)
-	if err != nil {
-		t.Fatalf("a version 6 database would not open: %v", err)
-	}
-	defer migrated.Close()
-	if migrated.MigratedFrom() != 6 {
-		t.Errorf("MigratedFrom is %d, want 6", migrated.MigratedFrom())
-	}
-	var version int
-	if err := migrated.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
-		t.Fatal(err)
-	}
-	if version != schemaVersion {
-		t.Fatalf("version %d after migrating, want %d", version, schemaVersion)
-	}
-	var old int
-	if err := migrated.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE name = 'allowlist'`).Scan(&old); err != nil {
-		t.Fatal(err)
-	}
-	if old != 0 {
-		t.Error("the old allowlist table is still there")
-	}
-
-	// alice's row: unsigned and so broken, sorted, both senders.
-	doc, sig, state, found, err := migrated.Allowlist(alice.Fingerprint())
-	if err != nil || !found || state != relayapi.AllowBroken || len(sig) != 0 {
-		t.Fatalf("alice's list after the migration: found %v, state %q, sig %d bytes, %v", found, state, len(sig), err)
-	}
-	d, err := allowlist.Parse(doc)
-	if err != nil {
-		t.Fatalf("alice's converted document does not parse: %v\n%s", err, doc)
-	}
-	want := []string{bob.Fingerprint(), carol.Fingerprint()}
-	if bob.Fingerprint() > carol.Fingerprint() {
-		want = []string{carol.Fingerprint(), bob.Fingerprint()}
-	}
-	if d.Owner != alice.Fingerprint() || strings.Join(d.Senders, ",") != strings.Join(want, ",") || d.Issued.Before(before) {
-		t.Errorf("alice's converted document: %+v", d)
-	}
-	// bob has no row.
-	if _, _, state, found, err := migrated.Allowlist(bob.Fingerprint()); err != nil || found || state != relayapi.AllowNone {
-		t.Errorf("bob's list after the migration: found %v, state %q, %v", found, state, err)
-	}
-	// carol's row names dave alone: the owner is dropped, since she may not
-	// be listed and is always admitted.
-	doc, _, state, _, err = migrated.Allowlist(carol.Fingerprint())
-	if err != nil || state != relayapi.AllowBroken {
-		t.Fatalf("carol's list after the migration: state %q, %v", state, err)
-	}
-	if d, err = allowlist.Parse(doc); err != nil || len(d.Senders) != 1 || d.Senders[0] != dave.Fingerprint() {
-		t.Errorf("carol's converted document: %+v, %v", d, err)
-	}
-	// The counts, for the administrator.
-	rec, err := migrated.MailboxRecord(alice.Fingerprint())
-	if err != nil || rec.AllowlistSize != 2 || rec.Allow != relayapi.AllowBroken {
-		t.Errorf("alice's record: %+v, %v", rec, err)
-	}
-
-	// The converted rows refuse everyone but the owner until a push: the
-	// senders they name included. A mailbox that had no list is open.
-	for _, c := range []struct {
-		to, from *identity.Identity
-		want     bool
-	}{
-		{alice, bob, false}, {alice, carol, false}, {alice, dave, false}, {alice, alice, true},
-		{bob, dave, true},
-		{carol, dave, false}, {carol, alice, false}, {carol, carol, true},
-	} {
-		got, err := migrated.MayPost(c.to.Fingerprint(), c.from.Fingerprint())
-		if err != nil || got != c.want {
-			t.Errorf("MayPost(%s, %s) = %v, %v; want %v", c.to.Name, c.from.Name, got, err, c.want)
-		}
-	}
-
-	// A migrated database and a fresh one must be the same shape.
-	fresh, err := OpenStore(filepath.Join(dir, "fresh.db"), filepath.Join(dir, "fresh-messages"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer fresh.Close()
-	if want, got := tableDDL(t, fresh), tableDDL(t, migrated); want != got {
-		t.Fatalf("migrated differs from fresh:\n--- fresh ---\n%s\n--- migrated ---\n%s", want, got)
-	}
-}
-
-// The conversion runs outside its transaction and must be safe to run
-// twice: run by hand, then again through the migration, the rows are what
-// they would have been once.
-func TestMigrationSixIsResumable(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "v6.db")
-	people := ids(t, "alice", "bob")
-	alice, bob := people[0], people[1]
-
-	db := openRaw(t, dbPath)
-	stmts := mailboxesTable + "\n" + schemaV6Allowlist + "\n" + messagesTable + "\n" +
-		noncesTable + "\n" + statsTable + "\n" + tokensTable + "\n" + blocksTable + "\n" +
-		uploadsTable + "\n" + certsTable + "\n" + directoriesTable + "\n" + channelsTable
-	if _, err := db.Exec(stmts); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	for _, id := range people {
-		if _, err := db.Exec(`INSERT INTO mailboxes (fp, bundle, name, created) VALUES (?, ?, ?, ?)`,
-			id.Fingerprint(), id.Public().Bundle(), id.Name, now); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := db.Exec(`INSERT INTO allowlist (fp, sender_fp) VALUES (?, ?)`, alice.Fingerprint(), bob.Fingerprint()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`PRAGMA user_version = 6`); err != nil {
-		t.Fatal(err)
-	}
-	// The first run, interrupted before its transaction.
-	if err := convertAllowlists(&Store{db: db}); err != nil {
-		t.Fatalf("the first conversion: %v", err)
-	}
-	db.Close()
-
-	migrated, err := OpenStore(dbPath, filepath.Join(dir, "messages"))
-	if err != nil {
-		t.Fatalf("the second run would not open: %v", err)
-	}
-	defer migrated.Close()
-	var rows int
-	if err := migrated.db.QueryRow(`SELECT COUNT(*) FROM allowlists`).Scan(&rows); err != nil {
-		t.Fatal(err)
-	}
-	if rows != 1 {
-		t.Fatalf("%d allowlists rows after two runs, want 1", rows)
-	}
-	// Converted, so broken until alice pushes: bob is refused, and a push
-	// admits him.
-	if ok, err := migrated.MayPost(alice.Fingerprint(), bob.Fingerprint()); err != nil || ok {
-		t.Errorf("bob may post to alice on an unsigned row after the resumed migration: %v, %v", ok, err)
-	}
-	d, doc, sig := signedList(t, alice, time.Now(), bob.Fingerprint())
-	if _, err := migrated.SetAllowlist(alice.Fingerprint(), d, doc, sig); err != nil {
-		t.Fatal(err)
-	}
-	if ok, err := migrated.MayPost(alice.Fingerprint(), bob.Fingerprint()); err != nil || !ok {
-		t.Errorf("bob may not post to alice after her push: %v, %v", ok, err)
-	}
-}
-
 // The store's own rules for a push: verified by the caller, ordered by
-// issue, the same bytes a no-op, an unsigned row replaced whatever its
-// time.
+// issue, the same bytes a no-op, a row with no signature replaced whatever
+// its time.
 func TestSetAllowlistOrdersByIssueAndReplacesAnUnsignedRow(t *testing.T) {
 	s, alice, bob := directoryStore(t)
 	at := time.Date(2026, 9, 17, 10, 4, 0, 0, time.UTC)
 
-	// An unsigned row issued in the future, as a relay whose clock is
-	// ahead would have converted it: broken, and no bar to a push.
+	// A row with its signature blanked and its issued moved into the
+	// future, as an editor of the database could leave it: broken, and no
+	// bar to a push.
 	unsigned, _ := json.Marshal(&allowlist.Document{V: 1, Owner: alice.Fingerprint(), Issued: at.Add(time.Hour), Senders: []string{}})
 	if _, err := s.db.Exec(`INSERT INTO allowlists (fp, doc, sig, issued, count) VALUES (?, ?, X'', ?, 0)`,
 		alice.Fingerprint(), unsigned, at.Add(time.Hour).Format(time.RFC3339Nano)); err != nil {

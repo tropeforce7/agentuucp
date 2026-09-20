@@ -789,11 +789,10 @@ func cmdExtract(args []string) error {
 func extractInto(s *store.Store, box store.Box, m *store.Stored, dir string) ([]string, error) {
 	var written []string
 	for i, a := range m.Inner.Body.Attachments {
-		if m.Streamed {
-			if a.Media == "" {
-				return written, fmt.Errorf("refusing to write %q: empty media type", a.Name)
-			}
-		} else {
+		// A streamed attachment's bytes are checked against the digest as
+		// they are copied; an envelope's are in the record and are checked
+		// here. Everything but the bytes, Load has held the record to.
+		if !m.Streamed {
 			check := message.Attachment{Name: a.Name, Media: a.Media, Size: a.Size, SHA256: a.SHA256, Data: a.Data}
 			if err := check.Validate(); err != nil {
 				return written, fmt.Errorf("refusing to write %q: %w", a.Name, err)

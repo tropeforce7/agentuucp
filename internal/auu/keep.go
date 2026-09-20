@@ -131,7 +131,7 @@ func markedOn(s *store.Store, relayName string) (map[int64][]record, error) {
 			if !m.OnRelay && !m.PayloadOnRelay {
 				continue
 			}
-			if m.Relay != relayName && m.Relay != "" {
+			if m.Relay != relayName {
 				continue
 			}
 			out[m.RelayID] = append(out[m.RelayID], record{box: box, id: m.Inner.ID})

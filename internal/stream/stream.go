@@ -238,6 +238,12 @@ func (m *Manifest) Validate() error {
 		if err := message.ValidAttachmentText(a.Name); err != nil {
 			return fmt.Errorf("%w: %v", ErrForm, err)
 		}
+		// As an envelope's attachment is held at Open: the record a
+		// receiver writes is held to the same at Load, and a stream
+		// taken here with no media type would be a record refused there.
+		if a.Media == "" {
+			return fmt.Errorf("%w: attachment %q has no media type", ErrForm, a.Name)
+		}
 		if a.Size < 0 {
 			return fmt.Errorf("%w: attachment %q has a negative size", ErrForm, a.Name)
 		}

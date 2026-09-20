@@ -531,15 +531,10 @@ func selectRelay(s *store.Store, flag string) (*store.Relay, error) {
 // to it goes and where its payload still is.
 //
 // An explicit --relay overrides it: somebody who says which relay they mean
-// means it. A message stored before a home could know more than one relay has
-// none recorded, and is taken to have come through the default, which is the
-// relay it did come through.
+// means it. Every record names its relay; Load refused one that does not.
 func relayOf(s *store.Store, m *store.Stored, flag string) (*store.Relay, error) {
 	if strings.TrimSpace(flag) != "" {
 		return selectRelay(s, flag)
-	}
-	if m.Relay == "" {
-		return selectRelay(s, "")
 	}
 	r, err := s.Relay(m.Relay)
 	if errors.Is(err, store.ErrNoSuchRelay) {

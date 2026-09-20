@@ -243,6 +243,7 @@ func TestCursor(t *testing.T) {
 func stored(id string, when time.Time) *Stored {
 	return &Stored{
 		RelayID:  1,
+		Relay:    "relay",
 		Received: when,
 		Inner: &envelope.Inner{
 			ID:   id,
@@ -609,35 +610,5 @@ func TestADefaultRelayNameIsAlwaysFound(t *testing.T) {
 	taken = append(taken, &Relay{Name: "relay.example.com-8443"})
 	if got, err := defaultRelayName("https://relay.example.com:8443", taken); err == nil || !strings.Contains(err.Error(), "--name") {
 		t.Errorf("past the ceiling: %q, %v; want an error naming --name", got, err)
-	}
-}
-
-// TestOpenReturnsForALegacyIPv6Relay: the migration of a legacy config
-// names the relay by its URL and used to spin the same way at every
-// command's start.
-func TestOpenReturnsForALegacyIPv6Relay(t *testing.T) {
-	scratch := t.TempDir()
-	home := filepath.Join(scratch, "home")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	legacy := `{"relay":"https://[2001:db8::1]:8443"}` + "\n"
-	if err := os.WriteFile(filepath.Join(home, configFile), []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var s *Store
-	var err error
-	if !withDeadline(3*time.Second, func() { s, err = Open(home) }) {
-		t.Fatal("Open of a home whose legacy config.json names relay https://[2001:db8::1]:8443 did not return within 3s")
-	}
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	relays, err := s.Relays()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(relays) != 1 || relays[0].Name != "2001db81" {
-		t.Errorf("the migrated relay: %+v, want one named 2001db81", relays)
 	}
 }

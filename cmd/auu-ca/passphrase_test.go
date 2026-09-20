@@ -132,25 +132,25 @@ func TestShowNeedsNoPassphrase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("show asked for something: %v", err)
 	}
-	if !strings.Contains(out, "encrypted") {
-		t.Errorf("show does not report that the keys are encrypted:\n%s", out)
+	if !strings.Contains(out, "keys:         ML-DSA-65\n") {
+		t.Errorf("show does not name the parameter set:\n%s", out)
 	}
-	if strings.Contains(out, "NOT ENCRYPTED") {
-		t.Errorf("show reports encrypted keys as unencrypted:\n%s", out)
-	}
-
-	var reported struct {
-		Encrypted bool `json:"keys_encrypted"`
+	// Every key file is encrypted, so there is no word for it and no
+	// field: a field that is always true is a field for a state that
+	// does not exist.
+	if strings.Contains(strings.ToLower(out), "encrypted") {
+		t.Errorf("show says something about encryption:\n%s", out)
 	}
 	asJSON, err := runWithStdin(t, dir, "", "show", "--json")
 	if err != nil {
 		t.Fatal(err)
 	}
+	var reported map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(asJSON), &reported); err != nil {
 		t.Fatal(err)
 	}
-	if !reported.Encrypted {
-		t.Error("show --json does not report that the keys are encrypted")
+	if _, has := reported["keys_encrypted"]; has {
+		t.Error("show --json carries keys_encrypted")
 	}
 }
 
@@ -181,49 +181,42 @@ func TestPassphraseChangesWhatOpensTheAuthority(t *testing.T) {
 	}
 }
 
-// TestPassphraseEncryptsAnAuthorityThatWasNot, and every command says so
-// until it has been.
-func TestPassphraseEncryptsAnAuthorityThatWasNot(t *testing.T) {
+// TestAnAuthorityFromBeforeEncryptionIsRefused: every command that opens
+// the directory, locked or not, refuses a plain key file by name and says
+// to re-create the authority, before asking for any passphrase; there is
+// no encrypting it in place, since passphrase opens it first.
+func TestAnAuthorityFromBeforeEncryptionIsRefused(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ca")
 	if _, err := run(t, dir, "init", "--name", "Test"); err != nil {
 		t.Fatal(err)
 	}
 	unencrypt(t, dir, testSecret)
-
-	out, err := runWithStdin(t, dir, "", "show")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out, "NOT ENCRYPTED") {
-		t.Errorf("show does not say the keys are in the clear:\n%s", out)
-	}
-
-	// Only a new passphrase is asked for: there is no old one.
+	want := filepath.Join(dir, "ta.key") + " holds an unencrypted private key, from before auu-ca encrypted its keys, " +
+		"and there is no reading it: delete " + dir + " and re-create the authority with 'auu-ca init'"
 	fresh := filepath.Join(t.TempDir(), "new")
 	if err := os.WriteFile(fresh, []byte("a first passphrase\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	text, err := runWithStdin(t, dir, "", "passphrase", "--new-passphrase-file", fresh)
-	if err != nil {
-		t.Fatalf("passphrase: %v", err)
+	for _, args := range [][]string{
+		{"show"},
+		{"show", "--json"},
+		{"relay", "--host", "relay.example.com", "--out", filepath.Join(t.TempDir(), "b.json")},
+		{"passphrase", "--new-passphrase-file", fresh},
+	} {
+		// Standard input empty: a command that asked for a passphrase
+		// before refusing would fail on that instead.
+		_, err := runWithStdin(t, dir, "", args...)
+		if err == nil || err.Error() != want {
+			t.Errorf("%s over an unencrypted authority: %v\nwant %s", strings.Join(args, " "), err, want)
+		}
 	}
-	if !strings.Contains(text, "encrypted the private keys") {
-		t.Errorf("passphrase does not say it encrypted them:\n%s", text)
+	// The fix the sentence names, walked through: the directory gone, init
+	// makes a new authority there.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := run(t, dir, "relay", "--host", "relay.example.com",
-		"--out", filepath.Join(t.TempDir(), "b.json"), "--passphrase-file", fresh); err != nil {
-		t.Errorf("after encrypting, relay fails: %v", err)
-	}
-
-	// Offering a current passphrase for keys that have none is a mistake
-	// worth naming rather than ignoring.
-	unencrypt(t, dir, "a first passphrase")
-	_, err = run(t, dir, "passphrase", "--passphrase-file", fresh, "--new-passphrase-file", fresh)
-	if err == nil {
-		t.Fatal("a current passphrase was accepted for keys that have none")
-	}
-	if !strings.Contains(err.Error(), "not encrypted") {
-		t.Errorf("error %q does not say why", err)
+	if _, err := run(t, dir, "init", "--name", "Test"); err != nil {
+		t.Fatalf("init after the named fix: %v", err)
 	}
 }
 

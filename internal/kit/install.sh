@@ -269,7 +269,6 @@ if ! waitfor 'bundle_source=credential'; then
 	journalctl -u auu-relay --no-pager -o cat --since '-2 minutes' 2>/dev/null | tail -40
 	fail "the relay did not start from the credential within 30s; its journal is above"
 fi
-journalctl _SYSTEMD_INVOCATION_ID="$(systemctl show -p InvocationID --value auu-relay)" --no-pager -o cat 2>/dev/null | grep -F 'database migrated' || true
 
 # 10. What to do next, read from the kit's own files.
 url=$(sed -n 's/^  "public_url": "\(.*\)",*$/\1/p' relay.json)

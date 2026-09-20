@@ -66,7 +66,7 @@ func streamedRecord(t *testing.T, name string, data []byte) (*store.Store, *stor
 	for _, a := range opened.Manifest.Attachments {
 		inner.Body.Attachments = append(inner.Body.Attachments, message.Attachment{Name: a.Name, Media: a.Media, Size: a.Size, SHA256: a.SHA256})
 	}
-	rec := &store.Stored{Inner: inner, Streamed: true, Received: time.Now().UTC()}
+	rec := &store.Stored{Relay: "relay", Inner: inner, Streamed: true, Received: time.Now().UTC()}
 	if err := s.Save(store.Inbox, rec); err != nil {
 		t.Fatal(err)
 	}

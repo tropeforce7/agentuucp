@@ -146,7 +146,7 @@ func elsewhere(s *store.Store, fp, label string, not *store.Relay) string {
 			continue
 		}
 		for _, m := range msgs {
-			if m.Inner.From != fp || m.Relay == "" || m.Relay == not.Name || seen[m.Relay] {
+			if m.Inner.From != fp || m.Relay == not.Name || seen[m.Relay] {
 				continue
 			}
 			seen[m.Relay] = true

@@ -89,6 +89,25 @@ func (h *harness) waitOnDisk(id string, n int64) {
 // the open after the wait succeeds at once; uploads in flight, their locks
 // held past their expiry, are not, and the open at the cap is refused with
 // a Retry-After of one.
+// The sender's count at every open is a range over the index on from_fp,
+// not a scan of every upload in progress: the plan names the index.
+func TestTheSendersCountOfOpenUploadsUsesItsIndex(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenStore(filepath.Join(dir, "relay.db"), filepath.Join(dir, "messages"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var plan string
+	if err := s.db.QueryRow(`EXPLAIN QUERY PLAN SELECT COUNT(*), COALESCE(MIN(expires), 0) FROM uploads WHERE from_fp = ?`,
+		strings.Repeat("a", 64)).Scan(new(int), new(int), new(int), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plan, "uploads_from_fp") {
+		t.Errorf("the sender's count does not use the index: %s", plan)
+	}
+}
+
 func TestLimitOpenUploadsAtTheCapAndOneOver(t *testing.T) {
 	h := newHarness(t, Config{Limits: Limits{MaxOpenUploads: 2}})
 	people := ids(t, "alice", "bob", "carol")

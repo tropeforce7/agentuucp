@@ -54,12 +54,16 @@ var (
 	ErrTokenWrongUse = errors.New("relay: token does not authorise this")
 )
 
-// schemaVersion is the shape this build understands. Version zero means a
-// database from before any of this, which is refused rather than migrated:
-// nothing was ever deployed, so no migration path back that far is owed.
+// schemaVersion is the one shape this build reads and writes. A database is
+// at it or is refused: there is no migration, since nothing on this
+// machine is from before — every released version is retracted, so a
+// database at another version is one nobody runs, and a path that
+// migrated it would be a path nobody tests. The refusal says to delete the
+// database and its message directory; the next start recreates both.
 const schemaVersion = 8
 
-// SchemaVersion is schemaVersion for the start-up log.
+// SchemaVersion is schemaVersion for the version line and the container
+// suite.
 const SchemaVersion = schemaVersion
 
 // Store is the relay's SQLite-backed state.
@@ -71,9 +75,8 @@ type Store struct {
 	// dir fails; see faults.go. Nil until a server gives it a logger.
 	faults *faultLog
 
-	reconciled   int
-	swept        SweepResult
-	migratedFrom int
+	reconciled int
+	swept      SweepResult
 
 	// uploads serialises the operations on one upload in progress: an
 	// append, a completion and an abort each hold the upload's own lock
@@ -120,9 +123,9 @@ PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;
 `
 
-// The tables, one constant each, so that creating a database fresh and
-// migrating one forward produce byte-identical DDL. SQLite stores the text of
-// every CREATE statement, and a test compares the two.
+// The tables, one constant each. Together they are the whole schema, and
+// the one text a database is created from; a change to any of them is a
+// new schemaVersion, at which every database from before is refused.
 const (
 	mailboxesTable = `CREATE TABLE IF NOT EXISTS mailboxes (
 	fp              TEXT PRIMARY KEY,
@@ -137,11 +140,10 @@ const (
 	// mailbox's bundle every time the list is enforced and served back to
 	// the owner verbatim, its issue time for refusing an older one, and
 	// how many senders it names, which is for the administrator's listing
-	// and decides nothing. A row whose sig is empty — a list converted from
-	// the table kept before lists were signed, or a signed row whose
-	// signature was blanked — is broken, and refuses every sender until
-	// the owner pushes again. A mailbox with no row takes mail from any
-	// registered sender.
+	// and decides nothing. A row whose sig is empty — a signed row whose
+	// signature was blanked, since nothing writes one without — is
+	// broken, and refuses every sender until the owner pushes again. A
+	// mailbox with no row takes mail from any registered sender.
 	allowlistsTable = `CREATE TABLE IF NOT EXISTS allowlists (
 	fp     TEXT PRIMARY KEY REFERENCES mailboxes(fp) ON DELETE CASCADE,
 	doc    BLOB NOT NULL,
@@ -171,9 +173,7 @@ CREATE INDEX IF NOT EXISTS messages_to ON messages(to_fp, id);`
 	// when the upload completes or is abandoned; the message it becomes
 	// carries no sender at all. The index on from_fp is what makes the
 	// sender's count at an open a range and not a scan, as messages_to
-	// does for a mailbox's page; it is its own constant so that the
-	// migration that adds it to an existing database and the fresh schema
-	// write one text.
+	// does for a mailbox's page.
 	uploadsTable = `CREATE TABLE IF NOT EXISTS uploads (
 	id       TEXT PRIMARY KEY,
 	to_fp    TEXT NOT NULL REFERENCES mailboxes(fp) ON DELETE CASCADE,
@@ -185,8 +185,7 @@ CREATE INDEX IF NOT EXISTS messages_to ON messages(to_fp, id);`
 	channel  TEXT NOT NULL DEFAULT 'default'
 );
 CREATE INDEX IF NOT EXISTS uploads_expires ON uploads(expires);
-` + uploadsFromIndex
-	uploadsFromIndex = `CREATE INDEX IF NOT EXISTS uploads_from_fp ON uploads(from_fp);`
+CREATE INDEX IF NOT EXISTS uploads_from_fp ON uploads(from_fp);`
 
 	noncesTable = `CREATE TABLE IF NOT EXISTS nonces (
 	nonce   TEXT PRIMARY KEY,
@@ -252,10 +251,7 @@ CREATE INDEX IF NOT EXISTS certs_fp ON certs(fp, not_after);`
 	// directory: the signed document and its signature, served back
 	// verbatim, and its issue time for refusing an older one. A mailbox
 	// with no row has the one channel, default. It is a table of its own
-	// rather than three columns on mailboxes because mailboxes is the
-	// parent of four foreign keys, and SQLite rewrites every child's
-	// REFERENCES clause when a parent is renamed, which the rename-and-copy
-	// migration the DDL identity test requires would have to do.
+	// rather than three columns on mailboxes, as allowlists is.
 	directoriesTable = `CREATE TABLE IF NOT EXISTS directories (
 	fp     TEXT PRIMARY KEY REFERENCES mailboxes(fp) ON DELETE CASCADE,
 	doc    BLOB NOT NULL,
@@ -283,86 +279,13 @@ const schema = mailboxesTable + "\n" + messagesTable + "\n" +
 	uploadsTable + "\n" + certsTable + "\n" + directoriesTable + "\n" + channelsTable + "\n" +
 	allowlistsTable
 
-// migrations[v] upgrades a database from version v to version v+1. Each runs
-// in its own transaction and sets user_version on the way out, so an
-// interrupted upgrade resumes rather than half-applying.
-//
-// There is no entry for 0: a version-zero database with tables in it predates
-// the schema version and is refused.
-var migrations = map[int]string{
-	1: tokensTable + "\n" + blocksTable,
-	// The bodies have already been written to files by preMigrations[2].
-	//
-	// The old table is renamed out of the way and the new one created from the
-	// same constant the fresh path uses, rather than ALTER TABLE ADD COLUMN.
-	// A NOT NULL column added to an existing table must carry a default, so
-	// that route cannot produce the same DDL, and the sqlite_master comparison
-	// in the tests would rightly call it drift. The index is dropped by name
-	// first: a rename leaves it attached to the old table, where IF NOT EXISTS
-	// would then skip recreating it and DROP TABLE would take it away.
-	2: `ALTER TABLE messages RENAME TO messages_v2;
-DROP INDEX IF EXISTS messages_to;
-` + messagesTable + `
-INSERT INTO messages (id, to_fp, received, size)
-	SELECT id, to_fp, received, length(envelope) FROM messages_v2;
-DROP TABLE messages_v2;`,
-	// Streams. The messages table is rebuilt again rather than altered, for
-	// the same reason: a NOT NULL column added to an existing table must
-	// carry a default the fresh schema does not have.
-	3: `ALTER TABLE messages RENAME TO messages_v3;
-DROP INDEX IF EXISTS messages_to;
-` + messagesTable + `
-INSERT INTO messages (id, to_fp, received, size, kind)
-	SELECT id, to_fp, received, size, 'envelope' FROM messages_v3;
-DROP TABLE messages_v3;
-` + uploadsTable,
-	// Client certificates. A new table and nothing else: a relay with
-	// client certificates off never writes a row, so an existing database
-	// migrates without any of its contents changing.
-	4: certsTable,
-	// Channels. messages and uploads are rebuilt as before, every existing
-	// row becoming 'default', and the two new tables are created from
-	// their constants. A rename carries the table's sqlite_sequence row to
-	// the new name and the copy sets the new table's to the highest id
-	// copied, which is lower than the old sequence whenever the newest
-	// messages had been acknowledged; the old value is put back so that no
-	// id is ever handed out twice, since a client's cursor is the last id
-	// it acknowledged and a repeated id would sit behind it unseen.
-	5: `ALTER TABLE messages RENAME TO messages_v5;
-DROP INDEX IF EXISTS messages_to;
-` + messagesTable + `
-INSERT INTO messages (id, to_fp, received, size, kind, channel)
-	SELECT id, to_fp, received, size, kind, 'default' FROM messages_v5;
-DELETE FROM sqlite_sequence WHERE name = 'messages';
-INSERT INTO sqlite_sequence (name, seq) SELECT 'messages', seq FROM sqlite_sequence WHERE name = 'messages_v5';
-DROP TABLE messages_v5;
-ALTER TABLE uploads RENAME TO uploads_v5;
-DROP INDEX IF EXISTS uploads_expires;
-` + uploadsTable + `
-INSERT INTO uploads (id, to_fp, from_fp, size, received, created, expires, channel)
-	SELECT id, to_fp, from_fp, size, received, created, expires, 'default' FROM uploads_v5;
-DROP TABLE uploads_v5;
-` + directoriesTable + "\n" + channelsTable,
-	// Signed allow lists. preMigrations[6] has already created allowlists
-	// from its constant and written one row per mailbox that had a list;
-	// the constant here is a no-op that keeps the fresh and the migrated
-	// DDL the same text, and the old table goes.
-	6: allowlistsTable + `
-DROP TABLE allowlist;`,
-	// The index for the sender's count of open uploads, which the cap on
-	// them reads at every open. A new index and nothing else: no row
-	// changes, and IF NOT EXISTS makes a repeated run a no-op.
-	7: uploadsFromIndex,
-}
-
 // OpenStore opens or creates the relay database at dbPath, with message bodies
 // under messagesDir.
 //
-// It creates a new database at the current schema version, migrates an older
-// one forward, refuses one this build does not understand, reconciles the
-// directory against the table, and reconciles the queued-message counters
-// against the rows. A crash in the middle of anything leaves work for the next
-// start rather than a wrong answer.
+// It creates a new database at schemaVersion, refuses one at any other
+// version, reconciles the directory against the table, and reconciles the
+// queued-message counters against the rows. A crash in the middle of
+// anything leaves work for the next start rather than a wrong answer.
 func OpenStore(dbPath, messagesDir string) (*Store, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -380,7 +303,7 @@ func OpenStore(dbPath, messagesDir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	if err := s.prepareSchema(); err != nil {
+	if err := s.prepareSchema(dbPath); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -431,8 +354,17 @@ func (s *Store) refuseLostDatabase(dbPath string) error {
 		dbPath, s.dir, held, boxes, dbPath)
 }
 
-// prepareSchema brings the file to schemaVersion, or refuses it.
-func (s *Store) prepareSchema() error {
+// prepareSchema creates the schema in an empty file, or refuses a file that
+// is not at schemaVersion.
+//
+// A version above this build's was written by a newer release, and the
+// sentence says so. Any other version — one below it, or zero with tables
+// in it, which is a database from before the version was recorded — is a
+// database from before this version, and there is no reading it: the
+// sentence names the file and the message directory and says to delete
+// both, since a message directory left beside a new database is the lost
+// database refuseLostDatabase refuses to start over.
+func (s *Store) prepareSchema(dbPath string) error {
 	db := s.db
 	version, err := readVersion(db)
 	if err != nil {
@@ -442,132 +374,25 @@ func (s *Store) prepareSchema() error {
 		return fmt.Errorf("relay: database is schema version %d, but this relay understands %d; "+
 			"it was written by a newer release", version, schemaVersion)
 	}
+	if version == schemaVersion {
+		return nil
+	}
 	if version == 0 {
 		populated, err := hasTables(db)
 		if err != nil {
 			return err
 		}
-		if populated {
-			return errors.New("relay: database is from a pre-release version; " +
-				"delete it and let the relay recreate it")
-		}
-		// A new file: create everything at once and claim the current version.
-		if _, err := db.Exec(schema); err != nil {
-			return fmt.Errorf("relay: schema: %w", err)
-		}
-		return setVersion(db, schemaVersion)
-	}
-	if version < schemaVersion {
-		s.migratedFrom = version
-	}
-	for v := version; v < schemaVersion; v++ {
-		// A migration that has work to do outside its transaction does it
-		// here, and must be safe to run twice.
-		if before, ok := preMigrations[v]; ok {
-			if err := before(s); err != nil {
-				return err
+		if !populated {
+			// A new file: create everything at once and claim the version.
+			if _, err := db.Exec(schema); err != nil {
+				return fmt.Errorf("relay: schema: %w", err)
 			}
-		}
-		stmts, ok := migrations[v]
-		if !ok {
-			return fmt.Errorf("relay: no migration from schema version %d", v)
-		}
-		if err := migrate(db, v, stmts); err != nil {
-			return err
+			return setVersion(db, schemaVersion)
 		}
 	}
-	return nil
-}
-
-// preMigrations run before the transaction of the same number, outside it, and
-// MUST be idempotent: a crash between one and its transaction leaves the old
-// version, and the next start runs it again.
-var preMigrations = map[int]func(*Store) error{
-	2: writeBlobsToFiles,
-	6: convertAllowlists,
-}
-
-// writeBlobsToFiles is the file half of migrating 2 to 3. It copies every
-// stored envelope out of the table and into its file, skipping any that is
-// already there with the right size, so it can be interrupted and repeated.
-func writeBlobsToFiles(s *Store) error {
-	if err := requireSQLite(s.db, 3, 35); err != nil {
-		return err
-	}
-	rows, err := s.db.Query(`SELECT to_fp, id, envelope FROM messages ORDER BY id`)
-	if err != nil {
-		return fmt.Errorf("relay: reading stored envelopes: %w", err)
-	}
-	defer rows.Close()
-	type item struct {
-		fp   string
-		id   int64
-		body []byte
-	}
-	var pending []item
-	for rows.Next() {
-		var it item
-		if err := rows.Scan(&it.fp, &it.id, &it.body); err != nil {
-			return err
-		}
-		pending = append(pending, it)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	// The query is drained before any writing: one connection, and a write
-	// while a read is open would deadlock.
-	for _, it := range pending {
-		if info, err := os.Stat(s.messagePath(it.fp, it.id)); err == nil &&
-			info.Size() == int64(len(it.body)) {
-			continue
-		}
-		tmp, err := s.writeTemp(it.body)
-		if err != nil {
-			return err
-		}
-		if err := s.place(tmp, it.fp, it.id); err != nil {
-			os.Remove(tmp)
-			return err
-		}
-	}
-	return nil
-}
-
-// requireSQLite refuses a library too old for what a migration needs, with a
-// message naming the version, rather than failing obscurely inside it.
-func requireSQLite(db *sql.DB, major, minor int) error {
-	var v string
-	if err := db.QueryRow(`SELECT sqlite_version()`).Scan(&v); err != nil {
-		return fmt.Errorf("relay: reading the SQLite version: %w", err)
-	}
-	var gotMajor, gotMinor, gotPatch int
-	if _, err := fmt.Sscanf(v, "%d.%d.%d", &gotMajor, &gotMinor, &gotPatch); err != nil {
-		return fmt.Errorf("relay: SQLite version %q is not a version", v)
-	}
-	if gotMajor > major || (gotMajor == major && gotMinor >= minor) {
-		return nil
-	}
-	return fmt.Errorf("relay: this migration needs SQLite %d.%d or later for ALTER TABLE DROP COLUMN, "+
-		"but the library is %s", major, minor, v)
-}
-
-// migrate applies one step inside a transaction, so an interrupted upgrade
-// leaves the version where it was and can simply be run again.
-func migrate(db *sql.DB, from int, stmts string) error {
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(stmts); err != nil {
-		return fmt.Errorf("relay: migrating schema version %d to %d: %w", from, from+1, err)
-	}
-	// PRAGMA does not take a placeholder, and from is an int this file owns.
-	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", from+1)); err != nil {
-		return fmt.Errorf("relay: recording schema version %d: %w", from+1, err)
-	}
-	return tx.Commit()
+	return fmt.Errorf("relay: %s is schema version %d, but this relay writes version %d and migrates nothing: "+
+		"delete it and the message directory beside it, %s, and the relay recreates both at the next start; "+
+		"every machine enrolled on it enrols again", dbPath, version, schemaVersion, s.dir)
 }
 
 func readVersion(db *sql.DB) (int, error) {
@@ -585,12 +410,11 @@ func setVersion(db *sql.DB, v int) error {
 	return nil
 }
 
-// hasTables reports whether this is one of our databases rather than an empty
-// file, which is what tells a pre-release database from a new one.
+// hasTables reports whether the file holds any table at all, which is what
+// tells a database from before the version was recorded from an empty file.
 func hasTables(db *sql.DB) (bool, error) {
 	var n int
-	err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'
-		AND name IN ('mailboxes', 'allowlist', 'messages', 'nonces')`).Scan(&n)
+	err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'`).Scan(&n)
 	if err != nil {
 		return false, fmt.Errorf("relay: inspecting database: %w", err)
 	}
@@ -640,12 +464,6 @@ func (s *Store) Reconciled() int { return s.reconciled }
 // non-zero field is worth a line in the log: it means the last shutdown was
 // not clean, or somebody has been editing the directory by hand.
 func (s *Store) Swept() SweepResult { return s.swept }
-
-// MigratedFrom is the schema version the database was at when it was
-// opened, when that was older than this build's, and zero when nothing was
-// migrated. It is for the start-up log, so an upgrade that changed the
-// database says so once.
-func (s *Store) MigratedFrom() int { return s.migratedFrom }
 
 func (s *Store) Close() error { return s.db.Close() }
 
@@ -899,9 +717,8 @@ func (s *Store) Put(toFP, channel string, raw []byte, q Quotas) (int64, error) {
 }
 
 // Row is one stored message. Envelope is nil for a stream, which the client
-// fetches separately. Channel is the name it was posted under, which is
-// always present from this relay: a listing without it is from a relay
-// from before channels.
+// fetches separately. Channel is the name it was posted under, which every
+// row carries.
 type Row struct {
 	ID       int64
 	Received time.Time

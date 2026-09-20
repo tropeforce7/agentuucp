@@ -3,7 +3,6 @@ package store
 import (
 	"crypto/mldsa"
 	"crypto/rand"
-	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
@@ -50,10 +49,10 @@ func testAnchor(t *testing.T, name string) *x509.Certificate {
 
 // oldHome writes a home in the layout that came before a home could know more
 // than one relay: the relay in config.json, and the anchor, the certificate
-// and the cursor loose in the root.
-func oldHome(t *testing.T, root, relayURL string, anchor *x509.Certificate) (anchorPEM, certJSON []byte) {
+// and the cursor loose in the root. It is what Open refuses.
+func oldHome(t *testing.T, root, relayURL string, anchor *x509.Certificate) {
 	t.Helper()
-	anchorPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: anchor.Raw})
+	anchorPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: anchor.Raw})
 	certJSON, err := json.MarshalIndent(&CertRecord{
 		Relay: relayURL, Serial: "abc123" + strings.Repeat("0", 26), Label: "laptop",
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(300 * 24 * time.Hour),
@@ -85,233 +84,146 @@ func oldHome(t *testing.T, root, relayURL string, anchor *x509.Certificate) (anc
 			t.Fatal(err)
 		}
 	}
-	return anchorPEM, certJSON
 }
 
-func TestAnOldHomeIsMovedUnderItsRelayAndNothingIsRewritten(t *testing.T) {
+// A home from before it could know more than one relay is refused at Open,
+// by the file and the key, with the fix, and is not moved to the new
+// shape: nothing on this machine is from before. Each of the four old
+// config keys alone is enough, and so is each of the three files a home
+// kept loose in its root, since a home whose relay came from the
+// environment had those with no relay in config.json.
+func TestAHomeFromBeforeIsRefusedByNameAndNotMoved(t *testing.T) {
 	const relayURL = "https://relay.example:9443"
-	root := t.TempDir()
 	anchor := testAnchor(t, "old home")
-	anchorPEM, certJSON := oldHome(t, root, relayURL, anchor)
+	wantFix := "this auu reads none of it; delete config.json and any of trust_anchor.pem, cert.json and cursor " +
+		"in the home's root, then add the relay again with 'auu relay add', or delete the home and run 'auu init' again"
 
-	s, err := Open(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// The relay is there, named for its host, and it is the default.
-	r, err := s.DefaultRelay()
-	if err != nil {
-		t.Fatalf("the migrated home has no default relay: %v", err)
-	}
-	if r.Name != "relay.example" || r.URL != relayURL {
-		t.Fatalf("migrated relay is %q at %q", r.Name, r.URL)
-	}
-
-	// The anchor and the certificate were moved, not rewritten. That matters
-	// more than it looks: a re-encoded anchor is a different file to reason
-	// about at exactly the moment somebody is least able to check it.
-	dir := s.RelayDir(r)
-	for name, want := range map[string][]byte{anchorFile: anchorPEM, certFile: certJSON} {
-		got, err := os.ReadFile(filepath.Join(dir, name))
+	t.Run("whole", func(t *testing.T) {
+		root := t.TempDir()
+		oldHome(t, root, relayURL, anchor)
+		before := snapshot(t, root)
+		_, err := Open(root)
+		want := filepath.Join(root, configFile) + ` has a key "relay", which is how a home from before v0.11.0 kept its one relay: ` + wantFix
+		if err == nil || err.Error() != want {
+			t.Fatalf("Open of an old home: %v\nwant %s", err, want)
+		}
+		if !errors.Is(err, ErrDamaged) {
+			t.Error("the refusal is not ErrDamaged, so auu would not exit 5")
+		}
+		if after := snapshot(t, root); len(after) != len(before) {
+			t.Errorf("Open moved or wrote files: %d before, %d after", len(before), len(after))
+		} else {
+			for name, was := range before {
+				if string(after[name]) != string(was) {
+					t.Errorf("%s was rewritten by a refusal", name)
+				}
+			}
+		}
+		// The fix the sentence names, walked through: the four files gone,
+		// the home opens and the relay is added again.
+		for _, name := range []string{configFile, anchorFile, certFile, cursorFile} {
+			if err := os.Remove(filepath.Join(root, name)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		s, err := Open(root)
 		if err != nil {
-			t.Fatalf("%s was not moved: %v", name, err)
+			t.Fatalf("Open after the named fix: %v", err)
 		}
-		if string(got) != string(want) {
-			// The bytes are a certificate and a key record; printing them
-			// would bury the point in eight kilobytes of base64.
-			t.Errorf("%s was rewritten rather than moved: %d bytes hashing %x, "+
-				"want %d bytes hashing %x",
-				name, len(got), sha256.Sum256(got), len(want), sha256.Sum256(want))
+		if _, err := s.AddRelay("relay", relayURL); err != nil {
+			t.Fatalf("auu relay add after the named fix: %v", err)
 		}
-		if _, err := os.Stat(filepath.Join(root, name)); err == nil {
-			t.Errorf("%s is still in the root as well", name)
-		}
-	}
-	if n, err := s.CursorFor(r); err != nil || n != 17 {
-		t.Errorf("cursor %d %v, want 17", n, err)
-	}
-	if !s.Registered(r) {
-		t.Error("the migrated relay is not marked registered, so 'auu inbox' would skip it")
-	}
-	if rec, err := s.AnchorFor(r); err != nil || rec.SPKI != pki.SPKI(anchor) {
-		t.Errorf("the migrated anchor does not load: %v", err)
-	}
-	if r.ServerIntSPKI == "" || r.ServerIntNotBefore.IsZero() {
-		t.Error("the rotation ratchet was not carried across")
-	}
+	})
 
-	// The old fields are gone from config.json, and the new one is set.
-	raw, err := os.ReadFile(filepath.Join(root, configFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var onDisk map[string]any
-	if err := json.Unmarshal(raw, &onDisk); err != nil {
-		t.Fatal(err)
-	}
-	for _, gone := range []string{"relay", "trust_anchor_spki", "server_int_spki", "server_int_not_before"} {
-		if _, ok := onDisk[gone]; ok {
-			t.Errorf("config.json still has %q", gone)
-		}
-	}
-	if onDisk["default_relay"] != "relay.example" {
-		t.Errorf("default_relay is %v", onDisk["default_relay"])
-	}
-
-	// Opening again changes nothing.
-	before, err := os.ReadFile(filepath.Join(root, configFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Open(root); err != nil {
-		t.Fatal(err)
-	}
-	after, err := os.ReadFile(filepath.Join(root, configFile))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(before) != string(after) {
-		t.Error("a second open moved the home again")
-	}
-	relays, err := s.Relays()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(relays) != 1 {
-		t.Fatalf("a second open left %d relays", len(relays))
-	}
-}
-
-// The move writes the directory first and config.json last, so a crash between
-// them leaves a home that still looks unmigrated. Opening it must finish the
-// job rather than doing it twice.
-func TestAnInterruptedMoveIsFinishedNotRedone(t *testing.T) {
-	const relayURL = "https://relay.example:9443"
-	anchor := testAnchor(t, "interrupted")
-
-	for _, tc := range []struct {
-		name string
-		// crash simulates how far the move had got before the power went.
-		crash func(t *testing.T, root string)
-	}{
-		{
-			name: "the directory exists and nothing has moved",
-			crash: func(t *testing.T, root string) {
-				if err := os.MkdirAll(filepath.Join(root, relaysDir, "relay.example"), dirMode); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
-			name: "the anchor moved and the rest did not",
-			crash: func(t *testing.T, root string) {
-				dir := filepath.Join(root, relaysDir, "relay.example")
-				if err := os.MkdirAll(dir, dirMode); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Rename(filepath.Join(root, anchorFile), filepath.Join(dir, anchorFile)); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-		{
-			name: "everything moved and the record was written",
-			crash: func(t *testing.T, root string) {
-				dir := filepath.Join(root, relaysDir, "relay.example")
-				if err := os.MkdirAll(dir, dirMode); err != nil {
-					t.Fatal(err)
-				}
-				for _, f := range []string{anchorFile, certFile, cursorFile} {
-					if err := os.Rename(filepath.Join(root, f), filepath.Join(dir, f)); err != nil {
-						t.Fatal(err)
-					}
-				}
-				rec, err := json.MarshalIndent(&Relay{
-					Name: "relay.example", URL: relayURL, Added: time.Unix(1000000, 0).UTC(),
-					TrustAnchorSPKI: pki.SPKI(anchor),
-				}, "", "  ")
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(filepath.Join(dir, relayFile), append(rec, '\n'), fileMode); err != nil {
-					t.Fatal(err)
-				}
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, key := range configKeysFromBefore {
+		t.Run("config key "+key, func(t *testing.T) {
 			root := t.TempDir()
-			anchorPEM, certJSON := oldHome(t, root, relayURL, anchor)
-			tc.crash(t, root)
+			cfg := `{"name": "ada", "` + key + `": "x"}` + "\n"
+			if err := os.WriteFile(filepath.Join(root, configFile), []byte(cfg), fileMode); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Open(root)
+			want := filepath.Join(root, configFile) + ` has a key "` + key + `", which is how a home from before v0.11.0 kept its one relay: ` + wantFix
+			if err == nil || err.Error() != want {
+				t.Fatalf("Open: %v\nwant %s", err, want)
+			}
+			if !errors.Is(err, ErrDamaged) {
+				t.Error("the refusal is not ErrDamaged")
+			}
+		})
+	}
 
-			s, err := Open(root)
-			if err != nil {
+	for _, file := range looseRelayFiles {
+		t.Run("loose "+file, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.MkdirAll(root, dirMode); err != nil {
 				t.Fatal(err)
 			}
-			relays, err := s.Relays()
-			if err != nil {
+			if err := os.WriteFile(filepath.Join(root, file), []byte("x\n"), fileMode); err != nil {
 				t.Fatal(err)
 			}
-			if len(relays) != 1 {
-				t.Fatalf("finished with %d relays, want 1", len(relays))
+			_, err := Open(root)
+			want := filepath.Join(root, file) + " is a relay's file in the home's root, which is how a home from before v0.11.0 kept its one relay: " + wantFix
+			if err == nil || err.Error() != want {
+				t.Fatalf("Open: %v\nwant %s", err, want)
 			}
-			r := relays[0]
-			dir := s.RelayDir(r)
-			for name, want := range map[string][]byte{anchorFile: anchorPEM, certFile: certJSON} {
-				got, err := os.ReadFile(filepath.Join(dir, name))
-				if err != nil {
-					t.Fatalf("%s: %v", name, err)
-				}
-				if string(got) != string(want) {
-					t.Errorf("%s was rewritten", name)
-				}
-			}
-			if n, err := s.CursorFor(r); err != nil || n != 17 {
-				t.Errorf("cursor %d %v, want 17", n, err)
-			}
-			cfg, err := s.Config()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if cfg.DefaultRelay != "relay.example" {
-				t.Fatalf("config after finishing: %+v", cfg)
-			}
-			legacy, err := s.legacyConfig()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if legacy.Relay != "" {
-				t.Fatalf("config.json still names a relay: %+v", legacy)
+			if !errors.Is(err, ErrDamaged) {
+				t.Error("the refusal is not ErrDamaged")
 			}
 		})
 	}
 }
 
-// A pre-plan home that had registered but never fetched had no cursor file at
-// all. It still has a mailbox, and 'auu inbox' must drain it.
-func TestAMigratedHomeWithNoCursorIsStillRegistered(t *testing.T) {
-	const relayURL = "https://relay.example:9443"
-	root := t.TempDir()
-	anchor := testAnchor(t, "never fetched")
-	oldHome(t, root, relayURL, anchor)
-	if err := os.Remove(filepath.Join(root, cursorFile)); err != nil {
+// config.json is a file this program wrote, read to its shape: a key
+// Config does not write is refused by name, and every key it writes
+// reads back. The keys are read from Config's tags, so a field added to
+// it is accepted without a list to update, and the set is shown here.
+func TestConfigRefusesAKeyItDoesNotKnow(t *testing.T) {
+	s := newStore(t)
+	want := map[string]bool{"name": true, "default_relay": true, "stream_threshold": true, "chunk_size": true, "editor": true}
+	if len(configKeys) != len(want) {
+		t.Fatalf("configKeys is %v, want %v", configKeys, want)
+	}
+	for k := range want {
+		if !configKeys[k] {
+			t.Errorf("configKeys lacks %q", k)
+		}
+	}
+	full := Config{Name: "ada", DefaultRelay: "work", StreamThreshold: 4096, ChunkSize: 65536, Editor: "vi"}
+	if err := s.SaveConfig(full); err != nil {
 		t.Fatal(err)
 	}
-
-	s, err := Open(root)
-	if err != nil {
+	if got, err := s.Config(); err != nil || got != full {
+		t.Fatalf("a full config read back as %+v, %v", got, err)
+	}
+	cfg := `{"name": "ada", "colour": "blue"}` + "\n"
+	if err := os.WriteFile(s.path(configFile), []byte(cfg), fileMode); err != nil {
 		t.Fatal(err)
 	}
-	r, err := s.DefaultRelay()
-	if err != nil {
+	_, err := s.Config()
+	wantErr := s.path(configFile) + ` has a key this auu does not know, "colour": remove it, or delete the file and ` +
+		"set the default relay again with 'auu relay default NAME'; it holds only that, the stream settings and your editor"
+	if err == nil || err.Error() != wantErr {
+		t.Fatalf("Config: %v\nwant %s", err, wantErr)
+	}
+	if !errors.Is(err, ErrDamaged) {
+		t.Error("the refusal is not ErrDamaged")
+	}
+	// And Open refuses it too, since a home with such a file is not one
+	// to write into.
+	if _, err := Open(s.Root()); err == nil || err.Error() != wantErr {
+		t.Fatalf("Open: %v\nwant %s", err, wantErr)
+	}
+	// The key is echoed in the sentence, so it is quoted: a key with an
+	// escape in it, or a line break, reaches the terminal as text.
+	cfg = `{"name": "ada", "co\u001bl\nour": "blue"}` + "\n"
+	if err := os.WriteFile(s.path(configFile), []byte(cfg), fileMode); err != nil {
 		t.Fatal(err)
 	}
-	if !s.Registered(r) {
-		t.Fatal("a home that had a relay configured is not marked registered on it")
-	}
-	if n, err := s.CursorFor(r); err != nil || n != 0 {
-		t.Fatalf("cursor %d %v, want 0", n, err)
+	_, err = s.Config()
+	if err == nil || !strings.Contains(err.Error(), `has a key this auu does not know, "co\x1bl\nour"`) ||
+		strings.ContainsAny(err.Error(), "\x1b\n") {
+		t.Fatalf("Config with an escape in the key: %q", err)
 	}
 }
 

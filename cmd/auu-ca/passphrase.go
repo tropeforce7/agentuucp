@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/tropeforce7/agentuucp/internal/keyfile"
 	"github.com/tropeforce7/agentuucp/internal/pki"
@@ -39,23 +38,13 @@ var (
 	fromFile          = term.FromFile
 )
 
-// unlock gets the passphrase for an existing authority, if it has one. A
-// directory from before key files were encrypted needs none, and must not be
-// asked for one.
+// unlock gets the passphrase for an existing authority. The directory is
+// read locked first, so that one that is not an authority, or holds a key
+// file from before they were encrypted, is refused by name before anybody
+// is asked for a passphrase it would not open.
 func unlock(dir, file string) ([]byte, error) {
-	locked, err := pki.OpenLocked(dir)
-	if err != nil {
+	if _, err := pki.OpenLocked(dir); err != nil {
 		return nil, err
 	}
-	if !locked.Encrypted() {
-		return nil, nil
-	}
 	return readPassphrase(fmt.Sprintf("Passphrase for %s: ", dir), file)
-}
-
-// legacyWarning is what show and every command that opens an unencrypted
-// authority prints, once, on stderr.
-func legacyWarning(dir string) string {
-	return strings.TrimSpace(fmt.Sprintf(
-		"the private keys in %s are not encrypted; run 'auu-ca passphrase' to encrypt them", dir))
 }

@@ -109,9 +109,6 @@ func cmdKit(args []string) error {
 		if store, err = pki.Open(*dir, secret); err != nil {
 			return err
 		}
-		if !store.Encrypted() {
-			fmt.Fprintln(os.Stderr, "auu-ca: "+legacyWarning(store.Dir()))
-		}
 		bundle, err := store.IssueRelay(hosts, *years, now)
 		if err != nil {
 			return err

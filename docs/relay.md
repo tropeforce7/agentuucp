@@ -135,7 +135,12 @@ not repair is a database that knows no mailbox at all beside a directory that
 holds mail, since repairing that would mean removing every message: the
 database was lost, and the relay refuses to start, saying so, and naming the
 two remedies, restoring `relay.db` from a backup or moving the message
-directory aside to start empty.
+directory aside to start empty. The database is at this version's schema
+or is refused, never migrated: one from before v0.11.0 is deleted, with
+the message directory beside it, and the relay recreates both at the next
+start, after which every machine enrolled on it enrols again; the refusal
+says so, naming both paths. One from a newer release is refused too,
+naming the version it found and the one this relay understands.
 
 ### 1.2 Large messages
 

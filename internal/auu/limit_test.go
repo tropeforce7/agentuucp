@@ -131,7 +131,7 @@ func TestLimitServeLedgerIntegers(t *testing.T) {
 		}
 	}
 	for _, n := range []int{0, 1, math.MaxInt} {
-		write(t, `{"v":1,"messages":{"`+id+`":{"thread":"`+id+`","failures":`+strconv.Itoa(n)+`}}}`)
+		write(t, `{"v":1,"messages":{"`+id+`":{"thread":"`+id+`","failures":`+strconv.Itoa(n)+`,"tried":"2026-09-20T10:00:00Z"}}}`)
 		l, err := loadLedger(path)
 		if err != nil || l.Messages[id] == nil || l.Messages[id].Failures != n {
 			t.Errorf("failures %d: %v; want it read", n, err)
@@ -140,6 +140,40 @@ func TestLimitServeLedgerIntegers(t *testing.T) {
 	write(t, `{"v":1,"messages":{"`+id+`":null}}`)
 	if _, err := loadLedger(path); err == nil || !strings.Contains(err.Error(), "has no entry under") {
 		t.Errorf("a null entry: %v; want the refusal", err)
+	}
+	// An attempt has a time: an entry that counts one, or gave up, with
+	// no tried is from before there were timestamps, and is refused
+	// naming the entry and the fix; a skipped entry has none and is
+	// read, as is one whose attempt is timed, and every attempt this
+	// program records writes the key.
+	fromBefore := "has an attempt with no time for " + id + ", which is how a ledger from before v0.11.0 was written"
+	for _, entry := range []string{
+		`{"thread":"` + id + `","failures":1}`,
+		`{"thread":"` + id + `","gave_up":true}`,
+		`{"thread":"` + id + `","failures":1,"tried":"0001-01-01T00:00:00Z"}`,
+	} {
+		write(t, `{"v":1,"messages":{"`+id+`":`+entry+`}}`)
+		_, err := loadLedger(path)
+		if err == nil || !strings.Contains(err.Error(), fromBefore) {
+			t.Errorf("%s: %v; want the refusal naming the entry", entry, err)
+		}
+	}
+	for _, entry := range []string{
+		`{"thread":"` + id + `","skipped":true}`,
+		`{"thread":"` + id + `","failures":1,"tried":"2026-09-20T10:00:00Z"}`,
+		`{"thread":"` + id + `","gave_up":true,"failures":3,"tried":"2026-09-20T10:00:00Z"}`,
+	} {
+		write(t, `{"v":1,"messages":{"`+id+`":`+entry+`}}`)
+		if _, err := loadLedger(path); err != nil {
+			t.Errorf("%s: %v; want it read", entry, err)
+		}
+	}
+	data, err := json.Marshal(&ledgerEntry{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"tried":`) {
+		t.Errorf("the zero entry marshals without its tried key: %s", data)
 	}
 }
 
@@ -182,6 +216,7 @@ func TestLimitPendingRecordIntegers(t *testing.T) {
 		t.Helper()
 		p.MessageID = id
 		p.To = strings.Repeat("c", 64)
+		p.Relay = "relay"
 		p.Started = time.Now()
 		data, err := json.Marshal(p)
 		if err != nil {
@@ -388,7 +423,11 @@ func TestLimitProxyAllowUIDs(t *testing.T) {
 
 // TestLimitPendingRecordShapes: an outbox record's id and recipient are a
 // message id and a fingerprint, held at listPending before a label slices
-// twelve of each; one character short is a broken record.
+// twelve of each, and its relay is a relay name; one character short is a
+// broken record, and so is a record that names no relay, which is how a
+// record from before a home could know more than one was written. The
+// relay's key is written for the zero value, so a record without it is
+// not one with the default.
 func TestLimitPendingRecordShapes(t *testing.T) {
 	s, err := store.Open(t.TempDir())
 	if err != nil {
@@ -397,12 +436,15 @@ func TestLimitPendingRecordShapes(t *testing.T) {
 	if err := os.MkdirAll(outboxDir(s), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	write := func(t *testing.T, id, to string) {
+	write := func(t *testing.T, id, to string, relay ...string) {
 		t.Helper()
 		if err := os.WriteFile(streamPath(s, id), []byte("sealed"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		p := pending{MessageID: id, To: to, Started: time.Now(), ChunkSize: stream.DefaultChunkSize}
+		p := pending{MessageID: id, To: to, Relay: "relay", Started: time.Now(), ChunkSize: stream.DefaultChunkSize}
+		if len(relay) > 0 {
+			p.Relay = relay[0]
+		}
 		data, err := json.Marshal(p)
 		if err != nil {
 			t.Fatal(err)
@@ -422,9 +464,22 @@ func TestLimitPendingRecordShapes(t *testing.T) {
 	if waiting, broken, err := listPending(s); err != nil || len(waiting) != 0 || len(broken) != 1 || broken[0] != fullID {
 		t.Errorf("a recipient one short: waiting %d, broken %v, %v; want the record broken", len(waiting), broken, err)
 	}
+	for _, relay := range []string{"", "../x"} {
+		write(t, fullID, strings.Repeat("c", 64), relay)
+		if waiting, broken, err := listPending(s); err != nil || len(waiting) != 0 || len(broken) != 1 || broken[0] != fullID {
+			t.Errorf("relay %q: waiting %d, broken %v, %v; want the record broken", relay, len(waiting), broken, err)
+		}
+	}
 	write(t, fullID, strings.Repeat("c", 64))
 	if waiting, broken, err := listPending(s); err != nil || len(waiting) != 1 || len(broken) != 0 {
 		t.Errorf("as written: waiting %d, broken %v, %v; want the record read", len(waiting), broken, err)
+	}
+	data, err := json.Marshal(&pending{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"relay":""`) {
+		t.Errorf("the zero record marshals without its relay key: %s", data)
 	}
 }
 
@@ -603,7 +658,7 @@ func TestLimitAttachmentNameIsNotAPathAtExtract(t *testing.T) {
 		if err := os.MkdirAll(out, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		m := &store.Stored{Inner: &envelope.Inner{
+		m := &store.Stored{Relay: "relay", Inner: &envelope.Inner{
 			ID: strings.Repeat("a", 32), Time: time.Now(),
 			Body: message.Body{Type: message.TypeNote, Thread: strings.Repeat("a", 32), Text: "hi",
 				Attachments: []message.Attachment{rawAttachment(v, []byte("hi"))}},
@@ -702,7 +757,7 @@ func TestLimitOutboxDirectoryEntries(t *testing.T) {
 	good := strings.Repeat("b", 32)
 	record := func(name, id string) {
 		t.Helper()
-		data, err := json.Marshal(pending{MessageID: id, To: strings.Repeat("c", 64), Started: time.Now(), ChunkSize: stream.DefaultChunkSize})
+		data, err := json.Marshal(pending{MessageID: id, To: strings.Repeat("c", 64), Relay: "relay", Started: time.Now(), ChunkSize: stream.DefaultChunkSize})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -890,7 +945,7 @@ func extractionWritesSafeUniqueNames(t *testing.T) {
 		atts = append(atts, rawAttachment(name, []byte(fmt.Sprintf("file %d\n", i))))
 	}
 	id := strings.Repeat("d", 32)
-	m := &store.Stored{Inner: &envelope.Inner{
+	m := &store.Stored{Relay: "relay", Inner: &envelope.Inner{
 		ID: id, Time: time.Now().UTC(), From: strings.Repeat("e", 64), To: strings.Repeat("f", 64),
 		Body: message.Body{Type: message.TypeNote, Thread: id, Text: "odd names", Attachments: atts},
 	}}
@@ -1022,7 +1077,7 @@ func aStreamExtractsUnderSafeUniqueNames(t *testing.T) {
 	for _, a := range opened.Manifest.Attachments {
 		inner.Body.Attachments = append(inner.Body.Attachments, message.Attachment{Name: a.Name, Media: a.Media, Size: a.Size, SHA256: a.SHA256})
 	}
-	rec := &store.Stored{Inner: inner, Streamed: true, Received: time.Now().UTC()}
+	rec := &store.Stored{Relay: "relay", Inner: inner, Streamed: true, Received: time.Now().UTC()}
 	if err := s.Save(store.Inbox, rec); err != nil {
 		t.Fatal(err)
 	}

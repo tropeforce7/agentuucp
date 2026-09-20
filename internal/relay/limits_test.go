@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -578,28 +579,61 @@ func TestEveryLimitAtZeroIsUnlimited(t *testing.T) {
 	}
 }
 
-func TestPreReleaseDatabaseIsRefused(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "old.db")
+// A database at any version but this build's is refused, never migrated:
+// nothing on this machine is from before. The sentence names the file,
+// the version found, the version written, the message directory, which
+// goes with the file since a new database beside old mail is the lost
+// database the next start refuses over, and what the deletion costs.
+// Version 0 with tables in it is a database from before the version was
+// recorded, refused the same way; version 0 with none is a new file.
+func TestADatabaseAtAnotherVersionIsRefusedNotMigrated(t *testing.T) {
+	for version := 0; version < schemaVersion; version++ {
+		t.Run(strconv.Itoa(version), func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "old.db")
+			messages := filepath.Join(dir, "messages")
+			store, err := OpenStore(path, messages)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, version)); err != nil {
+				t.Fatal(err)
+			}
+			store.Close()
 
-	// A database with our tables but no schema version: what a pre-release
-	// relay left behind.
-	store, err := OpenStore(path, filepath.Join(filepath.Dir(path), "messages"))
+			_, err = OpenStore(path, messages)
+			if err == nil {
+				t.Fatalf("a version %d database was opened", version)
+			}
+			want := fmt.Sprintf("relay: %s is schema version %d, but this relay writes version %d and migrates nothing: "+
+				"delete it and the message directory beside it, %s, and the relay recreates both at the next start; "+
+				"every machine enrolled on it enrols again", path, version, schemaVersion, messages)
+			if err.Error() != want {
+				t.Fatalf("error %q\nwant  %q", err, want)
+			}
+			// Refused means untouched: the version is still the one found.
+			db := openVersion(t, path)
+			if db != version {
+				t.Fatalf("the refusal left the database at version %d, want %d", db, version)
+			}
+		})
+	}
+}
+
+// openVersion reads a database's user_version with none of OpenStore's
+// checks, as an operator with sqlite3 would.
+func openVersion(t *testing.T, path string) int {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`PRAGMA user_version = 0`); err != nil {
+	defer db.Close()
+	var version int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	store.Close()
-
-	_, err = OpenStore(path, filepath.Join(filepath.Dir(path), "messages"))
-	if err == nil {
-		t.Fatal("a pre-release database was opened")
-	}
-	if !strings.Contains(err.Error(), "pre-release version") {
-		t.Fatalf("error %q does not say what is wrong", err)
-	}
+	return version
 }
 
 func TestNewerDatabaseIsRefused(t *testing.T) {
