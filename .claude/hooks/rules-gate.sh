@@ -13,8 +13,15 @@
 # `;`, `&&`, `||`, `|`, `&`, a newline, `(` and `)` end a simple command;
 # a `$( )` or a backtick substitution is read as commands of its own,
 # inside double quotes too, and stands in its word as a mark the gate
-# cannot read past; `#` starts a comment; a here-document's body is
-# skipped up to its delimiter; a redirection is not a word. So
+# cannot read past — a backtick's text first has its escaped backticks,
+# dollars and backslashes unescaped, and inside double quotes its
+# escaped double quotes too, as sh does before it runs the text, so a
+# backtick escaped inside one is the nested substitution it is;
+# `#` starts a comment; a here-document's body is skipped up to its
+# delimiter, and when the delimiter is unquoted the `$( )` and backtick
+# substitutions in the body are read as commands of their own, since sh
+# expands them there as it does inside double quotes, while a quoted
+# delimiter's body is literal; a redirection is not a word. So
 # `echo "git commit"` is not a commit, a commit message that mentions -a
 # is not -a, and `git add x && git commit` is two commands. A string
 # handed to `sh -c`, `bash -c` or `eval` is read the same way, in place.
@@ -298,6 +305,55 @@ function closetick(s, i, L,    c, j) {
 	return L + 1
 }
 
+# untick is the text of a backtick substitution as sh hands it to the
+# shell that runs it: a backslash before $, ` or \ is removed and every
+# other backslash kept, so a backtick escaped inside the text is a nested
+# substitution when the text is read, and one escaped twice is text.
+# Inside double quotes, dq set, a backslash before a double quote goes
+# too, since the rule of the quotes around it reaches into the text: sh
+# runs `\"git\" commit` inside "..." as git commit, and outside them as
+# a command named with the quotes in it.
+function untick(s, dq,    out, i, L, c, d) {
+	out = ""; L = length(s); i = 1
+	while (i <= L) {
+		c = substr(s, i, 1)
+		if (c == "\\") {
+			d = substr(s, i + 1, 1)
+			if (d == "$" || d == "`" || d == "\\" || (dq && d == "\"")) { out = out d; i += 2; continue }
+		}
+		out = out c; i++
+	}
+	return out
+}
+
+# hdbody reads the body of a here-document whose delimiter was not
+# quoted, where sh expands $( ) and backticks as it does inside double
+# quotes: each substitution is read as commands of its own, in its place
+# in the sequence, and a backslash before $, `, \ or a newline keeps the
+# next character literal. Everything else in the body is text.
+function hdbody(s,    i, L, c, d, j) {
+	L = length(s); i = 1
+	while (i <= L) {
+		c = substr(s, i, 1)
+		if (c == "\\") {
+			d = substr(s, i + 1, 1)
+			if (d == "$" || d == "`" || d == "\\" || d == "\n") { i += 2; continue }
+			i++; continue
+		}
+		if (c == "$" && substr(s, i + 1, 1) == "(") {
+			j = closeparen(s, i, L)
+			inner(substr(s, i + 2, j - i - 2))
+			i = j + 1; continue
+		}
+		if (c == "`") {
+			j = closetick(s, i, L)
+			inner(untick(substr(s, i + 1, j - i - 1)))
+			i = j + 1; continue
+		}
+		i++
+	}
+}
+
 # inner reads the text of a substitution as commands of its own, in their
 # place in the sequence, with the words of the command around it put
 # aside and restored: a commit inside $( ) is the commit the shell runs.
@@ -313,7 +369,7 @@ function inner(s,    SW, SC, sn, i) {
 # scan reads s as sh would, handing each simple command to analyse as it
 # ends, in order. A string given to sh -c or eval is scanned from inside
 # analyse, so its commands take their place in the sequence.
-function scan(s,    i, L, c, d, q, w, inw, nh, hd, hs, k, t, line, j) {
+function scan(s,    i, L, c, d, q, w, inw, nh, hd, hs, hq, k, t, line, j, body) {
 	L = length(s); i = 1; q = ""; w = ""; inw = 0; nh = 0
 	while (i <= L) {
 		c = substr(s, i, 1)
@@ -329,7 +385,7 @@ function scan(s,    i, L, c, d, q, w, inw, nh, hd, hs, k, t, line, j) {
 			}
 			if (c == "`") {
 				j = closetick(s, i, L)
-				inner(substr(s, i + 1, j - i - 1))
+				inner(untick(substr(s, i + 1, j - i - 1), 1))
 				w = w "`"; i = j + 1; continue
 			}
 			if (c == "\"") q = ""
@@ -360,13 +416,16 @@ function scan(s,    i, L, c, d, q, w, inw, nh, hd, hs, k, t, line, j) {
 			if (inw) { addword(w); w = ""; inw = 0 }
 			i++
 			for (k = 1; k <= nh; k++) {
+				body = ""
 				while (i <= L) {
 					t = index(substr(s, i), "\n")
 					if (t == 0) { line = substr(s, i); i = L + 1 }
 					else { line = substr(s, i, t - 1); i += t }
 					if (HS[k]) sub(/^\t+/, "", line)
 					if (line == HD[k]) break
+					body = body line "\n"
 				}
+				if (!HQ[k]) hdbody(body)
 			}
 			nh = 0
 			flush()
@@ -383,23 +442,24 @@ function scan(s,    i, L, c, d, q, w, inw, nh, hd, hs, k, t, line, j) {
 		if (c == "<" && substr(s, i + 1, 1) == "<") {
 			if (inw && w !~ /^[0-9]+$/) { addword(w) }
 			w = ""; inw = 0
-			i += 2; hs = 0
+			i += 2; hs = 0; hq = 0
 			if (substr(s, i, 1) == "-") { hs = 1; i++ }
 			while (substr(s, i, 1) == " " || substr(s, i, 1) == "\t") i++
 			hd = ""
 			while (i <= L) {
 				c = substr(s, i, 1)
 				if (c == "\047" || c == "\"") {
+					hq = 1
 					t = index(substr(s, i + 1), c)
 					if (t == 0) { hd = hd substr(s, i + 1); i = L + 1 }
 					else { hd = hd substr(s, i + 1, t - 1); i += t + 1 }
 					continue
 				}
-				if (c == "\\") { hd = hd substr(s, i + 1, 1); i += 2; continue }
+				if (c == "\\") { hq = 1; hd = hd substr(s, i + 1, 1); i += 2; continue }
 				if (c ~ /[ \t\n;&|<>()]/) break
 				hd = hd c; i++
 			}
-			nh++; HD[nh] = hd; HS[nh] = hs
+			nh++; HD[nh] = hd; HS[nh] = hs; HQ[nh] = hq
 			continue
 		}
 		if (c == "&" && substr(s, i + 1, 1) == ">") { w = w c; inw = 1; i++; continue }
@@ -420,7 +480,7 @@ function scan(s,    i, L, c, d, q, w, inw, nh, hd, hs, k, t, line, j) {
 		}
 		if (c == "`") {
 			j = closetick(s, i, L)
-			inner(substr(s, i + 1, j - i - 1))
+			inner(untick(substr(s, i + 1, j - i - 1)))
 			w = w "`"; inw = 1; i = j + 1; continue
 		}
 		w = w c; inw = 1; i++

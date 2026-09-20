@@ -22,10 +22,14 @@ import (
 // the plain commit with no record, with a record that says ready, with
 // one that does not; the forms that commit something other than the
 // index; the amend, gated over the whole commit it makes; the commands
-// that are not a commit though the word is in them; the diff that
-// changed after its record was written; a commit named through -C or cd
-// from elsewhere; and the input the hook must let through. It skips
-// where sh or git is absent, and on Windows, where the hook does not run.
+// that are not a commit though the word is in them; a commit inside a
+// substitution wherever sh runs one, a nested escaped backtick and an
+// unquoted here-document's body among them, beside the same text where
+// sh does not; the diff that changed after its record was written; a
+// commit named through -C or cd from elsewhere; and the input the hook
+// must let through. Which forms sh runs was confirmed against sh itself
+// before each row was written. It skips where sh or git is absent, and
+// on Windows, where the hook does not run.
 
 // The two sentences the gate refuses with when the command is wrong
 // before the index is looked at.
@@ -182,6 +186,45 @@ func TestTheGateReadsTheCommandAsShDoes(t *testing.T) {
 		{name: "a substitution in a for", command: "for f in $(ls); do echo $f; done", want: 0},
 		{name: "a variable as an argument", command: `git commit -m "fixes $bug"`, record: ready, want: 0},
 		{name: "a quoted parenthesis inside a substitution", command: `echo "$(echo "(")"`, want: 0},
+		// A backtick escaped inside a backtick substitution is a nested
+		// substitution: sh removes the backslash before it hands the text
+		// to the shell that runs it, and the gate reads the text the same
+		// way. Escaped twice it is a backtick in the text, and no command.
+		{name: "a commit inside nested escaped backticks", command: "echo `echo \\`git commit -m x\\``", want: 2, says: "no rules review for the staged diff ({hash})"},
+		{name: "a commit inside nested escaped backticks, with a record", command: "echo `echo \\`git commit -m x\\``", record: ready, want: 0},
+		{name: "a commit inside nested escaped backticks in double quotes", command: "echo \"`echo \\`git commit -m x\\``\"", want: 2, says: "no rules review"},
+		{name: "-a inside nested escaped backticks", command: "echo `echo \\`git commit -am x\\``", record: ready, want: 2, says: indexSentence},
+		{name: "a backtick escaped twice is text, not a nesting", command: "echo `echo \\\\\\`git commit -m x\\\\\\``", want: 0},
+		{name: "an escaped dollar inside backticks is a dollar", command: "echo `echo \\$(git commit -m x)`", want: 2, says: "no rules review"},
+		// Inside double quotes the quotes' own rule reaches into the
+		// backtick's text: sh drops the backslash before a double quote
+		// there, so the command is git and the message is one word;
+		// outside them the backslash stays and the command is named with
+		// the quotes in it, which is no command.
+		{name: "escaped quotes inside backticks inside double quotes are quotes", command: "echo \"`\\\"git\\\" commit -m x`\"", want: 2, says: "no rules review"},
+		{name: "an escaped quoted message inside backticks inside double quotes is one word", command: "echo \"`git commit -m \\\"a b\\\"`\"", record: ready, want: 0},
+		{name: "escaped quotes inside backticks outside double quotes are text", command: "echo `\\\"git\\\" commit -m x`", want: 0},
+		// A substitution in the body of a here-document is expanded by sh
+		// when the delimiter is unquoted, as inside double quotes, and is
+		// gated as the command it runs; a quoted delimiter's body is
+		// literal, and so is an escaped substitution in an unquoted one.
+		{name: "a commit inside a substitution in an unquoted here-document", command: "cat <<EOF\n$(git commit -m x)\nEOF", want: 2, says: "no rules review for the staged diff ({hash})"},
+		{name: "a commit inside a substitution in an unquoted here-document, with a record", command: "cat <<EOF\n$(git commit -m x)\nEOF", record: ready, want: 0},
+		{name: "-a inside a substitution in an unquoted here-document", command: "cat <<EOF\nsome text $(git commit -am x) more\nEOF\n", record: ready, want: 2, says: indexSentence},
+		{name: "a commit inside backticks in an unquoted here-document", command: "cat <<EOF\n`git commit -m x`\nEOF", want: 2, says: "no rules review"},
+		{name: "a commit inside a substitution in a here-document with tabs stripped", command: "cat <<-EOF\n\t$(git commit -m x)\n\tEOF", want: 2, says: "no rules review"},
+		{name: "a substitution spanning lines in an unquoted here-document", command: "cat <<EOF\n$(git commit \\\n -m x)\nEOF", want: 2, says: "no rules review"},
+		{name: "a commit inside a substitution in a single-quoted here-document is text", command: "cat <<'EOF'\n$(git commit -m x)\nEOF", want: 0},
+		{name: "a commit inside a substitution in a double-quoted here-document is text", command: "cat <<\"EOF\"\n$(git commit -m x)\nEOF", want: 0},
+		{name: "a commit inside a substitution in a backslash-quoted here-document is text", command: "cat <<\\EOF\n$(git commit -m x)\nEOF", want: 0},
+		{name: "a commit inside backticks in a quoted here-document is text", command: "cat <<'EOF'\n`git commit -m x`\nEOF", want: 0},
+		{name: "an escaped substitution in an unquoted here-document is text", command: "cat <<EOF\n\\$(git commit -m x)\nEOF", want: 0},
+		{name: "an escaped backtick in an unquoted here-document is text", command: "cat <<EOF\n\\`git commit -m x\\`\nEOF", want: 0},
+		{name: "the word in a here-document is still not a commit", command: "cat <<EOF\ngit commit -m x\nEOF", want: 0},
+		{name: "a message from an unquoted here-document with a substitution runs another command", record: ready, want: 2, says: aloneSentence,
+			command: "git commit -q -F - <<EOF\n$(date)\nEOF"},
+		{name: "a message from an unquoted here-document with no substitution", record: ready, want: 0,
+			command: "git commit -q -F - <<EOF\nSay why -a is refused.\nEOF"},
 		{name: "the literal spellings are still read", command: `git "commit" -m x`, want: 2, says: "no rules review"},
 		{name: "a split literal is still read", command: "git 'co''mmit' -m x", want: 2, says: "no rules review"},
 

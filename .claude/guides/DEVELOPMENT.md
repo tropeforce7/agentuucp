@@ -1148,7 +1148,19 @@ expand, so a command word or a git subcommand it cannot read as a literal
 word — a variable, or a word a `$( )` or a backtick is part of — is
 refused rather than guessed: the ultra review found `x=commit; git $x`
 and `git $(echo commit)` passing as "not a commit", and the gate is a
-guard against a commit made by habit, which such a spelling never is.
+guard against a commit made by habit, which such a spelling never is. A
+substitution is read as the commands it runs wherever sh would run it: in
+a word, inside double quotes, in the body of a here-document whose
+delimiter is unquoted (`cat <<EOF` expands `$( )` there; `cat <<'EOF'`
+does not, and its body stays text), and inside a backtick substitution's
+own text, where sh strips the backslash from an escaped backtick before it
+runs the text, so `` echo `echo \`git commit -m x\`` `` is the commit it
+is — the two forms the gate read past until the plan after the ultra
+review, each found by the worker while fixing the review's finding. A
+commit whose message comes from a substitution, `git commit -m "$(cat
+msg)"`, runs that substitution before the commit and is refused for it:
+`git commit -F <file>` is the way to give a message from a file, and a
+here-document with a quoted delimiter the way to give one inline.
 
 **The specifications are not in the repository.** `reviews/` is git-ignored.
 Do not commit anything from it, and do not write anything there except
