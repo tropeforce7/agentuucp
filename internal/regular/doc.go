@@ -43,14 +43,24 @@
 // confirms a link under the name the error is a *ModeError saying so;
 // otherwise the os error is returned as it came.
 //
-// On Windows the console and NUL devices answer to their names in every
-// directory, and what Go does when asked to create one exclusively is
-// not something this package assumes: CreateFile with CREATE_NEW on
-// "CON" may fail with the platform's own error or may hand back the
-// console's handle. Either is a refusal here — the os error passed
-// through, or the handle check finding a character device — and in
-// neither case is a byte written or an entry removed, since an exclusive
-// create that succeeded and produced a device made nothing to remove.
+// On Windows the DOS device names answer to their names in every
+// directory on some versions and not on others, and what CreateFile does
+// when asked to create one exclusively is not something this package
+// assumes: CREATE_NEW on a device name may fail with the platform's own
+// error or may hand back the device's handle. Either is a refusal here —
+// the os error passed through, or the handle check finding a character
+// device — and in neither case is a byte written or an entry removed,
+// since an exclusive create that succeeded and produced a device made
+// nothing to remove. On windows-2025-vs2026 (Windows Server 2025,
+// go1.27.0) NUL under a directory was the device, handed back by Open
+// and by the exclusive create alike and refused by the handle both
+// times, while CON, nul.txt and com1.txt were ordinary names there,
+// made as regular files; older Windows treats more of the names as
+// devices, which is what the handle check is for. A directory under the
+// name of an exclusive create is refused by the platform in one of two
+// words: EEXIST on Linux and macOS, EISDIR on Windows, where CreateFile
+// refuses a directory opened for writing as access denied and Go's
+// syscall.Open reports that as EISDIR.
 //
 // O_NONBLOCK is on every Unix open here for one reason: open(2) of a
 // FIFO for reading blocks until a writer arrives, so without it a pipe
@@ -59,8 +69,10 @@
 // FIFO opened for writing is refused by the platform (ENXIO, passed
 // through), and a regular file, on which the flag changes nothing, is
 // put back into blocking mode once its handle has been checked.
-// TestLimitADeviceIsRefusedByItsHandle asserts exactly that on Windows
-// for CON, NUL and com1.txt through Open and Create, and logs which of
-// the two refusals the platform gave; the Windows CI job runs it, and
-// its log is the record of what Go actually does there.
+// TestLimitADeviceIsRefusedByItsHandle asserts on Windows, for CON, NUL,
+// nul.txt and com1.txt through Open and Create, that each is refused by
+// the handle or by the platform or is an ordinary name made as a regular
+// file, never a device handed back as a regular file, and logs which;
+// the Windows CI job runs it, and its log is the record of what Go
+// actually does there.
 package regular

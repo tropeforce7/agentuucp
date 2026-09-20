@@ -102,7 +102,7 @@ jobs:
         run: go test -count=1 -v -run 'TestLimitADeviceIsRefusedByItsHandle|TestLimitTheDeviceListAgreesWithWindows|TestLimitTheForbiddenCharactersAgreeWithWindows|TestARegularFileOpensAndReads|TestADirectoryIsRefusedByItsHandle|TestTheOpenErrorPassesThroughUnwrapped' ./internal/regular/ ./internal/channels/
 
       - name: the agent end to end, and serve, as second processes
-        run: go test -count=1 -run 'Agent|Passphrase|Unlock|Locked|PublicCommandsNeedNoAgent|InitForceRefusesAnEncryptedHome|HalfConvertedHome|SkillsExitCode|Serve|TestLimitExtractionWritesSafeUniqueNames|TestLimitAStreamExtractsUnderSafeUniqueNames' ./internal/auu/
+        run: go test -count=1 -run 'Agent|Passphrase|Unlock|Locked|PublicCommandsNeedNoAgent|InitForceRefusesAnEncryptedHome|HalfConvertedHome|SkillsExitCode|Serve|TestLimitExtractionWritesSafeUniqueNames|TestLimitAStreamExtractsUnderSafeUniqueNames|TestADirectoryAtTheNameIsANameThatStands' ./internal/auu/
 
   race:
     name: race detector

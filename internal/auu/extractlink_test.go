@@ -209,3 +209,48 @@ func TestAnExtractTakesTheNameOnlyWithVerifiedContent(t *testing.T) {
 		}
 	})
 }
+
+// TestADirectoryAtTheNameIsANameThatStands: a directory standing at an
+// attachment's name is a name that stands, as a file or a link there is,
+// and the file goes beside it as the next numbered name with the
+// directory and what it holds untouched — on both write paths and on
+// every platform. Linux and macOS refuse the link and the exclusive
+// create over a directory as EEXIST, which the loops always took as a
+// name that stands; Windows refuses the create as EISDIR, which they did
+// not until the first Windows run, and refused the extract instead. The
+// Windows job is where the second word is proved.
+func TestADirectoryAtTheNameIsANameThatStands(t *testing.T) {
+	onEachWritePath(t, func(t *testing.T) {
+		payload := []byte(strings.Repeat("beside the directory\n", 100))
+		s, rec := streamedRecord(t, "report.txt", payload)
+		out := t.TempDir()
+		standing := filepath.Join(out, "report.txt")
+		if err := os.Mkdir(standing, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		inside := filepath.Join(standing, "keep")
+		if err := os.WriteFile(inside, []byte("keep me\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		written, err := extractInto(s, store.Inbox, rec, out)
+		if err != nil {
+			t.Fatalf("extractInto with a directory at the name: %v; want the file beside it", err)
+		}
+		if len(written) != 1 || filepath.Base(written[0]) != "report-2.txt" {
+			t.Fatalf("wrote %v, want report-2.txt beside the directory", written)
+		}
+		if data, err := os.ReadFile(written[0]); err != nil || !bytes.Equal(data, payload) {
+			t.Fatalf("the file: %d bytes, %v; want the payload whole", len(data), err)
+		}
+		if info, err := os.Lstat(standing); err != nil || !info.IsDir() {
+			t.Fatalf("the directory at the name: %v, %v; want it standing", info, err)
+		}
+		if data, _ := os.ReadFile(inside); string(data) != "keep me\n" {
+			t.Fatalf("what the directory held was touched: %q", data)
+		}
+		names := entriesOf(t, out)
+		if len(names) != 2 {
+			t.Fatalf("the directory holds %v; want the directory and the file alone, no temporary", names)
+		}
+	})
+}

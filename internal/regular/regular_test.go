@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -50,7 +51,16 @@ func TestARegularFileOpensAndReads(t *testing.T) {
 }
 
 // TestADirectoryIsRefusedByItsHandle: a directory under a valid name is
-// not a regular file, and Dir refuses a regular file the same way.
+// not a regular file, and Dir refuses a regular file the same way. An
+// exclusive create over the directory is refused by the platform, which
+// says so in one of two ways: Linux and macOS answer EEXIST, as open(2)
+// with O_CREAT|O_EXCL does for any entry under the name, and Windows
+// answers EISDIR, since CreateFile with CREATE_NEW opened for writing
+// refuses a directory as access denied and Go's syscall.Open reports
+// that as EISDIR when the attributes say directory (the first Windows
+// run, on windows-2025-vs2026 with go1.27.0, is where this was learned).
+// Either passes through unwrapped, and a caller that asks whether a
+// name stands asks for both.
 func TestADirectoryIsRefusedByItsHandle(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "sub")
@@ -77,8 +87,14 @@ func TestADirectoryIsRefusedByItsHandle(t *testing.T) {
 	if _, err := ReadFile(sub); err == nil || !strings.Contains(err.Error(), "is a directory, not a regular file") {
 		t.Errorf("ReadFile on a directory: %v", err)
 	}
-	if _, err := Create(sub, 0o600); !errors.Is(err, os.ErrExist) {
-		t.Errorf("Create over a directory: %v, want ErrExist", err)
+	_, err = Create(sub, 0o600)
+	switch {
+	case runtime.GOOS == "windows" && errors.Is(err, syscall.EISDIR):
+		t.Logf("Create over a directory: %v (Windows answers EISDIR)", err)
+	case errors.Is(err, os.ErrExist):
+		t.Logf("Create over a directory: %v", err)
+	default:
+		t.Errorf("Create over a directory: %v, want ErrExist, or EISDIR on Windows", err)
 	}
 	if _, err := os.Stat(sub); err != nil {
 		t.Errorf("the directory is gone after the refusals: %v", err)
@@ -132,13 +148,23 @@ func TestTheOpenErrorPassesThroughUnwrapped(t *testing.T) {
 	}
 }
 
-// TestLimitADeviceIsRefusedByItsHandle (Windows): CON, NUL, nul.txt and com1.txt
-// under a temporary directory, through Open and Create, are each an
-// error — the handle check's sentence when the platform hands back the
-// device, or the platform's own refusal — with no file made under the
-// directory and no byte written. The test logs which of the two refusals
-// each name got, since what Go does with CreateFile and CREATE_NEW on a
-// device name is what this test exists to record.
+// TestLimitADeviceIsRefusedByItsHandle (Windows): CON, NUL, nul.txt and
+// com1.txt under a temporary directory, through Open and Create, each
+// answer one of three ways, and the test logs which: the handle check's
+// sentence, when the platform hands back the device under the name; the
+// platform's own refusal, passed through, with nothing made; or, since
+// Windows versions differ in which names are devices under a directory,
+// an ordinary name, which Open finds nothing under and Create makes a
+// regular file under, which the test removes. What never happens is a
+// device handed back as a regular file: a handle that came back is asked
+// its mode here, the claim being the test's own and not the helper's.
+// The first run, on windows-2025-vs2026 (Windows Server 2025, go1.27.0
+// windows/amd64): NUL was the device — Open's handle check refused it
+// as a device, and Create's exclusive create succeeded and handed the
+// device back, the Handed sentence — while CON, nul.txt and com1.txt
+// were ordinary names, not found by Open and made as regular files by
+// Create. Older Windows resolves more of them, and the hand list in
+// internal/channels stays wider than any one Windows for that reason.
 func TestLimitADeviceIsRefusedByItsHandle(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows device names; the Unix plants are TestLimitAPlantedEntryIsRefusedByItsHandle's, in plants_unix_test.go")
@@ -154,18 +180,32 @@ func TestLimitADeviceIsRefusedByItsHandle(t *testing.T) {
 			{"Create", func() (*os.File, error) { return Create(path, 0o600) }},
 		} {
 			f, err := try.call()
-			if f != nil {
-				f.Close()
-			}
-			if err == nil {
-				t.Errorf("%s of %s succeeded", try.name, name)
-				continue
-			}
 			var me *ModeError
 			switch {
+			case err == nil:
+				info, serr := f.Stat()
+				f.Close()
+				if serr != nil || !info.Mode().IsRegular() {
+					t.Errorf("%s of %s handed back %v, %v; want a regular file or a refusal", try.name, name, info, serr)
+					continue
+				}
+				t.Logf("%s of %s: an ordinary name on this Windows; a regular file", try.name, name)
+				if try.name == "Create" {
+					if err := os.Remove(path); err != nil {
+						t.Errorf("removing the file made under %s: %v", name, err)
+					}
+				}
 			case errors.As(err, &me):
+				if f != nil {
+					f.Close()
+					t.Errorf("%s of %s: a file came back with the refusal %v", try.name, name, err)
+				}
 				t.Logf("%s of %s: the handle check refused it: %v", try.name, name, err)
 			default:
+				if f != nil {
+					f.Close()
+					t.Errorf("%s of %s: a file came back with the refusal %v", try.name, name, err)
+				}
 				t.Logf("%s of %s: the platform refused it: %v", try.name, name, err)
 			}
 		}
@@ -175,6 +215,6 @@ func TestLimitADeviceIsRefusedByItsHandle(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		t.Errorf("%q was made under the directory", e.Name())
+		t.Errorf("%q stands under the directory", e.Name())
 	}
 }

@@ -93,7 +93,11 @@ func Open(path string) (*os.File, error) {
 }
 
 // Create makes the named file, which must not exist, for writing: an
-// existing entry under the name, whatever it is, is os.ErrExist.
+// existing entry under the name, whatever it is, is os.ErrExist — except
+// a directory on Windows, which CreateFile refuses for writing as access
+// denied and Go reports as syscall.EISDIR; Linux and macOS answer EEXIST
+// for a directory as for anything else. A caller asking whether a name
+// stands asks for both.
 func Create(path string, perm fs.FileMode) (*os.File, error) {
 	return OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
 }

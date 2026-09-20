@@ -383,7 +383,11 @@ a socket, a directory or a symbolic link under any name before a byte
 moves; a create is exclusive, so nothing that already stood under the name
 is opened, and no such name is a rename's destination. On Windows the
 device rule asks the OS itself, and the Windows CI job holds the hand
-list, which is the rule everywhere else, to what the OS says.
+list, which is the rule everywhere else, to be no narrower than what its
+OS says: Windows versions differ in which names are devices under a
+directory (Server 2025 resolves `NUL` alone), so the list is the union
+across them and the handle check is the safety net for a name it does
+not hold.
 
 **The HTTP layer has bounds of its own**, and they are not settings. The
 relay speaks HTTP/1.1 alone: HTTP/2 is off on the listener and not offered

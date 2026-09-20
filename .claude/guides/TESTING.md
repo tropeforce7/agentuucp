@@ -973,11 +973,14 @@ something that already stood under that name, and there is no rename onto
 a name from outside, since a rename's destination has no handle to ask.
 The file-open ledger says which rows are held to this, and its test fails
 a network row or a directory-entry row that opens by the plain `os` call.
-The proof runs on both kinds of machine: on Windows, `CON` and `nul.txt`
-through the helper and through extraction, asserting no byte written and
-the sentence naming what was found; on Unix, a FIFO, a symlink to a
-device and a directory planted under a valid name, asserting the same,
-with a witness file untouched. An operator's own input file is not held
+The proof runs on both kinds of machine: on Windows, `CON`, `NUL`,
+`nul.txt` and `com1.txt` through the helper, asserting that each is
+refused by the handle with the sentence naming the device, or refused by
+the platform, or — since Windows versions differ in which of them is a
+device under a directory — made as a regular file, and never a device
+handed back as a regular file, and `CON` through extraction under its
+safe name; on Unix, a FIFO, a symlink to a device and a directory planted
+under a valid name, asserting the same, with a witness file untouched. An operator's own input file is not held
 to this: a passphrase file from process substitution is a pipe on
 purpose.
 
@@ -987,7 +990,12 @@ constants, the wire's constants shared by both ends) or held to its source
 by a test that runs on the platform that owns it, and on that platform the
 source is asked at run time wherever it can be: on Windows the device rule
 asks the OS through `filepath.Abs`, and the hand list is for the other
-platforms, which the Windows job holds to what the OS said.
+platforms, which the Windows job holds to what the OS said. Where the
+source's versions differ — Windows Server 2025 resolves `NUL` alone
+under a directory, older Windows the whole DOS set — the list is the
+union, held one way: every name the OS on the runner calls a device must
+be in it, and it may be wider; and the OS check at the open, the handle
+asked its mode, is the safety net for whatever the list does not hold.
 
 **The ledger.** `internal/limits/ledger.txt` holds one row per site the
 test finds:
@@ -1341,6 +1349,20 @@ survived. A repository a test makes sets `core.autocrlf false`, and so does
 the clone an asker applies a patch in, so that both sides of `git apply`
 agree; a byte comparison against a file git wrote is otherwise a
 comparison against the runner's settings.
+
+**A device name is a device on one Windows and a file on another.** The
+first run of the name tests on `windows-2025-vs2026` made regular files
+under `CON`, `nul.txt`, `com1.txt`, `CONIN$` and `CONOUT$` and resolved
+`NUL` alone to a device, where the tests, written from Microsoft's
+pages, had asserted every listed name a device to the OS and no file
+made. The list is the union across versions and the assertion is one
+way, as above; a test that creates under a device name asserts the
+refusal or a regular file, never a device handed back as one, and
+removes what it made. The same run answered an exclusive create over a
+directory with `EISDIR`, where Linux and macOS answer `EEXIST`: a loop
+that asks whether a name stands asks for both (`stands` in
+`internal/auu/inbox.go`), and `TestADirectoryAtTheNameIsANameThatStands`
+runs there to show the file going beside the directory.
 
 **A lock's pid cannot be read while it is held on Windows.** The serve lock
 is a handle opened with no sharing, which is what stands in for `flock`

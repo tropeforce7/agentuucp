@@ -8,10 +8,12 @@ import (
 )
 
 // osDevice asks Windows: filepath.Abs is GetFullPathNameW underneath,
-// which rewrites a DOS device name in any directory, with or without an
-// extension, to a \\.\ device path. What it answers for CONIN$ and
-// CONOUT$, which CreateFile understands but the resolver may not, is what
-// TestLimitTheDeviceListAgreesWithWindows logs on the Windows job.
+// which rewrites a DOS device name to a \\.\ device path — in any
+// directory and with or without an extension on older Windows, and on
+// Windows Server 2025 for NUL alone, bare, as
+// TestLimitTheDeviceListAgreesWithWindows logged on the Windows job's
+// first run; CONIN$ and CONOUT$, which CreateFile understands, it left as
+// paths there. The list is the wider answer and this the OS's own.
 func osDevice(stem string) bool {
 	if stem == "" {
 		return false

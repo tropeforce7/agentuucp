@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/channels"
@@ -830,8 +831,9 @@ var beforeLink func(tmp string)
 // name in the same directory, created exclusively by the handle, and
 // held to the record's size and digest there; only then is the name
 // taken, by linking the temporary to it. A link is an exclusive create:
-// whatever already stands under the name — a file, a device, a link — is
-// os.ErrExist and the next candidate is tried, nothing is renamed onto a
+// whatever already stands under the name — a file, a directory, a
+// device, a link — is a name that stands (see stands) and the next
+// candidate is tried, nothing is renamed onto a
 // name from outside, and the name appears only with verified content, so
 // a process killed mid-copy leaves the hidden temporary and never a
 // partial file under the attachment's name. The link resolves the
@@ -881,7 +883,7 @@ func writeUnique(s *store.Store, box store.Box, m *store.Stored, i int, a messag
 			}
 			return target, nil
 		}
-		if os.IsExist(err) {
+		if stands(err) {
 			continue
 		}
 		// Not a name that stands, but the filesystem's refusal of the
@@ -914,7 +916,7 @@ func writeTemp(s *store.Store, box store.Box, m *store.Stored, i int, a message.
 			out = f
 			break
 		}
-		if !os.IsExist(err) || try >= 8 {
+		if !stands(err) || try >= 8 {
 			return nil, "", fmt.Errorf("writing %q: %w", a.Name, err)
 		}
 	}
@@ -948,7 +950,7 @@ func copyFromTemp(f *os.File, dir, safe string, n int) (string, error) {
 	for ; n <= maxNameTries; n++ {
 		target := filepath.Join(dir, message.Numbered(safe, n))
 		out, err := regular.Create(target, 0o600)
-		if os.IsExist(err) {
+		if stands(err) {
 			continue
 		}
 		if err != nil {
@@ -967,6 +969,19 @@ func copyFromTemp(f *os.File, dir, safe string, n int) (string, error) {
 		return target, nil
 	}
 	return "", fmt.Errorf("%s holds %d files named like %q already; choose another --out directory", dir, maxNameTries, safe)
+}
+
+// stands says an exclusive create or a link found an entry under the
+// name, so the next candidate is tried: os.ErrExist, which every platform
+// answers for a file, a link or a device there and Linux and macOS answer
+// for a directory too; and EISDIR, which Windows answers for a directory,
+// since CreateFile refuses one opened for writing as access denied and
+// Go's syscall.Open reports that as EISDIR rather than as an existing
+// entry. The first Windows run of the regular package's tests is where
+// the second word was learned; without it a directory at an attachment's
+// name refused the extract there instead of the file going beside it.
+func stands(err error) bool {
+	return os.IsExist(err) || errors.Is(err, syscall.EISDIR)
 }
 
 // copyStreamed copies a streamed attachment from its spool file into out,

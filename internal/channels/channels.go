@@ -19,14 +19,21 @@
 // device list in WindowsDevice is not the source of that rule: Windows is,
 // and on Windows the function asks the OS through filepath.Abs, whose
 // GetFullPathNameW rewrites a DOS device name to a \\.\ path. The Windows
-// CI job holds the hand list to the OS in both directions with
-// TestLimitTheDeviceListAgreesWithWindows and logs what filepath.Abs
-// answered for each name; what it answered for CONIN$ and CONOUT$, which
-// CreateFile understands and the resolver may not rewrite, is to be
-// recorded here from that job's first run after this note was written.
-// Until then the list holds them and the test holds them to the OS the
-// other way it can: an exclusive create under a temporary directory must
-// leave no file there.
+// CI job holds the hand list to the OS one way with
+// TestLimitTheDeviceListAgreesWithWindows — every name the OS resolves
+// to a device must be in the list, and the list may be wider — and logs
+// what filepath.Abs answered for each name. Its first run, on
+// windows-2025-vs2026 (Windows Server 2025, build 10.0.26100, go1.27.0):
+// the resolver rewrote NUL alone, bare and with a trailing space, in
+// either case, and left NUL.txt and every other listed name in every
+// form as a path under the directory; CreateFile made a regular file
+// under CON, nul.txt and com1.txt (the regular package's
+// TestLimitADeviceIsRefusedByItsHandle) and under CONIN$, CONOUT$ and
+// their .txt forms, the console names it understands and the resolver
+// does not rewrite. Older Windows resolves more of the list, and a
+// message may land on any of them, so the list is the union across
+// versions and the handle check at the open (internal/regular) is the
+// safety net for a name the list does not hold.
 package channels
 
 import (
@@ -159,14 +166,15 @@ const WindowsForbidden = "<>\"|?*"
 // device path is a device, whatever the list below says, and the list is
 // only the fast first answer. On every other platform the list is the
 // rule, since a Unix sender must refuse what a Windows receiver could not
-// extract, and the Windows CI job holds the list to what the OS says
-// (TestLimitTheDeviceListAgreesWithWindows). The list, under case
-// folding and ignoring trailing spaces as the resolver does: CON, PRN,
-// AUX, NUL, CONIN$ and CONOUT$, and COM and LPT followed by one digit 0
-// to 9 or by one of the superscript digits U+00B9, U+00B2 and U+00B3.
-// Microsoft's pages have not agreed on the set: older ones list COM1 to
-// COM9 and LPT1 to LPT9, the current one COM0 to COM9 with the three
-// superscripts, so this is the union, since a name nobody can use on some
+// extract, and the Windows CI job holds the list to be no narrower than
+// what its OS says (TestLimitTheDeviceListAgreesWithWindows). The list,
+// under case folding and ignoring trailing spaces as the resolver does:
+// CON, PRN, AUX, NUL, CONIN$ and CONOUT$, and COM and LPT followed by one
+// digit 0 to 9 or by one of the superscript digits U+00B9, U+00B2 and
+// U+00B3. Microsoft's pages have not agreed on the set: older ones list
+// COM1 to COM9 and LPT1 to LPT9, the current one COM0 to COM9 with the
+// three superscripts, and Windows Server 2025 resolves NUL alone under a
+// directory, so this is the union, since a name nobody can use on some
 // Windows is a name nobody needs. COM10 is not a device on any of them.
 // A file name is refused for every receiver when its stem is one, since
 // a sender cannot know where a message lands; a channel name is refused
