@@ -626,7 +626,14 @@ answer and nothing is overwritten. The sender's test runs everywhere; the
 delivery and extraction tests build a manifest past the sender's rule and
 ask the disk whether it folds (`probe` against `Probe`), asserting the
 suffix where it does and two files where it does not, so that a pass on
-Linux says only what it can.
+Linux says only what it can. The loop that tries the suffixes has a
+ceiling, `maxNameTries`, a thousand, after which the directory is
+refused by name with the count rather than tried for ever; it is a bound
+the program chose over a loop, which the limit ledger has no kind for,
+so its test stands without a row: `TestLimitTheNumberedSuffixHasACeiling`
+plants 999 names and sees `name-1000` written, then the thousandth and
+sees the refusal, the thousand files as planted and no temporary, on
+both write paths.
 
 **A count against a quota is one arithmetic in one helper, and the test
 drives every caller through it.** `Put` and `OpenUpload` each compared

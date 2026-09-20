@@ -1126,6 +1126,89 @@ func aStreamExtractsUnderSafeUniqueNames(t *testing.T) {
 	}
 }
 
+// TestLimitTheNumberedSuffixHasACeiling: the loop that makes an
+// attachment's name unique at the write tries the name and then
+// name-2, name-3, … up to maxNameTries, a thousand, and then refuses the
+// directory by name with the count, rather than trying for ever in a
+// directory somebody keeps full. With 999 names standing — the name and
+// name-2 … name-999 — the extract writes name-1000, the last the loop
+// tries; with the thousandth standing too it is refused naming the
+// directory and the count, writes nothing under the name, and leaves no
+// temporary, the thousand files as they were. On both write paths, the
+// link and the copy a filesystem that refuses links gets.
+func TestLimitTheNumberedSuffixHasACeiling(t *testing.T) {
+	onEachWritePath(t, theNumberedSuffixHasACeiling)
+}
+
+func theNumberedSuffixHasACeiling(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("d", 32)
+	m := &store.Stored{Relay: "relay", Inner: &envelope.Inner{
+		ID: id, Time: time.Now().UTC(), From: strings.Repeat("e", 64), To: strings.Repeat("f", 64),
+		Body: message.Body{Type: message.TypeNote, Thread: id, Text: "full", Attachments: []message.Attachment{rawAttachment("report.txt", []byte("the bytes\n"))}},
+	}}
+	if err := s.Save(store.Inbox, m); err != nil {
+		t.Fatal(err)
+	}
+	plant := func(t *testing.T, dir string, upTo int) {
+		t.Helper()
+		for n := 1; n <= upTo; n++ {
+			if err := os.WriteFile(filepath.Join(dir, message.Numbered("report.txt", n)), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// One under the ceiling: the thousandth name is the one written.
+	under := filepath.Join(t.TempDir(), "out")
+	if err := os.MkdirAll(under, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plant(t, under, maxNameTries-1)
+	written, err := extractInto(s, store.Inbox, m, under)
+	if err != nil || len(written) != 1 || written[0] != filepath.Join(under, "report-1000.txt") {
+		t.Fatalf("with %d names standing: wrote %v, %v; want report-1000.txt", maxNameTries-1, written, err)
+	}
+	if data, err := os.ReadFile(written[0]); err != nil || string(data) != "the bytes\n" {
+		t.Fatalf("report-1000.txt holds %q, %v", data, err)
+	}
+	if entries, _ := os.ReadDir(under); len(entries) != maxNameTries {
+		t.Errorf("the directory holds %d entries after the write, want %d", len(entries), maxNameTries)
+	}
+	// At the ceiling: refused by name, and nothing written or left.
+	at := filepath.Join(t.TempDir(), "out")
+	if err := os.MkdirAll(at, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plant(t, at, maxNameTries)
+	written, err = extractInto(s, store.Inbox, m, at)
+	want := fmt.Sprintf("%s holds %d files named like %q already; choose another --out directory", at, maxNameTries, "report.txt")
+	if err == nil || err.Error() != want {
+		t.Fatalf("with %d names standing: %v\nwant %s", maxNameTries, err, want)
+	}
+	if len(written) != 0 {
+		t.Errorf("the refusal reported %v written", written)
+	}
+	entries, err := os.ReadDir(at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != maxNameTries {
+		t.Errorf("the directory holds %d entries after the refusal, want the %d planted and no temporary", len(entries), maxNameTries)
+	}
+	for _, e := range entries {
+		info, err := e.Info()
+		if err != nil {
+			t.Fatalf("%s: %v", e.Name(), err)
+		}
+		if info.Size() != 0 || strings.HasPrefix(e.Name(), tempPrefix) {
+			t.Errorf("%s: size %d; want the empty file planted", e.Name(), info.Size())
+		}
+	}
+}
+
 // TestLimitASenderDoesNotShipANameTheReceiverWouldChange: auu send
 // --attach of a file whose name a receiver would write differently is
 // refused as a usage error naming the step, inline and as a stream, and

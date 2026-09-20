@@ -299,7 +299,9 @@ prefixed with `_`, cut to 200 bytes, and `attachment` when nothing is
 left — and made unique at the write: a name that already stands there,
 whatever it is, is left alone and the file is written beside it as
 `x-2.txt`, `x-3.txt`, so that what your disk folds (case, on macOS and
-Windows) is settled by the disk's own answer and nothing is overwritten.
+Windows) is settled by the disk's own answer and nothing is overwritten;
+a directory that already holds a thousand names like it is refused with
+the count, and `--out` somewhere else is the answer.
 The line that reports each file says the sender's name where it differs
 from what was written. The file is made and the spooled bytes are read by
 their handle, not their name: an attachment that turns out not to be a
