@@ -566,7 +566,10 @@ owner — and a column alone moved a century ahead under a row that still
 verified barred every push with no `broken` state to name a repair at
 all. The card's second reader found the first in the card's copy of the
 code, which the allow list turned out to share, and the allow list's
-reader found the second in both.
+reader found the second in both; the directory's push had never verified
+the stored row at all and was made the same shape after. The rule is one
+shape in three functions, `SetDirectory`, `SetAllowlist` and `SetCard`,
+each with the same five rows in the test of its push.
 
 **Do not store what the relay does not need.** There is deliberately no
 column recording which token created which mailbox. That link appears once in

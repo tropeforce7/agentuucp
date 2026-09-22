@@ -272,9 +272,12 @@ CREATE INDEX IF NOT EXISTS certs_fp ON certs(fp, not_after);`
 
 	// directories is one row per mailbox whose owner has pushed a channel
 	// directory: the signed document and its signature, served back
-	// verbatim, and its issue time for refusing an older one. A mailbox
-	// with no row has the one channel, default. It is a table of its own
-	// rather than three columns on mailboxes, as allowlists is.
+	// verbatim, and its issue time as the document says it, a copy the
+	// watch compares and a push is never held to (a push is held to the
+	// time inside the verified document, as the allow list's and the
+	// card's are). A mailbox with no row has the one channel, default. It
+	// is a table of its own rather than three columns on mailboxes, as
+	// allowlists is.
 	directoriesTable = `CREATE TABLE IF NOT EXISTS directories (
 	fp     TEXT PRIMARY KEY REFERENCES mailboxes(fp) ON DELETE CASCADE,
 	doc    BLOB NOT NULL,

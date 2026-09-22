@@ -42,6 +42,9 @@ func signedDirectory(t *testing.T, owner *identity.Identity, issued time.Time, c
 	return d, doc, sig
 }
 
+// The store's own rules for a push: ordered by issue between two rows that
+// verify, the same bytes a no-op, a row that does not verify replaced
+// whatever its time, and the column never read to decide.
 func TestSetDirectoryRefusesAnOlderIssue(t *testing.T) {
 	s, _, bob := directoryStore(t)
 	fp := bob.Fingerprint()
@@ -96,6 +99,57 @@ func TestSetDirectoryRefusesAnOlderIssue(t *testing.T) {
 	if exists, _, _ := s.ChannelState(fp, "bugs"); exists {
 		t.Fatal("the newer directory did not replace the channel rows")
 	}
+
+	// A row that no longer verifies, its issued moved an hour ahead by
+	// the same editor: the signature blanked, one bit of it flipped, then
+	// the document edited under the intact signature. Each is no bar to a
+	// push issued now, since the rule holds only between two directories
+	// the owner signed; against the rule as it was, the owner was refused
+	// for a time an editor chose. Then the column alone moved a century
+	// ahead under a row that verifies, and a column that is not a time:
+	// the push is held to the time inside the document, so each is taken.
+	ahead := time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
+	repair := func(what string) {
+		t.Helper()
+		d, doc, sig := signedDirectory(t, bob, time.Now(), channels.Channel{Name: "default"}, channels.Channel{Name: "repaired"})
+		if stored, err := s.SetDirectory(fp, d, doc, sig); err != nil || !stored {
+			t.Fatalf("a push over %s: stored %v, %v", what, stored, err)
+		}
+		if got, gotSig, _, _ := s.Directory(fp); string(got) != string(doc) || string(gotSig) != string(sig) {
+			t.Fatalf("after the push over %s the stored pair is not the pushed one", what)
+		}
+		if exists, _, _ := s.ChannelState(fp, "repaired"); !exists {
+			t.Fatalf("after the push over %s the channel rows are not the pushed ones", what)
+		}
+	}
+	if _, err := s.db.Exec(`UPDATE directories SET sig = X'', issued = ? WHERE fp = ?`, ahead, fp); err != nil {
+		t.Fatal(err)
+	}
+	repair("a blanked signature issued ahead")
+	_, currentSig, _, _ := s.Directory(fp)
+	flipped := append([]byte{}, currentSig...)
+	flipped[len(flipped)/2] ^= 0x01
+	if _, err := s.db.Exec(`UPDATE directories SET sig = ?, issued = ? WHERE fp = ?`, flipped, ahead, fp); err != nil {
+		t.Fatal(err)
+	}
+	repair("a flipped signature issued ahead")
+	current, _, _, _ := s.Directory(fp)
+	edited := strings.Replace(string(current), `"name":"repaired"`, `"name":"replaced"`, 1)
+	if edited == string(current) {
+		t.Fatal("the document has no channel name to edit")
+	}
+	if _, err := s.db.Exec(`UPDATE directories SET doc = ?, issued = ? WHERE fp = ?`, []byte(edited), ahead, fp); err != nil {
+		t.Fatal(err)
+	}
+	repair("an edited document issued ahead")
+	if _, err := s.db.Exec(`UPDATE directories SET issued = '2126-01-01T00:00:00Z' WHERE fp = ?`, fp); err != nil {
+		t.Fatal(err)
+	}
+	repair("a verified row whose column alone was moved a century ahead")
+	if _, err := s.db.Exec(`UPDATE directories SET issued = 'yesterday' WHERE fp = ?`, fp); err != nil {
+		t.Fatal(err)
+	}
+	repair("a verified row whose column is not a time")
 
 	// A mailbox that is not there.
 	if _, err := s.SetDirectory(strings.Repeat("0", 64), first, firstDoc, firstSig); !errors.Is(err, ErrNoMailbox) {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/channels"
+	"github.com/tropeforce7/agentuucp/internal/identity"
 )
 
 // A mailbox's channel directory. The signed document is kept as it came so
@@ -42,9 +43,20 @@ func (e *DirectoryOlderError) Unwrap() error { return ErrDirectoryOlder }
 // different bytes, is ErrDirectoryOlder. The same bytes at the same instant
 // are the directory the relay already holds, and pushing them again is not
 // an error: a machine catching a relay up after an outage must be able to
-// push what it has without first asking what the relay has. It reports
-// whether anything was written; that push is the one success that writes
-// nothing, so a caller can tell a change from a repeat.
+// push what it has without first asking what the relay has. The rule
+// holds only between two directories that verify: a stored row that does
+// not — its signature blanked, a bit of it flipped, its document edited,
+// by somebody with the database open — is replaced whatever its issued
+// says, since a row that does not verify says nothing about when the
+// owner issued it, and an editor who also moved its issued forward must
+// not lock the owner out of pushing. The stored row is verified here,
+// inside the transaction, against the mailbox's bundle, and the time the
+// push is held to is the one inside the verified document, never the
+// issued column, which the signature does not cover; the first cut
+// verified nothing here and held the column, as the allow list's and the
+// card's pushes did before them. It reports whether anything was written;
+// the repeated push is the one success that writes nothing, so a caller
+// can tell a change from a repeat.
 func (s *Store) SetDirectory(fp string, d *channels.Directory, doc, sig []byte) (stored bool, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -52,26 +64,19 @@ func (s *Store) SetDirectory(fp string, d *channels.Directory, doc, sig []byte) 
 	}
 	defer tx.Rollback()
 
-	var one int
-	err = tx.QueryRow(`SELECT 1 FROM mailboxes WHERE fp = ?`, fp).Scan(&one)
+	var bundle, storedDoc, storedSig []byte
+	err = tx.QueryRow(`SELECT m.bundle, r.doc, r.sig FROM mailboxes m
+		LEFT JOIN directories r ON r.fp = m.fp WHERE m.fp = ?`, fp).Scan(&bundle, &storedDoc, &storedSig)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrNoMailbox
 	}
 	if err != nil {
 		return false, err
 	}
-
-	var storedDoc []byte
-	var storedIssued string
-	err = tx.QueryRow(`SELECT doc, issued FROM directories WHERE fp = ?`, fp).Scan(&storedDoc, &storedIssued)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return false, err
-	}
-	if err == nil {
-		held, err := time.Parse(time.RFC3339Nano, storedIssued)
-		if err != nil {
-			return false, fmt.Errorf("relay: directory for %s has issued %q: %w", fp, storedIssued, err)
-		}
+	// A mailbox with no row joins nil bytes, which directoryDecision
+	// reads as not verifying: no rule, and the first push is taken.
+	if stored, ok := directoryDecision(bundle, storedDoc, storedSig); ok {
+		held := stored.Issued
 		if !d.Issued.After(held) {
 			if d.Issued.Equal(held) && bytes.Equal(doc, storedDoc) {
 				return false, nil
@@ -106,6 +111,30 @@ func (s *Store) SetDirectory(fp string, d *channels.Directory, doc, sig []byte) 
 		return false, err
 	}
 	return true, nil
+}
+
+// directoryDecision reads a stored directory as the push is held to it:
+// verified against the mailbox's registered key, and nothing otherwise. A
+// row with no signature is nothing before anything is parsed: nothing
+// writes one, so it is a signed row somebody blanked the signature of.
+// It is the allow list's allowDecision and the card's cardDecision for
+// the document that has no state word of its own: a directory that does
+// not verify is not served as broken, since the reader verifies it with
+// the key they hold for the owner and refuses it there, and a post is
+// routed by the channel rows the push unpacked, which this does not read.
+func directoryDecision(bundle, doc, sig []byte) (*channels.Directory, bool) {
+	if len(sig) == 0 {
+		return nil, false
+	}
+	pub, err := identity.ParseBundle(bundle)
+	if err != nil {
+		return nil, false
+	}
+	d, err := channels.Verify(pub, doc, sig)
+	if err != nil {
+		return nil, false
+	}
+	return d, true
 }
 
 // Directory returns the signed document and its signature as they were

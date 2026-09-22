@@ -541,10 +541,14 @@ sub-mailboxes an owner defines. The owner pushes it with `PUT
 (`document`, `signature`). The relay verifies the signature against the
 registered key before storing either. It answers `401` for one that does
 not verify, `400` with the rule broken, and `409` for a directory issued no
-later than the one it holds, naming when that was issued. The relay never
-bounds `issued` against its own clock. So an owner who signs one far in the
-future locks their own other machines out of pushing until they push a
-later one, or deregister. Only the identity key can do that, to itself.
+later than the one it holds, naming when that was issued — a stored row
+that no longer verifies being no bar, whatever issue time an editor left
+on it, since the relay verifies the stored row before its time can refuse
+a push and holds the push to the time inside the verified document. The
+relay never bounds `issued` against its own clock. So an owner who signs
+one far in the future locks their own other machines out of pushing until
+they push a later one, or deregister. Only the identity key can do that,
+to itself.
 Anyone the allow list admits fetches it with `GET
 /v1/mailbox/{fp}/channels` and gets the same two fields back verbatim, to
 verify against the key they hold for the owner. A sender the allow list

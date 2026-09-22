@@ -168,6 +168,25 @@ func TestOnlyTheOwnerPushesADirectory(t *testing.T) {
 	if doc, _, _, _ := h.store.Directory(bob.Fingerprint()); string(doc) != string(second.Document) {
 		t.Fatal("the newer directory was not stored")
 	}
+	// The stored row's signature edited through the store's own handle,
+	// one bit flipped, and its issued moved a day ahead by the same
+	// editor: the owner's next push through the route is taken all the
+	// same, since the row does not verify and a row that does not verify
+	// says nothing about when the owner issued it.
+	_, sig, _, _ := h.store.Directory(bob.Fingerprint())
+	changed := append([]byte{}, sig...)
+	changed[len(changed)/2] ^= 0x01
+	ahead := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := h.store.db.Exec(`UPDATE directories SET sig = ?, issued = ? WHERE fp = ?`, changed, ahead, bob.Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	status, body, third := h.pushDirectory(bob, bob, at.Add(2*time.Minute), dflt, bugs)
+	if status != http.StatusNoContent {
+		t.Fatalf("the push over an edited row issued ahead: %d %s", status, body)
+	}
+	if doc, _, _, _ := h.store.Directory(bob.Fingerprint()); string(doc) != string(third.Document) {
+		t.Fatal("the push over an edited row did not replace it")
+	}
 }
 
 // Who may read a directory is who may post: the mailbox must exist and not
