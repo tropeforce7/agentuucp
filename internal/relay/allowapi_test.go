@@ -462,11 +462,15 @@ func TestAnEditedAllowlistRefusesRatherThanAdmits(t *testing.T) {
 		}
 	})
 
-	t.Run("one byte of the signature", func(t *testing.T) {
+	t.Run("one byte of the signature, issued moved ahead", func(t *testing.T) {
+		// The editor moves issued a day ahead too: the push is taken all
+		// the same, since the row does not verify, and the owner is not
+		// answered 409 for a time an editor chose.
 		_, sig, _, _, _ := h.store.Allowlist(fp)
 		changed := append([]byte{}, sig...)
 		changed[len(changed)/2] ^= 0x01
-		if _, err := h.store.db.Exec(`UPDATE allowlists SET sig = ? WHERE fp = ?`, changed, fp); err != nil {
+		ahead := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339Nano)
+		if _, err := h.store.db.Exec(`UPDATE allowlists SET sig = ?, issued = ? WHERE fp = ?`, changed, ahead, fp); err != nil {
 			t.Fatal(err)
 		}
 		h.clock.advance(2 * time.Minute)

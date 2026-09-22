@@ -138,7 +138,9 @@ const (
 	// allowlists is one row per mailbox whose owner has pushed an allow
 	// list: the signed document and its signature, verified against the
 	// mailbox's bundle every time the list is enforced and served back to
-	// the owner verbatim, its issue time for refusing an older one, and
+	// the owner verbatim, its issue time as the document says it, a copy
+	// for the administrator's eye that decides nothing (a push is held to
+	// the time inside the verified document, never this column), and
 	// how many senders it names, which is for the administrator's listing
 	// and decides nothing. A row whose sig is empty — a signed row whose
 	// signature was blanked, since nothing writes one without — is
@@ -155,7 +157,8 @@ const (
 	// signed document and its signature, verified against the mailbox's
 	// bundle every time a knock is let past the allow list and served
 	// verbatim to the owner and, when listed, to every registered
-	// identity; its issue time for refusing an older one; and the two
+	// identity; its issue time as the document says it, a copy that
+	// decides nothing, as the allow list's is; and the two
 	// words the relay parsed from it at the push, listed for the listing's
 	// query and knocks for the administrator's line, neither of which
 	// decides anything: what decides is the document, verified. The name

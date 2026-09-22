@@ -249,7 +249,9 @@ it and again on every post, with no cache. A row edited in the relay's
 database therefore refuses every sender but the owner rather than admitting one. A
 sender is told what a refused sender is always told. Your own listing says
 `broken`, `auu inbox` says so, and your next `auu allow push` is the whole
-repair. A row with no signature is broken too. A signed row with its
+repair, whatever issue time an editor left on the row, since the
+newer-issued rule holds only between two lists you signed. A row with no
+signature is broken too. A signed row with its
 signature removed refuses every sender but the owner at once. There is no state in
 which the relay honours a list it cannot verify. So a restricted mailbox
 whose list does not verify is closed until its owner pushes, and `auu
@@ -558,7 +560,7 @@ under its own domain.
 The relay verifies the pair against the registered key before storing
 either. It answers `401` for a signature that does not verify, `400` with
 the rule broken, and `409` for a list issued no later than the one it
-holds. A body with no document is answered `400 this relay takes a signed
+holds, a broken row being no bar. A body with no document is answered `400 this relay takes a signed
 allow list; the request carries no document`, which stores nothing. The
 owner reads it back with `GET /v1/mailbox/{fp}/allow`. That answer is the
 pair verbatim and `state`, one of `signed`, `none` and `broken`. `none`

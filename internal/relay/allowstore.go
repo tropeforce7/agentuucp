@@ -41,12 +41,23 @@ func (e *AllowlistOlderError) Unwrap() error { return ErrAllowlistOlder }
 // different bytes, is ErrAllowlistOlder. The same bytes at the same instant
 // are the list the relay already holds, and pushing them again is not an
 // error: a machine catching a relay up after an outage must be able to push
-// what it has without first asking what the relay has. A row with no
-// signature — one somebody blanked, which the relay reads as broken — is
-// replaced whatever its issued says, since a row that does not verify
-// says nothing about when the owner issued it. It reports whether
-// anything was written; the repeated push is the one success that writes
-// nothing.
+// what it has without first asking what the relay has. The rule holds
+// only between two lists that verify: a row that does not — its
+// signature blanked, a bit of it flipped, its document edited, by
+// somebody with the database open — is replaced whatever its issued
+// says, since a row that does not verify says nothing about when the
+// owner issued it, and an editor who also moved its issued forward must
+// not lock the owner out of the one repair. The stored row is verified
+// here, inside the transaction, against the mailbox's bundle, and the
+// time it is held to is the one inside the verified document, never the
+// issued column, which the signature does not cover and which is written
+// for the administrator's eye alone: a column set a century ahead under
+// a row that still verifies would otherwise answer every push 409 with
+// no broken state to name the repair. The first cut verified nothing
+// here, read a blank signature alone as no bar and held the column, so
+// a flipped signature issued ahead, and a column alone moved ahead,
+// each answered the owner's repair 409. It reports whether anything was
+// written; the repeated push is the one success that writes nothing.
 func (s *Store) SetAllowlist(fp string, d *allowlist.Document, doc, sig []byte) (stored bool, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -54,26 +65,19 @@ func (s *Store) SetAllowlist(fp string, d *allowlist.Document, doc, sig []byte) 
 	}
 	defer tx.Rollback()
 
-	var one int
-	err = tx.QueryRow(`SELECT 1 FROM mailboxes WHERE fp = ?`, fp).Scan(&one)
+	var bundle, storedDoc, storedSig []byte
+	err = tx.QueryRow(`SELECT m.bundle, a.doc, a.sig FROM mailboxes m
+		LEFT JOIN allowlists a ON a.fp = m.fp WHERE m.fp = ?`, fp).Scan(&bundle, &storedDoc, &storedSig)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrNoMailbox
 	}
 	if err != nil {
 		return false, err
 	}
-
-	var storedDoc, storedSig []byte
-	var storedIssued string
-	err = tx.QueryRow(`SELECT doc, sig, issued FROM allowlists WHERE fp = ?`, fp).Scan(&storedDoc, &storedSig, &storedIssued)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return false, err
-	}
-	if err == nil && len(storedSig) > 0 {
-		held, err := time.Parse(time.RFC3339Nano, storedIssued)
-		if err != nil {
-			return false, fmt.Errorf("relay: allow list for %s has issued %q: %w", fp, storedIssued, err)
-		}
+	// A mailbox with no row joins nil bytes, which allowDecision reads as
+	// broken: no rule, and the first push is taken.
+	if state, stored := allowDecision(bundle, storedDoc, storedSig); state == relayapi.AllowSigned {
+		held := stored.Issued
 		if !d.Issued.After(held) {
 			if d.Issued.Equal(held) && bytes.Equal(doc, storedDoc) {
 				return false, nil

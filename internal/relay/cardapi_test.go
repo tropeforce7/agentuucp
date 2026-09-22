@@ -179,6 +179,28 @@ func TestSetCardOrdersByIssueAndReplacesAnUnsignedRow(t *testing.T) {
 	if got, _, state, _, _ := s.Card(fp); state != relayapi.CardSigned || string(got) != string(repairDoc) {
 		t.Fatalf("after the repair: state %q, the bytes %v", state, string(got) == string(repairDoc))
 	}
+	// The issued column alone moved a century ahead, under a row that
+	// still verifies: the column is not what the signature covers, and
+	// the push is held to the time inside the document, so it is taken;
+	// a column that is not a time at all is no failure either, since the
+	// column is never read to decide.
+	if _, err := s.db.Exec(`UPDATE cards SET issued = '2126-01-01T00:00:00Z' WHERE fp = ?`, fp); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, state, _, _ := s.Card(fp); state != relayapi.CardSigned {
+		t.Fatalf("state %q with the column alone moved, want signed", state)
+	}
+	repair, repairDoc, repairSig = signedCard(t, alice, time.Now(), true, true)
+	if stored, err := s.SetCard(fp, repair, repairDoc, repairSig); err != nil || !stored {
+		t.Fatalf("a push over a verified row whose column alone was moved ahead: stored %v, %v", stored, err)
+	}
+	if _, err := s.db.Exec(`UPDATE cards SET issued = 'yesterday' WHERE fp = ?`, fp); err != nil {
+		t.Fatal(err)
+	}
+	repair, repairDoc, repairSig = signedCard(t, alice, time.Now(), true, true)
+	if stored, err := s.SetCard(fp, repair, repairDoc, repairSig); err != nil || !stored {
+		t.Fatalf("a push over a verified row whose column is not a time: stored %v, %v", stored, err)
+	}
 	// No such mailbox.
 	if _, err := s.SetCard(strings.Repeat("0", 64), d, doc, sig); err != ErrNoMailbox {
 		t.Fatalf("a push for no mailbox: %v", err)

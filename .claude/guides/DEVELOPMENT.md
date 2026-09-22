@@ -546,13 +546,27 @@ before exercised. A test plants each version from 0 to 7 and asserts the
 sentence and that the file was left as found.
 
 **A row that does not verify says nothing about when the owner issued
-it.** A signed document replaces a row with no signature — one somebody
-blanked, since nothing writes one without — whatever that row's `issued`
-says, and the newer-issued rule holds only between two documents the
-owner signed. This began as the rule for rows the migration from before
-signed lists converted, whose issue time was the migration's clock: had
-the 409 rule applied to them, an owner whose machine clock ran behind
-the relay's could never have pushed over one.
+it.** A signed document replaces a row that does not verify — its
+signature blanked, a bit of it flipped, its document edited, by somebody
+with the database open — whatever that row's `issued` says, and the
+newer-issued rule holds only between two documents the owner signed, so
+the store verifies the stored row inside the transaction before its
+issue time can bar a push, and the time it holds the push to is the one
+inside the verified document, never the `issued` column, which the
+signature does not cover and which is written for the administrator's
+eye alone. This began as the rule for rows the migration
+from before signed lists converted, whose issue time was the migration's
+clock: had the 409 rule applied to them, an owner whose machine clock
+ran behind the relay's could never have pushed over one. The first cut
+read a blank signature alone as no bar and honoured any other row's
+`issued` column, so an editor who flipped a bit and moved the column a
+day ahead had the owner's repair answered `409 … from another machine of
+yours` while `auu inbox` said to push — a loop with no exit for the
+owner — and a column alone moved a century ahead under a row that still
+verified barred every push with no `broken` state to name a repair at
+all. The card's second reader found the first in the card's copy of the
+code, which the allow list turned out to share, and the allow list's
+reader found the second in both.
 
 **Do not store what the relay does not need.** There is deliberately no
 column recording which token created which mailbox. That link appears once in

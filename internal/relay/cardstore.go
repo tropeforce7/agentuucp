@@ -47,9 +47,11 @@ func (e *CardOlderError) Unwrap() error { return ErrCardOlder }
 // issued says, since a row that does not verify says nothing about when
 // the owner issued it, and an editor who also moved its issued forward
 // must not lock the owner out of the one repair. The stored row is
-// verified here, inside the transaction, against the mailbox's bundle.
-// It reports whether anything was written; the repeated push is the one
-// success that writes nothing.
+// verified here, inside the transaction, against the mailbox's bundle,
+// and the time it is held to is the one inside the verified document,
+// never the issued column, which the signature does not cover and is
+// written for the administrator's eye alone. It reports whether anything
+// was written; the repeated push is the one success that writes nothing.
 func (s *Store) SetCard(fp string, d *card.Document, doc, sig []byte) (stored bool, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -58,20 +60,18 @@ func (s *Store) SetCard(fp string, d *card.Document, doc, sig []byte) (stored bo
 	defer tx.Rollback()
 
 	var bundle, storedDoc, storedSig []byte
-	var storedIssued sql.NullString
-	err = tx.QueryRow(`SELECT m.bundle, c.doc, c.sig, c.issued FROM mailboxes m
-		LEFT JOIN cards c ON c.fp = m.fp WHERE m.fp = ?`, fp).Scan(&bundle, &storedDoc, &storedSig, &storedIssued)
+	err = tx.QueryRow(`SELECT m.bundle, c.doc, c.sig FROM mailboxes m
+		LEFT JOIN cards c ON c.fp = m.fp WHERE m.fp = ?`, fp).Scan(&bundle, &storedDoc, &storedSig)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrNoMailbox
 	}
 	if err != nil {
 		return false, err
 	}
-	if state, _ := cardDecision(bundle, storedDoc, storedSig); storedIssued.Valid && state == relayapi.CardSigned {
-		held, err := time.Parse(time.RFC3339Nano, storedIssued.String)
-		if err != nil {
-			return false, fmt.Errorf("relay: card for %s has issued %q: %w", fp, storedIssued.String, err)
-		}
+	// A mailbox with no row joins nil bytes, which cardDecision reads as
+	// broken: no rule, and the first push is taken.
+	if state, stored := cardDecision(bundle, storedDoc, storedSig); state == relayapi.CardSigned {
+		held := stored.Issued
 		if !d.Issued.After(held) {
 			if d.Issued.Equal(held) && bytes.Equal(doc, storedDoc) {
 				return false, nil
