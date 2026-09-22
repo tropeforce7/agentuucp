@@ -278,7 +278,25 @@ a prompt, and a local label only once they accept it.
 **Where trust comes from.** `authorized_peers`, and nowhere else. The relay's
 key lookup endpoint is a convenience for typing accuracy. It is not a trust
 anchor, and `auu lookup` deliberately refuses to add anyone. Confirm
-fingerprints with people directly. The one identity trusted without an entry
+fingerprints with people directly. The card listing is a second way a
+person may choose to fill the file, and it rests on exactly one thing:
+who the relay admits. The relay can prove, and the client checks, that a
+listed bundle hashes to its fingerprint and that its card was signed by
+the key inside it; that is a statement about bytes, and the client
+verifies every entry itself, dropping what fails, so an edit to the
+relay's database removes a name and never adds one. What the relay
+cannot prove is that a fingerprint belongs to a person. On a relay that
+invites by token, a listed identity was let in by an administrator who
+signed the token, and its name is its own claim; on one that registers
+anyone, an identity proves nothing about who holds it. So a peer taken
+from the listing is trusted as far as the relay's admission is, and no
+further, and `auu peers fetch`, the one
+command that adds from it, prints which kind of relay it is before it
+asks, at a terminal, and never without a person. The name on a card is
+the owner's claim, offered at the prompt as the local name and never
+taken as one until the person accepts it. A relay that lies about its
+mode is admitting anybody, which is the case the sentence warns of.
+The one identity trusted without an entry
 is your own. A message you sent yourself is opened, verified and delivered
 like any other, and the relay accepts it for your mailbox whatever your allow
 list says. Sender
@@ -577,14 +595,33 @@ The card travels the same way. `PUT /v1/mailbox/{fp}/card` carries
 `document` and `signature`, the card as the owner signed it under its own
 domain, `ccx-card-v1`, and is read under the general 64 KiB cap. The
 document is `v`, `owner`, `issued`, `name`, `listed` and `knocks`, the
-name under the export line's rule. The relay verifies the pair against
-the registered key before storing either, and answers `401` for a
-signature that does not verify (a body with no document included), `400`
-with the rule broken or naming another owner, and `409` for a card issued
+name under the export line's rule, and at most 512 bytes — a card at
+every maximum is 199 as `auu` writes it — a rule both ends run before
+the signature is checked, since a card padded to the route's cap would
+otherwise take every reader's page of the listing over its hold. The
+relay verifies the pair against the registered key before storing
+either, and answers `401` for a signature that does not verify (a body
+with no document included), `400` with the rule broken, the document
+over its bytes or naming another owner, and `409` for a card issued
 no later than the one it holds, a broken row being no bar. The owner
 reads it back with `GET /v1/mailbox/{fp}/card`, the pair verbatim and
 `state`, one of `signed`, `none` and `broken`, and their own listing
-carries the word as `card`. The health answer, unsigned and served to
+carries the word as `card`. Any registered, unblocked identity — a
+mailbox, not a certificate alone — fetches the cards that say listed
+with `GET /v1/listed?after=FP&limit=N`: a page of `entries`, each the
+`bundle` the relay verified the card against at the push, the
+`document` and the `signature` as stored, in fingerprint order from
+`after` exclusive, at most `limit` of them, `limit` held to 1 to 100 and
+refused outside it, and `listed`, how many such cards the relay holds in
+all. Blocked owners are left out. The relay verifies nothing on the way
+out; the reader verifies every entry — the bundle parses, its
+fingerprint is the document's owner, the signature verifies under its
+key, the document says listed, and the fingerprints rise — and drops
+what fails, refusing an answer whole that breaks the order or carries
+more than it asked for, and a full page from which nothing could be
+paged past. A page is held to 256 KiB, which a hundred cards at their
+cap fit under, and the whole listing to ten thousand entries served,
+verified or not. The health answer, unsigned and served to
 anyone, carries the relay's registration mode as `registration`, one of
 `open`, `token` and `closed`: it is what admission to the relay means,
 and a client prints it wherever it shows a name it found there, since a

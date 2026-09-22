@@ -148,3 +148,46 @@ func cardDecision(bundle, doc, sig []byte) (state string, d *card.Document) {
 	}
 	return relayapi.CardSigned, d
 }
+
+// ListedCards is a page of the cards whose documents said listed, with
+// the bundle each was verified against at its push, in fingerprint order
+// from after exclusive, at most limit entries, and how many such cards the
+// relay holds in all. A blocked owner is left out of both. The relay
+// verifies nothing here: it serves stored bytes, and the reader verifies
+// every entry with the bundle beside it, because the reader is the party
+// that must not trust the relay, and a verification here would only
+// remove what the reader removes anyway. The listed column is the relay's
+// parse at the push and decides only which rows are served; a row whose
+// column was edited to say listed serves a document that says otherwise,
+// which the reader drops.
+func (s *Store) ListedCards(after string, limit int) (entries []relayapi.ListedEntry, total int64, err error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, 0, err
+	}
+	defer tx.Rollback()
+	// The count and the page in one transaction, so that they agree.
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM cards c WHERE c.listed = 1
+		AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.fp = c.fp)`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := tx.Query(`SELECT m.bundle, c.doc, c.sig FROM cards c JOIN mailboxes m ON m.fp = c.fp
+		WHERE c.listed = 1 AND c.fp > ? AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.fp = c.fp)
+		ORDER BY c.fp LIMIT ?`, after, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	entries = []relayapi.ListedEntry{}
+	for rows.Next() {
+		var e relayapi.ListedEntry
+		if err := rows.Scan(&e.Bundle, &e.Document, &e.Signature); err != nil {
+			return nil, 0, err
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return entries, total, tx.Commit()
+}

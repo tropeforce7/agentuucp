@@ -555,12 +555,16 @@ func (s *Server) handleBlob(w http.ResponseWriter, r *http.Request, body []byte,
 	http.ServeContent(&deadlineWriter{ResponseWriter: w, extend: extend}, r, "", info.ModTime(), f)
 }
 
-// uploadAuthed is authed for the upload routes, whose path carries no
-// mailbox fingerprint (who may touch an upload is decided from the row)
-// and whose body, on the PUT, is the payload itself and must not be read
-// into memory. The signature therefore covers an empty body, which is what
-// the client signs for these requests.
-func (s *Server) uploadAuthed(fn func(w http.ResponseWriter, r *http.Request, callerFP string)) http.HandlerFunc {
+// callerAuthed is authed for the routes whose path carries no mailbox
+// fingerprint: the upload routes, where who may touch an upload is
+// decided from the row and the PUT's body is the payload itself and must
+// not be read into memory, and the card listing, which is about no
+// mailbox in particular and has no body. The signature therefore covers
+// an empty body, which is what the client signs for these requests. The
+// caller is still a registered, unblocked identity: a certificate alone,
+// which the key lookup accepts, is not enough here, since "admitted to
+// the relay" means a mailbox.
+func (s *Server) callerAuthed(fn func(w http.ResponseWriter, r *http.Request, callerFP string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Nothing of the body has been read at this point, which is the
 		// point: a caller without a certificate does not get to stream

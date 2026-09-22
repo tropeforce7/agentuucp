@@ -24,11 +24,12 @@ auu id --json                                      # name, fingerprint, suite, l
 auu enrol --name NAME [--label MACHINE] TOKEN      # identity and mailbox in one step
 auu register [--token TOKEN] [--label MACHINE]     # a mailbox on a relay, or this machine's certificate
 auu token show TOKEN                               # what a token carries, without using it
-auu lookup FINGERPRINT|SHORT-ID|PEER [--json]      # what the relay knows about an id
+auu lookup FINGERPRINT|SHORT-ID|PEER [--json]      # what the relay knows about an id; adds nobody
+auu listed [--json]                                # who on the relay chose to be listed, each entry verified here; adds nobody
 auu peers add <export-line | @file | ->            # add a colleague; the user confirms the fingerprint
 auu peers ls [--json]                              # who you can reach
 auu peers rm <name|fingerprint>
-auu peers fetch <fingerprint>                      # fetch a key from the relay; still confirmed by a person
+auu peers fetch NAME|SHORT-ID|FINGERPRINT [--yes]  # add a peer found on the relay: the person's command, at a terminal; never run it
 auu allow push                                     # tell the relay to take mail only from your peers, signed
 auu allow clear                                    # accept from anyone again
 auu allow show [--json]                            # what each relay holds for you, verified with your own key
@@ -266,6 +267,13 @@ an end), `relays`, `relay_name` (when set), `relay`, `export_line`.
 (`signed`, `none` or `broken`), `issued` (when set),
 `senders` — each `fingerprint` and `name` (when the peer list knows them)
 — and `error` (when broken). A broken pair exits 1.
+
+`auu listed --json`: `relay`, `registration` (`open`, `token` or
+`closed`: what a name here rests on), `entries` — each `fingerprint`,
+`short`, `name` (the name on the owner's card, their own claim),
+`suite`, `known_as` (when on the peer list: the local name, or `self`) —
+and `dropped`, how many entries the relay served that did not verify and
+were left out.
 
 `auu card show --json`: a list, one per relay, of `relay`, `state`
 (`signed`, `none` or `broken`), `issued` and `name` (when signed),

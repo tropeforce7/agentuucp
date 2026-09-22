@@ -340,6 +340,51 @@ func TestAVerifiedCardIsTheSignersAlone(t *testing.T) {
 	})
 }
 
+// A document over relayapi.MaxCardBytes is refused by the length before
+// the signature is checked, on Verify and on Parse: a padded document is
+// what a reader must not spend a signature check on, and the refusal
+// names the bytes and the cap. At the cap it is taken.
+func TestACardIsHeldToItsBytesBeforeTheSignature(t *testing.T) {
+	id := owner(t)
+	doc, sig, err := Sign(id, base(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Padded with spaces inside the object, which a decoder ignores and
+	// the signature covers when signed by hand.
+	pad := func(n int) []byte {
+		out := append([]byte{}, doc[:len(doc)-1]...)
+		out = append(out, strings.Repeat(" ", n-len(doc))...)
+		return append(out, '}')
+	}
+	atCap := pad(relayapi.MaxCardBytes)
+	if _, err := Verify(id.Public(), atCap, mustSign(t, id, signingBytes(atCap))); err != nil {
+		t.Fatalf("a document at the cap, %d bytes: %v", len(atCap), err)
+	}
+	over := pad(relayapi.MaxCardBytes + 1)
+	// Signed by nobody, since the length refuses it before the signature
+	// is looked at; the signature is a valid one over other bytes.
+	_, err = Verify(id.Public(), over, sig)
+	if !errors.Is(err, ErrForm) || err.Error() != "card is malformed: the card is 513 bytes; at most 512, so send it compact" {
+		t.Fatalf("a document one over the cap: %v", err)
+	}
+	// And under a good signature all the same.
+	if _, err := Verify(id.Public(), over, mustSign(t, id, signingBytes(over))); !errors.Is(err, ErrForm) {
+		t.Fatalf("a signed document one over the cap: %v", err)
+	}
+	if _, err := Parse(over); !errors.Is(err, ErrForm) {
+		t.Fatalf("Parse of a document one over the cap: %v", err)
+	}
+	if _, err := Parse(atCap); err != nil {
+		t.Fatalf("Parse of a document at the cap: %v", err)
+	}
+	// The order: over the cap and under the wrong key, the length is the
+	// refusal, not the signature.
+	if _, err := Verify(owner(t).Public(), over, sig); !errors.Is(err, ErrForm) {
+		t.Fatalf("over the cap under the wrong key: %v; want the length's refusal", err)
+	}
+}
+
 // Parse is Verify without the signature, for the one document that has
 // none: it is as strict about the form and the rules.
 func TestParseIsStrictWithoutASignature(t *testing.T) {

@@ -1,9 +1,13 @@
 package card
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 // TestLimitCardV: the one integer a card carries is its version, held to
@@ -21,5 +25,23 @@ func TestLimitCardV(t *testing.T) {
 	}
 	if err := base(id).Validate(); err != nil {
 		t.Errorf("v 1: %v", err)
+	}
+}
+
+// TestLimitACardDocumentIsCapped: the document's bytes at the cap taken,
+// one over refused by name, at every edge the reader meets — the empty
+// document, which the signature refuses, and the cap, cap+1 and far past
+// it, which the length refuses first.
+func TestLimitACardDocumentIsCapped(t *testing.T) {
+	id := owner(t)
+	for _, n := range []int{relayapi.MaxCardBytes + 1, relayapi.MaxCardBytes * 2, 1 << 16} {
+		doc := []byte("{" + strings.Repeat(" ", n-2) + "}")
+		_, err := Verify(id.Public(), doc, mustSign(t, id, signingBytes(doc)))
+		if !errors.Is(err, ErrForm) || !strings.Contains(err.Error(), fmt.Sprintf("the card is %d bytes; at most %d", n, relayapi.MaxCardBytes)) {
+			t.Errorf("%d bytes: %v; want the length's refusal", n, err)
+		}
+	}
+	if _, err := Verify(id.Public(), nil, nil); !errors.Is(err, ErrSignature) {
+		t.Errorf("an empty document: %v; want the signature's refusal", err)
 	}
 }

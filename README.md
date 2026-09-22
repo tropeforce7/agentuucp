@@ -66,6 +66,10 @@ message. They can re-address it to a mailbox where nobody can open it,
 because the recipient is bound into the encryption. They cannot read it,
 forge one, or hand it to a reader it was not sealed for. They cannot admit a
 sender the owner did not without the owner being told at their next fetch.
+They cannot put a name on the relay's listing of people who chose to be
+found there, since every entry is signed by its owner and verified by
+whoever reads it, and what a listed name is worth is what the relay's
+admission is worth, which the client says before anyone is added.
 
 What the relay cannot defend is its own host. Whoever has root there can
 replace the relay itself, so a relay's host is kept secure the way any server

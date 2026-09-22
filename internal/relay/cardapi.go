@@ -105,3 +105,30 @@ func (s *Server) handleGetCard(w http.ResponseWriter, r *http.Request, body []by
 	}
 	s.writeJSON(w, http.StatusOK, relayapi.CardResponse{Document: doc, Signature: sig, State: state})
 }
+
+// handleListed is GET /v1/listed?after=FP&limit=N: a page of the cards
+// whose owners chose to be listed, each with its bundle, for any
+// registered and unblocked identity, which the wrapper has settled.
+// after is a fingerprint or absent, refused by name otherwise before it
+// reaches SQL; limit is held to [1, MaxListedLimit], the default the cap,
+// and refused over it rather than served at the cap, since a client
+// sizes what it holds of a page to the cap and would refuse more. The
+// relay verifies nothing here; the reader verifies every entry.
+func (s *Server) handleListed(w http.ResponseWriter, r *http.Request, callerFP string) {
+	after := r.URL.Query().Get("after")
+	if after != "" && !identity.ValidFingerprint(after) {
+		s.fail(w, http.StatusBadRequest, "bad after parameter")
+		return
+	}
+	limit, err := intParam(r, "limit", relayapi.MaxListedLimit)
+	if err != nil || limit < 1 || limit > relayapi.MaxListedLimit {
+		s.fail(w, http.StatusBadRequest, fmt.Sprintf("bad limit parameter: from 1 to %d", relayapi.MaxListedLimit))
+		return
+	}
+	entries, total, err := s.store.ListedCards(after, int(limit))
+	if err != nil {
+		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		return
+	}
+	s.writeJSON(w, http.StatusOK, relayapi.ListedResponse{Entries: entries, Listed: total})
+}

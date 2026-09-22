@@ -151,6 +151,23 @@ func (c *Client) checkHealth(h *relayapi.HealthResponse) error {
 	return nil
 }
 
+// checkListed is a page of the card listing: entries always sent, empty
+// past the end, and never more of them than the page asked for, since a
+// relay that ignored the limit is not one this client sizes its hold
+// to; the count of listed cards in all, a number the relay sends whose
+// zero is a value; each entry's three byte fields are the reader's to
+// verify, not to check for shape.
+func (c *Client) checkListed(page *relayapi.ListedResponse) error {
+	const answer = "the card listing"
+	if page.Entries == nil {
+		return c.malformed(answer, "entries", "present: a page carries its entries, [] past the end")
+	}
+	if len(page.Entries) > relayapi.MaxListedLimit {
+		return c.malformed(answer, "entries", fmt.Sprintf("at most the %d asked for", relayapi.MaxListedLimit))
+	}
+	return c.counts(answer, count{"listed", page.Listed})
+}
+
 // checkCard is the owner's own card as the relay serves it: the state as
 // one of its three words, which the relay always sends.
 func (c *Client) checkCard(r *relayapi.CardResponse) error {

@@ -3,7 +3,11 @@ package relay
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -313,6 +317,36 @@ func TestOnlyTheOwnerPushesACard(t *testing.T) {
 		t.Fatal("a refused card was stored")
 	}
 
+	// A document padded past the card's cap, signed by bob: refused by
+	// the length, before the signature, with the sentence naming the
+	// bytes and the cap; at the cap it is taken. The route's body cap is
+	// 64 KiB, and without this a padded card took every reader's page
+	// over its hold.
+	earlier, _ := json.Marshal(&card.Document{V: 1, Owner: fp, Issued: at.Add(-time.Second), Name: "bob", Listed: true, Knocks: true})
+	pad := func(n int) []byte {
+		out := append([]byte{}, earlier[:len(earlier)-1]...)
+		out = append(out, strings.Repeat(" ", n-len(earlier))...)
+		return append(out, '}')
+	}
+	over := pad(relayapi.MaxCardBytes + 1)
+	status, body = h.do(bob, "PUT", "/v1/mailbox/"+fp+"/card",
+		relayapi.CardRequest{Document: over, Signature: mustSign(t, bob, append([]byte("ccx-card-v1"), over...))}, nil)
+	if status != http.StatusBadRequest || errorText(t, body) != fmt.Sprintf("card is malformed: the card is %d bytes; at most %d, so send it compact", relayapi.MaxCardBytes+1, relayapi.MaxCardBytes) {
+		t.Fatalf("a card one over its cap: %d %s", status, body)
+	}
+	if stored() {
+		t.Fatal("a card over its cap was stored")
+	}
+	atCap := pad(relayapi.MaxCardBytes)
+	status, body = h.do(bob, "PUT", "/v1/mailbox/"+fp+"/card",
+		relayapi.CardRequest{Document: atCap, Signature: mustSign(t, bob, append([]byte("ccx-card-v1"), atCap...))}, nil)
+	if status != http.StatusNoContent {
+		t.Fatalf("a card at its cap: %d %s", status, body)
+	}
+	if got, _, _, _, _ := h.store.Card(fp); string(got) != string(atCap) {
+		t.Fatal("the padded card at the cap was not stored as signed")
+	}
+
 	// The good one, stored verbatim with the parsed columns.
 	status, body, req := h.pushCard(bob, bob, at, true, false)
 	if status != http.StatusNoContent {
@@ -534,5 +568,212 @@ func TestTheHealthAnswerCarriesTheRegistrationMode(t *testing.T) {
 	// The tag: the zero value names the field.
 	if zero, _ := json.Marshal(relayapi.HealthResponse{}); !strings.Contains(string(zero), `"registration":""`) {
 		t.Fatalf("the zero health answer does not name registration: %s", zero)
+	}
+}
+
+// listed fetches one page of the card listing as the caller.
+func (h *harness) listed(caller *identity.Identity, query string) (int, []byte, relayapi.ListedResponse) {
+	h.t.Helper()
+	status, body := h.do(caller, "GET", "/v1/listed"+query, nil, nil)
+	var resp relayapi.ListedResponse
+	if status == http.StatusOK {
+		if err := json.Unmarshal(body, &resp); err != nil {
+			h.t.Fatalf("the listing is not JSON: %s", body)
+		}
+	}
+	return status, body, resp
+}
+
+// The listing: every card that says listed, with its bundle, in
+// fingerprint order, and none that says otherwise or has no card; the
+// count of listed cards in all; after and limit paging through them; a
+// blocked owner left out of the page and the count; the relay serving
+// stored bytes without verifying, so an edited row goes out as stored for
+// the reader to drop.
+func TestTheListingServesEveryListedCardInFingerprintOrder(t *testing.T) {
+	h := newHarness(t, Config{})
+	people := ids(t, "alice", "bob", "carol", "dave", "erin", "frank")
+	for _, id := range people {
+		h.register(id)
+	}
+	// alice, bob and carol listed; dave's card says no; erin has none;
+	// frank listed and then blocked.
+	listed := []*identity.Identity{people[0], people[1], people[2], people[5]}
+	for _, id := range listed {
+		if status, body, _ := h.pushCard(id, id, time.Now(), true, false); status != http.StatusNoContent {
+			t.Fatalf("%s's push: %d %s", id.Name, status, body)
+		}
+	}
+	if status, body, _ := h.pushCard(people[3], people[3], time.Now(), false, true); status != http.StatusNoContent {
+		t.Fatalf("dave's push: %d %s", status, body)
+	}
+	if err := h.store.SetBlock(people[5].Fingerprint(), "gone", people[0].Fingerprint(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	want := listed[:3]
+	sort.Slice(want, func(i, j int) bool { return want[i].Fingerprint() < want[j].Fingerprint() })
+
+	status, body, page := h.listed(people[4], "")
+	if status != http.StatusOK {
+		t.Fatalf("the listing: %d %s", status, body)
+	}
+	if page.Listed != 3 || len(page.Entries) != 3 {
+		t.Fatalf("listed %d, %d entries; want 3 and 3", page.Listed, len(page.Entries))
+	}
+	for i, e := range page.Entries {
+		pub, err := identity.ParseBundle(e.Bundle)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if pub.Fingerprint() != want[i].Fingerprint() {
+			t.Fatalf("entry %d is %s, want %s: not in fingerprint order or not the listed set", i, pub.Short(), want[i].Public().Short())
+		}
+		d, err := card.Verify(pub, e.Document, e.Signature)
+		if err != nil || !d.Listed || d.Name != want[i].Name {
+			t.Fatalf("entry %d does not verify as its owner's listed card: %v", i, err)
+		}
+	}
+	// The tags: entries and listed are always present, entries [] past
+	// the end.
+	if !strings.Contains(string(body), `"listed":3`) || !strings.Contains(string(body), `"entries":[`) {
+		t.Fatalf("the answer lacks a field: %s", body)
+	}
+	status, body, page = h.listed(people[4], "?after="+want[2].Fingerprint())
+	if status != http.StatusOK || len(page.Entries) != 0 || page.Listed != 3 || !strings.Contains(string(body), `"entries":[]`) {
+		t.Fatalf("the page past the end: %d %s", status, body)
+	}
+	if zero, _ := json.Marshal(relayapi.ListedResponse{}); !strings.Contains(string(zero), `"entries":null`) || !strings.Contains(string(zero), `"listed":0`) {
+		t.Fatalf("the zero answer does not name both fields: %s", zero)
+	}
+
+	// Paging: one at a time from each fingerprint, and the count the same
+	// on every page.
+	after := ""
+	var got []string
+	for {
+		status, body, page := h.listed(people[4], "?limit=1&after="+after)
+		if status != http.StatusOK {
+			t.Fatalf("a page: %d %s", status, body)
+		}
+		if page.Listed != 3 {
+			t.Fatalf("the count on a page is %d, want 3", page.Listed)
+		}
+		if len(page.Entries) == 0 {
+			break
+		}
+		if len(page.Entries) != 1 {
+			t.Fatalf("limit=1 gave %d entries", len(page.Entries))
+		}
+		pub, _ := identity.ParseBundle(page.Entries[0].Bundle)
+		got = append(got, pub.Fingerprint())
+		after = pub.Fingerprint()
+	}
+	if len(got) != 3 || got[0] != want[0].Fingerprint() || got[2] != want[2].Fingerprint() {
+		t.Fatalf("paging one at a time gave %v", got)
+	}
+
+	// The blocked owner is left out; unblocked, in again, and the count
+	// follows.
+	if _, err := h.store.RemoveBlock(people[5].Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, page := h.listed(people[4], ""); page.Listed != 4 || len(page.Entries) != 4 {
+		t.Fatalf("after the unblock: listed %d, %d entries; want 4 and 4", page.Listed, len(page.Entries))
+	}
+
+	// Served as stored: a row edited to say listed on a card that says
+	// no goes out, and the reader is what drops it; and a signature
+	// blanked is served blank. The relay verifies nothing here.
+	if _, err := h.store.db.Exec(`UPDATE cards SET listed = 1 WHERE fp = ?`, people[3].Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.store.db.Exec(`UPDATE cards SET sig = X'' WHERE fp = ?`, people[0].Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	_, _, page = h.listed(people[4], "")
+	if page.Listed != 5 || len(page.Entries) != 5 {
+		t.Fatalf("with two edited rows: listed %d, %d entries; want 5 and 5, the relay serving as stored", page.Listed, len(page.Entries))
+	}
+	blank, unlisted := 0, 0
+	for _, e := range page.Entries {
+		if len(e.Signature) == 0 {
+			blank++
+		}
+		pub, _ := identity.ParseBundle(e.Bundle)
+		if d, err := card.Verify(pub, e.Document, e.Signature); err == nil && !d.Listed {
+			unlisted++
+		}
+	}
+	if blank != 1 || unlisted != 1 {
+		t.Fatalf("the edited rows were not served as stored: %d blank, %d saying no", blank, unlisted)
+	}
+}
+
+// The listing is for a registered, unblocked identity: a certificate
+// alone, which the key lookup takes, is not enough, and a blocked
+// caller is refused before the listing is read.
+func TestTheListingIsForARegisteredUnblockedIdentity(t *testing.T) {
+	h := newHarness(t, Config{})
+	people := ids(t, "alice", "stranger", "blocked")
+	alice, stranger, blocked := people[0], people[1], people[2]
+	h.register(alice)
+	h.register(blocked)
+	if status, body, _ := h.pushCard(alice, alice, time.Now(), true, false); status != http.StatusNoContent {
+		t.Fatalf("alice's push: %d %s", status, body)
+	}
+	// An identity no mailbox has, signing a well-formed request: 401, the
+	// one word every authentication failure gets.
+	status, body, _ := h.listed(stranger, "")
+	if status != http.StatusUnauthorized || errorText(t, body) != "unauthorized" {
+		t.Fatalf("a stranger with no mailbox: %d %s", status, body)
+	}
+	// No signature at all.
+	status, body, _ = h.listed(nil, "")
+	if status != http.StatusUnauthorized {
+		t.Fatalf("no signature: %d %s", status, body)
+	}
+	if err := h.store.SetBlock(blocked.Fingerprint(), "gone", alice.Fingerprint(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	status, body, _ = h.listed(blocked, "")
+	if status != http.StatusForbidden || errorText(t, body) != msgBlocked {
+		t.Fatalf("a blocked caller: %d %s", status, body)
+	}
+	// And a registered one is answered.
+	if status, body, page := h.listed(alice, ""); status != http.StatusOK || len(page.Entries) != 1 {
+		t.Fatalf("the owner's own listing: %d %s", status, body)
+	}
+}
+
+// TestLimitTheListingParameters: after is a fingerprint or absent, refused
+// by name before it reaches SQL; limit is held to [1, MaxListedLimit] and
+// refused by name outside it rather than served at the cap, since a
+// client sizes what it holds of a page to the cap and would refuse more —
+// 0, 101, -1, the type's extremes, and the text forms that bite.
+func TestLimitTheListingParameters(t *testing.T) {
+	h := newHarness(t, Config{})
+	alice := ids(t, "alice")[0]
+	h.register(alice)
+	for _, tc := range []struct{ param, value string }{
+		{"after", "ab"}, {"after", strings.Repeat("a", 63)}, {"after", strings.Repeat("a", 65)},
+		{"after", strings.Repeat("A", 64)}, {"after", "%20" + strings.Repeat("a", 63)}, {"after", "../x"},
+		{"limit", "0"}, {"limit", strconv.Itoa(relayapi.MaxListedLimit + 1)}, {"limit", "-1"}, {"limit", "-0"},
+		{"limit", strconv.FormatInt(math.MinInt64, 10)}, {"limit", strconv.FormatInt(math.MaxInt64, 10)},
+		{"limit", "9223372036854775808"}, {"limit", "%201"}, {"limit", "١"}, {"limit", "1e2"}, {"limit", "0x10"},
+	} {
+		status, body, _ := h.listed(alice, "?"+tc.param+"="+tc.value)
+		if status != http.StatusBadRequest || !strings.Contains(errorText(t, body), "bad "+tc.param+" parameter") {
+			t.Errorf("%s=%s: %d %s; want 400 naming the parameter", tc.param, tc.value, status, body)
+		}
+	}
+	if status, body, _ := h.listed(alice, "?limit="+strconv.Itoa(relayapi.MaxListedLimit+1)); status != http.StatusBadRequest ||
+		errorText(t, body) != fmt.Sprintf("bad limit parameter: from 1 to %d", relayapi.MaxListedLimit) {
+		t.Errorf("one over the cap: %d %s; want the sentence naming the range", status, body)
+	}
+	for _, query := range []string{"", "?limit=1", "?limit=%2B1", "?limit=" + strconv.Itoa(relayapi.MaxListedLimit),
+		"?after=" + strings.Repeat("a", 64), "?after=" + strings.Repeat("f", 64)} {
+		if status, body, _ := h.listed(alice, query); status != http.StatusOK {
+			t.Errorf("%q: %d %s; want 200", query, status, body)
+		}
 	}
 }

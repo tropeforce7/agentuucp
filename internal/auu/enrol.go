@@ -1,7 +1,6 @@
 package auu
 
 import (
-	"bufio"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -295,22 +294,6 @@ func describeToken(s *store.Store, u *token.Unverified) string {
 		}
 	}
 	return token.Describe(u.Claims, issuerName, verified, time.Now())
-}
-
-// confirm asks a yes-or-no question. Anything but an explicit yes is a no.
-func confirm(question string) bool {
-	fmt.Printf("%s [y/N]: ", question)
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if err != nil && line == "" {
-		fmt.Println()
-		return false
-	}
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "y", "yes":
-		return true
-	default:
-		return false
-	}
 }
 
 // fetchAnchor fetches the relay's trust anchor and checks it against the hash

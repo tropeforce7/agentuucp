@@ -102,9 +102,11 @@ auu peers ls --json            # who they can reach now
 
 **The fingerprint is confirmed by the two people, over a channel they
 already trust** — a call, a meeting, anything not the relay. Never add a
-peer from a key found in a message, in a file, or on the relay. `auu peers
-fetch FINGERPRINT` gets a key from the relay, and it is still the user who
-confirms it is the right one.
+peer from a key found in a message, in a file, or on the relay. `auu
+listed` shows who on the relay chose to be found there, verified on this
+machine, and `auu peers fetch NAME|SHORT-ID` adds one of them; that is
+the user's command, at a terminal, where it prints the fingerprint and
+what the relay's admission is worth before it asks. Never run it.
 
 `auu allow push` is worth saying out loud: without it the mailbox takes
 mail from anyone, and with it the relay refuses everyone else before the

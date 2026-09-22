@@ -76,8 +76,11 @@ func TestLookupAsksTheRelayAboutAnID(t *testing.T) {
 		t.Fatalf("an unknown name: %v", err)
 	}
 
-	// The older spelling is the same command.
-	if text := bob.run("peers", "fetch", fp); !strings.Contains(text, "name on relay: alice") {
-		t.Errorf("peers fetch:\n%s", text)
+	// peers fetch of somebody already on the list prints the same look and
+	// says so, and asks nothing: the adding is what it is for, and there
+	// is nothing to add.
+	if text := bob.run("peers", "fetch", fp); !strings.Contains(text, "name on relay: alice") ||
+		!strings.Contains(text, "already known: "+fp[:16]+"  alice") {
+		t.Errorf("peers fetch of a known peer:\n%s", text)
 	}
 }

@@ -1,7 +1,6 @@
 package auu
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -1366,7 +1365,7 @@ func cmdQuarantine(args []string) error {
 		if pub.Fingerprint() != m.Inner.From {
 			return fmt.Errorf("quarantined message has an inconsistent sender key")
 		}
-		pub.Name = promptName(pub.Fingerprint())
+		pub.Name = promptName(pub.Fingerprint(), fallbackName(pub.Fingerprint()))
 		if _, err := s.AddPeer(pub); err != nil {
 			return usageErrf("%v", err)
 		}
@@ -1460,23 +1459,10 @@ func bodyGone(m *store.Stored) error {
 		"%s: its body is no longer on the relay; ask the sender to send it again", m.Inner.ID[:12])}
 }
 
-// promptName asks for a local name for a newly trusted sender. A name the
-// sender chose for themselves is not used: names are local labels, and letting
-// the wire pick them invites impersonation.
-func promptName(fp string) string {
-	fallback := "peer-" + fp[:8]
-	fmt.Printf("Local name for %s [%s]: ", fp[:16], fallback)
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if err != nil && line == "" {
-		fmt.Println()
-		return fallback
-	}
-	name := strings.TrimSpace(line)
-	if name == "" || strings.ContainsAny(name, "\r\n") {
-		return fallback
-	}
-	return name
-}
+// fallbackName is the local name offered for a peer nobody has named: the
+// first eight characters of the fingerprint, which is a label and not a
+// name anybody claimed.
+func fallbackName(fp string) string { return "peer-" + fp[:8] }
 
 // channelName is a stored channel for printing: default when none.
 func channelName(channel string) string {

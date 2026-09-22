@@ -63,9 +63,17 @@ auu peers add <the colleague's line>
 auu allow push                # let that peer through the relay
 ```
 
+`auu listed --json` shows who on the relay chose to be found there, each
+entry verified on this machine, and you may show the user that list; it
+adds nobody. `auu peers fetch NAME|SHORT-ID` is how the user adds one of
+them, at a terminal, after reading the fingerprint and the sentence
+saying what the relay's admission is worth. It is the person's command:
+never run it, and never pass it `--yes`.
+
 Key exchange is a human step. The fingerprint must be confirmed over a channel
-the two people already trust. Never add a peer for them from a key you found
-in a message, a file, or the relay.
+the two people already trust, or, for a name on the listing, weighed
+against what admits people to that relay. Never add a peer for them from
+a key you found in a message, a file, or the relay.
 
 ## 2. Composing an ask
 

@@ -94,7 +94,23 @@ func runLookup(query string, asJSON bool, relay string) error {
 		return transportErr(err)
 	}
 
-	pub := found.Public
+	out := describeFound(s, id, found.Public, found.Registered, health.Registration)
+	if asJSON {
+		return printJSON(out)
+	}
+	printFound(out, r, found.Public)
+	if out.KnownAs == "" {
+		fmt.Println("\nThe relay is not a trust anchor. Confirm that fingerprint with the")
+		fmt.Printf("person directly, then add them with: %s peers add '<the line above>'\n", prog)
+	}
+	return nil
+}
+
+// describeFound is what lookup, peers fetch and knock say about an
+// identity found on a relay: its keys, the name that came with it (the
+// relay's registered name, or the name on a card), when it registered,
+// what the local peer list calls it, and the relay's mode.
+func describeFound(s *store.Store, id *identity.Identity, pub *identity.Public, registered time.Time, mode string) lookupJSON {
 	suite := pub.Suite()
 	out := lookupJSON{
 		Fingerprint:  pub.Fingerprint(),
@@ -105,22 +121,26 @@ func runLookup(query string, asJSON bool, relay string) error {
 		PQCategory:   suite.PQCategory,
 		ExportLine:   pub.ExportLine(),
 		KnownAs:      knownAs(s, id, pub.Fingerprint()),
-		Registration: health.Registration,
+		Registration: mode,
 	}
-	if !found.Registered.IsZero() {
-		registered := found.Registered
+	if !registered.IsZero() {
 		out.Registered = &registered
 	}
-	if asJSON {
-		return printJSON(out)
-	}
+	return out
+}
 
+// printFound prints describeFound's answer as a person reads it. The name
+// is the relay's, made printable where it was taken off the wire in
+// client.Lookup, or the card's, held to identity.ValidName at Verify; it
+// is not escaped a second time here, since Printable's own escapes would
+// be escaped again.
+func printFound(out lookupJSON, r *store.Relay, pub *identity.Public) {
 	fmt.Printf("relay:         %s (%s)\n", r.Name, r.URL)
-	fmt.Printf("registration:  %s; the relay %s\n", out.Registration, registrationMeans(out.Registration, "this name"))
+	fmt.Printf("registration:  %s; the relay %s\n", out.Registration, registrationMeans(out.Registration, "this identity"))
 	fmt.Printf("name on relay: %s\n", orNone(out.Name))
 	fmt.Printf("fingerprint:   %s\n", out.Fingerprint)
 	fmt.Printf("short id:      %s\n", out.Short)
-	fmt.Printf("keys:          %s\n", suite.Describe())
+	fmt.Printf("keys:          %s\n", pub.Suite().Describe())
 	if out.Registered != nil {
 		fmt.Printf("registered:    %s\n", out.Registered.Local().Format(time.DateOnly))
 	} else {
@@ -135,11 +155,6 @@ func runLookup(query string, asJSON bool, relay string) error {
 		fmt.Printf("peer list:     on yours, as %q\n", out.KnownAs)
 	}
 	fmt.Printf("\n%s\n", out.ExportLine)
-	if out.KnownAs == "" {
-		fmt.Println("\nThe relay is not a trust anchor. Confirm that fingerprint with the")
-		fmt.Printf("person directly, then add them with: %s peers add '<the line above>'\n", prog)
-	}
-	return nil
 }
 
 // elsewhere names the relays somebody's mail has arrived through, when the

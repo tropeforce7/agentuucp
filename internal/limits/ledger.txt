@@ -158,6 +158,7 @@ internal/auu/identity_cmds.go idJSON int PQCategory int = output
 internal/auu/identity_cmds.go idJSON int SuiteID int = output
 internal/auu/identity_cmds.go peerJSON int PQCategory int = output
 internal/auu/identity_cmds.go peerJSON int SuiteID int = output
+internal/auu/identity_cmds.go peersFetch string takenBy[:identity.ShortIDLen] = local: Fingerprint of a resolved peer at suggestedName, 64 hex characters
 internal/auu/identity_cmds.go truncate string s[:i] = local: i is a rune boundary of s from range
 internal/auu/inbox.go attachmentJSON int Size int64 = output
 internal/auu/inbox.go bodyGone string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
@@ -181,13 +182,14 @@ internal/auu/inbox.go printInboxLine string m.Inner.ID[:12] = local: ValidID at 
 internal/auu/inbox.go printMessage string a.SHA256[:16] = local: ValidDigest at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go printMessage string m.Inner.From[:16] = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go printMessage string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
-internal/auu/inbox.go promptName string fp[:16] = local: fp is Fingerprint of the sender key at cmdQuarantine, 64 hex characters
-internal/auu/inbox.go promptName string fp[:8] = local: fp is Fingerprint of the sender key at cmdQuarantine, 64 hex characters
+internal/auu/inbox.go fallbackName string fp[:8] = local: fp is Fingerprint of a parsed bundle at every caller, 64 hex characters
 internal/auu/inbox.go relayFetch int Queued int64 = output
+internal/auu/listed.go listedJSON int Dropped int = output
 internal/auu/lookup.go knownAs string fp[:identity.ShortIDLen] = local: equal to Fingerprint of the resolved key, checked at knownAs
 internal/auu/lookup.go lookupJSON int PQCategory int = output
 internal/auu/lookup.go lookupJSON int SuiteID int = output
 internal/auu/outbox.go pending int Bytes int64 = >= 0 shown by TestLimitPendingRecordIntegers
+internal/auu/prompt.go promptName string fp[:16] = local: fp is Fingerprint of a parsed bundle at every caller, 64 hex characters
 internal/auu/outbox.go pending int ChunkSize int = [4096, 16777216] shown by TestLimitPendingRecordIntegers
 internal/auu/outbox.go pending int Chunks int64 = >= 0 shown by TestLimitPendingRecordIntegers
 internal/auu/relay.go relayAdd string (*anchor)[:16] = local: ValidFingerprint at relayAdd shown by TestLimitAnchorArgsOneShort
@@ -315,6 +317,7 @@ internal/relayapi/relayapi.go LimitsView int RelayMaxBytes int64 = >= 0 shown by
 internal/relayapi/relayapi.go LimitsView int RequestsPerMinute int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int UnauthenticatedPerMinute int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go ListResponse int Queued int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go ListedResponse int Listed int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go MailboxRecord int AllowlistSize int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go MailboxRecord int Channels int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go MailboxRecord int QueuedBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers

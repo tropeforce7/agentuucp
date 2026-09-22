@@ -293,27 +293,30 @@ func relayShow(args []string) error {
 	}
 	fmt.Printf("directory:  %s\n", s.RelayDir(r))
 	if out.Registration != "" {
-		fmt.Printf("registration: %s (%s)\n", out.Registration, registrationMeans(out.Registration, "a name here"))
+		fmt.Printf("registration: %s (%s)\n", out.Registration, registrationMeans(out.Registration, "an identity here"))
 	} else {
 		fmt.Printf("registration: not asked (%s)\n", identity.PrintableText(out.RegistrationError))
 	}
 	return nil
 }
 
-// registrationMeans is what a relay's registration mode says about a
-// name found on it, subject being "this name" or "a name here": the
-// sentence every command that asks a person to trust a listed name
-// prints, since that trust rests on the relay's admission and no further.
-// A relay that lies about its mode is admitting anybody, which is the case
+// registrationMeans is what a relay's registration mode says about an
+// identity found on it, subject being "this identity" or "an identity
+// here": the sentence every command that asks a person to trust a listed
+// name prints, since that trust rests on the relay's admission and no
+// further. It is the identity the admission covers, never the name: a
+// token pins at most a fingerprint, and the name on a card or a
+// registration is the owner's own claim, which the sentence says. A
+// relay that lies about its mode is admitting anybody, which is the case
 // the open sentence warns of.
 func registrationMeans(mode, subject string) string {
 	switch mode {
 	case relayapi.RegistrationToken:
-		return "invites by token: " + subject + " was let in by an administrator"
+		return "invites by token: " + subject + " was let in by an administrator, and its name is its own claim"
 	case relayapi.RegistrationClosed:
-		return "registers nobody now: " + subject + " was let in before it closed, under whichever rule held then"
+		return "registers nobody now: " + subject + " was let in before it closed, under whichever rule held then, and its name is its own claim"
 	default:
-		return "registers anyone: " + subject + " proves nothing about who holds it"
+		return "registers anyone: " + subject + " proves nothing about who holds it, and its name is its own claim"
 	}
 }
 

@@ -70,9 +70,32 @@ line, and says whether they are already on your list. The relay is not a
 trust anchor. That is a matter of checking with the person, and `lookup`
 adds nobody.
 
-Restrict your relay mailbox to the people on your list:
+The other way to find a colleague is the relay's listing of the people
+who chose to be found there:
 
 *Listing 1.2c*
+```
+auu listed                         # everyone on the relay whose card says list me, verified here
+auu peers fetch bob                # add one, at a terminal, after reading the fingerprint
+```
+
+`listed` prints each identity's short id, the name on their card, their
+keys and whether they are on your list already, and says which kind of
+relay it is; every entry was verified on your machine against the key
+beside it, and one the relay served that does not verify is left out and
+counted. `peers fetch` takes a name from that listing, or a short id or
+fingerprint from anywhere, prints what `lookup` prints, and asks you —
+`peers fetch` is yours, at a terminal, and the skills never run it. What
+a name there rests on is who the relay admits: on a relay that invites by
+token, an administrator let that identity in; on one that registers
+anyone, a name proves nothing about who holds it, and the command says
+so before it asks. The name offered as the local name is the owner's
+own claim; accept it or type another. Two people may claim one name,
+and then the command says to use the short id.
+
+Restrict your relay mailbox to the people on your list:
+
+*Listing 1.2d*
 ```
 auu allow push
 ```
@@ -89,7 +112,7 @@ opens the mailbox again.
 The third document you can push is your card, and nothing is pushed until
 you say so:
 
-*Listing 1.2d*
+*Listing 1.2e*
 ```
 auu card push --listed             # let the relay show your name and key to everyone it admits
 auu card push --knocks             # say your mailbox takes knocks

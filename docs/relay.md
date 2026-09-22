@@ -333,7 +333,7 @@ The HTTP layer has bounds of its own, none of them settings:
 | request line and headers | 32 KiB | over it the answer is `431`, written by Go's `net/http` before the relay sees the request (it reads the block through a 4 KiB buffer, so the cut lands at 36 KiB); the largest header the protocol carries, the request signature, is about 200 bytes, and the relay refuses an auth header longer than its five fields can be before it reads one |
 | body of a post | `max_bytes` + 64 KiB | the envelope with its JSON and base64 framing |
 | body of an allow list or a channel directory | 1 MiB | two of the three owner-signed documents, sized to their own maxima on the wire — a full directory of 64 channels at every cap is 565,026 bytes as the client sends it — with the room above for a signer that indents; over it the answer is `413` naming the bytes and saying to send the document compact |
-| body of every other request | 64 KiB | a card, a registration, a certificate request, an admin token, a stream's open; none reaches a tenth of it |
+| body of every other request | 64 KiB | a card (whose document inside is held to 512 bytes besides), a registration, a certificate request, an admin token, a stream's open; none reaches a tenth of it |
 | the stream `PUT` | the size the open declared | its `Content-Length` must equal what is left of that size, judged before a byte is read |
 | timeouts | headers 15 s, body 5 min, response 5 min, idle 2 min | the stream routes move their own deadlines as above |
 

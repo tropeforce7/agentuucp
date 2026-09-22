@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 const (
@@ -145,6 +146,13 @@ func Verify(pub *identity.Public, doc, sig []byte) (*Document, error) {
 	if pub == nil {
 		return nil, ErrOwner
 	}
+	// The length before anything else: it is the one check that costs
+	// nothing and reveals nothing, and a document over the cap is not
+	// verified, so a reader of the listing spends no signature check on
+	// a card padded past what a page can hold.
+	if err := checkLength(doc); err != nil {
+		return nil, err
+	}
 	if !pub.Verify(signingBytes(doc), sig) {
 		return nil, ErrSignature
 	}
@@ -164,6 +172,9 @@ func Verify(pub *identity.Public, doc, sig []byte) (*Document, error) {
 // no signature is broken, not parsed — and it is exported for a reader,
 // such as a test, that wants to see what a document says.
 func Parse(doc []byte) (*Document, error) {
+	if err := checkLength(doc); err != nil {
+		return nil, err
+	}
 	d, err := decode(doc)
 	if err != nil {
 		return nil, err
@@ -172,6 +183,16 @@ func Parse(doc []byte) (*Document, error) {
 		return nil, err
 	}
 	return d, nil
+}
+
+// checkLength holds a document's bytes to relayapi.MaxCardBytes: the
+// wire's rule, run at the push and at every entry of the listing. The
+// sentence says the bytes and the cap, and what to do.
+func checkLength(doc []byte) error {
+	if len(doc) > relayapi.MaxCardBytes {
+		return fmt.Errorf("%w: the card is %d bytes; at most %d, so send it compact", ErrForm, len(doc), relayapi.MaxCardBytes)
+	}
+	return nil
 }
 
 // signingBytes is the exact input to the signature.

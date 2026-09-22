@@ -32,6 +32,7 @@ func TestTheClassifierAgreesWithTheRelay(t *testing.T) {
 		"GET /v1/mailbox/{fp}/{id}/blob": agent.ScopeReceive,
 		"GET /v1/mailbox/{fp}/allow":     agent.ScopeReceive,
 		"GET /v1/mailbox/{fp}/card":      agent.ScopeReceive,
+		"GET /v1/listed":                 agent.ScopeReceive,
 		"GET /v1/mailbox/{fp}/channels":  agent.ScopeReceive,
 		"GET /v1/mailbox/{fp}/certs":     agent.ScopeReceive,
 		"DELETE /v1/mailbox/{fp}/{id}":   agent.ScopeReceive,

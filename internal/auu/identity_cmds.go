@@ -490,17 +490,96 @@ func peersRemove(args []string) error {
 // peersFetch is a convenience only. It deliberately does not add the peer: the
 // relay is not a trust anchor, so a human has to confirm the fingerprint first.
 // peersFetch is 'auu lookup' under its older name.
+// peersFetch adds a peer found on the relay, at a terminal: a name is
+// found through the card listing, a fingerprint or a short id through the
+// key lookup, the bundle held to the fingerprint either way; what lookup
+// prints is printed, with one sentence saying what the relay's admission
+// makes of a name found there; then the person is asked, and asked the
+// local name with the name that came with the identity offered and
+// never taken. Without a terminal and without --yes it refuses, since
+// adding a peer is a person's decision and never an agent's, which the
+// connect skill is told. 'auu lookup' is the same look without the
+// adding.
 func peersFetch(args []string) error {
 	fs := newFlagSet("peers fetch")
 	relay := relayFlag(fs)
+	yes := fs.Bool("yes", false, "add without asking, under the name offered; for a person's own script, never an agent")
 	positional, err := parseArgs(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(positional) != 1 {
-		return usageErrf("usage: %s peers fetch <fingerprint>", prog)
+		return usageErrf("usage: %s peers fetch NAME|SHORT-ID|FINGERPRINT [--relay NAME] [--yes]", prog)
 	}
-	return runLookup(positional[0], false, *relay)
+	query := positional[0]
+	s, id, err := loadIdentity()
+	if err != nil {
+		return err
+	}
+	r, err := selectRelay(s, *relay)
+	if err != nil {
+		return err
+	}
+	c, err := dial(s, id, r)
+	if err != nil {
+		return err
+	}
+	// The relay's mode first: it is what the name rests on, and a health
+	// answer without it is refused before a name is shown.
+	health, err := c.HealthInfo(ctx())
+	if err != nil {
+		return transportErr(fmt.Errorf("%s: %w", r.Name, err))
+	}
+	found, err := findOnRelay(c, r, query)
+	if err != nil {
+		return err
+	}
+	out := describeFound(s, id, found.Public, found.Registered, health.Registration)
+	printFound(out, r, found.Public)
+	switch out.KnownAs {
+	case "self":
+		return usageErrf("that is you")
+	case "":
+	default:
+		fmt.Printf("\nalready known: %s  %s\n", found.Public.Short(), out.KnownAs)
+		return nil
+	}
+	fmt.Printf("\nThe relay is not a trust anchor: the relay %s.\n", registrationMeans(health.Registration, "this identity"))
+	if !*yes {
+		if !stdinIsTerminal() {
+			return usageErrf("adding a peer is a person's decision: run this at a terminal, or pass --yes from your own script")
+		}
+		if !confirm(fmt.Sprintf("Add %s as a peer?", found.Public.Short())) {
+			fmt.Println("nothing added")
+			return nil
+		}
+	}
+	// The local name: the name that came with the identity is offered
+	// when the peer list is not already using it for somebody else, and
+	// a person accepts it or types another; --yes takes the offer. The
+	// collision is checked before the question so that a refusal costs
+	// nothing.
+	name, takenBy := suggestedName(s, found)
+	if takenBy != "" {
+		fmt.Printf("%q is already the name of %s on your peer list, so it is not offered\n", found.Suggested, takenBy[:identity.ShortIDLen])
+	}
+	if !*yes {
+		name = promptName(found.Public.Fingerprint(), name)
+	}
+	pub := found.Public
+	pub.Name = name
+	ok, err := s.AddPeer(pub)
+	if err != nil {
+		return usageErrf("%v", err)
+	}
+	if !ok {
+		fmt.Printf("already known: %s  %s\n", pub.Short(), orNone(pub.Name))
+		return nil
+	}
+	fmt.Printf("added %s  %s\n", pub.Short(), orNone(pub.Name))
+	fmt.Printf("  the relay %s\n", registrationMeans(health.Registration, "this identity"))
+	fmt.Printf("\nIf your relay mailbox is restricted, run '%s allow push' so they can reach you.\n", prog)
+	return nil
 }
 
 func printJSON(v any) error {

@@ -361,7 +361,7 @@ func TestRelayShowAndLookupSayWhatARegistrationModeMeans(t *testing.T) {
 	bob := newUser(t, "bob", relayURL)
 
 	out := alice.run("relay", "show")
-	if !strings.Contains(out, "registration: open (registers anyone: a name here proves nothing about who holds it)\n") {
+	if !strings.Contains(out, "registration: open (registers anyone: an identity here proves nothing about who holds it, and its name is its own claim)\n") {
 		t.Fatalf("relay show on an open relay:\n%s", out)
 	}
 	var shown relayJSON
@@ -377,7 +377,7 @@ func TestRelayShowAndLookupSayWhatARegistrationModeMeans(t *testing.T) {
 	}
 
 	out = alice.run("lookup", bob.exportFingerprint())
-	if !strings.Contains(out, "registration:  open; the relay registers anyone: this name proves nothing about who holds it\n") ||
+	if !strings.Contains(out, "registration:  open; the relay registers anyone: this identity proves nothing about who holds it, and its name is its own claim\n") ||
 		!strings.Contains(out, "name on relay: bob\n") {
 		t.Fatalf("lookup on an open relay:\n%s", out)
 	}
@@ -391,10 +391,10 @@ func TestRelayShowAndLookupSayWhatARegistrationModeMeans(t *testing.T) {
 
 	// The token sentence and the closed sentence, from the function the
 	// commands share.
-	if got := registrationMeans(relayapi.RegistrationToken, "this name"); got != "invites by token: this name was let in by an administrator" {
+	if got := registrationMeans(relayapi.RegistrationToken, "this identity"); got != "invites by token: this identity was let in by an administrator, and its name is its own claim" {
 		t.Fatalf("the token sentence: %q", got)
 	}
-	if got := registrationMeans(relayapi.RegistrationClosed, "this name"); got != "registers nobody now: this name was let in before it closed, under whichever rule held then" {
+	if got := registrationMeans(relayapi.RegistrationClosed, "this identity"); got != "registers nobody now: this identity was let in before it closed, under whichever rule held then, and its name is its own claim" {
 		t.Fatalf("the closed sentence: %q", got)
 	}
 }

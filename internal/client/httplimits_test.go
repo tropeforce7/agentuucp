@@ -137,9 +137,11 @@ func TestLimitResponseHeadersAreCapped(t *testing.T) {
 // as JSON. A listing page follows the relay's max_bytes, so the client
 // sizes what it holds of one to that relay — twice max_bytes plus the
 // framing allowance — learning max_bytes from the health answer once per
-// Client on the first listing; every other answer keeps the fixed hold
-// of twice the default max_bytes, since none scales with max_bytes, shown
-// on the health answer itself.
+// Client on the first listing; a page of the card listing is held to
+// relayapi.MaxListedBytes, sized to its hundred entries and shown by
+// TestLimitAListingPageIsHeldToItsBytes; every other answer keeps the
+// fixed hold of twice the default max_bytes, since none scales with
+// max_bytes, shown on the health answer itself.
 func TestLimitAnAnswerIsHeldToWhatItsRouteHolds(t *testing.T) {
 	const maxBytes = 100 << 10
 	var page atomic.Int64

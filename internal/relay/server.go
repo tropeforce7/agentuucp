@@ -187,8 +187,9 @@ func NewServer(store *Store, cfg Config) *Server {
 
 	s.route("POST /v1/mailbox/{fp}/streams", s.authed(s.handleOpenStream))
 	s.route("GET /v1/mailbox/{fp}/{id}/blob", s.authed(s.handleBlob))
-	s.route("PUT /v1/uploads/{id}", s.uploadAuthed(s.handlePutStream))
-	s.route("DELETE /v1/uploads/{id}", s.uploadAuthed(s.handleAbortStream))
+	s.route("PUT /v1/uploads/{id}", s.callerAuthed(s.handlePutStream))
+	s.route("DELETE /v1/uploads/{id}", s.callerAuthed(s.handleAbortStream))
+	s.route("GET /v1/listed", s.callerAuthed(s.handleListed))
 
 	s.route("GET /v1/admin/status", s.adminAuthed(s.handleAdminStatus))
 	s.route("GET /v1/admin/mailboxes", s.adminAuthed(s.handleAdminMailboxes))

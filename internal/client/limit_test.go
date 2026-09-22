@@ -110,6 +110,8 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 		{"/v1/admin/tokens", tokens(func(tk *relayapi.TokenRecord, n int64) { tk.Uses, tk.UsesLeft = int(n), int(n) }), callTokens},
 		{"/v1/mailbox/" + fp, listing(func(l *relayapi.ListResponse, n int64) { l.Queued = n }), callList},
 		{"/v1/mailbox/" + fp, listing(func(l *relayapi.ListResponse, n int64) { l.Messages[0].Size = n }), callList},
+		{"/v1/listed", func(n int64) any { return relayapi.ListedResponse{Entries: []relayapi.ListedEntry{}, Listed: n} },
+			func(c *Client) error { _, err := c.Listed(context.Background()); return err }},
 		{"/v1/mailbox/" + bob.Fingerprint() + "/streams", func(n int64) any { return relayapi.OpenStreamResponse{Upload: "u", ResumeThreshold: n} },
 			func(c *Client) error {
 				_, err := c.OpenStream(context.Background(), bob.Fingerprint(), "", 5000)

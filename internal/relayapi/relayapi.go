@@ -135,6 +135,30 @@ type (
 		Signature []byte `json:"signature"`
 		State     string `json:"state"`
 	}
+	// ListedEntry is one card the relay lists, with the bundle it was
+	// verified against at the push: the bytes as stored, which the reader
+	// verifies for itself — the bundle's fingerprint is the document's
+	// owner, the signature verifies under the bundle's key, and the
+	// document says listed — since the reader is the party that must not
+	// trust the relay. An entry that fails is dropped and counted; a row
+	// edited in the relay's database removes a name and never adds one.
+	ListedEntry struct {
+		Bundle    []byte `json:"bundle"`
+		Document  []byte `json:"document"`
+		Signature []byte `json:"signature"`
+	}
+	// ListedResponse is a page of the cards whose owners chose to be
+	// listed, in fingerprint order from the after parameter exclusive, at
+	// most limit entries, and how many such cards the relay holds in all,
+	// so a client knows when it has the whole list. Listed is a count
+	// whose zero the relay sends, as a listing's queued is, so absent and
+	// zero are one number; entries is always sent, empty for the page
+	// past the end, and a page with more entries than the limit asked
+	// for is a relay that ignored the parameter, refused by name.
+	ListedResponse struct {
+		Entries []ListedEntry `json:"entries"`
+		Listed  int64         `json:"listed"`
+	}
 	// ChannelsRequest carries an owner's channel directory: the document
 	// bytes exactly as the owner signed them, and the signature over them
 	// under the directory's own domain. The relay verifies the pair against
@@ -438,7 +462,40 @@ const (
 const (
 	DefaultListLimit = 50
 	MaxListLimit     = 200
+	// MaxListedLimit is the most entries one page of the card listing
+	// carries, and the default: a page over it is refused rather than
+	// served at the cap, since a client sizes what it holds of a page to
+	// this number, and a relay asked for more than it would serve is a
+	// client from somewhere else.
+	MaxListedLimit = 100
 )
+
+// MaxCardBytes caps a card's document, the bytes the owner signed: a card
+// at every maximum as this client marshals it — a name of 64 bytes and
+// issued to the nanosecond — is 199 bytes, and the cap leaves room for a
+// signer whose encoder indented it. It is the wire's rule and both ends
+// run it, the relay at the push and every reader of the listing at the
+// entry, before the signature is checked, since a length is checked
+// before anything is decoded. Without it a registered identity could
+// push a card padded to the route's 64 KiB and take every reader's page
+// over its hold, which the second reader of the listing found.
+const MaxCardBytes = 512
+
+// MaxListedBytes is the most the client holds of one page of the card
+// listing: MaxListedLimit entries as this client marshals them, each a
+// bundle, a card and a signature in base64 inside the entry's JSON, with
+// the page's framing. The worst page is every card at MaxCardBytes, and
+// TestLimitAListingPageIsHeldToItsBytes measured it on 2026-09-22:
+//
+//	210,286 bytes with cards as this client writes them, 247,926 with
+//	every card padded to MaxCardBytes
+//
+// each entry a bundle of the one suite (1,222 bytes, 1,632 in base64), a
+// card (up to 684 in base64), an Ed25519 signature (64 bytes, 88) and
+// the entry's framing, and the hold is the round number above the worst
+// page. A page over the hold is refused by name; the test feeds one at
+// the hold and one over.
+const MaxListedBytes = 256 << 10
 
 // The listing's hold. A listing asked for with wait=D is held open until a
 // message arrives after the id it asked from, or a watched directory is

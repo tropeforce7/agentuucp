@@ -35,6 +35,7 @@ var subcommands = []subcommand{
 		{name: "export", describe: "print the line to give a colleague"},
 	}},
 	{name: "lookup", describe: "ask the relay about a fingerprint, short id or peer"},
+	{name: "listed", describe: "who on the relay chose to be listed, verified here"},
 	{name: "enrol", describe: "create an identity and register with an enrolment token"},
 	{name: "register", describe: "register your identity with the relay"},
 	{name: "token", describe: "inspect an enrolment token", subs: []subcommand{
@@ -62,7 +63,7 @@ var subcommands = []subcommand{
 		{name: "add", describe: "add a colleague's export line"},
 		{name: "ls", describe: "list peers"},
 		{name: "rm", describe: "remove a peer"},
-		{name: "fetch", describe: "look a fingerprint up on the relay"},
+		{name: "fetch", describe: "add a peer found on the relay, at a terminal"},
 	}},
 	{name: "allow", describe: "restrict your relay mailbox to your peers", subs: []subcommand{
 		{name: "push", describe: "send your peer list to the relay, signed"},
