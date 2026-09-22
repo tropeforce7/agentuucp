@@ -423,7 +423,7 @@ func TestAFailedRenewalWarnsAndTheCommandStillRuns(t *testing.T) {
 			_, _ = w.Write([]byte(`{"error":"relay is busy"}`))
 			return
 		}
-		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216}`))
+		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"registration":"open"}`))
 	}))
 	defer failing.Close()
 
@@ -770,7 +770,7 @@ func TestRenewalDoesNotWarnWhenTheRelayHasExpired(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216}`))
+		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"registration":"open"}`))
 	}))
 	srv.TLS = &tls.Config{Certificates: []tls.Certificate{*leaf}, MinVersion: tls.VersionTLS13}
 	srv.StartTLS()

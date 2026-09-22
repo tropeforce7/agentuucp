@@ -207,10 +207,17 @@ func (s *Server) look(fp string, after int64, limit int, stubs bool, peers map[s
 	if err != nil {
 		return resp, false, err
 	}
+	// And the card's, for the same reason: one that no longer verifies
+	// unlists the owner and closes the mailbox to knocks.
+	cardState, err := s.store.CardState(fp)
+	if err != nil {
+		return resp, false, err
+	}
 	resp = relayapi.ListResponse{
 		Messages: make([]relayapi.StoredMessage, 0, len(listing.Rows)),
 		Queued:   listing.Queued,
 		Allow:    allow,
+		Card:     cardState,
 	}
 	for _, row := range listing.Rows {
 		msg := relayapi.StoredMessage{

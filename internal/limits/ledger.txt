@@ -239,6 +239,7 @@ internal/auu/watch.go messageEvent int ID int64 = output
 internal/auu/watch.go messageEvent int Size int64 = output
 internal/auu/watch_cmds.go cmdWatch int fs.Duration("interval") = >= 5s shown by TestLimitWaitAndWatchFlags
 internal/auu/watch_cmds.go cmdWatch int fs.Duration("timeout") = >= 0s shown by TestLimitWaitAndWatchFlags
+internal/card/card.go Document int V int = [1, 1] shown by TestLimitCardV
 internal/channels/channels.go Directory int V int = [1, 1] shown by TestLimitDirectoryV
 internal/channels/channels.go listedDevice string stem[3:] = local: len(stem) >= 4 by the check before
 internal/channels/channels.go listedDevice string stem[:3] #2 = local: len(stem) >= 4 by the check before
@@ -331,6 +332,7 @@ internal/relayapi/relayapi.go TokenRecord int UsesLeft int = >= 0 shown by TestL
 internal/store/allowpushed.go (*Store).AllowPushed string text[:40] = local: len(text) > 40 by the check before
 internal/store/anchor.go (*Store).AnchorFor string got[:16] = local: SPKI writes 64 hex characters
 internal/store/anchor.go (*Store).AnchorFor string r.TrustAnchorSPKI[:16] = local: ValidFingerprint at readRelay shown by TestLimitRelayRecordHashes
+internal/store/cardpushed.go (*Store).CardPushed string text[:40] = local: len(text) > 40 by the check before
 internal/store/channelsettings.go ChannelSettings int V int = [1, 1] shown by TestLimitChannelSettingsV
 internal/store/damagedbox.go DamagedRecord int RelayID int64 = >= 0 shown by TestLimitDamagedRelayID
 internal/store/damagedbox.go recordPath string binPath[:len(binPath) - len(".bin")] = local: binPath ends in ".bin" from DamagedPath

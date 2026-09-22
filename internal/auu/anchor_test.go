@@ -237,7 +237,7 @@ func TestARelayWithoutThePostQuantumHandshakeIsNamed(t *testing.T) {
 	// A relay serving only X25519: the shape of a terminator without the
 	// hybrid in front of a relay, or of something that is not this relay.
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216}`))
+		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"registration":"open"}`))
 	}))
 	srv.TLS = &tls.Config{Certificates: []tls.Certificate{*leaf}, CurvePreferences: []tls.CurveID{tls.X25519}}
 	srv.StartTLS()

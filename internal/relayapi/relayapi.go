@@ -116,6 +116,25 @@ type (
 		Signature []byte `json:"signature"`
 		State     string `json:"state"`
 	}
+	// CardRequest carries an owner's card: the signed document bytes
+	// exactly as the owner signed them and the signature over them under
+	// the card's own domain, which a relay verifies against the mailbox's
+	// registered bundle and stores verbatim. A request with no document
+	// is one whose signature does not verify, and is refused as such.
+	CardRequest struct {
+		Document  []byte `json:"document,omitempty"`
+		Signature []byte `json:"signature,omitempty"`
+	}
+	// CardResponse is a mailbox's card as pushed, for its owner alone: the
+	// document and signature verbatim, to verify with the owner's own key,
+	// and State, one of the Card* words, which is the relay's own reading
+	// and is not to be trusted over the pair. Always sent; a client
+	// refuses an answer without it by name.
+	CardResponse struct {
+		Document  []byte `json:"document"`
+		Signature []byte `json:"signature"`
+		State     string `json:"state"`
+	}
 	// ChannelsRequest carries an owner's channel directory: the document
 	// bytes exactly as the owner signed them, and the signature over them
 	// under the directory's own domain. The relay verifies the pair against
@@ -177,6 +196,13 @@ type (
 		// client refuses a listing without it, or with any other word, by
 		// name.
 		Allow string `json:"allow"`
+		// Card is the state of the mailbox's card as the relay holds it,
+		// one of the Card* words, for the same reason: a card that no
+		// longer verifies unlists the owner and closes their mailbox to
+		// knocks, and the owner would otherwise learn that from nothing.
+		// Always present; a client refuses a listing without it, or with
+		// any other word, by name.
+		Card string `json:"card"`
 	}
 	HealthResponse struct {
 		OK bool `json:"ok"`
@@ -186,6 +212,12 @@ type (
 		// the ceiling. Always sent; a health answer without it is refused
 		// by name.
 		MaxBytes int64 `json:"max_bytes"`
+		// Registration is the relay's registration mode, one of the
+		// Registration* words: what admission to this relay means, and so
+		// what a name listed on it rests on. A relay that lies here is
+		// admitting anybody, which is the case the word warns of. Always
+		// sent; a health answer without it is refused by name.
+		Registration string `json:"registration"`
 		// MLDSA is the parameter set — 44, 65 or 87 — the relay requires of
 		// a client's certificate key, so a machine can generate the right
 		// one before it enrols. Absent when the relay issues no
@@ -281,6 +313,15 @@ type (
 		// after an incident: a list that does not verify is a row the
 		// relay cannot vouch for, and refuses on.
 		Allow string `json:"allow,omitempty"`
+		// Card is the state of the card, one of the Card* words, or empty
+		// for a mailbox that has never pushed one, which is a value and not
+		// an absence; CardListed and CardKnocks are the two words the relay
+		// parsed from it at the push, for the administrator's line, and
+		// decide nothing. As with the allow list, "broken" is the word to
+		// look for after an incident.
+		Card       string `json:"card,omitempty"`
+		CardListed bool   `json:"card_listed"`
+		CardKnocks bool   `json:"card_knocks"`
 		// Channels is how many channels the mailbox's directory lists, zero
 		// for a mailbox with none, which has default by that fact rather
 		// than by a row. A count and never the names: what an owner's
@@ -424,6 +465,22 @@ const (
 	// key, a row with no signature included. The relay refuses every post
 	// to the mailbox until the owner pushes again.
 	AllowBroken = "broken"
+)
+
+// The states of a mailbox's card, the allow list's three words, as the
+// owner's listing and the administrator's record report it. A card that
+// merely lacks a signature is broken, as a list is.
+const (
+	// CardSigned is a card the owner signed, which verifies.
+	CardSigned = "signed"
+	// CardNone is a mailbox that has never pushed a card: not listed, and
+	// taking no knocks.
+	CardNone = "none"
+	// CardBroken is a card that does not verify against the mailbox's key,
+	// a row with no signature included. The relay refuses every knock to
+	// the mailbox, and a client drops the entry from the listing, until
+	// the owner pushes again.
+	CardBroken = "broken"
 )
 
 // MsgNeedSignedAllowlist is the 400 for an allow request with no document:

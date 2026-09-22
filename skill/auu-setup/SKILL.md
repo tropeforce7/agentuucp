@@ -130,6 +130,25 @@ carries no document` was sent an allow request with no document in it,
 which this `auu` never sends: what is at that URL is not this relay, or
 the request was not `auu`'s. Nothing was stored.
 
+The **card** is the other signed document, and it is the user's decision
+to push one: it carries their name and two words, `--listed`, whether the
+relay may show their name and key to every identity registered there, and
+`--knocks`, whether their mailbox takes knocks; each defaults to what the
+last push said, so a bare `auu card push` pushes the same card again.
+`auu card clear` pushes one that says neither, which is what a mailbox
+with no card means. Do not run `card push` with a flag unless the user
+asked for exactly that: saying they may be listed is saying they may be
+found by everyone the relay admits, and what that means depends on the
+relay — `auu relay show` says whether it invites by token or registers
+anyone.
+`auu inbox` says something about the card once per run, on stderr, in the
+allow list's two shapes: `your card on RELAY is missing, though you pushed
+one on DATE; run auu card push and tell the relay's operator`, and `your
+card on RELAY does not verify, so nobody can knock and you are not listed
+there; run auu card push, and if you did not change it, tell the relay's
+operator`. Run the push; the user tells the operator. `auu card show`
+prints what each relay holds, verified with the user's own key.
+
 ## 4. Another relay
 
 One home can be on several relays with one identity, one peer list and one

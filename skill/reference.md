@@ -32,6 +32,9 @@ auu peers fetch <fingerprint>                      # fetch a key from the relay;
 auu allow push                                     # tell the relay to take mail only from your peers, signed
 auu allow clear                                    # accept from anyone again
 auu allow show [--json]                            # what each relay holds for you, verified with your own key
+auu card push [--listed] [--knocks]                # sign your card and push it: whether the relay may list you, and whether you take knocks
+auu card clear                                     # a card that says neither: not listed, no knocks
+auu card show [--json]                             # what each relay holds for you, verified with your own key
 ```
 
 Relays, anchors and certificates:
@@ -256,12 +259,17 @@ an end), `relays`, `relay_name` (when set), `relay`, `export_line`.
 
 `auu lookup --json`: `fingerprint`, `short`, `name`, `suite`, `suite_id`,
 `pq_category`, `registered` (when set), `known_as` (when set),
-`export_line`.
+`export_line`, `registration` (the relay's mode: `open`, `token` or
+`closed`, which is what the name on the relay rests on).
 
 `auu allow show --json`: a list, one per relay, of `relay`, `state`
 (`signed`, `none` or `broken`), `issued` (when set),
 `senders` — each `fingerprint` and `name` (when the peer list knows them)
 — and `error` (when broken). A broken pair exits 1.
+
+`auu card show --json`: a list, one per relay, of `relay`, `state`
+(`signed`, `none` or `broken`), `issued` and `name` (when signed),
+`listed`, `knocks`, and `error` (when broken). A broken pair exits 1.
 
 `auu send --json` and `auu reply --json`: `id`, `thread`, `to`, `to_name`,
 `relay_id`, `bytes`, `in_reply_to` (when set), `kind` (`envelope` or
@@ -282,7 +290,8 @@ own line for each round that did something, and nothing for a quiet one.
 `kept` and `channels_gone` (when set); `relays`, a list of `relay`, `url`,
 the same fetch counts, `queued` (what that relay still holds), `allow`
 (the state of your allow list there: `signed`, `none` or
-`broken`) and `error` (when
+`broken`), `card` (the state of your card there, the same three words)
+and `error` (when
 set); and `messages`, each `id`, `thread`, `in_reply_to` (when set),
 `type`, `subject`, `from`, `from_name`, `time`, `received`, `read`, `box`,
 `thread_subject` (only where the whole message is printed: the subject the
@@ -318,7 +327,9 @@ set), `queued` (a map of channel to count) and `error` (when set).
 `auu relay ls --json` and `auu relay show --json`: `name`, `url`, `added`,
 `default`, `registered`, `anchor` and `anchor_expires` (when set),
 `server_intermediate` and `server_intermediate_issued` (when set),
-`cert_serial`, `cert_label` and `cert_expires` (when set).
+`cert_serial`, `cert_label` and `cert_expires` (when set); `relay show`
+alone asks the relay and adds `registration` (`open`, `token` or
+`closed`) or, when it could not be asked, `registration_error`.
 
 `auu cert status --json`: `relay_name`, `relay`, `serial`, `label`,
 `mldsa`, `not_before`, `not_after`, `renews_after`, `ca_fingerprint` (each
@@ -458,6 +469,17 @@ about your own allow list on one relay; the exit code is the run's own:
 - `this relay takes a signed allow list; the request carries no document`
   — a relay refusing an allow request with no signed document in it, which
   no `auu` of this version sends; nothing was stored.
+
+And about your own card there, in the same place and the same way:
+
+- `your card on RELAY is missing, though you pushed one on DATE; run auu
+  card push and tell the relay's operator` — the relay has lost what this
+  machine pushed; a bare `auu card push` pushes the same card again.
+- `your card on RELAY does not verify, so nobody can knock and you are not
+  listed there; run auu card push, and if you did not change it, tell the
+  relay's operator` — the card on the relay is not what was signed, or has
+  no signature at all; until the push the relay lists you to nobody and
+  lets no knock through.
 
 Certificates, when a relay requires them:
 

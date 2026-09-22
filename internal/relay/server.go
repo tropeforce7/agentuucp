@@ -176,6 +176,8 @@ func NewServer(store *Store, cfg Config) *Server {
 	s.route("GET /v1/mailbox/{fp}/allow", s.authed(s.handleGetAllow))
 	s.route("PUT /v1/mailbox/{fp}/channels", s.authedBody(relayapi.MaxDocumentBytes, hintCompact, s.handleSetChannels))
 	s.route("GET /v1/mailbox/{fp}/channels", s.authed(s.handleGetChannels))
+	s.route("PUT /v1/mailbox/{fp}/card", s.authedBody(relayapi.FramingAllowance, hintCompact, s.handleSetCard))
+	s.route("GET /v1/mailbox/{fp}/card", s.authed(s.handleGetCard))
 	s.route("POST /v1/mailbox/{fp}", s.authedBody(s.postCap(), "", s.handlePost))
 	s.route("GET /v1/mailbox/{fp}", s.authed(s.handleList))
 	s.route("DELETE /v1/mailbox/{fp}/{id}", s.authed(s.handleDelete))
@@ -451,9 +453,10 @@ func (s *Server) rateLimited(w http.ResponseWriter, which string, retryAfter tim
 // about it.
 //
 // The caps are per route and are the wire's constants: the post route
-// takes max_bytes plus relayapi.FramingAllowance, the two owner-signed
-// documents relayapi.MaxDocumentBytes, and every other body route
-// relayapi.FramingAllowance alone. The stream PUT never comes here: its
+// takes max_bytes plus relayapi.FramingAllowance, two of the three
+// owner-signed documents relayapi.MaxDocumentBytes, and every other body
+// route relayapi.FramingAllowance alone, the card among them, since a card
+// is a few hundred bytes. The stream PUT never comes here: its
 // body is judged by Content-Length against the size the open declared
 // and streamed to disk, in handlePutStream.
 func (s *Server) readBody(w http.ResponseWriter, r *http.Request, limit int64, hint string) ([]byte, bool) {
@@ -508,7 +511,10 @@ const hintCompact = "send the document compact, without indentation"
 func (s *Server) postCap() int64 { return s.cfg.MaxBytes + relayapi.FramingAllowance }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	resp := relayapi.HealthResponse{OK: true, MaxBytes: s.cfg.MaxBytes}
+	// The registration mode is what admission to this relay means, and
+	// so what a name listed on it rests on; a client says it wherever it
+	// asks a person to trust a listed name.
+	resp := relayapi.HealthResponse{OK: true, MaxBytes: s.cfg.MaxBytes, Registration: s.cfg.Registration}
 	if s.clientCerts() {
 		resp.MLDSA = clientca.ParameterNumber(s.cfg.ClientCerts.Issuer.Parameters())
 	}

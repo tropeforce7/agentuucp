@@ -17,8 +17,10 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/allowlist"
+	"github.com/tropeforce7/agentuucp/internal/card"
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/clientca"
+	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/pki"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
@@ -45,7 +47,7 @@ func TestTheClientSpeaksHTTP11Alone(t *testing.T) {
 	}
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Proto", r.Proto)
-		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216}`))
+		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"registration":"open"}`))
 	}))
 	// The server offers h2 first and serves it when negotiated (EnableHTTP2
 	// installs the handler); a client offering http/1.1 alone is answered
@@ -110,7 +112,7 @@ func TestLimitResponseHeadersAreCapped(t *testing.T) {
 			w.Header().Set("X-Junk", strings.Repeat("j", int(n)))
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216}`))
+		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"registration":"open"}`))
 	}))
 	t.Cleanup(srv.Close)
 	c, err := New(srv.URL, testIdentity(t, "alice"), nil)
@@ -148,10 +150,10 @@ func TestLimitAnAnswerIsHeldToWhatItsRouteHolds(t *testing.T) {
 		if r.URL.Path == "/v1/health" {
 			healths.Add(1)
 			if n := healthSize.Load(); n > 0 {
-				w.Write(paddedJSON(fmt.Sprintf(`{"ok":true,"max_bytes":%d`, maxBytes), n))
+				w.Write(paddedJSON(fmt.Sprintf(`{"ok":true,"max_bytes":%d,"registration":"open"`, maxBytes), n))
 				return
 			}
-			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: maxBytes})
+			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: maxBytes, Registration: relayapi.RegistrationOpen})
 			return
 		}
 		// A listing of one envelope whose ct is page bytes of base64.
@@ -159,7 +161,7 @@ func TestLimitAnAnswerIsHeldToWhatItsRouteHolds(t *testing.T) {
 			"messages": []map[string]any{{"id": 1, "received": "2026-09-20T00:00:00Z", "kind": "envelope",
 				"size": page.Load(), "channel": "default", "envelope": map[string]any{"v": 1, "to": "x", "ct": strings.Repeat("A", int(page.Load()))}}},
 			"queued": 1,
-			"allow":  "none",
+			"allow":  "none", "card": "none",
 		})
 	}))
 	t.Cleanup(srv.Close)
@@ -218,7 +220,7 @@ func TestARaisedMaxBytesIsLearnedWhenAPageIsRefusedForItsSize(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/v1/health" {
 			healths.Add(1)
-			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: maxBytes.Load()})
+			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: maxBytes.Load(), Registration: relayapi.RegistrationOpen})
 			return
 		}
 		listings.Add(1)
@@ -226,7 +228,7 @@ func TestARaisedMaxBytesIsLearnedWhenAPageIsRefusedForItsSize(t *testing.T) {
 			"messages": []map[string]any{{"id": 1, "received": "2026-09-20T00:00:00Z", "kind": "envelope",
 				"size": page.Load(), "channel": "default", "envelope": map[string]any{"v": 1, "to": "x", "ct": strings.Repeat("A", int(page.Load()))}}},
 			"queued": 1,
-			"allow":  "none",
+			"allow":  "none", "card": "none",
 		})
 	}))
 	t.Cleanup(srv.Close)
@@ -357,12 +359,15 @@ func TestLimitAStreamAnswerIsHeldTo64KiB(t *testing.T) {
 	}
 }
 
-// TestLimitADocumentIsHeldToTheCapBeforeThePut: the client holds the two
-// owner-signed documents' requests to relayapi.MaxDocumentBytes before a
-// byte goes on the wire. A directory and an allow list at every maximum,
-// marshalled as the client marshals them (565,026 and 89,622 bytes), are
-// sent; a request one byte over the cap is refused here with the bytes and
-// the cap in the sentence and the relay sees nothing of it.
+// TestLimitADocumentIsHeldToTheCapBeforeThePut: the client holds the three
+// owner-signed documents' requests to their routes' caps before a byte
+// goes on the wire: the directory and the allow list to
+// relayapi.MaxDocumentBytes, the card to relayapi.FramingAllowance, the
+// general cap its route reads under. A directory and an allow list at
+// every maximum, marshalled as the client marshals them (565,026 and
+// 89,622 bytes), and a card at its own (393 bytes), are sent; a request
+// one byte over its cap is refused here with the bytes and the cap in
+// the sentence and the relay sees nothing of it.
 func TestLimitADocumentIsHeldToTheCapBeforeThePut(t *testing.T) {
 	var puts atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -410,13 +415,23 @@ func TestLimitADocumentIsHeldToTheCapBeforeThePut(t *testing.T) {
 	if err := c.SetAllowlist(context.Background(), adoc, asig); err != nil {
 		t.Fatalf("an allow list at every maximum: %v; want it sent", err)
 	}
-	if n := puts.Load(); n != 2 {
-		t.Fatalf("the relay saw %d PUTs, want 2", n)
+	cdoc, csig, err := card.Sign(owner, &card.Document{Issued: at, Name: strings.Repeat("a", identity.MaxNameBytes), Listed: true, Knocks: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wire, _ := json.Marshal(relayapi.CardRequest{Document: cdoc, Signature: csig}); len(wire) < 300 || len(wire) > relayapi.FramingAllowance {
+		t.Fatalf("the full card is %d bytes on the wire; want between 300 and the general cap", len(wire))
+	}
+	if err := c.SetCard(context.Background(), cdoc, csig); err != nil {
+		t.Fatalf("a card at its maximum: %v; want it sent", err)
+	}
+	if n := puts.Load(); n != 3 {
+		t.Fatalf("the relay saw %d PUTs, want 3", n)
 	}
 
 	// One byte over the cap: the document's bytes are the signer's, so a
 	// document the cap does not hold is made by size alone.
-	over := func(t *testing.T, name string, send func(doc []byte) error) {
+	over := func(t *testing.T, name string, limit int, send func(doc []byte) error) {
 		t.Helper()
 		// The request is the document in base64 beside a signature; find
 		// the document length that puts the request exactly one over.
@@ -424,29 +439,30 @@ func TestLimitADocumentIsHeldToTheCapBeforeThePut(t *testing.T) {
 			wire, _ := json.Marshal(relayapi.ChannelsRequest{Document: bytes.Repeat([]byte("d"), n), Signature: []byte("s")})
 			return len(wire)
 		}
-		n := relayapi.MaxDocumentBytes * 3 / 4
-		for probe(n) < relayapi.MaxDocumentBytes+1 {
+		n := limit * 3 / 4
+		for probe(n) < limit+1 {
 			n++
 		}
-		for probe(n) > relayapi.MaxDocumentBytes+1 {
+		for probe(n) > limit+1 {
 			n--
 		}
-		if probe(n) != relayapi.MaxDocumentBytes+1 {
+		if probe(n) != limit+1 {
 			// Base64 grows in steps of four; the nearest size over is
 			// what the sentence then names.
 			n++
 		}
 		before := puts.Load()
 		err := send(bytes.Repeat([]byte("d"), n))
-		if err == nil || !strings.Contains(err.Error(), name+" is") || !strings.Contains(err.Error(), fmt.Sprintf("over the relay's cap of %d", relayapi.MaxDocumentBytes)) {
+		if err == nil || !strings.Contains(err.Error(), name+" is") || !strings.Contains(err.Error(), fmt.Sprintf("over the relay's cap of %d", limit)) {
 			t.Fatalf("%s one byte over the cap: %v; want the refusal naming the bytes and the cap", name, err)
 		}
 		if puts.Load() != before {
 			t.Fatalf("%s over the cap reached the relay", name)
 		}
 	}
-	over(t, "the directory", func(d []byte) error { return c.SetDirectory(context.Background(), d, []byte("s")) })
-	over(t, "the allow list", func(d []byte) error { return c.SetAllowlist(context.Background(), d, []byte("s")) })
+	over(t, "the directory", relayapi.MaxDocumentBytes, func(d []byte) error { return c.SetDirectory(context.Background(), d, []byte("s")) })
+	over(t, "the allow list", relayapi.MaxDocumentBytes, func(d []byte) error { return c.SetAllowlist(context.Background(), d, []byte("s")) })
+	over(t, "the card", relayapi.FramingAllowance, func(d []byte) error { return c.SetCard(context.Background(), d, []byte("s")) })
 }
 
 // TestAStalledStreamIsCutInsideTheWindow: the stream routes run on a client
@@ -594,11 +610,11 @@ func TestAHeldListingCompletes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/v1/health" {
-			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes})
+			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen})
 			return
 		}
 		time.Sleep(relayapi.MaxWait)
-		json.NewEncoder(w).Encode(map[string]any{"messages": []any{}, "queued": 0, "allow": "none"})
+		json.NewEncoder(w).Encode(map[string]any{"messages": []any{}, "queued": 0, "allow": "none", "card": "none"})
 	}))
 	t.Cleanup(srv.Close)
 	c, err := New(srv.URL, testIdentity(t, "alice"), nil)

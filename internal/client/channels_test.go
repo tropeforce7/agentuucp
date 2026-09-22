@@ -28,7 +28,7 @@ func TestListCarriesTheChannelTheRelayNamed(t *testing.T) {
 			{"id": 2, "received": "2026-09-13T01:19:30Z", "kind": "stream", "size": 5000, "channel": "default"},
 		},
 		"queued": 2,
-		"allow":  "none",
+		"allow":  "none", "card": "none",
 	}
 	rec := &recorder{replies: []reply{{status: http.StatusOK, body: page}}}
 	c, _ := newTestClient(t, rec)

@@ -94,8 +94,10 @@ type relayFetch struct {
 	// which 'auu rm' is what removes.
 	Queued int64 `json:"queued"`
 	// Allow is the state of this identity's allow list on the relay, as
-	// the relay said it: signed, none or broken.
+	// the relay said it: signed, none or broken. Card is the same for the
+	// card.
 	Allow string `json:"allow,omitempty"`
+	Card  string `json:"card,omitempty"`
 	Error string `json:"error,omitempty"`
 }
 
@@ -106,6 +108,7 @@ type relayFetch struct {
 type relaySaid struct {
 	Queued int64
 	Allow  string
+	Card   string
 }
 
 // fetch drains one relay's mailbox into the local spool.
@@ -194,7 +197,7 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 			return res, said, transportErr(err)
 		}
 		hold = 0
-		said = relaySaid{Queued: page.Queued, Allow: page.Allow}
+		said = relaySaid{Queued: page.Queued, Allow: page.Allow, Card: page.Card}
 		if len(page.Messages) == 0 {
 			// Nothing after the cursor, and yet the relay holds mail: the
 			// cursor is past it. The relay says how many, the sentence
@@ -410,7 +413,7 @@ func fetchEvery(s *store.Store, id *identity.Identity, relays []*store.Relay, na
 		if err == nil {
 			var said relaySaid
 			report.fetchResult, said, err = fetch(ctx(), s, id, c, r, 0)
-			report.Queued, report.Allow = said.Queued, said.Allow
+			report.Queued, report.Allow, report.Card = said.Queued, said.Allow, said.Card
 		}
 		if err == nil {
 			// A relay this identity has drained is a relay it has a mailbox
@@ -537,15 +540,18 @@ func cmdInbox(args []string) error {
 			fmt.Printf("%s: %d message(s) on the relay; %s rm removes them\n", rep.Relay, rep.Queued, prog)
 		}
 	}
-	// What each relay said about this identity's allow list there, after
-	// the messages and on stderr: a warning, and the run's own exit code
-	// stands.
+	// What each relay said about this identity's allow list and card
+	// there, after the messages and on stderr: a warning, and the run's
+	// own exit code stands.
 	for _, rep := range reports {
 		if rep.Error != "" {
 			continue
 		}
 		if r, err := s.Relay(rep.Relay); err == nil {
 			if err := warnAllowState(s, r, rep.Allow); err != nil {
+				return err
+			}
+			if err := warnCardState(s, r, rep.Card); err != nil {
 				return err
 			}
 		}
@@ -1098,6 +1104,9 @@ func cmdWait(args []string) error {
 			if err == nil && !warned[r.Name] {
 				warned[r.Name] = true
 				err = warnAllowState(s, r, said.Allow)
+				if err == nil {
+					err = warnCardState(s, r, said.Card)
+				}
 			}
 			if err == nil {
 				ok++

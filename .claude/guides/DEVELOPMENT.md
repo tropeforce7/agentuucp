@@ -658,13 +658,14 @@ by CI, whatever it formats.
 
 ## Signatures and tokens
 
-**One identity key signs six things, so each has its own domain string.**
+**One identity key signs seven things, so each has its own domain string.**
 `ccx-http-v1` for requests, `ccx-sig-v1` for messages, `ccx-token-v1` for
 enrolment tokens, `ccx-stream-sig-v1` for a stream's manifest,
 `ccx-channels-v1` for a mailbox's channel directory, `ccx-allow-v1` for its
-allow list. There is a test that a signature over the same bytes in one
-domain does not verify in another, in both directions. Add a seventh thing
-to sign and you add a seventh domain and a seventh test.
+allow list, `ccx-card-v1` for its card. There is a test that a signature
+over the same bytes in one domain does not verify in another, in both
+directions. Add an eighth thing to sign and you add an eighth domain and
+an eighth test.
 
 **The agent decides by the domain it is asked to sign under, never by who
 asks.** The second outside review's closing point: key extraction was
@@ -680,9 +681,9 @@ thing has one at the front. The table:
 
 | asked to sign | scope |
 |---|---|
-| `ccx-http-v1` + a method and path in the receive set: `GET` of a listing, a blob, an allow list, a directory or certs; `DELETE` of a message; `HEAD` of an upload; `POST` of this identity's certs, which is renewal | receive |
+| `ccx-http-v1` + a method and path in the receive set: `GET` of a listing, a blob, an allow list, a card, a directory or certs; `DELETE` of a message; `HEAD` of an upload; `POST` of this identity's certs, which is renewal | receive |
 | `ccx-http-v1` + anything else — a post, an upload, a push, a registration, an admin route | send |
-| `ccx-sig-v1`, `ccx-stream-sig-v1`, `ccx-channels-v1`, `ccx-allow-v1`, `ccx-token-v1` | send |
+| `ccx-sig-v1`, `ccx-stream-sig-v1`, `ccx-channels-v1`, `ccx-allow-v1`, `ccx-card-v1`, `ccx-token-v1` | send |
 | anything else under the identity key, malformed included | send |
 | a machine key (`cert:`, `pending:`): the TLS handshake, a CSR | receive |
 | `generate` under a `cert:` name, a new machine key for renewal, or for enrolment before `POST /v1/register` makes it send | receive |
@@ -752,22 +753,26 @@ stays false and nobody downstream mistakes it for the end of a stream.
 
 **`ccx` in a constant is not a leftover: it is on the wire.** The binaries are
 `auu`, `auu-relay`, `auu-admin` and `auu-ca`, and the project is AgentUUCP,
-but fifteen constants deliberately still say `ccx` — the ten `ccx-*-v1`
-domain strings (`ccx-allow-v1`, `ccx-channels-v1`, `ccx-chunk-v1`,
-`ccx-envelope-v1`, `ccx-http-v1`, `ccx-id-v1`, `ccx-sig-v1`,
-`ccx-stream-sig-v1`, `ccx-stream-v1`, `ccx-token-v1`: six under a
-signature, three in an HPKE `info` or a chunk's additional data, one under
-the fingerprint hash), the `ccx1` and `ccx2` export-line prefixes, the
-`ccxt1` (read) and `ccxt2` (written) token prefixes, and the `X-CCX-Auth`
-header. Recount with `grep -rn '"ccx' --include='*.go' internal cmd | grep
--v _test` when you add one. Every one
+but sixteen constants deliberately still say `ccx` — the eleven `ccx-*-v1`
+domain strings (`ccx-allow-v1`, `ccx-card-v1`, `ccx-channels-v1`,
+`ccx-chunk-v1`, `ccx-envelope-v1`, `ccx-http-v1`, `ccx-id-v1`,
+`ccx-sig-v1`, `ccx-stream-sig-v1`, `ccx-stream-v1`, `ccx-token-v1`: seven
+under a signature, three in an HPKE `info` or a chunk's additional data,
+one under the fingerprint hash), the `ccx1` and `ccx2` export-line
+prefixes, the `ccxt1` (read) and `ccxt2` (written) token prefixes, and the
+`X-CCX-Auth` header. Recount with `grep -rn '"ccx' --include='*.go'
+internal cmd | grep -v _test` when you add one; run on 2026-09-22 when
+the card's domain went in, it answered seventeen lines: the fifteen
+lower-case constants, the agent's second spelling of the request domain,
+and one comment quoting the export prefix, with the header, in upper
+case, the sixteenth constant the grep does not match. Every one
 of them is either inside a signature, inside an HPKE `info` string, or in a
 format two machines have already agreed on. Renaming any of them invalidates every
 identity, message and token in existence and silently breaks compatibility with
 any deployed relay. If a future rename tempts you, rename the commands and
 leave the wire alone. When a format does have to change, do what `ccx2` did: a
 new prefix, the old one still read, only the new one written. One of the
-nine is spelt a second time, in `internal/agent/scope.go`, where the agent
+eleven is spelt a second time, in `internal/agent/scope.go`, where the agent
 recognises a relay request by its domain without importing `relayapi`;
 `TestTheClassifierAgreesWithTheRelay` is what fails if the two ever differ.
 
@@ -851,11 +856,12 @@ the cut lands at the cap plus 4096, and the test says so); an auth header
 is held to `relayapi.MaxAuthHeader`, the length its five fields can
 reach, before a field is cut from it; every body is read under its
 route's cap, `readBody` taking the cap as an argument — the post route at
-`max_bytes` plus `FramingAllowance`, the two owner-signed documents at
-`MaxDocumentBytes`, sized to their maxima as the client marshals them
-(the document is base64 inside the envelope, so 4/3 of it, measured and
-written in the constant's comment), and every other body route at
-`FramingAllowance` alone — with a body that declares itself over the cap
+`max_bytes` plus `FramingAllowance`, two of the three owner-signed
+documents at `MaxDocumentBytes`, sized to their maxima as the client
+marshals them (the document is base64 inside the envelope, so 4/3 of it,
+measured and written in the constant's comment), and every other body
+route at `FramingAllowance` alone, the card among them, since a card at
+its maximum is a few hundred bytes — with a body that declares itself over the cap
 refused `413` before a byte, naming the cap; and HTTP/2 is off on the
 relay's listener, `TLSNextProto` an empty map and `NextProtos` http/1.1
 alone, so the drain, `Connection: close` and the stall deadline are

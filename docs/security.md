@@ -11,7 +11,14 @@ wrote anything. The channel is one label per message, from a list the owner
 wrote and published to every sender they admit. It is there because the
 relay routes by it. The relay refuses a post to a channel that does not
 exist or is not open before the message is stored. The owner chooses what
-the labels say. The message itself is a file beside the database, which an
+the labels say. Beside the rows, per mailbox, the three documents an
+owner signs and pushes: the channel directory, the allow list, and the
+card, which says the owner's name and two words of the owner's, `listed`
+and `knocks`. Each is the bytes the owner signed and the signature,
+verified against the registered key at the push and again wherever the
+relay acts on it, and the card's two words are parsed into columns that
+decide nothing. The
+message itself is a file beside the database, which an
 operator can list, count and delete but not read. Every value the relay puts
 to that database goes as a query parameter, never into the text of a query.
 That is true of a fingerprint, a channel name, a token id and a reason
@@ -253,6 +260,19 @@ replace the relay itself. That is where *What is not protected* below
 draws the line. The signature moves the bar from editing one table to
 replacing the binary.
 
+**The card.** Owner-signed, the third document. `auu card push` signs
+your name and two words, `listed` and `knocks`, with your identity key,
+and the relay verifies the pair against your registered key before storing
+it. A row edited in the relay's database stops verifying, and a card that
+does not verify says nothing on your behalf: the relay reads it as
+`broken`, your own listing says so, `auu inbox` says so, and a bare `auu
+card push` is the whole repair, whatever issue time an editor left on the
+row, since the newer-issued rule holds only between two cards you signed.
+A mailbox with no card has said neither word, and so has one whose card
+says neither, which is what `auu card clear` pushes. The name on the card
+is a name from the wire wherever another person reads it: a suggestion at
+a prompt, and a local label only once they accept it.
+
 **Where trust comes from.** `authorized_peers`, and nowhere else. The relay's
 key lookup endpoint is a convenience for typing accuracy. It is not a trust
 anchor, and `auu lookup` deliberately refuses to add anyone. Confirm
@@ -297,7 +317,8 @@ here has one, and a relay request is decided by its method and path
 against the relay's route table. A plain `auu unlock` is receive scope.
 The agent opens mail, signs the transport, and signs what lists, fetches,
 watches and acknowledges. It refuses to sign a message, a stream's
-manifest, a channel directory, an allow list, a token, or any request that
+manifest, a channel directory, an allow list, a card, a token, or any
+request that
 posts, uploads, registers, pushes or administers. Anything it does not
 recognise is refused too. `auu unlock --send` is everything, and then back
 to receive. It asks the passphrase again, and its window is ten minutes by
@@ -414,7 +435,8 @@ bytes. The relay refuses an auth header longer than its five fields can be
 before it cuts a field from it. Every body is read under the cap of its
 route. A post is read at `max_bytes` plus 64 KiB of framing. An allow list
 or a channel directory is read at 1 MiB, sized to the documents' own
-maxima on the wire. Every other request is read at 64 KiB. A body that
+maxima on the wire. Every other request is read at 64 KiB, a card among
+them, since one at its maximum is a few hundred bytes. A body that
 declares itself over the cap is refused `413` before a byte of it is read,
 the sentence naming the cap. The stream `PUT` is bounded by the size its
 open declared. On every authenticated route the order is the certificate,
@@ -492,14 +514,16 @@ inbox` says so, with the count, the cursor file to delete and the `auu inbox
 anything. Each message listed says which channel it is under (`channel`),
 always, `default` included, held to the channel name rule as it is read.
 It says its kind too (`envelope` or `stream`). The listing says the state
-of the owner's allow list (`allow`) on every answer. **Nothing on the wire
+of the owner's allow list (`allow`) and of their card (`card`) on every
+answer. **Nothing on the wire
 is from before.** Every released version is retracted and no peer from
 before this batch is supported. So a field one end always sends is
 required by the other and refused by name when it is absent, with nothing
 of the answer used, rather than read as a peer from before the field. A
-listing without `channel`, `kind` or `allow`, a health answer without
-`max_bytes`, a lookup without `created`, and a status without
-`registration` or `client_certs` are each refused so. Neither end carries
+listing without `channel`, `kind`, `allow` or `card`, a health answer
+without `max_bytes` or `registration`, a card answer without `state`, a
+lookup without `created`, and a status without `registration` or
+`client_certs` are each refused so. Neither end carries
 a branch for an older peer. The wire has one version, this one, and a peer
 from before it is refused by name at the first exchange. **Nothing on this
 machine is from before** either. A file a version from before a rule wrote
@@ -542,6 +566,24 @@ means never pushed, and any registered sender may post. `broken` means it
 does not verify, a row with no signature included, and every sender but
 the owner is refused. The owner's own mailbox listing carries the same word as `allow`
 on every answer.
+
+The card travels the same way. `PUT /v1/mailbox/{fp}/card` carries
+`document` and `signature`, the card as the owner signed it under its own
+domain, `ccx-card-v1`, and is read under the general 64 KiB cap. The
+document is `v`, `owner`, `issued`, `name`, `listed` and `knocks`, the
+name under the export line's rule. The relay verifies the pair against
+the registered key before storing either, and answers `401` for a
+signature that does not verify (a body with no document included), `400`
+with the rule broken or naming another owner, and `409` for a card issued
+no later than the one it holds, a broken row being no bar. The owner
+reads it back with `GET /v1/mailbox/{fp}/card`, the pair verbatim and
+`state`, one of `signed`, `none` and `broken`, and their own listing
+carries the word as `card`. The health answer, unsigned and served to
+anyone, carries the relay's registration mode as `registration`, one of
+`open`, `token` and `closed`: it is what admission to the relay means,
+and a client prints it wherever it shows a name it found there, since a
+relay that lies about its mode is admitting anybody, which is the case
+the word warns of.
 
 A message posted to a channel names it in the clear, as `ch` on the outer
 envelope at step 3 and `channel` on the request that opens a stream. The

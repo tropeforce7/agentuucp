@@ -478,17 +478,26 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 
 // Health checks that the relay is reachable.
 func (c *Client) Health(ctx context.Context) error {
+	_, err := c.HealthInfo(ctx)
+	return err
+}
+
+// HealthInfo is Health with the answer: the relay's max_bytes, its
+// registration mode and the parameter set it wants of a client
+// certificate, each held to its shape, since the answer is unsigned and
+// unauthenticated and a relay's word all the same.
+func (c *Client) HealthInfo(ctx context.Context) (*relayapi.HealthResponse, error) {
 	var resp relayapi.HealthResponse
 	if err := c.do(ctx, "GET", "/v1/health", nil, &resp, nil); err != nil {
-		return err
+		return nil, err
 	}
 	if err := c.checkHealth(&resp); err != nil {
-		return err
+		return nil, err
 	}
 	if !resp.OK {
-		return errors.New("relay reported unhealthy")
+		return nil, errors.New("relay reported unhealthy")
 	}
-	return nil
+	return &resp, nil
 }
 
 // Register creates or updates this identity's mailbox on the relay.
@@ -616,28 +625,30 @@ func (c *Client) FetchKey(ctx context.Context, fp string) (*identity.Public, err
 // against this identity's registered key and answers 409 when it holds a
 // directory issued no earlier, which comes back as an HTTPError.
 func (c *Client) SetDirectory(ctx context.Context, doc, sig []byte) error {
-	body, err := documentBody("the directory", relayapi.ChannelsRequest{Document: doc, Signature: sig})
+	body, err := documentBody("the directory", relayapi.ChannelsRequest{Document: doc, Signature: sig}, relayapi.MaxDocumentBytes)
 	if err != nil {
 		return err
 	}
 	return c.do(ctx, "PUT", "/v1/mailbox/"+c.id.Fingerprint()+"/channels", body, nil, nil)
 }
 
-// documentBody marshals one of the two owner-signed documents' requests
-// and holds it to relayapi.MaxDocumentBytes, the relay's cap on the
-// route, before a byte goes on the wire: a document over it is refused
-// here with the bytes and the cap in the sentence rather than 413 by the
-// relay after the upload. The cap holds either document at every
-// maximum as this client marshals it; what runs over it is whitespace
-// inside the signed document, which is the signer's encoder's.
-func documentBody(what string, req any) ([]byte, error) {
+// documentBody marshals one of the three owner-signed documents' requests
+// and holds it to the relay's cap on its route, before a byte goes on the
+// wire: a document over it is refused here with the bytes and the cap in
+// the sentence rather than 413 by the relay after the upload. The
+// directory and the allow list are read at relayapi.MaxDocumentBytes,
+// which holds either at every maximum as this client marshals it; the
+// card, a few hundred bytes at its own, at relayapi.FramingAllowance, the
+// general cap. What runs over a cap is whitespace inside the signed
+// document, which is the signer's encoder's.
+func documentBody(what string, req any, limit int) ([]byte, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	if len(body) > relayapi.MaxDocumentBytes {
+	if len(body) > limit {
 		return nil, fmt.Errorf("%s is %d bytes as sent, over the relay's cap of %d; nothing was sent",
-			what, len(body), relayapi.MaxDocumentBytes)
+			what, len(body), limit)
 	}
 	return body, nil
 }
@@ -680,7 +691,7 @@ func (c *Client) Directory(ctx context.Context, fp string) (*DirectoryResult, er
 // verifies against this identity's registered key. A relay holding a list
 // issued no earlier answers 409, which comes back as an HTTPError.
 func (c *Client) SetAllowlist(ctx context.Context, doc, sig []byte) error {
-	body, err := documentBody("the allow list", relayapi.AllowRequest{Document: doc, Signature: sig})
+	body, err := documentBody("the allow list", relayapi.AllowRequest{Document: doc, Signature: sig}, relayapi.MaxDocumentBytes)
 	if err != nil {
 		return err
 	}
@@ -706,6 +717,42 @@ func (c *Client) Allowlist(ctx context.Context) (*AllowlistResult, error) {
 	}
 	return &AllowlistResult{Document: resp.Document, Signature: resp.Signature, State: resp.State,
 		None: resp.State == relayapi.AllowNone}, nil
+}
+
+// SetCard replaces this mailbox's card on the relay: the document bytes
+// as signed and the signature over them, which the relay verifies against
+// this identity's registered key. A relay holding a card issued no earlier
+// answers 409, which comes back as an HTTPError.
+func (c *Client) SetCard(ctx context.Context, doc, sig []byte) error {
+	body, err := documentBody("the card", relayapi.CardRequest{Document: doc, Signature: sig}, relayapi.FramingAllowance)
+	if err != nil {
+		return err
+	}
+	return c.do(ctx, "PUT", "/v1/mailbox/"+c.id.Fingerprint()+"/card", body, nil, nil)
+}
+
+// CardResult is this mailbox's card as the relay serves it: the bytes this
+// identity signed, to be verified with its own key and never trusted
+// before, and the state the relay reads them as. None means the relay
+// holds no card: the mailbox is not listed and takes no knocks.
+type CardResult struct {
+	Document  []byte
+	Signature []byte
+	State     string
+	None      bool
+}
+
+// Card fetches this mailbox's card.
+func (c *Client) Card(ctx context.Context) (*CardResult, error) {
+	var resp relayapi.CardResponse
+	if err := c.do(ctx, "GET", "/v1/mailbox/"+c.id.Fingerprint()+"/card", nil, &resp, nil); err != nil {
+		return nil, err
+	}
+	if err := c.checkCard(&resp); err != nil {
+		return nil, err
+	}
+	return &CardResult{Document: resp.Document, Signature: resp.Signature, State: resp.State,
+		None: resp.State == relayapi.CardNone}, nil
 }
 
 // Post drops a sealed envelope into the recipient's mailbox, under a
@@ -779,6 +826,9 @@ type Listing struct {
 	// it, one of the relayapi.Allow* words, and empty from a relay that
 	// predates signed lists, which is nothing to say.
 	Allow string
+	// Card is the state of this mailbox's card as the relay holds it, one
+	// of the relayapi.Card* words, always sent.
+	Card string
 }
 
 // ListRequest is what a listing asks for beyond the page.
@@ -884,7 +934,8 @@ func (c *Client) ListWait(ctx context.Context, req ListRequest) (Listing, error)
 		}
 		out = append(out, msg)
 	}
-	return Listing{Messages: out, Queued: resp.Queued, DirectoriesChanged: resp.DirectoriesChanged, Allow: resp.Allow}, nil
+	return Listing{Messages: out, Queued: resp.Queued, DirectoriesChanged: resp.DirectoriesChanged,
+		Allow: resp.Allow, Card: resp.Card}, nil
 }
 
 // Ack deletes a message from the relay once it is safely on disk locally.

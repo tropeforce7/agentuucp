@@ -86,6 +86,29 @@ but you until you push again, and `auu inbox` tells you so. `auu allow show` pri
 what each relay holds for you, verified with your own key. `auu allow clear`
 opens the mailbox again.
 
+The third document you can push is your card, and nothing is pushed until
+you say so:
+
+*Listing 1.2d*
+```
+auu card push --listed             # let the relay show your name and key to everyone it admits
+auu card push --knocks             # say your mailbox takes knocks
+auu card show                      # what each relay holds, verified with your own key
+```
+
+A card carries the name you chose at `auu init`, signed by your key, and
+two words: whether the relay may list you, and whether your mailbox takes
+knocks. Each flag defaults to what your last push said, so a bare
+`auu card push` pushes the same card again, which is the repair `auu
+inbox` names when a relay has lost it; `--listed=false` turns a word off
+and `auu card clear` pushes a card that says neither, which is what having
+no card means. Saying you may be listed is saying you may be found by
+every identity the relay admits, and what that is worth depends on the
+relay: `auu relay show` says whether it invites by token or registers
+anyone, and so does `auu lookup`. As with the allow list, a card edited
+on the relay's host stops verifying, which the relay reads as `broken`
+until you push again, and `auu inbox` tells you so.
+
 ### 1.3 Send something
 
 *Listing 1.3a*
@@ -704,11 +727,14 @@ Go's file modes say nothing about who can read.
 | `COMPOSE_MSG` | the last message composed in the editor |
 | `authorized_peers` | one export line per peer, the trust anchor |
 | `channels.json` | your channel directory as this machine last signed it, `issued` included; `auu channel push` signs it under that time again, and a file that will not read, or that breaks a rule, is refused by name with exit 5 |
+| `card.json` | your card as this machine last pushed it, `issued` included: your name and whether the relay may list you and let a knock through; `auu card push` signs it again with the words a typed flag changes, and a file that will not read, or that breaks a rule, is refused by name with exit 5 |
 | `channel-settings.json` | this machine's own policy per channel: whether mail fetched from it is left on the relay; absent, and every channel keeps |
 | `relays/<name>/relay.json` | one relay: its URL, when it was added, and what this machine has learned about its certificates |
 | `relays/<name>/trust_anchor.pem` | that relay's pinned trust anchor, when it has one; `relay.json` records its hash, and a file here with no hash recorded is refused as an edit, not taken as unpinned |
 | `relays/<name>/cert.json` | this machine's client certificate for that relay, and its key — sealed under the home key when a passphrase is set |
 | `relays/<name>/cursor` | how far that relay's mailbox has been drained; one past mail the relay still holds is refused with the count and the file to delete, exit 5 |
+| `relays/<name>/allow_pushed` | when this machine last pushed a signed allow list to that relay, one RFC 3339 line, so a fetch can tell a relay that never had one from a relay that has lost it; `auu allow clear` removes it |
+| `relays/<name>/card_pushed` | the same for the card; `auu card clear` removes it |
 | `relays/<name>/left-behind` | the ids `auu rm --local-only` removed here and left on that relay, one per line, so the fetch does not mistake them for mail the cursor has skipped; pruned when the relay no longer lists them |
 | `relays/<name>/fetch.lock` | held while a fetch from that relay runs, so two `auu inbox` at once take turns; the second waits up to a minute and then says so |
 | `inbox/`, `sent/`, `quarantine/` | the message spool, one JSON file each; a record that will not read is said to be, once, and left out of the listing |

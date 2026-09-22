@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/allowlist"
+	"github.com/tropeforce7/agentuucp/internal/card"
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
@@ -168,12 +169,14 @@ func fullAllowList(t *testing.T, owner *identity.Identity, at time.Time) relayap
 // its own cap, and a body that declares itself over the cap is answered
 // 413 before a byte of it is read, the sentence naming the cap in bytes
 // and the connection closed behind the answer. The post route takes
-// max_bytes + FramingAllowance; the two owner-signed documents take
-// MaxDocumentBytes, and a directory and an allow list built at every
+// max_bytes + FramingAllowance; two of the three owner-signed documents
+// take MaxDocumentBytes, and a directory and an allow list built at every
 // maximum and marshalled as the client marshals them — 565,026 and 89,622
 // bytes — are taken under it, one byte over refused with the hint to send
 // the document compact; every other body route takes FramingAllowance
-// alone, shown on the registration, the stream open and an admin token.
+// alone, shown on the card, the registration, the stream open and an
+// admin token. A card at its maximum, a name of 64 bytes, is a few
+// hundred bytes and is taken under the general cap.
 // The refusals are proved by requests that declare the body and send none
 // of it, answered anyway.
 func TestLimitBodyCapsPerRoute(t *testing.T) {
@@ -207,6 +210,22 @@ func TestLimitBodyCapsPerRoute(t *testing.T) {
 	if status, body := h.do(alice, "PUT", "/v1/mailbox/"+alice.Fingerprint()+"/allow", list, nil); status/100 != 2 {
 		t.Fatalf("an allow list at every maximum, %d bytes: %d %.200s; want it taken", len(wire), status, body)
 	}
+	big := &card.Document{Issued: at, Name: strings.Repeat("a", identity.MaxNameBytes), Listed: true, Knocks: true}
+	bigDoc, bigSig, err := card.Sign(alice, big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullCard := relayapi.CardRequest{Document: bigDoc, Signature: bigSig}
+	wire, err = json.Marshal(fullCard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wire) > relayapi.FramingAllowance || len(wire) < 300 {
+		t.Fatalf("the full card is %d bytes on the wire; want under FramingAllowance %d and above 300", len(wire), relayapi.FramingAllowance)
+	}
+	if status, body := h.do(alice, "PUT", "/v1/mailbox/"+alice.Fingerprint()+"/card", fullCard, nil); status/100 != 2 {
+		t.Fatalf("a card at its maximum, %d bytes: %d %.200s; want it taken", len(wire), status, body)
+	}
 
 	// One byte over each route's cap, declared and never sent: 413 before
 	// a byte, naming the cap; at the cap the body is waited for, which
@@ -221,6 +240,7 @@ func TestLimitBodyCapsPerRoute(t *testing.T) {
 	}{
 		{"the directory", "PUT", "/v1/mailbox/" + me + "/channels", alice, relayapi.MaxDocumentBytes, hintCompact},
 		{"the allow list", "PUT", "/v1/mailbox/" + me + "/allow", alice, relayapi.MaxDocumentBytes, hintCompact},
+		{"the card", "PUT", "/v1/mailbox/" + me + "/card", alice, relayapi.FramingAllowance, hintCompact},
 		{"the post", "POST", "/v1/mailbox/" + bob.Fingerprint(), alice, 1<<20 + relayapi.FramingAllowance, ""},
 		{"the stream open", "POST", "/v1/mailbox/" + bob.Fingerprint() + "/streams", alice, relayapi.FramingAllowance, ""},
 		{"the registration", "POST", "/v1/register", alice, relayapi.FramingAllowance, ""},

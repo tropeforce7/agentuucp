@@ -117,15 +117,15 @@ func mailboxesList(args []string) error {
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "FINGERPRINT\tNAME\tQUEUED\tBYTES\tALLOW\tSTATE")
+	fmt.Fprintln(w, "FINGERPRINT\tNAME\tQUEUED\tBYTES\tALLOW\tCARD\tSTATE")
 	for _, m := range resp.Mailboxes {
 		state := "-"
 		if m.Blocked {
 			state = "blocked"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
 			m.FP[:16], truncate(orNone(identity.Printable(m.Name)), 20), m.QueuedMessages,
-			term.HumanBytes(m.QueuedBytes), allowColumn(m), state)
+			term.HumanBytes(m.QueuedBytes), allowColumn(m), cardColumn(m), state)
 	}
 	if err := w.Flush(); err != nil {
 		return err
@@ -162,6 +162,7 @@ func mailboxShow(args []string) error {
 	fmt.Printf("created:     %s\n", m.Created.Local().Format(time.RFC3339))
 	fmt.Printf("queued:      %d messages, %s\n", m.QueuedMessages, term.HumanBytes(m.QueuedBytes))
 	fmt.Printf("allowlist:   %s\n", allowField(*m))
+	fmt.Printf("card:        %s\n", cardField(*m))
 	fmt.Printf("channels:    %d\n", m.Channels)
 	fmt.Printf("blocked:     %t\n", m.Blocked)
 	return nil
@@ -184,6 +185,38 @@ func allowField(m relayapi.MailboxRecord) string {
 		return "none"
 	}
 	return fmt.Sprintf("%d senders, %s", m.AllowlistSize, m.Allow)
+}
+
+// cardColumn is a mailbox's card in the listing: "-" for a mailbox that
+// has never pushed one, "broken" for a row that no longer verifies, and
+// otherwise the two words the relay parsed from it, "listed,knocks",
+// "listed", "knocks" or "neither".
+func cardColumn(m relayapi.MailboxRecord) string {
+	if m.Card == "" {
+		return "-"
+	}
+	return cardField(m)
+}
+
+// cardField is the same for 'show', in words: "none", "broken", or what
+// the card says.
+func cardField(m relayapi.MailboxRecord) string {
+	switch m.Card {
+	case "":
+		return "none"
+	case relayapi.CardSigned:
+	default:
+		return m.Card
+	}
+	switch {
+	case m.CardListed && m.CardKnocks:
+		return "listed, knocks"
+	case m.CardListed:
+		return "listed"
+	case m.CardKnocks:
+		return "knocks"
+	}
+	return "neither"
 }
 
 // mailboxRemove backs both rm and purge, which differ only in whether the

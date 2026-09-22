@@ -73,6 +73,10 @@ Usage:
   auu allow clear
   auu allow show [--json]            # what each relay holds for you, verified with your key
 
+  auu card push [--listed] [--knocks]   # sign your card and push it to every relay
+  auu card clear                     # a card that says neither; not listed, no knocks
+  auu card show [--json]             # what each relay holds for you, verified with your key
+
   auu channel ls [PEER] [--json]      # your channels and what each relay holds, or a peer's
   auu channel create NAME [--description TEXT] [--not-before T] [--not-after T]
   auu channel update NAME [--description TEXT] [--not-before T|none] [--not-after T|none]
@@ -288,6 +292,8 @@ func dispatch(args []string) error {
 		return cmdPeers(rest)
 	case "allow":
 		return cmdAllow(rest)
+	case "card":
+		return cmdCard(rest)
 	case "channel", "channels":
 		return cmdChannel(rest)
 	case "send":

@@ -69,6 +69,11 @@ var subcommands = []subcommand{
 		{name: "clear", describe: "accept mail from anyone again"},
 		{name: "show", describe: "what each relay holds for you, verified with your key"},
 	}},
+	{name: "card", describe: "whether the relay may list you, and whether you take knocks", subs: []subcommand{
+		{name: "push", describe: "sign your card and push it to every relay"},
+		{name: "clear", describe: "a card that says neither: not listed, no knocks"},
+		{name: "show", describe: "what each relay holds for you, verified with your key"},
+	}},
 	{name: "channel", describe: "the named sub-mailboxes senders choose between", subs: []subcommand{
 		{name: "ls", describe: "list your channels, or a peer's"},
 		{name: "create", describe: "add a channel and push the directory"},

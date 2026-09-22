@@ -39,7 +39,7 @@ func TestAnAnswerWithoutARequiredFieldIsRefusedByName(t *testing.T) {
 		return m
 	}
 	listing := func(over map[string]any, rows ...map[string]any) map[string]any {
-		m := map[string]any{"messages": rows, "queued": len(rows), "allow": "none"}
+		m := map[string]any{"messages": rows, "queued": len(rows), "allow": "none", "card": "none"}
 		for k, v := range over {
 			if v == nil {
 				delete(m, k)
@@ -61,6 +61,16 @@ func TestAnAnswerWithoutARequiredFieldIsRefusedByName(t *testing.T) {
 		return out
 	}
 	keys := map[string]any{"bundle": bundle, "name": "alice", "created": "2026-09-20T01:19:29Z"}
+	health := map[string]any{"ok": true, "max_bytes": relayapi.DefaultMaxBytes, "registration": "open"}
+	cardAnswer := map[string]any{"document": nil, "signature": nil, "state": "none"}
+	over := func(m map[string]any, field string, v any) map[string]any {
+		out := map[string]any{}
+		for k, val := range m {
+			out[k] = val
+		}
+		out[field] = v
+		return out
+	}
 
 	list := func(c *Client) error { _, err := c.List(context.Background(), 0, 10); return err }
 	stubs := func(c *Client) error {
@@ -69,6 +79,8 @@ func TestAnAnswerWithoutARequiredFieldIsRefusedByName(t *testing.T) {
 	}
 	adminStatus := func(c *Client) error { _, err := c.AdminStatus(context.Background()); return err }
 	lookup := func(c *Client) error { _, err := c.Lookup(context.Background(), fp); return err }
+	healthCall := func(c *Client) error { return c.Health(context.Background()) }
+	cardCall := func(c *Client) error { _, err := c.Card(context.Background()); return err }
 
 	for _, tc := range []struct {
 		name, path, field, want string
@@ -78,6 +90,12 @@ func TestAnAnswerWithoutARequiredFieldIsRefusedByName(t *testing.T) {
 	}{
 		{"a listing without queued", "/v1/mailbox/" + fp, "queued", "", listing(map[string]any{"queued": nil}, row(nil)), list, listing(nil, row(nil))},
 		{"a listing without allow", "/v1/mailbox/" + fp, "allow", "one of signed, none, broken", listing(map[string]any{"allow": nil}, row(nil)), list, listing(nil, row(nil))},
+		{"a listing without card", "/v1/mailbox/" + fp, "card", "one of signed, none, broken", listing(map[string]any{"card": nil}, row(nil)), list, listing(nil, row(nil))},
+		{"a listing with another card word", "/v1/mailbox/" + fp, "card", "one of signed, none, broken", listing(map[string]any{"card": "lost"}, row(nil)), list, listing(nil, row(nil))},
+		{"a health answer without registration", "/v1/health", "registration", "one of open, token, closed", without(health, "registration"), healthCall, health},
+		{"a health answer with a fourth word", "/v1/health", "registration", "one of open, token, closed", over(health, "registration", "invite"), healthCall, health},
+		{"a card answer without state", "/v1/mailbox/" + fp + "/card", "state", "one of signed, none, broken", without(cardAnswer, "state"), cardCall, cardAnswer},
+		{"a card answer with another word", "/v1/mailbox/" + fp + "/card", "state", "one of signed, none, broken", over(cardAnswer, "state", "lost"), cardCall, cardAnswer},
 		{"a row without kind", "/v1/mailbox/" + fp, "kind", "a message kind (envelope or stream)", listing(nil, row(map[string]any{"kind": nil})), list, listing(nil, row(nil))},
 		{"a row with another kind", "/v1/mailbox/" + fp, "kind", "a message kind (envelope or stream)", listing(nil, row(map[string]any{"kind": "letter"})), list, listing(nil, row(nil))},
 		{"a row without channel", "/v1/mailbox/" + fp, "channel", "a channel name", listing(nil, row(map[string]any{"channel": nil})), list, listing(nil, row(nil))},

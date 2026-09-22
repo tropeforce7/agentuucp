@@ -792,6 +792,7 @@ func TestAListingWithoutWaitIsUnchanged(t *testing.T) {
 		Messages []listedMessage `json:"messages"`
 		Queued   int64           `json:"queued"`
 		Allow    string          `json:"allow"`
+		Card     string          `json:"card"`
 	}{
 		Messages: []listedMessage{{
 			ID: row.Rows[0].ID, Received: row.Rows[0].Received, Kind: row.Rows[0].Kind,
@@ -799,6 +800,7 @@ func TestAListingWithoutWaitIsUnchanged(t *testing.T) {
 		}},
 		Queued: 1,
 		Allow:  "none",
+		Card:   "none",
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -19,6 +19,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/agent"
 	"github.com/tropeforce7/agentuucp/internal/allowlist"
+	"github.com/tropeforce7/agentuucp/internal/card"
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/keyfile"
@@ -381,6 +382,52 @@ func TestMailboxesAndBlocks(t *testing.T) {
 	}
 	if out := f.boss.run("mailboxes", "ls"); !strings.Contains(out, "  1 broken  ") {
 		t.Fatalf("mailboxes ls with a broken list:\n%s", out)
+	}
+
+	// The card: none until one is pushed, then the two words the relay
+	// parsed from it, "neither" for a signed card that says neither, and
+	// broken for a row that no longer verifies; the name is never printed,
+	// since the relay does not keep it.
+	if out := f.boss.run("mailboxes", "show", alice.Fingerprint()); !strings.Contains(out, "card:        none\n") {
+		t.Fatalf("mailboxes show with no card:\n%s", out)
+	}
+	pushCard := func(listed, knocks bool) {
+		t.Helper()
+		c := &card.Document{Issued: time.Now(), Name: "alice", Listed: listed, Knocks: knocks}
+		cdoc, csig, err := card.Sign(alice, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.store.SetCard(alice.Fingerprint(), c, cdoc, csig); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		listed, knocks bool
+		want           string
+	}{
+		{true, true, "listed, knocks"}, {true, false, "listed"}, {false, true, "knocks"}, {false, false, "neither"},
+	} {
+		pushCard(tc.listed, tc.knocks)
+		if out := f.boss.run("mailboxes", "show", alice.Fingerprint()); !strings.Contains(out, "card:        "+tc.want+"\n") {
+			t.Fatalf("mailboxes show with a card listed %v knocks %v:\n%s", tc.listed, tc.knocks, out)
+		}
+		if out := f.boss.run("mailboxes", "ls"); !strings.Contains(out, "  "+tc.want+"  ") {
+			t.Fatalf("mailboxes ls with a card listed %v knocks %v:\n%s", tc.listed, tc.knocks, out)
+		}
+	}
+	if out := f.boss.run("mailboxes", "show", alice.Fingerprint(), "--json"); !strings.Contains(out, `"card": "signed"`) ||
+		!strings.Contains(out, `"card_listed": false`) || !strings.Contains(out, `"card_knocks": false`) {
+		t.Fatalf("mailboxes show --json with a card:\n%s", out)
+	}
+	if _, err := db.Exec(`UPDATE cards SET sig = X'00' WHERE fp = ?`, alice.Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	if out := f.boss.run("mailboxes", "show", alice.Fingerprint()); !strings.Contains(out, "card:        broken\n") {
+		t.Fatalf("mailboxes show with a broken card:\n%s", out)
+	}
+	if out := f.boss.run("mailboxes", "ls"); !strings.Contains(out, "  broken  ") {
+		t.Fatalf("mailboxes ls with a broken card:\n%s", out)
 	}
 
 	// Blocking, listing, and lifting it.
@@ -1081,6 +1128,29 @@ func TestStatusEscapesTheRelaysWordsAndHoldsItsEnums(t *testing.T) {
 			t.Errorf("status with an escape in %s: %v\n%s", tc.field, err, out)
 		case !tc.enum && !strings.Contains(out, `\x1b]0;owned\a`):
 			t.Errorf("status does not show the relay's %s escaped:\n%s", tc.field, out)
+		}
+	}
+}
+
+func TestMailboxListingHoldsTheCardWordToItsSet(t *testing.T) {
+	boss, err := identity.Generate("boss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := boss.Fingerprint()
+	rec := relayapi.MailboxRecord{FP: fp, Name: "alice", Card: "signed" + escapeSeq, CardListed: true}
+	srv := fakeRelay(t, map[string]any{
+		"/v1/admin/mailboxes":       relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{rec}},
+		"/v1/admin/mailboxes/" + fp: rec,
+	})
+	p := newPersona(t, "boss", srv.URL)
+	for _, args := range [][]string{{"mailboxes", "ls"}, {"mailboxes", "show", fp}} {
+		out, err := p.tryRun(args...)
+		if c, found := controlBytes(out); found {
+			t.Errorf("auu-admin %s printed byte %#x from the relay's card field:\n%q", strings.Join(args, " "), c, out)
+		}
+		if err == nil || !strings.Contains(err.Error(), "card is not one of signed, none, broken") {
+			t.Errorf("auu-admin %s with a card word outside the set: %v, want the malformed-answer sentence", strings.Join(args, " "), err)
 		}
 	}
 }

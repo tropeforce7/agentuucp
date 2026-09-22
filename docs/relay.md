@@ -36,7 +36,7 @@ Later ones win. A flag you do not type never overrides the file.
 | `--max-bytes N` | `max_bytes` | 16 MiB, at most 1 GiB |
 | `--streams` | `streams` | true |
 | `--max-stream-bytes N` | `max_stream_bytes` | 4 GiB, 0 is unlimited |
-| `--registration open\|token\|closed` | `registration` | `open` |
+| `--registration open\|token\|closed` | `registration` | `open`; the health answer carries the word, since it is what a name listed on this relay rests on |
 | `--public-url URL` | `public_url` | none |
 | `--admin-file PATH` | `admin.authorized_file` | none, no administrators |
 | `--token-max-age DURATION` | `admin.token_max_age` | `720h` |
@@ -115,7 +115,7 @@ beside it.
 *Listing 1.1a*
 ```
 /var/lib/auu/
-  relay.db                     mailboxes, counters, one row per message
+  relay.db                     mailboxes, counters, one row per message, the three owner-signed documents
   messages/
     tmp/                       writes in progress, swept at startup
     uploads/                   streams still being uploaded
@@ -128,6 +128,20 @@ So `relay.db` stays small whatever the relay is carrying. A 2 GB message is
 four kilobytes of database and a two gigabyte file. A completed upload is
 *renamed* into place rather than copied. That is why finishing one is instant
 however large it is, and why `messages_dir` must be a single filesystem.
+
+The database also holds, per mailbox, the three documents an owner signs
+and pushes — the channel directory in `directories` and `channels`, the
+allow list in `allowlists`, and the card in `cards`, each the bytes the
+owner signed and the signature over them, verified against the mailbox's
+registered key at the push and again wherever the relay acts on one.
+Beside a card's bytes sit its issue time and the two words the relay
+parsed from it, `listed` and `knocks`, which are for the administrator's
+line and decide nothing: an edit to those columns changes what
+`auu-admin` prints and not what the relay does, and an edit to the bytes
+or the signature makes the row `broken`, which the owner is told of at
+their next fetch and repairs with a push, whatever issue time the edit
+left. The name on a card is not stored a second time; the relay has no
+use for it.
 
 An operator can list all of this, and count it, and delete it. None of it can
 be read. Every file is a sealed envelope or a sealed stream. **Back up the
@@ -318,8 +332,8 @@ The HTTP layer has bounds of its own, none of them settings:
 |---|---|---|
 | request line and headers | 32 KiB | over it the answer is `431`, written by Go's `net/http` before the relay sees the request (it reads the block through a 4 KiB buffer, so the cut lands at 36 KiB); the largest header the protocol carries, the request signature, is about 200 bytes, and the relay refuses an auth header longer than its five fields can be before it reads one |
 | body of a post | `max_bytes` + 64 KiB | the envelope with its JSON and base64 framing |
-| body of an allow list or a channel directory | 1 MiB | the two owner-signed documents, sized to their own maxima on the wire — a full directory of 64 channels at every cap is 565,026 bytes as the client sends it — with the room above for a signer that indents; over it the answer is `413` naming the bytes and saying to send the document compact |
-| body of every other request | 64 KiB | a registration, a certificate request, an admin token, a stream's open; none reaches a tenth of it |
+| body of an allow list or a channel directory | 1 MiB | two of the three owner-signed documents, sized to their own maxima on the wire — a full directory of 64 channels at every cap is 565,026 bytes as the client sends it — with the room above for a signer that indents; over it the answer is `413` naming the bytes and saying to send the document compact |
+| body of every other request | 64 KiB | a card, a registration, a certificate request, an admin token, a stream's open; none reaches a tenth of it |
 | the stream `PUT` | the size the open declared | its `Content-Length` must equal what is left of that size, judged before a byte is read |
 | timeouts | headers 15 s, body 5 min, response 5 min, idle 2 min | the stream routes move their own deadlines as above |
 
@@ -747,7 +761,7 @@ so an administrator can keep a dedicated identity in its own home.
 auu-admin status
 
 auu-admin mailboxes ls [--after FP] [--limit N]   # N is 1 or more; over 200 the relay answers 200
-auu-admin mailboxes show FP        # queued, allow list state, channels, blocked
+auu-admin mailboxes show FP        # queued, allow list state, card, channels, blocked
 auu-admin mailboxes rm FP          # deregister, discarding queued mail
 auu-admin mailboxes purge FP       # discard queued mail, keep the mailbox
 

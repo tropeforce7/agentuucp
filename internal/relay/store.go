@@ -60,7 +60,7 @@ var (
 // database at another version is one nobody runs, and a path that
 // migrated it would be a path nobody tests. The refusal says to delete the
 // database and its message directory; the next start recreates both.
-const schemaVersion = 8
+const schemaVersion = 9
 
 // SchemaVersion is schemaVersion for the version line and the container
 // suite.
@@ -151,6 +151,26 @@ const (
 	issued TEXT NOT NULL,
 	count  INTEGER NOT NULL
 );`
+	// cards is one row per mailbox whose owner has pushed a card: the
+	// signed document and its signature, verified against the mailbox's
+	// bundle every time a knock is let past the allow list and served
+	// verbatim to the owner and, when listed, to every registered
+	// identity; its issue time for refusing an older one; and the two
+	// words the relay parsed from it at the push, listed for the listing's
+	// query and knocks for the administrator's line, neither of which
+	// decides anything: what decides is the document, verified. The name
+	// is not stored a second time, since nothing on the relay needs it. A
+	// row whose sig is empty is broken, as an allow list's is. A mailbox
+	// with no row is not listed and takes no knocks.
+	cardsTable = `CREATE TABLE IF NOT EXISTS cards (
+	fp     TEXT PRIMARY KEY REFERENCES mailboxes(fp) ON DELETE CASCADE,
+	doc    BLOB NOT NULL,
+	sig    BLOB NOT NULL,
+	issued TEXT NOT NULL,
+	listed INTEGER NOT NULL,
+	knocks INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cards_listed ON cards(listed, fp);`
 	// The body is not here: it is a file, and size is what the counters and
 	// the quotas are computed from.
 	//
@@ -277,7 +297,7 @@ CREATE INDEX IF NOT EXISTS certs_fp ON certs(fp, not_after);`
 const schema = mailboxesTable + "\n" + messagesTable + "\n" +
 	noncesTable + "\n" + statsTable + "\n" + tokensTable + "\n" + blocksTable + "\n" +
 	uploadsTable + "\n" + certsTable + "\n" + directoriesTable + "\n" + channelsTable + "\n" +
-	allowlistsTable
+	allowlistsTable + "\n" + cardsTable
 
 // OpenStore opens or creates the relay database at dbPath, with message bodies
 // under messagesDir.

@@ -65,6 +65,8 @@ var (
 	certModes         = []string{relayapi.ClientCertsOff, relayapi.ClientCertsRequired}
 	allowWords        = []string{relayapi.AllowSigned, relayapi.AllowNone, relayapi.AllowBroken}
 	mailboxAllowWords = []string{"", relayapi.AllowSigned, relayapi.AllowNone, relayapi.AllowBroken}
+	cardWords         = []string{relayapi.CardSigned, relayapi.CardNone, relayapi.CardBroken}
+	mailboxCardWords  = []string{"", relayapi.CardSigned, relayapi.CardNone, relayapi.CardBroken}
 	kinds             = []string{relayapi.KindEnvelope, relayapi.KindStream}
 	tokenUses         = []string{token.UseRegister, token.UseCert}
 	tokenStates       = []string{relayapi.TokenLive, relayapi.TokenSpent, relayapi.TokenRevoked, relayapi.TokenExpired}
@@ -140,11 +142,27 @@ func (c *Client) checkHealth(h *relayapi.HealthResponse) error {
 	if h.MaxBytes < 1 || h.MaxBytes > relayapi.MaxBytesCeiling {
 		return c.malformed("the health answer", "max_bytes", wantMaxBytes)
 	}
+	// The registration mode is what a listed name rests on, said wherever
+	// a command asks a person to trust one; a health answer without it,
+	// or with a fourth word, is refused by name.
+	if !oneOf(h.Registration, registrations) {
+		return c.malformed("the health answer", "registration", wantOneOf(registrations))
+	}
+	return nil
+}
+
+// checkCard is the owner's own card as the relay serves it: the state as
+// one of its three words, which the relay always sends.
+func (c *Client) checkCard(r *relayapi.CardResponse) error {
+	if !oneOf(r.State, cardWords) {
+		return c.malformed("the card answer", "state", wantOneOf(cardWords))
+	}
 	return nil
 }
 
 // checkListing is a page of a mailbox: how much is queued, the state of
-// the allow list as one of its words, and each message's id, size, kind
+// the allow list and of the card each as one of its words, and each
+// message's id, size, kind
 // as one of its two words and channel held to the name rule, every one
 // of which the relay always sends and is refused by name when absent. A
 // page asked for as stubs carries no envelope: a row with one is a relay
@@ -156,6 +174,9 @@ func (c *Client) checkListing(page *relayapi.ListResponse, stubs bool) error {
 	}
 	if !oneOf(page.Allow, allowWords) {
 		return c.malformed(answer, "allow", wantOneOf(allowWords))
+	}
+	if !oneOf(page.Card, cardWords) {
+		return c.malformed(answer, "card", wantOneOf(cardWords))
 	}
 	for i := range page.Messages {
 		m := &page.Messages[i]
@@ -262,6 +283,9 @@ func (c *Client) checkMailbox(answer string, m *relayapi.MailboxRecord) error {
 	}
 	if !oneOf(m.Allow, mailboxAllowWords) {
 		return c.malformed(answer, "allow", wantOneOf(mailboxAllowWords))
+	}
+	if !oneOf(m.Card, mailboxCardWords) {
+		return c.malformed(answer, "card", wantOneOf(mailboxCardWords))
 	}
 	return c.counts(answer, count{"queued_messages", m.QueuedMessages}, count{"queued_bytes", m.QueuedBytes},
 		count{"channels", m.Channels}, count{"allowlist_size", m.AllowlistSize})

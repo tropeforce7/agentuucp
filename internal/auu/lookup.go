@@ -47,6 +47,10 @@ type lookupJSON struct {
 	// "self" when it is the caller's own. Absent when it is on neither.
 	KnownAs    string `json:"known_as,omitempty"`
 	ExportLine string `json:"export_line"`
+	// Registration is the relay's registration mode, open, token or
+	// closed: what admission to it means, and so what the name it
+	// registered under rests on.
+	Registration string `json:"registration"`
 }
 
 func runLookup(query string, asJSON bool, relay string) error {
@@ -70,6 +74,12 @@ func runLookup(query string, asJSON bool, relay string) error {
 	if err != nil {
 		return err
 	}
+	// The relay's mode first: it is what the name on the relay rests on,
+	// and a health answer without it is refused before the name is shown.
+	health, err := c.HealthInfo(ctx())
+	if err != nil {
+		return transportErr(fmt.Errorf("%s: %w", r.Name, err))
+	}
 	found, err := c.Lookup(ctx(), query)
 	if err != nil {
 		var httpErr *client.HTTPError
@@ -87,14 +97,15 @@ func runLookup(query string, asJSON bool, relay string) error {
 	pub := found.Public
 	suite := pub.Suite()
 	out := lookupJSON{
-		Fingerprint: pub.Fingerprint(),
-		Short:       pub.Short(),
-		Name:        pub.Name,
-		Suite:       suite.Name,
-		SuiteID:     int(suite.ID),
-		PQCategory:  suite.PQCategory,
-		ExportLine:  pub.ExportLine(),
-		KnownAs:     knownAs(s, id, pub.Fingerprint()),
+		Fingerprint:  pub.Fingerprint(),
+		Short:        pub.Short(),
+		Name:         pub.Name,
+		Suite:        suite.Name,
+		SuiteID:      int(suite.ID),
+		PQCategory:   suite.PQCategory,
+		ExportLine:   pub.ExportLine(),
+		KnownAs:      knownAs(s, id, pub.Fingerprint()),
+		Registration: health.Registration,
 	}
 	if !found.Registered.IsZero() {
 		registered := found.Registered
@@ -105,6 +116,7 @@ func runLookup(query string, asJSON bool, relay string) error {
 	}
 
 	fmt.Printf("relay:         %s (%s)\n", r.Name, r.URL)
+	fmt.Printf("registration:  %s; the relay %s\n", out.Registration, registrationMeans(out.Registration, "this name"))
 	fmt.Printf("name on relay: %s\n", orNone(out.Name))
 	fmt.Printf("fingerprint:   %s\n", out.Fingerprint)
 	fmt.Printf("short id:      %s\n", out.Short)

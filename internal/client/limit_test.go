@@ -73,7 +73,8 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 	callTokens := func(c *Client) error { _, err := c.AdminTokens(context.Background(), false); return err }
 	listing := func(set func(l *relayapi.ListResponse, n int64)) func(int64) any {
 		return func(n int64) any {
-			l := relayapi.ListResponse{Allow: relayapi.AllowNone, Messages: []relayapi.StoredMessage{{ID: 1, Size: 10, Kind: relayapi.KindStream, Channel: "default"}}}
+			l := relayapi.ListResponse{Allow: relayapi.AllowNone, Card: relayapi.CardNone,
+				Messages: []relayapi.StoredMessage{{ID: 1, Size: 10, Kind: relayapi.KindStream, Channel: "default"}}}
 			set(&l, n)
 			return l
 		}
@@ -135,11 +136,11 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 	mldsa := []shape{
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.MLDSA = int(n) }), callStatus},
 		{"/v1/health", func(n int64) any {
-			return relayapi.HealthResponse{OK: true, MLDSA: int(n), MaxBytes: relayapi.DefaultMaxBytes}
+			return relayapi.HealthResponse{OK: true, MLDSA: int(n), MaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}
 		},
 			func(c *Client) error { _, err := c.MLDSA(context.Background()); return err }},
 		{"/v1/health", func(n int64) any {
-			return relayapi.HealthResponse{OK: true, MLDSA: int(n), MaxBytes: relayapi.DefaultMaxBytes}
+			return relayapi.HealthResponse{OK: true, MLDSA: int(n), MaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}
 		},
 			func(c *Client) error { return c.Health(context.Background()) }},
 	}
@@ -148,7 +149,9 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 	// to, is refused by name. Read by Health here, and by the first listing, which sizes
 	// what the client will hold of a page by it (TestLimitAnAnswerIsHeldToWhatItsRouteHolds).
 	maxBytes := []shape{
-		{"/v1/health", func(n int64) any { return relayapi.HealthResponse{OK: true, MaxBytes: n} },
+		{"/v1/health", func(n int64) any {
+			return relayapi.HealthResponse{OK: true, MaxBytes: n, Registration: relayapi.RegistrationOpen}
+		},
 			func(c *Client) error { return c.Health(context.Background()) }},
 	}
 

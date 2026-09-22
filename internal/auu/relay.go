@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
 
@@ -58,10 +59,19 @@ type relayJSON struct {
 	CertSerial  string     `json:"cert_serial,omitempty"`
 	CertLabel   string     `json:"cert_label,omitempty"`
 	CertExpires *time.Time `json:"cert_expires,omitempty"`
+
+	// Registration is the relay's registration mode as its health answer
+	// gave it just now — open, token or closed — which is what a name
+	// listed there rests on; RegistrationError is why it could not be
+	// asked. Only 'relay show' fills them: 'relay ls' reads local files
+	// alone.
+	Registration      string `json:"registration,omitempty"`
+	RegistrationError string `json:"registration_error,omitempty"`
 }
 
 // describeRelay gathers everything the home knows about one relay. It reads
-// only local files: no command in this family contacts anything.
+// only local files: 'relay ls' contacts nothing, and 'relay show' asks the
+// relay one thing more, its registration mode, after this.
 func describeRelay(s *store.Store, r *store.Relay, defaultName string) relayJSON {
 	out := relayJSON{
 		Name:       r.Name,
@@ -244,6 +254,17 @@ func relayShow(args []string) error {
 		defaultName = def.Name
 	}
 	out := describeRelay(s, r, defaultName)
+	// The relay's registration mode, from its health answer, which needs
+	// neither a certificate nor a signature: a relay that cannot be
+	// reached is said on its line, and the rest of what the home holds is
+	// printed all the same, since that is what this command is for.
+	if c, err := dialNoCert(s, nil, r); err != nil {
+		out.RegistrationError = err.Error()
+	} else if health, err := c.HealthInfo(ctx()); err != nil {
+		out.RegistrationError = err.Error()
+	} else {
+		out.Registration = health.Registration
+	}
 	if *asJSON {
 		return printJSON(out)
 	}
@@ -271,7 +292,29 @@ func relayShow(args []string) error {
 			out.CertSerial[:16], out.CertLabel, out.CertExpires.Local().Format(time.DateOnly))
 	}
 	fmt.Printf("directory:  %s\n", s.RelayDir(r))
+	if out.Registration != "" {
+		fmt.Printf("registration: %s (%s)\n", out.Registration, registrationMeans(out.Registration, "a name here"))
+	} else {
+		fmt.Printf("registration: not asked (%s)\n", identity.PrintableText(out.RegistrationError))
+	}
 	return nil
+}
+
+// registrationMeans is what a relay's registration mode says about a
+// name found on it, subject being "this name" or "a name here": the
+// sentence every command that asks a person to trust a listed name
+// prints, since that trust rests on the relay's admission and no further.
+// A relay that lies about its mode is admitting anybody, which is the case
+// the open sentence warns of.
+func registrationMeans(mode, subject string) string {
+	switch mode {
+	case relayapi.RegistrationToken:
+		return "invites by token: " + subject + " was let in by an administrator"
+	case relayapi.RegistrationClosed:
+		return "registers nobody now: " + subject + " was let in before it closed, under whichever rule held then"
+	default:
+		return "registers anyone: " + subject + " proves nothing about who holds it"
+	}
 }
 
 func relayDefault(args []string) error {
