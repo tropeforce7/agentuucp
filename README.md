@@ -44,16 +44,23 @@ relay.
 and a directory of message files. Anybody can run one. Its row for a message
 holds the recipient's fingerprint, the channel it was posted to, when it
 arrived, its size and its kind. The ciphertext is a file beside it. The
-sender's name is inside the ciphertext. So the relay's rows never say who
-wrote anything, and its operator can list and delete messages but not read
-them.
+sender's name is inside the ciphertext. So a message's row does not say who
+wrote it, and the operator can list and delete messages but not read them.
 
-There is one exception, and it is short-lived. While a large message is
-being uploaded the relay holds the sender's fingerprint, so that only the
-sender can add to the upload. The sender's hourly budget was spent on the
-whole of it when it opened, and its space is reserved against the
-recipient's mailbox. That row is deleted when the upload completes or is
-abandoned.
+There are two exceptions, and each lasts only as long as the row it is on.
+While a large message is being uploaded the relay holds the sender's
+fingerprint, so that only the sender can add to the upload; the sender's
+hourly budget was spent on the whole of it when it opened, and its space is
+reserved against the recipient's mailbox. That row is deleted when the
+upload completes or is abandoned.
+
+The other is a knock, the one message that reaches somebody who has not
+added you. Its row names the knocker until the owner's fetch acknowledges
+it, it is replaced, or the mailbox goes. That is what lets a second knock
+from one key replace the first, so the relay's cap on waiting knocks counts
+knockers and no single identity can fill a mailbox's share of it. An owner
+who wants neither the knocks nor the row pushes a card that takes none, and
+[docs/security.md](docs/security.md) has the whole of it.
 
 The relay does see the sender at the moment of posting, because posting is
 authenticated. Its access log records that moment, and the default,

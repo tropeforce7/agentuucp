@@ -42,11 +42,15 @@ type Limits struct {
 	// unlimited everywhere and a knock is a post. auu-relay holds it to
 	// MaxBytes at the config's read.
 	KnockMaxBytes int64
-	// MaxKnocksWaiting caps the knocks one mailbox holds, rows the relay
-	// has whatever the owner has read: a knock is refused 429 without a
-	// Retry-After at it, since the relay cannot say when the owner will
-	// fetch or remove them. Zero is unlimited; auu-relay holds it to
-	// 1000, for the reason MaxOpenUploads has a ceiling.
+	// MaxKnocksWaiting caps the knockers one mailbox holds a knock from,
+	// rows the relay has whatever the owner has read: one knocker holds
+	// one row however often they knock, since a second knock from a key
+	// replaces the first, so this is a count of knockers and no single
+	// identity can fill it. A knock from a knocker the mailbox does not
+	// already hold one from is refused 429 at it, without a Retry-After,
+	// since the relay cannot say when the owner will fetch or remove
+	// them. Zero is unlimited; auu-relay holds it to 1000, for the
+	// reason MaxOpenUploads has a ceiling.
 	MaxKnocksWaiting int64
 	// KnocksPerHour caps the knocks one sender may post in an hour across
 	// every mailbox, keyed by the verified fingerprint like every other

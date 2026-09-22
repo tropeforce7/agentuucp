@@ -1082,7 +1082,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 	if !ok {
 		return
 	}
-	id, err := s.store.Put(fp, channel, relayapi.KindEnvelope, body, s.cfg.Limits.Quotas())
+	id, err := s.store.Put(fp, channel, relayapi.KindEnvelope, "", body, s.cfg.Limits.Quotas())
 	switch {
 	case errors.Is(err, ErrMailboxFull):
 		// Not the sender's fault and not something they can retry around: the

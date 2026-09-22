@@ -574,7 +574,8 @@ on is watched at once, and the first to answer ends the watch. A relay
 over its cap on holds answers at once and is polled at the interval
 instead, which the watch cannot tell and does not need to. There are no
 delivery receipts, and cannot be. The relay records no sender on a
-message, so it cannot say whose was collected.
+message, so it cannot say whose was collected — with one exception, a
+knock, whose row names its knocker until the fetch that acknowledges it.
 
 ### 1.8 Several relays
 

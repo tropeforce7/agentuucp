@@ -49,12 +49,12 @@ func TestAnEnvelopeIsChargedAgainstStreamReservations(t *testing.T) {
 	}
 	// 8192 reserved of 12288, so at most 4096 is left for anything else.
 	envelope := bytes.Repeat([]byte("e"), 4097)
-	if _, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, envelope, q); !errors.Is(err, ErrMailboxFull) {
+	if _, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", envelope, q); !errors.Is(err, ErrMailboxFull) {
 		t.Errorf("an envelope of %d bytes was queued for a mailbox with %d of its %d byte quota reserved by an open upload (err=%v); "+
 			"expected ErrMailboxFull, since only %d bytes are unreserved", len(envelope), streamSize, quota, err, quota-streamSize)
 	}
 	// What is unreserved is taken.
-	if _, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, envelope[:4096], q); err != nil {
+	if _, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", envelope[:4096], q); err != nil {
 		t.Fatalf("an envelope that fits beside the reservation was refused: %v", err)
 	}
 	// And the stream, completed on top of it, leaves the mailbox and the
@@ -96,7 +96,7 @@ func TestAnEnvelopeIsChargedAgainstStreamReservations(t *testing.T) {
 		1, now, now.Add(time.Hour), q, 0); !errors.Is(err, ErrRelayFull) {
 		t.Errorf("a stream was opened for another mailbox while the relay is at its quota: %v", err)
 	}
-	if _, err := h.store.Put(alice.Fingerprint(), "default", relayapi.KindEnvelope, []byte("e"), q); !errors.Is(err, ErrRelayFull) {
+	if _, err := h.store.Put(alice.Fingerprint(), "default", relayapi.KindEnvelope, "", []byte("e"), q); !errors.Is(err, ErrRelayFull) {
 		t.Errorf("an envelope was queued for another mailbox while the relay is at its quota: %v", err)
 	}
 }
@@ -122,10 +122,10 @@ func TestAnEnvelopeIsCountedBesideStreamReservations(t *testing.T) {
 		16, now, now.Add(time.Hour), q, 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, []byte("first"), q); err != nil {
+	if _, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", []byte("first"), q); err != nil {
 		t.Fatalf("the envelope beside one reservation was refused: %v", err)
 	}
-	if _, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, []byte("second"), q); !errors.Is(err, ErrMailboxFull) {
+	if _, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", []byte("second"), q); !errors.Is(err, ErrMailboxFull) {
 		t.Errorf("a second envelope was queued beside one reservation under mailbox_max_messages 2 (err=%v); expected ErrMailboxFull", err)
 	}
 	other, err := NewUploadID()

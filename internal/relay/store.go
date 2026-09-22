@@ -63,7 +63,7 @@ var (
 // database at another version is one nobody runs, and a path that
 // migrated it would be a path nobody tests. The refusal says to delete the
 // database and its message directory; the next start recreates both.
-const schemaVersion = 10
+const schemaVersion = 11
 
 // SchemaVersion is schemaVersion for the version line and the container
 // suite.
@@ -116,9 +116,11 @@ type Quotas struct {
 	// MaxOpenUploads is the most uploads one sender may have open at
 	// once; zero is no cap.
 	MaxOpenUploads int64
-	// MaxKnocksWaiting is the most knocks one mailbox holds, rows of the
-	// kind whatever the owner has read; zero is no cap. It is judged
-	// inside Put's transaction, beside the
+	// MaxKnocksWaiting is the most knockers one mailbox holds a knock
+	// from, whatever the owner has read; zero is no cap. A knocker
+	// already waiting is replaced rather than counted, so this bounds
+	// knockers and not knocks. It is judged inside Put's transaction,
+	// after the replacement and beside the
 	// room, so two knocks at once cannot each be told there is room for
 	// the last.
 	MaxKnocksWaiting int64
@@ -126,10 +128,20 @@ type Quotas struct {
 
 // connectionPragmas apply to the connection, not the file, so they run on
 // every open.
+//
+// secure_delete is here because two rows name a sender — an upload's
+// from_fp and a knock's knocker — and both are promised to live no longer
+// than the row. Without it SQLite leaves a deleted row's bytes and its
+// index entries in free pages until something reuses them, so a backup or
+// a stolen disk taken after a knock was acknowledged still yields who
+// knocked at whom, which is the graph the relay is built not to keep. It
+// costs a write of zeroes over what was freed, on a database that holds
+// bookkeeping and no message body.
 const connectionPragmas = `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;
+PRAGMA secure_delete = ON;
 `
 
 // The tables, one constant each. Together they are the whole schema, and
@@ -192,18 +204,29 @@ CREATE INDEX IF NOT EXISTS cards_listed ON cards(listed, fp);`
 	// says so.
 	//
 	// kind is envelope, stream or knock, the word the relay lists the row
-	// under; the index on it is what makes the count of one mailbox's
-	// knocks at a knock's Put a range and not a scan of its page.
+	// under.
+	//
+	// knocker is the one other exception to the rule that no stored row
+	// names a sender, beside the uploads table: the verified fingerprint
+	// of whoever knocked, on a knock row and empty on every other, kept
+	// only for as long as the row is — until the owner's fetch
+	// acknowledges it, until that knocker knocks again and replaces it,
+	// or until the mailbox goes. It is what lets a second knock from one
+	// key replace the first, so the waiting cap counts knockers rather
+	// than knocks and no one identity can fill a mailbox's share of it.
+	// The index serves both: the replacement's lookup by all three
+	// columns, and the cap's count by its (to_fp, kind) prefix.
 	messagesTable = `CREATE TABLE IF NOT EXISTS messages (
 	id       INTEGER PRIMARY KEY AUTOINCREMENT,
 	to_fp    TEXT NOT NULL REFERENCES mailboxes(fp) ON DELETE CASCADE,
 	received TEXT NOT NULL,
 	size     INTEGER NOT NULL,
 	kind     TEXT NOT NULL DEFAULT 'envelope',
-	channel  TEXT NOT NULL DEFAULT 'default'
+	channel  TEXT NOT NULL DEFAULT 'default',
+	knocker  TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS messages_to ON messages(to_fp, id);
-CREATE INDEX IF NOT EXISTS messages_kind ON messages(to_fp, kind);`
+CREATE INDEX IF NOT EXISTS messages_knocker ON messages(to_fp, kind, knocker);`
 
 	// uploads is the one place the relay records who sent a message, because
 	// it must know who may append to a half-finished one. The row is deleted
@@ -705,16 +728,30 @@ func (s *Store) Exists(fp string) (bool, error) {
 // listed under, envelope or knock, and returns its relay id. The channel
 // is the caller's to have checked against the directory; the row records
 // whatever name it is given. The kind is the route's word: the post route
-// stores an envelope and the knock route a knock, and a knock is held to
-// the mailbox's knock cap here, inside the transaction, so two knocks at
-// once cannot each be told there is room for the last.
+// stores an envelope and the knock route a knock. knocker is the verified
+// fingerprint of whoever knocked, required on a knock and empty on every
+// other kind; a caller that gets that wrong is a programming fault and is
+// told so rather than storing a row nothing can account for.
+//
+// A knock replaces that knocker's earlier knock to the same mailbox, and
+// is then held to the mailbox's knock cap, both inside the one
+// transaction: so one identity occupies one of the mailbox's places
+// however often it knocks, the cap counts knockers rather than knocks,
+// and two knocks at once cannot each be told there is room for the last.
+// The replacement comes before roomFor as well as before the count,
+// since a knock that nets to zero must not be refused by a mailbox at
+// its message quota.
 //
 // The body is written to a temporary file and fsynced, then the row is
 // inserted and the file renamed into place, all before the transaction
 // commits. That ordering is what makes the invariant hold: after a commit
 // there is always a file, and every crash leaves at most an unreferenced file
 // for the sweep, never a row promising a message that is not there.
-func (s *Store) Put(toFP, channel, kind string, raw []byte, q Quotas) (int64, error) {
+func (s *Store) Put(toFP, channel, kind, knocker string, raw []byte, q Quotas) (int64, error) {
+	if (kind == relayapi.KindKnock) != (knocker != "") {
+		return 0, fmt.Errorf("relay: a %s row carries knocker %q: a knock names its knocker and nothing else does",
+			kind, knocker)
+	}
 	size := int64(len(raw))
 	tmp, err := s.writeTemp(raw)
 	if err != nil {
@@ -729,6 +766,12 @@ func (s *Store) Put(toFP, channel, kind string, raw []byte, q Quotas) (int64, er
 	}
 	defer tx.Rollback()
 
+	// The knocker's earlier knock goes first, so the room and the cap are
+	// judged on what is left.
+	replaced, err := replaceKnock(tx, toFP, kind, knocker)
+	if err != nil {
+		return 0, err
+	}
 	// Room is one question with one answer, roomFor's, and open uploads'
 	// reservations are in it: an envelope is charged as a stream is.
 	if err := roomFor(tx, toFP, size, q); err != nil {
@@ -740,8 +783,8 @@ func (s *Store) Put(toFP, channel, kind string, raw []byte, q Quotas) (int64, er
 		}
 	}
 
-	res, err := tx.Exec(`INSERT INTO messages (to_fp, received, size, kind, channel) VALUES (?, ?, ?, ?, ?)`,
-		toFP, time.Now().UTC().Format(time.RFC3339), size, kind, channel)
+	res, err := tx.Exec(`INSERT INTO messages (to_fp, received, size, kind, channel, knocker) VALUES (?, ?, ?, ?, ?, ?)`,
+		toFP, time.Now().UTC().Format(time.RFC3339), size, kind, channel, knocker)
 	if err != nil {
 		return 0, err
 	}
@@ -762,17 +805,59 @@ func (s *Store) Put(toFP, channel, kind string, raw []byte, q Quotas) (int64, er
 		s.removeMessage(toFP, id)
 		return 0, err
 	}
+	// The replaced row's body, after the commit, as Delete removes one.
+	// This is the one place that is not literally Delete's: Delete
+	// reports the unlink's failure to its caller, and here the row is
+	// committed and the message taken, so a failure cannot be answered
+	// with a 500 for a message the relay holds. removeMessage has
+	// already noted it as a storage fault, which is the operator's line,
+	// and the startup sweep takes a file no row names.
+	if replaced != 0 {
+		s.removeMessage(toFP, replaced)
+	}
+	return id, nil
+}
+
+// replaceKnock removes the knocker's earlier knock to this mailbox and
+// reports its id, or zero when there was none. It runs inside Put's
+// transaction and decrements the counters there, as Delete does; the body
+// file is the caller's to remove after the commit.
+//
+// The lookup is by (to_fp, kind, knocker), which the messages_knocker
+// index serves whole. There is at most one such row, since this is the
+// only place a knock is stored and every one of them passes here.
+func replaceKnock(tx *sql.Tx, toFP, kind, knocker string) (replaced int64, err error) {
+	if kind != relayapi.KindKnock {
+		return 0, nil
+	}
+	var id, size int64
+	err = tx.QueryRow(`SELECT id, size FROM messages WHERE to_fp = ? AND kind = ? AND knocker = ?`,
+		toFP, relayapi.KindKnock, knocker).Scan(&id, &size)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if _, err := tx.Exec(`DELETE FROM messages WHERE to_fp = ? AND id = ?`, toFP, id); err != nil {
+		return 0, err
+	}
+	if err := adjustCounters(tx, toFP, -1, -size); err != nil {
+		return 0, err
+	}
 	return id, nil
 }
 
 // roomForKnock is the one arithmetic for the knock cap: the knocks the
 // mailbox holds, counted, against q.MaxKnocksWaiting, in the transaction
-// the row is inserted in. The count is over one mailbox's rows under the
-// messages_kind index, bounded by mailbox_max_messages, which is why a
-// count is right here where the guide's counter rule, about sums over
-// the whole table, keeps the mailbox's counters instead: a knock is the
-// rare row, and a counter for it would be one more thing the sweep must
-// correct.
+// the row is inserted in and after the knocker's own earlier row has gone
+// from it, so the count is of other knockers and the cap counts knockers.
+// The count is over one mailbox's rows under the messages_knocker index,
+// whose (to_fp, kind) prefix serves it, bounded by mailbox_max_messages,
+// which is why a count is right here where the guide's counter rule,
+// about sums over the whole table, keeps the mailbox's counters instead:
+// a knock is the rare row, and a counter for it would be one more thing
+// the sweep must correct.
 func roomForKnock(tx *sql.Tx, toFP string, q Quotas) error {
 	if q.MaxKnocksWaiting <= 0 {
 		return nil

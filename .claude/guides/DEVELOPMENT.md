@@ -592,7 +592,18 @@ each with the same five rows in the test of its push.
 column recording which token created which mailbox. That link appears once in
 the operator's audit log and nowhere in the database: a permanent table of who
 invited whom is a social graph of a different kind. The same reasoning is why
-the relay stores no sender on a message.
+the relay stores no sender on a message. Two rows are exceptions, and each
+carries its sender only for as long as it is itself: an upload's row, since
+only its sender may append to it and somebody must be charged the
+reservation, and a knock's, since the knocker's fingerprint is what lets a
+second knock from one key replace the first — which is what makes
+`max_knocks_waiting` a count of knockers rather than of knocks, so one
+identity cannot fill a mailbox's share of it. Both go with the row: an
+upload's when it completes or is abandoned, a knock's when the owner's
+fetch acknowledges it, when it is replaced, or when the mailbox goes. An
+owner who wants neither kept pushes a card that says no knocks. Adding a
+third such column means answering the same question: what does it buy, and
+what takes it away again.
 
 **A service's record of what it has done is a file it writes, and nothing
 else.** `auu serve` decides what to answer from `serve/ledger.json` alone.

@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -198,19 +199,32 @@ func p04(t *testing.T) {
 	// have spent this address's five on their own strangers, and this row
 	// needs two of its own.
 	undoThenRestart(t, relay.edit(t, relaySettings, `"access_log": "minimal",`,
-		`"access_log": "minimal",`+"\n"+`  "limits": {"max_knocks_waiting": 1, "knocks_per_hour": 1, `+
+		`"access_log": "minimal",`+"\n"+`  "limits": {"max_knocks_waiting": 1, "knocks_per_hour": 2, `+
 			`"registrations_per_hour": 100},`))
 	relayRestart(t)
 	// The settings the operator set, as the administrator reads them
 	// back. The text view prints no limits at all today; --json is where
 	// they are, and this asserts them there.
 	r := operator.admin("status", "--json")
-	expectSays(t, r, 0, `"max_knocks_waiting": 1`, `"knocks_per_hour": 1`, `"knock_max_bytes": 8192`)
+	expectSays(t, r, 0, `"max_knocks_waiting": 1`, `"knocks_per_hour": 2`, `"knock_max_bytes": 8192`)
 
 	carol := enrolCarol(t)
 	dave := enrolCarol(t)
-	// Carol's knock fills the mailbox's one waiting slot.
-	expectSays(t, carol.auu("knock", state.bobFP, "--yes"), 0, "knocked on "+state.bobFP[:16])
+	// Carol's knock fills the mailbox's one waiting place. Its text is
+	// given, so the assertion below that it is gone is about this knock
+	// and not about a string no row ever carried.
+	expectSays(t, carol.auu("knock", state.bobFP, "--text", "carol, first try", "--yes"),
+		0, "knocked on "+state.bobFP[:16])
+	// And her second replaces it rather than meeting the cap: the cap
+	// counts knockers, so one knocker holds one place however often they
+	// knock. She has to forget bob first, since auu knock refuses a knock
+	// to a peer — which is the client's rule, not the relay's.
+	carol.auu("peers", "rm", "bob")
+	expectSays(t, carol.auu("knock", state.bobFP, "--text", "carol again, about the CFP", "--yes"),
+		0, "knocked on "+state.bobFP[:16])
+	if n := knockRows(t, state.bobFP); n != 1 {
+		t.Errorf("%d knock rows after one knocker knocked twice, want 1", n)
+	}
 	// Dave's meets the recipient's cap, refused by the sentence that
 	// names the setting. It carries no Retry-After, so the client does
 	// not wait it out: the answer comes back at once.
@@ -228,8 +242,11 @@ func p04(t *testing.T) {
 	r = carol.auu("knock", state.aliceFP, "--yes")
 	expectSays(t, r, 2, "rate limited: knocks")
 	// Bob fetches, which takes the knock off the relay and empties the
-	// cap, and dave's knock is taken.
+	// cap, and what reaches his quarantine is carol's second text and not
+	// her first: the replacement is what he sees.
 	expectSays(t, bob.auu("inbox"), 0, "quarantined from unknown senders")
+	expectSays(t, bob.auu("quarantine", "ls"), 0, "carol again, about the CFP")
+	expectNot(t, bob.auu("quarantine", "ls"), "carol, first try")
 	expectSays(t, dave.auu("knock", state.bobFP, "--yes"), 0, "knocked on "+state.bobFP[:16])
 	// The knock's own text rule, before anything is sealed and before the
 	// relay is asked: one byte over is refused here, at exit 1.
@@ -261,10 +278,20 @@ func p04(t *testing.T) {
 // characters of one, which every command takes in place of the whole.
 var reHex12 = regexp.MustCompile(`\b[0-9a-f]{12}\b`)
 
+// knockRows is how many rows of kind knock the relay holds for a mailbox.
+func knockRows(t *testing.T, fp string) int {
+	t.Helper()
+	out := strings.TrimSpace(relay.sql(t, "SELECT COUNT(*) FROM messages WHERE to_fp='"+fp+"' AND kind='knock'"))
+	n, err := strconv.Atoi(out)
+	if err != nil {
+		t.Fatalf("counting knock rows: %q", out)
+	}
+	return n
+}
+
 // holdsKnock reports whether the relay still holds a row of kind knock
 // for a mailbox.
 func holdsKnock(t *testing.T, fp string) bool {
 	t.Helper()
-	out := relay.sql(t, "SELECT COUNT(*) FROM messages WHERE to_fp='"+fp+"' AND kind='knock'")
-	return strings.TrimSpace(out) != "0"
+	return knockRows(t, fp) != 0
 }

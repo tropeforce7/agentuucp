@@ -4,7 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -282,24 +286,28 @@ func TestAKnockIsJudgedBeforeTheCard(t *testing.T) {
 // The three settings. max_knocks_waiting: at 2, two knocks are taken and
 // the third refused 429 with the sentence naming the setting and no
 // Retry-After, the sender's knock token given back so the refusal costs
-// the sender nothing, and one acknowledged makes room. knocks_per_hour:
+// the sender nothing, and one acknowledged makes room. The cap counts
+// knockers, not knocks: a knocker already waiting is never refused by
+// it, since their second knock replaces their first. knocks_per_hour:
 // at 1 the second knock is refused 429 with Retry-After, and two senders
 // do not share a bucket. Zero is unlimited for both counts. The two 429s
 // name their limits in the log.
 func TestLimitKnocksWaitingAndKnocksPerHour(t *testing.T) {
 	t.Run("max_knocks_waiting", func(t *testing.T) {
 		h := newHarness(t, Config{Limits: Limits{MaxKnocksWaiting: 2, KnocksPerHour: 3}})
-		people := ids(t, "alice", "bob")
-		alice, bob := people[0], people[1]
-		h.register(alice)
-		h.register(bob)
+		people := ids(t, "alice", "bob", "carol", "dave")
+		alice, bob, carol, dave := people[0], people[1], people[2], people[3]
+		for _, id := range people {
+			h.register(id)
+		}
 		fp := bob.Fingerprint()
 		if status, body, _ := h.pushCard(bob, bob, time.Now(), false, true); status != http.StatusNoContent {
 			t.Fatalf("card push: %d %s", status, body)
 		}
+		// Two knockers fill the two places.
 		var first int64
-		for i := range 2 {
-			status, body, _ := h.knock(alice, bob, "hi")
+		for i, who := range []*identity.Identity{alice, carol} {
+			status, body, _ := h.knock(who, bob, "hi")
 			if status != http.StatusOK {
 				t.Fatalf("knock %d: %d %s", i+1, status, body)
 			}
@@ -309,17 +317,29 @@ func TestLimitKnocksWaitingAndKnocksPerHour(t *testing.T) {
 				first = posted.ID
 			}
 		}
-		// The third and the fourth, at the cap: with three tokens an hour
-		// and two spent, the third refusal gives its token back, so the
-		// fourth meets the same refusal and not the bucket's.
+		// A third knocker, twice, at the cap: with three tokens an hour
+		// and one spent, the first refusal gives its token back, so the
+		// second meets the same refusal and not the bucket's.
 		for i := range 2 {
-			status, body, hdr := h.knock(alice, bob, "hi")
+			status, body, hdr := h.knock(dave, bob, "hi")
 			if status != http.StatusTooManyRequests || errorText(t, body) != relayapi.MsgKnocksWaiting {
 				t.Fatalf("knock %d at the cap: %d %s; want 429 %q", i+3, status, body, relayapi.MsgKnocksWaiting)
 			}
 			if hdr.Get("Retry-After") != "" {
 				t.Fatalf("knock %d at the cap carries Retry-After %q; the relay cannot say when the owner fetches", i+3, hdr.Get("Retry-After"))
 			}
+		}
+		// But a knocker already waiting is not refused at the cap: their
+		// second knock replaces their first, so the mailbox still holds
+		// two rows and alice's is the new one.
+		status, body, _ := h.knock(alice, bob, "hi again")
+		if status != http.StatusOK {
+			t.Fatalf("a waiting knocker's second knock at the cap: %d %s", status, body)
+		}
+		var again relayapi.PostResponse
+		json.Unmarshal(body, &again)
+		if again.ID == first {
+			t.Fatal("the replacing knock kept the replaced row's id")
 		}
 		if h.knockRows(fp) != 2 {
 			t.Fatalf("%d knock rows, want 2", h.knockRows(fp))
@@ -329,15 +349,18 @@ func TestLimitKnocksWaitingAndKnocksPerHour(t *testing.T) {
 			t.Fatalf("the log does not name the limit:\n%s", h.logs.String())
 		}
 		// One acknowledged makes room, and the token given back is the
-		// one that pays for it.
-		if status, body := h.do(bob, "DELETE", fmt.Sprintf("/v1/mailbox/%s/%d", fp, first), nil, nil); status != http.StatusNoContent {
+		// one that pays for it: alice's row goes, and she knocks again
+		// into the place it left.
+		if status, body := h.do(bob, "DELETE", fmt.Sprintf("/v1/mailbox/%s/%d", fp, again.ID), nil, nil); status != http.StatusNoContent {
 			t.Fatalf("ack: %d %s", status, body)
 		}
 		if status, body, _ := h.knock(alice, bob, "hi"); status != http.StatusOK {
 			t.Fatalf("the knock after an ack: %d %s", status, body)
 		}
-		// The hour's three are spent now: the bucket's refusal, with
-		// Retry-After, named apart in the log.
+		// Alice's hour is spent now — three knocks taken, the refusals
+		// having given their tokens back — so her fourth meets the
+		// bucket rather than the cap she is inside, with Retry-After,
+		// named apart in the log.
 		status, body, hdr := h.knock(alice, bob, "hi")
 		if status != http.StatusTooManyRequests || errorText(t, body) != "rate limited: knocks" {
 			t.Fatalf("the fourth knock of the hour: %d %s", status, body)
@@ -385,21 +408,25 @@ func TestLimitKnocksWaitingAndKnocksPerHour(t *testing.T) {
 	})
 	t.Run("zero is unlimited", func(t *testing.T) {
 		h := newHarness(t, Config{Limits: Limits{MaxKnocksWaiting: 0, KnocksPerHour: 0}})
-		people := ids(t, "alice", "bob")
-		alice, bob := people[0], people[1]
-		h.register(alice)
+		bob := ids(t, "bob")[0]
 		h.register(bob)
 		if status, body, _ := h.pushCard(bob, bob, time.Now(), false, true); status != http.StatusNoContent {
 			t.Fatalf("card push: %d %s", status, body)
 		}
+		// Twenty-five knockers, since a mailbox holds one row per
+		// knocker however many times each knocks: with no cap at all,
+		// every one of them is taken.
 		for i := range 25 {
-			if status, body, _ := h.knock(alice, bob, "hi"); status != http.StatusOK {
+			who := ids(t, fmt.Sprintf("knocker%d", i))[0]
+			h.register(who)
+			if status, body, _ := h.knock(who, bob, "hi"); status != http.StatusOK {
 				t.Fatalf("knock %d under no limits: %d %s", i+1, status, body)
 			}
 		}
 		if h.knockRows(bob.Fingerprint()) != 25 {
 			t.Fatalf("%d knock rows, want 25", h.knockRows(bob.Fingerprint()))
 		}
+		h.assertCountersAgree()
 	})
 }
 
@@ -450,9 +477,20 @@ func TestAKnockIsAPostForTheBudgets(t *testing.T) {
 		for _, route := range []string{"knock", "post"} {
 			t.Run(route, func(t *testing.T) {
 				h := setUp(t, Config{Limits: Limits{MailboxMaxMessages: 1, PostsPerMinute: 2}})
+				// A fresh knocker each time on the knock route: one
+				// knocker's second knock replaces their first and would
+				// never meet the full mailbox, which is the rule the
+				// mailbox quota sits behind.
+				knockers := ids(t, "kn1", "kn2", "kn3")
+				for _, who := range knockers {
+					h.register(who)
+				}
+				n := 0
 				post := func() (int, []byte) {
 					if route == "knock" {
-						status, body, _ := h.knock(alice, bob, "hi")
+						who := knockers[n]
+						n++
+						status, body, _ := h.knock(who, bob, "hi")
 						return status, body
 					}
 					status, body, _ := h.send(alice, "POST", "/v1/mailbox/"+bob.Fingerprint(), sealed(t, alice, bob.Public(), "x"), nil)
@@ -464,10 +502,20 @@ func TestAKnockIsAPostForTheBudgets(t *testing.T) {
 				if status, body := post(); status != http.StatusInsufficientStorage || errorText(t, body) != relayapi.MsgMailboxFull {
 					t.Fatalf("the second, the mailbox full: %d %s", status, body)
 				}
-				// The token the refused one spent is spent: the third meets
-				// the minute's budget, not the full mailbox.
-				if status, body := post(); status != http.StatusTooManyRequests || errorText(t, body) != "rate limited: posts" {
-					t.Fatalf("the third, after a refused Put: %d %s; want the post budget", status, body)
+				// The token the refused one spent is spent. On the post
+				// route, where every post is alice's, the third meets the
+				// minute's budget rather than the full mailbox; on the
+				// knock route each knocker has a budget of their own, so
+				// the proof is the recipient's counters, which a refused
+				// Put must leave as they were.
+				if route == "post" {
+					if status, body := post(); status != http.StatusTooManyRequests || errorText(t, body) != "rate limited: posts" {
+						t.Fatalf("the third, after a refused Put: %d %s; want the post budget", status, body)
+					}
+				}
+				h.assertCountersAgree()
+				if got := h.messageCount(bob.Fingerprint()); got != 1 {
+					t.Fatalf("%d messages after a refused Put, want the one that was taken", got)
 				}
 			})
 		}
@@ -569,5 +617,331 @@ func TestTheAdministratorSeesTheKnockLimits(t *testing.T) {
 		if !strings.Contains(string(body), key) {
 			t.Errorf("the status answer lacks %s", key)
 		}
+	}
+}
+
+// knockID posts a knock and returns the relay id it was given.
+func (h *harness) knockID(from, to *identity.Identity, text string) int64 {
+	h.t.Helper()
+	status, body, _ := h.send(from, "POST", "/v1/mailbox/"+to.Fingerprint()+"/knock",
+		sealedKnock(h.t, from, to.Public(), "", text), nil)
+	if status != http.StatusOK {
+		h.t.Fatalf("knock: %d %s", status, body)
+	}
+	var posted relayapi.PostResponse
+	if err := json.Unmarshal(body, &posted); err != nil {
+		h.t.Fatal(err)
+	}
+	return posted.ID
+}
+
+// knockerOf is the knocker column of a mailbox's one knock row, and the
+// row's id and size beside it.
+func (h *harness) knockerOf(fp string) (knocker string, id, size int64) {
+	h.t.Helper()
+	if err := h.store.db.QueryRow(
+		`SELECT knocker, id, size FROM messages WHERE to_fp = ? AND kind = ?`, fp, relayapi.KindKnock).
+		Scan(&knocker, &id, &size); err != nil {
+		h.t.Fatal(err)
+	}
+	return knocker, id, size
+}
+
+// A second knock from one key replaces the first: one row, the second's
+// bytes, the first's file gone and its counters given back, and the new
+// id where the old one was. So the waiting cap counts knockers rather
+// than knocks, and a knocker who got their line wrong can send it again.
+// The row carries the fingerprint the signature proved and no other, and
+// every row that is not a knock carries none.
+func TestAKnockReplacesTheKnockersEarlierKnock(t *testing.T) {
+	h := newHarness(t, Config{})
+	people := ids(t, "alice", "bob", "carol")
+	alice, bob, carol := people[0], people[1], people[2]
+	for _, id := range people {
+		h.register(id)
+	}
+	fp := bob.Fingerprint()
+	if status, body, _ := h.pushCard(bob, bob, time.Now(), false, true); status != http.StatusNoContent {
+		t.Fatalf("card push: %d %s", status, body)
+	}
+	first := h.knockID(alice, bob, "alice here, at the standup")
+	knocker, id, size := h.knockerOf(fp)
+	if knocker != alice.Fingerprint() || id != first {
+		t.Fatalf("the knock row: knocker %q id %d, want alice's fingerprint and %d", knocker, id, first)
+	}
+	firstFile := h.store.messagePath(fp, first)
+	if _, err := os.Stat(firstFile); err != nil {
+		t.Fatalf("the first knock has no file: %v", err)
+	}
+
+	// The second, longer, so the sizes differ and the row's is the new
+	// one's.
+	second := h.knockID(alice, bob, "alice here, from the Tuesday standup, about the CFP")
+	if second == first {
+		t.Fatal("the replacing knock kept the replaced id")
+	}
+	if n := h.knockRows(fp); n != 1 {
+		t.Fatalf("%d knock rows after a second knock from one knocker, want 1", n)
+	}
+	knocker, id, newSize := h.knockerOf(fp)
+	if knocker != alice.Fingerprint() || id != second || newSize <= size {
+		t.Fatalf("the row after the replacement: knocker %q id %d size %d, want alice, %d and more than %d",
+			knocker, id, newSize, second, size)
+	}
+	if _, err := os.Stat(firstFile); !os.IsNotExist(err) {
+		t.Fatalf("the replaced knock's file is still there: %v", err)
+	}
+	h.assertCountersAgree()
+	// The owner sees one message, and it is the second text.
+	status, body := h.do(bob, "GET", "/v1/mailbox/"+fp, nil, nil)
+	var list relayapi.ListResponse
+	if status != http.StatusOK || json.Unmarshal(body, &list) != nil || len(list.Messages) != 1 {
+		t.Fatalf("the owner's listing: %d %s", status, body)
+	}
+	if list.Messages[0].ID != second {
+		t.Fatalf("the listed id is %d, want the replacement %d", list.Messages[0].ID, second)
+	}
+
+	// Another knocker is another row: replacement is by the knocker and
+	// not by the mailbox.
+	h.knockID(carol, bob, "carol here")
+	if n := h.knockRows(fp); n != 2 {
+		t.Fatalf("%d knock rows after a second knocker, want 2", n)
+	}
+	h.assertCountersAgree()
+
+	// A row that is not a knock carries no knocker: an envelope from a
+	// peer, and a stream.
+	if status, body, _ := h.pushAllow(bob, bob, time.Now(), alice.Fingerprint()); status != http.StatusNoContent {
+		t.Fatalf("allow push: %d %s", status, body)
+	}
+	if status, body := h.do(alice, "POST", "/v1/mailbox/"+fp, sealed(t, alice, bob.Public(), "x"), nil); status != http.StatusOK {
+		t.Fatalf("an ordinary post: %d %s", status, body)
+	}
+	var others int64
+	if err := h.store.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE to_fp = ? AND kind <> ? AND knocker <> ''`,
+		fp, relayapi.KindKnock).Scan(&others); err != nil {
+		t.Fatal(err)
+	}
+	if others != 0 {
+		t.Fatalf("%d rows that are not knocks carry a knocker", others)
+	}
+}
+
+// The knocker is the fingerprint the request's signature proved, never
+// what the sealed record says: a sender who seals a record claiming
+// somebody else's key still owns their own row, and the forged inner is
+// the receiver's to refuse when they open it.
+func TestTheKnockerIsTheVerifiedCallerAndNotTheSealedClaim(t *testing.T) {
+	h := newHarness(t, Config{})
+	people := ids(t, "alice", "bob", "mallory")
+	alice, bob, mallory := people[0], people[1], people[2]
+	for _, id := range people {
+		h.register(id)
+	}
+	fp := bob.Fingerprint()
+	if status, body, _ := h.pushCard(bob, bob, time.Now(), false, true); status != http.StatusNoContent {
+		t.Fatalf("card push: %d %s", status, body)
+	}
+	// Alice knocks first, and then mallory posts a knock alice sealed:
+	// the request is mallory's and signed by her, the record inside is
+	// alice's.
+	h.knockID(alice, bob, "alice here")
+	sealedByAlice := sealedKnock(t, alice, bob.Public(), "", "alice here again")
+	if status, body, _ := h.send(mallory, "POST", "/v1/mailbox/"+fp+"/knock", sealedByAlice, nil); status != http.StatusOK {
+		t.Fatalf("mallory's knock carrying alice's record: %d %s", status, body)
+	}
+	// Two rows, since the knocker is mallory: alice's is untouched.
+	if n := h.knockRows(fp); n != 2 {
+		t.Fatalf("%d knock rows, want 2: the sealed claim replaced the row the signature owns", n)
+	}
+	var byMallory int64
+	if err := h.store.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE to_fp = ? AND knocker = ?`,
+		fp, mallory.Fingerprint()).Scan(&byMallory); err != nil {
+		t.Fatal(err)
+	}
+	if byMallory != 1 {
+		t.Fatalf("%d rows carry mallory's fingerprint, want the one she posted", byMallory)
+	}
+	h.assertCountersAgree()
+}
+
+// Eight knocks from one knocker at once leave one row. The store keeps
+// one connection, so the replacement, the count and the insert of each
+// are one transaction against the others' whole transactions; the stall
+// harness is no use here, since it parks a request in readBody, before
+// any of that. What is proved is the end state: one row, its bytes one
+// of the eight, the counters agreeing, and one file in the mailbox.
+func TestKnocksFromOneKnockerAtOnceLeaveOneRow(t *testing.T) {
+	h := newHarness(t, Config{Limits: Limits{MaxKnocksWaiting: 2}})
+	people := ids(t, "alice", "bob")
+	alice, bob := people[0], people[1]
+	h.register(alice)
+	h.register(bob)
+	fp := bob.Fingerprint()
+	if status, body, _ := h.pushCard(bob, bob, time.Now(), false, true); status != http.StatusNoContent {
+		t.Fatalf("card push: %d %s", status, body)
+	}
+	const n = 8
+	texts := make([]string, n)
+	var wg sync.WaitGroup
+	statuses := make([]int, n)
+	for i := range n {
+		texts[i] = fmt.Sprintf("alice here, attempt %d", i)
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			status, _, _ := h.send(alice, "POST", "/v1/mailbox/"+fp+"/knock",
+				sealedKnock(t, alice, bob.Public(), "", texts[i]), nil)
+			statuses[i] = status
+		}(i)
+	}
+	wg.Wait()
+	for i, status := range statuses {
+		if status != http.StatusOK {
+			t.Fatalf("knock %d of %d at once: %d; the cap counts knockers and alice is one", i, n, status)
+		}
+	}
+	if got := h.knockRows(fp); got != 1 {
+		t.Fatalf("%d knock rows after %d knocks at once from one knocker, want 1", got, n)
+	}
+	h.assertCountersAgree()
+	// The row's bytes are one of the eight, and its file is the only one
+	// the mailbox holds.
+	_, id, size := h.knockerOf(fp)
+	ok := false
+	for _, text := range texts {
+		if int64(len(sealedKnock(t, alice, bob.Public(), "", text))) == size {
+			ok = true
+		}
+	}
+	if !ok {
+		t.Fatalf("the surviving row is %d bytes, which is none of the eight knocks", size)
+	}
+	entries, err := os.ReadDir(filepath.Dir(h.store.messagePath(fp, id)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || entries[0].Name() != strconv.FormatInt(id, 10) {
+		t.Fatalf("the mailbox holds %d files, want the surviving row's alone", len(entries))
+	}
+}
+
+// A mailbox that goes takes its knock rows with it, and so does a purge:
+// the knocker's fingerprint lives exactly as long as the row it is on,
+// which is what the security document promises. A knocker whose row was
+// purged knocks again into an empty mailbox.
+func TestDeregisterAndPurgeTakeTheKnockRows(t *testing.T) {
+	for _, what := range []string{"purge", "deregister"} {
+		t.Run(what, func(t *testing.T) {
+			people := ids(t, "alice", "bob", "boss")
+			alice, bob, boss := people[0], people[1], people[2]
+			h := newHarness(t, Config{AdminFile: adminFile(t, boss)})
+			h.register(alice)
+			h.register(bob)
+			h.enroll(boss)
+			fp := bob.Fingerprint()
+			if status, body, _ := h.pushCard(bob, bob, time.Now(), false, true); status != http.StatusNoContent {
+				t.Fatalf("card push: %d %s", status, body)
+			}
+			h.knockID(alice, bob, "alice here")
+			if h.knockRows(fp) != 1 {
+				t.Fatal("the knock was not stored")
+			}
+			path := "/v1/admin/mailboxes/" + fp
+			if what == "purge" {
+				path += "/messages"
+			}
+			if status, body, _ := h.send(boss, "DELETE", path, nil, nil); status != http.StatusNoContent {
+				t.Fatalf("%s: %d %s", what, status, body)
+			}
+			var left int64
+			if err := h.store.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE knocker <> ''`).Scan(&left); err != nil {
+				t.Fatal(err)
+			}
+			if left != 0 {
+				t.Fatalf("%d rows still name a knocker after a %s", left, what)
+			}
+			if what == "purge" {
+				// The mailbox is still there, so a knocker knocks again.
+				h.assertCountersAgree()
+				if id := h.knockID(alice, bob, "alice again"); id == 0 {
+					t.Fatal("a knock after a purge was not stored")
+				}
+				if h.knockRows(fp) != 1 {
+					t.Fatalf("%d knock rows after a purge and a knock, want 1", h.knockRows(fp))
+				}
+			}
+		})
+	}
+}
+
+// Put holds its own invariant: a knock names its knocker and no other
+// kind does. A caller that gets this wrong is a programming fault, not a
+// request, so it is refused with a sentence naming the kind and the value
+// rather than storing a row nothing can account for: a knock with no
+// knocker would never be replaced, and an envelope carrying one would be
+// a row naming a sender for no reason at all, which is the thing the
+// relay is built not to hold. (The replacement's lookup asks for the
+// knock kind as well, so such a row would not in fact be swept away by
+// the next knock; it would simply sit there naming somebody.)
+func TestPutRefusesAKnockerOnTheWrongKind(t *testing.T) {
+	h := newHarness(t, Config{})
+	people := ids(t, "alice", "bob")
+	alice, bob := people[0], people[1]
+	h.register(alice)
+	h.register(bob)
+	fp := bob.Fingerprint()
+	raw := sealed(t, alice, bob.Public(), "x")
+	for _, tc := range []struct{ name, kind, knocker string }{
+		{"a knock with no knocker", relayapi.KindKnock, ""},
+		{"an envelope with one", relayapi.KindEnvelope, alice.Fingerprint()},
+		{"a stream with one", relayapi.KindStream, alice.Fingerprint()},
+	} {
+		_, err := h.store.Put(fp, "default", tc.kind, tc.knocker, raw, Quotas{})
+		if err == nil || !strings.Contains(err.Error(), "a knock names its knocker and nothing else does") {
+			t.Errorf("%s: %v; want the invariant's refusal", tc.name, err)
+		}
+	}
+	if n := h.messageCount(fp); n != 0 {
+		t.Fatalf("%d messages stored by a refused Put", n)
+	}
+	// And the two right ways round are taken.
+	if _, err := h.store.Put(fp, "default", relayapi.KindEnvelope, "", raw, Quotas{}); err != nil {
+		t.Fatalf("an envelope with no knocker: %v", err)
+	}
+	if _, err := h.store.Put(fp, "default", relayapi.KindKnock, alice.Fingerprint(), raw, Quotas{}); err != nil {
+		t.Fatalf("a knock with its knocker: %v", err)
+	}
+	h.assertCountersAgree()
+}
+
+// Two rows name a sender — an upload's from_fp and a knock's knocker —
+// and both are promised to live no longer than the row itself. SQLite
+// would otherwise leave a deleted row's bytes in free pages until
+// something reused them, so a backup taken after a knock was
+// acknowledged would still carry who knocked at whom; secure_delete is
+// what makes the promise the documents give true of the file and not
+// only of the table. It is a connection pragma, so every connection the
+// store opens must have it.
+//
+// What this pins is the setting, not its effect: a knocker has a mailbox
+// on the same relay, so their fingerprint is in the file either way, and
+// the thing secure_delete protects — the association between that
+// fingerprint and a recipient, in a freed page — has no assertion that
+// is not also true of a database that never held it.
+func TestTheStoreDeletesSecurely(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenStore(filepath.Join(dir, "relay.db"), filepath.Join(dir, "messages"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var on int
+	if err := store.db.QueryRow(`PRAGMA secure_delete`).Scan(&on); err != nil {
+		t.Fatal(err)
+	}
+	if on != 1 {
+		t.Fatalf("secure_delete is %d on a fresh store; a deleted knocker's bytes stay in the file", on)
 	}
 }

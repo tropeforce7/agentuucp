@@ -149,7 +149,7 @@ type LimitsConfig struct {
 	// read, since a setting pair that cancels a guarantee is refused,
 	// not documented.
 	KnockMaxBytes int64 `json:"knock_max_bytes"`
-	// MaxKnocksWaiting is the knocks one mailbox holds, the
+	// MaxKnocksWaiting is the knockers one mailbox holds a knock from, the
 	// second limit with a ceiling, maxKnocksWaitingCeiling, for the
 	// reason max_open_uploads has one: each is a file and a row the relay
 	// holds for a mailbox its owner has not fetched.

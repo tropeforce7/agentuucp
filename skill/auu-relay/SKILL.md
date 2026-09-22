@@ -207,7 +207,10 @@ mailbox.
 **Backups** are `/var/lib/auu` — `relay.db` and `messages/` together, one
 without the other being an index pointing at files that are not there — and
 the `auu-ca` directory on the operator's own machine, which is the one
-thing that cannot be reissued.
+thing that cannot be reissued. A backup of `relay.db` carries the two rows
+that name a sender while they live: an upload in progress, and a waiting
+knock, whose row names its knocker until the owner fetches it. Say so if
+the user asks what a backup holds.
 
 ## 6. What needs the user's word every time
 

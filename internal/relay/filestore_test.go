@@ -113,7 +113,7 @@ func TestNothingIsVisibleUntilPutReturns(t *testing.T) {
 		}
 	}()
 
-	h.store.Put(fp, "default", relayapi.KindEnvelope, big, Quotas{})
+	h.store.Put(fp, "default", relayapi.KindEnvelope, "", big, Quotas{})
 	close(stop)
 	select {
 	case msg := <-bad:
@@ -137,7 +137,7 @@ func TestDeleteRemovesTheFile(t *testing.T) {
 	alice, bob := people[0], people[1]
 	h.register(alice)
 	h.register(bob)
-	id, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, sealed(t, alice, bob.Public(), "x"), Quotas{})
+	id, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", sealed(t, alice, bob.Public(), "x"), Quotas{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestDeregisterAndPurgeRemoveFiles(t *testing.T) {
 		h.register(alice)
 		h.register(bob)
 		for range 3 {
-			if _, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope,
+			if _, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "",
 				sealed(t, alice, bob.Public(), "x"), Quotas{}); err != nil {
 				t.Fatal(err)
 			}
@@ -226,7 +226,7 @@ func TestStartupSweep(t *testing.T) {
 		}
 		var paths []string
 		for range n {
-			id, err := s.Put(fp, "default", relayapi.KindEnvelope, sealed(t, alice, bob.Public(), "x"), Quotas{})
+			id, err := s.Put(fp, "default", relayapi.KindEnvelope, "", sealed(t, alice, bob.Public(), "x"), Quotas{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -461,7 +461,7 @@ func TestAFreshDatabaseBesideOldMailIsRefused(t *testing.T) {
 		if err := s.Register(fpB, bob.Public().Bundle(), bob.Name, RegisterOptions{}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.Put(fpB, "default", relayapi.KindEnvelope, sealed(t, alice, bob.Public(), "x"), Quotas{}); err != nil {
+		if _, err := s.Put(fpB, "default", relayapi.KindEnvelope, "", sealed(t, alice, bob.Public(), "x"), Quotas{}); err != nil {
 			t.Fatal(err)
 		}
 		s.Close()
@@ -486,7 +486,7 @@ func TestListOmitsAMessageWhoseFileHasGone(t *testing.T) {
 
 	var ids []int64
 	for range 3 {
-		id, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, sealed(t, alice, bob.Public(), "x"), Quotas{})
+		id, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", sealed(t, alice, bob.Public(), "x"), Quotas{})
 		if err != nil {
 			t.Fatal(err)
 		}

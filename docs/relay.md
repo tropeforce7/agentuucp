@@ -148,7 +148,16 @@ use for it. A message row carries its kind, `envelope`, `stream` or
 `knock`, the word the route it arrived by gives it and the word every
 listing says beside the row; a knock is an envelope a stranger posted to
 the knock route of a mailbox whose card, verified at that moment and
-never read from the column, says `knocks`.
+never read from the column, says `knocks`. A knock row carries one thing
+no other row does: the fingerprint of the knocker, the one the request's
+signature proved and never anything the envelope claims. It is there so
+that a second knock from the same key replaces the first — which is what
+makes `max_knocks_waiting` a count of knockers — and it lives exactly as
+long as the row: until the owner's fetch acknowledges it, until it is
+replaced, or until the mailbox goes. Beside the uploads table it is the
+only place the relay records who is sending something; an operator whose
+users would rather it did not can say so, and those users push a card
+that takes no knocks.
 
 An operator can list all of this, and count it, and delete it. None of it can
 be read. Every file is a sealed envelope or a sealed stream. **Back up the
@@ -264,7 +273,7 @@ switch the lot off.
 | `max_inflight` | requests being handled at once | 256 |
 | `max_waiting` | listings held open at once for watchers; over it the next is answered at once rather than held, and each held listing keeps an in-flight slot, so keep this well under `max_inflight` | 64 |
 | `knock_max_bytes` | the largest knock envelope, on the knock route's own cap, so a stranger's one message is read under a bound of its own; 0 is `max_bytes`, since a knock is a post, and a value over `max_bytes` is refused at startup naming both | 8192 |
-| `max_knocks_waiting` | knocks one mailbox holds, counted as rows the relay has whatever the owner has read; a knock at it is refused `429` with no `Retry-After`, since the relay cannot say when the owner will fetch or remove them, and the sender's knock is not charged for it; 0 is unlimited; at most 1000, for the reason `max_open_uploads` has a ceiling | 10 |
+| `max_knocks_waiting` | knockers one mailbox holds a knock from, counted as rows the relay has whatever the owner has read. One knocker holds one row however often they knock: a second knock from a key replaces the first, so this counts knockers and one identity cannot fill it. A knock from somebody the mailbox holds none from is refused `429` at the cap, with no `Retry-After`, since the relay cannot say when the owner will fetch or remove them, and the sender's knock is not charged for it; 0 is unlimited; at most 1000, for the reason `max_open_uploads` has a ceiling | 10 |
 | `knocks_per_hour` | knocks one sender may post in an hour, across every mailbox, beside the post budgets every knock is charged as a post; 0 is unlimited | 10 |
 
 The three queue limits count a stream from the moment it is opened. What
@@ -392,7 +401,12 @@ line names the verified caller and the request path, which together are who is
 writing to whose mailbox. Set `access_log: "minimal"` on any relay shared
 beyond one team. It logs the route (`POST /v1/mailbox/{fp}`) instead of the
 path and omits the caller. That is still enough to operate the relay and to
-tell an attack from ordinary traffic.
+tell an attack from ordinary traffic. One thing it does not hide, because
+it is not in the log at all: a waiting knock's row names its knocker, so
+the database says who has knocked at whom until that knock is fetched or
+replaced. An operator whose users want no such record turns knocks off by
+telling them so; a user does it themselves with a card that says no
+knocks.
 
 A file operation under the message directory that fails is answered to the
 client as a `500` that says only `storage error`, since nothing the client

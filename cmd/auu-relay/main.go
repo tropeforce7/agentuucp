@@ -142,7 +142,7 @@ func registerFlags(fs *flag.FlagSet) *flagValues {
 	fs.Int64Var(&f.knockMaxBytes, "knock-max-bytes", d.Limits.KnockMaxBytes,
 		"largest knock envelope, at most max-bytes (0: max-bytes)")
 	fs.Int64Var(&f.maxKnocksWaiting, "max-knocks-waiting", d.Limits.MaxKnocksWaiting,
-		"most knocks one mailbox holds, at most 1000 (0: unlimited)")
+		"most knockers one mailbox holds a knock from, at most 1000 (0: unlimited)")
 	fs.Int64Var(&f.knocksPerHour, "knocks-per-hour", d.Limits.KnocksPerHour,
 		"knocks an hour, per identity, across every mailbox (0: unlimited)")
 	fs.StringVar(&f.accessLog, "access-log", d.AccessLog,

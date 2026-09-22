@@ -38,13 +38,26 @@ follows says only that the owner is finished with it, whether that is a
 second later or a month. What it costs is room, which the per-mailbox
 limits bound.
 
-One table is an exception, and it is worth stating. While a stream is being
+Two rows are exceptions, and both are worth stating. While a stream is being
 uploaded, the relay holds a row naming the *sender* as well as the recipient.
 It has to, because only the sender may append to their own upload and the
 reservation must be charged to somebody. That row lives for the length of one
-upload and is deleted when the stream completes or is abandoned. It is the
-only place the relay writes down who is sending something, and nothing survives
-it. While it lives, the reservation counts against the recipient's quotas
+upload and is deleted when the stream completes or is abandoned, and nothing
+survives it.
+
+The other is a knock. A knock row carries the fingerprint of whoever
+knocked, and carries it for exactly as long as the row: until the owner's
+fetch acknowledges it, until that knocker knocks again and replaces it, or
+until the mailbox goes. It has to, because that is what lets a second knock
+from one key replace the first, so the waiting cap counts knockers rather
+than knocks and no single identity can fill a mailbox's share of it. Nothing
+survives that row either: no counter, no log line and no other table keeps
+it, and an owner who would rather the relay held no such thing pushes a card
+that says no knocks, which closes the door and stores nothing. Those two
+rows are the whole of what the relay writes down about who is sending
+something.
+
+While an upload's row lives, the reservation counts against the recipient's quotas
 and the relay's as though the stream were already queued. That holds for an
 envelope posted beside it as much as for another stream. One arithmetic
 answers both, so neither can be filled into the other's reservation. What
@@ -60,14 +73,19 @@ relay knows which identity is writing into which mailbox. Its access log
 records exactly that unless you set `access_log: "minimal"`. Rate limiting
 keeps the verified fingerprint in memory for as long as a bucket lives.
 Anybody holding the logs of a `full`-mode relay holds the social graph. Nothing
-is written to the database, and no limiter key is ever written anywhere. The
+of that is written to the database, and no limiter key is ever written
+anywhere; the one thing a stored row says about a sender is the knocker on a
+knock, above, which lives as long as the knock does. The
 channel a message was posted to is the one thing about a message's content
 the relay learns beyond its size. It is written to the row, served in the
 owner's own listing, and recorded in the access log under neither mode.
-A knock is seen exactly as any post is: the relay knows which identity
-posted it and to whose mailbox, and no more. The row it writes says
-`knock` and names no knocker, as no row names a sender; who is knocking
-is inside the ciphertext with everything else the sender wrote.
+A knock is seen as any post is, and stored with one thing more: the row
+says `knock` and carries the knocker's fingerprint, which is what lets a
+second knock from one key replace the first. What the knocker *wrote* is
+inside the ciphertext like every sender's words; what the row holds is
+who they are, and only until the owner's fetch acknowledges it, it is
+replaced, or the mailbox goes. An owner who would rather the relay held
+no such thing pushes a card that says no knocks.
 
 A listing held open (`wait`) tells the relay nothing it did not know. It is
 the owner's own listing, answered later. A directory watch (`peers`) tells
@@ -75,10 +93,16 @@ it which peers the watcher may post to, which the directory fetch the
 watcher made first had already told it. It tells it nothing about a peer
 who has not admitted the watcher, since such a peer is dropped before
 anything is held. Neither reaches the access log. The query string is not
-logged under either mode. And there are no delivery receipts, and cannot
-be. The stored row has no sender, so nothing ties a message being collected
-to the person who posted it. Building that would mean recording the sender
-on every message, which is the social graph the relay is built not to hold.
+logged under either mode. And there are no delivery receipts for an
+ordinary message, and cannot be: its stored row has no sender, so nothing
+ties it being collected to the person who posted it, and building that
+would mean recording the sender on every message, which is the social
+graph the relay is built not to hold. A knock is the exception and is
+worth saying plainly: its row names its knocker, and the relay handles
+the acknowledgement that removes it, so for knocks alone the relay could
+tell that this person's knock was collected. That is the price of one
+knock per knocker, it lasts as long as the row and no longer, and an
+owner who does not want it takes no knocks.
 
 **What the network says reaches a terminal escaped.** A relay is trusted
 with routing and nothing else, and what it sends back is read on a
@@ -398,7 +422,9 @@ the channel, omitted for the default one. Sealed inside `ct`, where the
 relay cannot read a byte of it, are the Ed25519 signature, the sender's
 fingerprint and public keys, the subject, thread, message id and time, the
 text, and any attachments. Sign-then-encrypt, so the signature is inside
-the box. The relay sees that you posted to Bob, and stores no sender.
+the box. The relay sees that you posted to Bob, and stores no sender —
+except on a knock, whose row names its knocker for as long as the row
+lives, which is the one exception above.
 
 The message id, the thread and, on a reply, `in_reply_to` are each a
 message id. That is 32 lowercase hex characters, the id of the message that
@@ -855,11 +881,20 @@ registered key at that moment, never cached and never read from the
 inside the transaction that inserts the row counts the knocks the mailbox
 already holds and refuses at `max_knocks_waiting` with a `429` that
 carries no `Retry-After`, since the relay cannot say when the owner will
-fetch, and gives the knocker's token back. What bounds that cap is the
-knocker's own hourly budget, so one identity may fill a mailbox's cap in
-a burst and the door stays shut to every other knocker until the owner's
-next fetch empties it; the two settings are the operator's, and a smaller
-`knocks_per_hour` spreads the cap across more knockers. The allow list is
+fetch, and gives the knocker's token back.
+
+That cap counts knockers, not knocks. A mailbox holds one knock per
+knocker: a second knock from the same key replaces the first, in the same
+transaction that counts and stores, so a knocker who got their line wrong
+sends it again and a knocker cannot take more than one of a mailbox's
+places however often they knock. The replacement is the knocker's own
+act, not the relay's choice: the owner sees the earlier id go and a new
+one arrive, and if they had already fetched the earlier knock — a fetch
+acknowledges every knock — then nothing is there to replace and they
+simply have two knocks from one stranger, which is what happened. To
+recognise a knocker the relay keeps their fingerprint on the row, for as
+long as the row lives and no longer; an owner who would rather it did not
+pushes a card that says no knocks. The allow list is
 never read on this route, and the card is never read on the post route.
 No card, a card that says no and a card that does not verify are one
 refusal, `403 the

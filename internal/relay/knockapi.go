@@ -92,7 +92,10 @@ func (s *Server) handleKnock(w http.ResponseWriter, r *http.Request, body []byte
 		s.rateLimited(w, limitKnocks, retry, "")
 		return
 	}
-	id, err := s.store.Put(fp, channels.Default, relayapi.KindKnock, body, s.cfg.Limits.Quotas())
+	// The knocker is the fingerprint the signature proved, never anything
+	// the envelope claims: what the sender wrote inside is sealed and is
+	// the recipient's to judge, and the column is the relay's own.
+	id, err := s.store.Put(fp, channels.Default, relayapi.KindKnock, callerFP, body, s.cfg.Limits.Quotas())
 	switch {
 	case errors.Is(err, ErrKnocksWaiting):
 		// The recipient's cap, not the sender's: the token is given back,
