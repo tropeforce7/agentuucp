@@ -91,6 +91,22 @@ func newHarness(t *testing.T, cfg Config) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { store.Close() })
+	return serveStore(t, store, cfg)
+}
+
+// serveStore is newHarness over a store that is already open: a second
+// relay on the same database and message directory, for a test that
+// needs one request under one setting and the next under another —
+// a stream uploaded under the default stall deadline and its blob read
+// under a short one — without changing a running server's config under
+// its handlers, which the race detector would rightly see. The store
+// is closed by whoever opened it; each server closes with its own
+// cleanup, the later first. The one thing the servers share besides the
+// rows is the store's fault log, which NewServer points at its own
+// logger: after the second server is built, a storage fault under
+// either lands in the second harness's logs.
+func serveStore(t *testing.T, store *Store, cfg Config) *harness {
+	t.Helper()
 	// Streams are a capability the library leaves off unless asked, as
 	// auu-relay asks. Tests want them on unless they are testing the refusal.
 	if !cfg.streamsSet {

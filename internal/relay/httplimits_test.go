@@ -371,16 +371,28 @@ func TestTheAuthHeaderIsReadBeforeTheBody(t *testing.T) {
 // end within two seconds with less than the blob delivered; one that reads
 // 64 KiB at a time with a pause between reads, longer than the window in
 // all, gets the whole blob.
+//
+// The 24 MiB upload that makes the blob is not run under the 200 ms
+// stall: the PUT's read deadline is the same setting turned round, and
+// under the race detector with other packages' tests beside it the
+// loopback delivery of 24 MiB paused for longer than that between reads
+// often enough — two runs in four, the reviewer's logs — to cut the
+// fixture's own upload short with "the attempt stopped short at N of
+// 25167148 bytes". The upload goes through a relay at the default stall,
+// and the blob is read through a second relay over the same store at
+// 200 ms, since the setting is the server's and is not changed under a
+// running one.
 func TestLimitABlobReaderThatStopsIsCutInsideTheWindow(t *testing.T) {
-	h := newHarness(t, Config{StallTimeout: 200 * time.Millisecond})
+	uploader := newHarness(t, Config{})
 	people := ids(t, "alice", "bob")
 	alice, bob := people[0], people[1]
-	h.register(alice)
-	h.register(bob)
+	uploader.register(alice)
+	uploader.register(bob)
 	// Larger than the loopback socket buffers on any platform this runs
 	// on, so a reader that stops makes the relay's write block.
 	blob := fakeStream(200, 24<<20)
-	id := h.uploadStream(alice, bob.Fingerprint(), blob)
+	id := uploader.uploadStream(alice, bob.Fingerprint(), blob)
+	h := serveStore(t, uploader.store, Config{StallTimeout: 200 * time.Millisecond})
 	path := fmt.Sprintf("/v1/mailbox/%s/%d/blob", bob.Fingerprint(), id)
 
 	open := func(t *testing.T) (net.Conn, *bufio.Reader) {
