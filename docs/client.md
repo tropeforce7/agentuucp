@@ -132,6 +132,44 @@ anyone, and so does `auu lookup`. As with the allow list, a card edited
 on the relay's host stops verifying, which the relay reads as `broken`
 until you push again, and `auu inbox` tells you so.
 
+The third way to reach somebody is to knock, and it is the only one that
+does not need them to have added you first. It works where their card
+says `knocks`:
+
+*Listing 1.2f*
+```
+auu knock bob                      # one message to somebody who has not admitted you
+auu knock 4c1d9e2a7b0f3c58 --text "alice from the Tuesday standup"
+```
+
+A knock is one sealed message from you — `auu knock` sends one and then
+refuses, since they are a peer by then — of at most 512 bytes of text on
+one line, carrying the name you call yourself. It goes to a route of its own on the
+relay, which lets it past the recipient's allow list only because their
+signed card says it may, and nothing else goes that way: a second knock
+to the same person is refused, since they are on your list by then and
+`auu send` is what writes to a peer. Before anything leaves, `knock`
+prints what `lookup` prints, says what the relay's admission makes of a
+name found there, and asks you twice — whether to knock, and what to call
+them locally, with the name from their card offered and never taken by
+itself. Like `peers fetch` it refuses without a terminal unless you pass
+`--yes`, because it adds a peer, and the skills never run it. Once the
+knock is posted it adds them to your peer list and, when this machine has
+pushed an allow list to that relay, pushes it again so their reply
+reaches your inbox rather than being refused.
+
+On the other side a knock arrives in quarantine like any stranger's
+message, listed as `knock` with the name they claim and their one line;
+it is never left on the relay, whatever the channel's keep setting says.
+`auu quarantine show` prints it whole, saying the name is their own
+claim. `auu quarantine trust` is what accepts them: at a terminal it
+offers their claimed name as the local name, saying it is their claim and
+not a name you gave, and adds them once you accept it or type another;
+with no terminal the claim is not offered at all, since the prompt would
+take it with nobody there, and `peer-<short>` is offered instead. Then,
+if your mailbox is restricted, it asks whether to push your allow list so
+they can write to you.
+
 ### 1.3 Send something
 
 *Listing 1.3a*
@@ -402,6 +440,13 @@ auu quarantine ls
 auu quarantine show MESSAGE-ID
 auu quarantine trust MESSAGE-ID    # adds them to your peer list
 ```
+
+A knock is listed there as `knock`, with the name its sender claims and
+their one line, both escaped before they reach your terminal. It is never
+left on the relay, so it holds no room in your mailbox. `trust` on a
+knock offers the claimed name as the local name and, when this machine
+has pushed an allow list to that relay, asks whether to push it again so
+they can reply; answering no prints the `auu allow push` to run later.
 
 *Listing 1.5c*
 ```
@@ -763,7 +808,7 @@ Go's file modes say nothing about who can read.
 | `inbox/`, `sent/`, `quarantine/` | the message spool, one JSON file each; a record that will not read is said to be, once, and left out of the listing |
 | `inbox/<id>.d/` | a large message's files, written straight to disk |
 | `outbox/` | streams sealed but not yet delivered, waiting for `auu send --resume` |
-| `damaged/<relay>/<id>.bin`, `.json` | a message your key could not open, as the relay served it, with a record of which relay's message it was, when, and why in a word — `did not decrypt`, `not addressed to this key`, `sender signature failed`, `malformed`, or `misfiled` for a message the relay listed under a channel it was not sealed for; a stream keeps its manifest chunk only. `auu inbox` says how many are there until you remove them; the directory holds at most 64 MiB, the oldest going first, and a message that alone exceeds that is not kept, which the warning says |
+| `damaged/<relay>/<id>.bin`, `.json` | a message your key could not open, as the relay served it, with a record of which relay's message it was, when, and why in a word — `did not decrypt`, `not addressed to this key`, `sender signature failed`, `malformed`, or `misfiled` for a message the relay listed under a channel it was not sealed for, or listed as a kind its sealed record is not — a knock that is not one inside, or one that is inside a row listed as an ordinary envelope; a stream keeps its manifest chunk only. `auu inbox` says how many are there until you remove them; the directory holds at most 64 MiB, the oldest going first, and a message that alone exceeds that is not kept, which the warning says |
 
 `authorized_peers` is the file that matters. Nothing on the network can add to
 it. Back it up alongside `identity.json`. Back up `home.key` and

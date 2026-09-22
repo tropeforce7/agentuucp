@@ -69,6 +69,7 @@ Usage:
   auu peers rm <name|fingerprint>
   auu peers fetch NAME|SHORT-ID|FINGERPRINT [--yes]   # add a peer found on the relay, at a terminal
   auu listed [--json]                 # who on the relay chose to be listed, verified here
+  auu knock NAME|SHORT-ID|FINGERPRINT [--text "..."] [--yes]   # one message to somebody who has not admitted you
 
   auu allow push                     # sign your peer list and push it to every relay
   auu allow clear
@@ -279,6 +280,8 @@ func dispatch(args []string) error {
 		return cmdLookup(rest)
 	case "listed":
 		return cmdListed(rest)
+	case "knock":
+		return cmdKnock(rest)
 	case "enrol", "enroll":
 		return cmdEnrol(rest)
 	case "register":

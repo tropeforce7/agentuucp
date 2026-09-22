@@ -98,7 +98,7 @@ func cmdAllow(args []string) error {
 			if err := s.SetAllowPushed(r, now); err != nil {
 				return err
 			}
-			fmt.Printf("%s will now accept mail for you from %d peer(s) only\n", r.Name, len(fps))
+			fmt.Println(allowPushedLine(r.Name, len(fps)))
 		} else {
 			if err := s.ClearAllowPushed(r); err != nil {
 				return err
@@ -113,6 +113,51 @@ func cmdAllow(args []string) error {
 		fmt.Println("(messages from senders outside your peer list still land in quarantine)")
 	}
 	return nil
+}
+
+// allowPushedLine is what a push says it did, in one place: 'auu allow
+// push' prints it, and a command that pushes as part of something else
+// prints it or holds it back, as 'auu knock --json' does, which owes its
+// caller one object and nothing else.
+func allowPushedLine(relay string, senders int) string {
+	return fmt.Sprintf("%s will now accept mail for you from %d peer(s) only", relay, senders)
+}
+
+// pushAllowTo pushes this machine's peer list to one relay, quietly: the
+// same work 'auu allow push --relay NAME' does, without its line, for a
+// caller that says the line itself or says nothing. It reports how many
+// senders the list names.
+func pushAllowTo(s *store.Store, id *identity.Identity, r *store.Relay) (senders int, err error) {
+	peers, err := s.Peers()
+	if err != nil {
+		return 0, err
+	}
+	fps := make([]string, 0, len(peers))
+	for _, p := range peers {
+		fps = append(fps, p.Fingerprint())
+	}
+	now := time.Now()
+	doc, sig, err := allowlist.Sign(id, &allowlist.Document{Issued: now, Senders: fps})
+	if err != nil {
+		return 0, err
+	}
+	c, err := dial(s, id, r)
+	if err != nil {
+		return 0, err
+	}
+	if err := c.SetAllowlist(ctx(), doc, sig); err != nil {
+		var httpErr *client.HTTPError
+		if errors.As(err, &httpErr) && httpErr.Status == http.StatusConflict {
+			return 0, &exitError{code: exitTransport, err: fmt.Errorf(
+				"%s: holds a newer allow list, %s, from another machine of yours; '%s allow show --relay %s' shows it",
+				r.Name, issuedFrom(httpErr.Message), prog, r.Name)}
+		}
+		return 0, transportErr(fmt.Errorf("%s: %w", r.Name, err))
+	}
+	if err := s.SetAllowPushed(r, now); err != nil {
+		return 0, err
+	}
+	return len(fps), nil
 }
 
 // issuedFrom takes "issued T" out of the relay's 409 sentence, "a newer

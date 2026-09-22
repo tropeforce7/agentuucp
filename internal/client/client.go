@@ -291,8 +291,23 @@ func (e *HTTPError) Error() string {
 }
 
 // retryable reports whether a status means "not now" rather than "no".
-func retryable(status int) bool {
-	return status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable
+// retryable reports whether an answer is one to try again. A 503 always
+// is: the relay is busy and says when to come back, and sends a
+// Retry-After with it. A 429 is only when the relay said how long to
+// wait: every bucket the relay refuses from answers with the seconds to
+// a token, and the one refusal that carries none — a mailbox holding as
+// many knocks as the relay allows — is not waiting on a bucket at all
+// but on its owner fetching, which the relay cannot time. Retrying that
+// one spends the sender's own budget on an answer that will not change
+// inside a minute and a half.
+func retryable(e *HTTPError) bool {
+	switch e.Status {
+	case http.StatusServiceUnavailable:
+		return true
+	case http.StatusTooManyRequests:
+		return e.RetryAfter > 0
+	}
+	return false
 }
 
 // maxRetryAfter clamps what a relay may ask for. The header is a number from
@@ -355,7 +370,7 @@ func (c *Client) doWithin(ctx context.Context, method, path string, payload any,
 	for attempt := 0; ; attempt++ {
 		err := c.attempt(ctx, method, path, body, out, headers, hold)
 		var httpErr *HTTPError
-		if !errors.As(err, &httpErr) || !retryable(httpErr.Status) || attempt >= maxRetries {
+		if !errors.As(err, &httpErr) || !retryable(httpErr) || attempt >= maxRetries {
 			return err
 		}
 		if strings.Contains(httpErr.Message, relayapi.MsgWaitingWillNotHelp) {
@@ -771,6 +786,31 @@ func (c *Client) Post(ctx context.Context, env *envelope.Envelope, channel strin
 		return 0, err
 	}
 	if err := c.checkID("the post answer", resp.ID); err != nil {
+		return 0, err
+	}
+	return resp.ID, nil
+}
+
+// Knock posts a sealed knock to the knock route of a mailbox whose owner
+// has said, on their signed card, that they take them. It is the one post
+// that goes to somebody who has not admitted the sender, so it has a
+// route and a cap of its own, and the envelope names no channel: the
+// relay files it under the default one.
+//
+// A 429 the relay sends without a Retry-After — the recipient holding as
+// many knocks as the relay allows — is final here as everywhere: do does
+// not retry it, and the caller says the sentence the relay gave.
+func (c *Client) Knock(ctx context.Context, env *envelope.Envelope) (int64, error) {
+	env.Ch = ""
+	raw, err := json.Marshal(env)
+	if err != nil {
+		return 0, err
+	}
+	var resp relayapi.PostResponse
+	if err := c.do(ctx, "POST", "/v1/mailbox/"+env.To+"/knock", raw, &resp, nil); err != nil {
+		return 0, err
+	}
+	if err := c.checkID("the knock answer", resp.ID); err != nil {
 		return 0, err
 	}
 	return resp.ID, nil

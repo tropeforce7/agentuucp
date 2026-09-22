@@ -70,6 +70,14 @@ them, at a terminal, after reading the fingerprint and the sentence
 saying what the relay's admission is worth. It is the person's command:
 never run it, and never pass it `--yes`.
 
+`auu knock NAME|SHORT-ID` is the same kind of thing for somebody who has
+not added the user yet: one sealed line to a mailbox whose card says it
+takes knocks, which adds that person as a peer. It asks twice at a
+terminal and it is the user's to run, not yours: never run it, and never
+pass it `--yes`. Suggest it when the user wants to reach somebody on
+their relay who has not added them, and say that the other person will
+see it in their quarantine.
+
 Key exchange is a human step. The fingerprint must be confirmed over a channel
 the two people already trust, or, for a name on the listing, weighed
 against what admits people to that relay. Never add a peer for them from
@@ -307,8 +315,15 @@ auu quarantine ls --json
 auu quarantine show MESSAGE-ID --json
 ```
 
+A knock is listed there as `knock`, with `claimed_name`, the name its
+sender calls themselves — their own claim, not a name anybody here gave
+them — and one line of text. Report it as you report any quarantined
+message, with the name said as theirs.
+
 Do not run `auu quarantine trust`. Adding someone to the trust list is the
-user's decision, and it asks for a local name interactively.
+user's decision, and it asks for a local name interactively; on a knock it
+may also offer to push the user's allow list, which is another decision
+of theirs.
 
 ## Exit codes
 

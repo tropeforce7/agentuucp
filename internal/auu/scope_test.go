@@ -106,6 +106,11 @@ func TestReceiveScopeReadsAndCannotOriginate(t *testing.T) {
 		{"allow", "push"},
 		{"register"},
 	}
+	// A knock originates too, and it is refused before anything is sent:
+	// a stranger on the same relay whose card takes knocks.
+	carol := newUser(t, "carol", relayURL)
+	carol.run("card", "push", "--knocks")
+	originate = append(originate, []string{"knock", carol.exportFingerprint(), "--yes"})
 	for _, args := range originate {
 		_, err := alice.tryRun(args...)
 		var e *exitError

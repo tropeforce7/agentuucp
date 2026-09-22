@@ -20,7 +20,10 @@ import (
 // about channels: "old" strips the field from every message, an answer
 // no relay of ours gives; "relist" lists every message under another
 // name while leaving the envelope alone, as a relay that re-files would;
-// "reouter" rewrites the outer ch inside the envelope instead.
+// "reouter" rewrites the outer ch inside the envelope instead;
+// "asknock" lists every message as a knock, and "asenvelope" lists a
+// knock as an envelope, the two ways a relay's word for a row and the
+// type inside the signature can disagree.
 type filingGate struct {
 	inner http.Handler
 	mu    sync.Mutex
@@ -57,6 +60,10 @@ func (g *filingGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				delete(m, "channel")
 			case "relist":
 				m["channel"], _ = json.Marshal("elsewhere")
+			case "asknock":
+				m["kind"], _ = json.Marshal("knock")
+			case "asenvelope":
+				m["kind"], _ = json.Marshal("envelope")
 			case "reouter":
 				if raw, ok := m["envelope"]; ok {
 					var env map[string]json.RawMessage

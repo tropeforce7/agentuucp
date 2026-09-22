@@ -262,6 +262,26 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 				continue
 			}
 
+			// The kind the relay listed it under, against the type inside
+			// the signature. A knock came in past the allow list because
+			// the owner's card admits knocks, so a row that says knock
+			// outside and something else inside, or the reverse, is
+			// obeyed in neither direction: kept, said to be, and
+			// acknowledged, as a message filed under the wrong channel is.
+			if !knockAgrees(m.Kind, inner.Body.Type) {
+				if err := keepMiskinded(s, r, m.ID, m.Received, m.Raw, m.Kind, inner.Body.Type, &res); err != nil {
+					return res, said, err
+				}
+				if err := c.Ack(ctx, m.ID); err != nil {
+					return res, said, transportErr(err)
+				}
+				cursor = m.ID
+				if err := s.SetCursorFor(r, cursor); err != nil {
+					return res, said, err
+				}
+				continue
+			}
+
 			// The channel it was sealed for, against the one the relay
 			// posted and listed it under. A relay that filed it elsewhere
 			// is found out here, not obeyed: the message is kept, said to
@@ -287,8 +307,12 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 			}
 			// Kept on the relay, or acknowledged away, as this machine's
 			// setting for the channel says. Kept is the default, and the
-			// record says so, since nothing else would remember.
-			keep := keepFor(settings, channel)
+			// record says so, since nothing else would remember. A knock
+			// is never kept, whatever the channel says: the recipient's
+			// copy is the one that matters, and a kept knock would count
+			// against the relay's max_knocks_waiting for ever, closing
+			// the mailbox to every other knocker.
+			keep := keepFor(settings, channel) && inner.Body.Type != message.TypeKnock
 			stored := &store.Stored{
 				RelayID:    m.ID,
 				Relay:      r.Name,
@@ -349,6 +373,11 @@ type messageJSON struct {
 	// Channel is the channel the message is filed under, default when the
 	// sender named none.
 	Channel string `json:"channel"`
+	// ClaimedName is the name a knock's sender called themselves, their
+	// own claim and never a label: present on a knock alone, and set
+	// beside from_name, which is what this machine calls them, empty
+	// until somebody accepts one.
+	ClaimedName string `json:"claimed_name,omitempty"`
 	// OnRelay says the message is still queued on the relay it came
 	// through, and PayloadOnRelay that a quarantined stream's body is.
 	OnRelay        bool `json:"on_relay,omitempty"`
@@ -370,6 +399,7 @@ func toJSON(box store.Box, m *store.Stored, includeText bool) messageJSON {
 		Box:         string(box),
 		Attachments: make([]attachmentJSON, 0, len(m.Inner.Body.Attachments)),
 		Channel:     channelName(m.Channel),
+		ClaimedName: m.Inner.Body.Name,
 
 		OnRelay:        m.OnRelay,
 		PayloadOnRelay: m.PayloadOnRelay,
@@ -574,6 +604,21 @@ func cmdInbox(args []string) error {
 	return nil
 }
 
+// printQuarantineLine is one message as the quarantine lists it. A knock
+// has no subject and carries its sender's own name and one line instead,
+// both said as theirs and both escaped here, as every word from outside
+// is wherever it is printed.
+func printQuarantineLine(m *store.Stored) {
+	if m.Inner.Body.Type == message.TypeKnock {
+		fmt.Printf("%s  knock  from %s  %s  %s%s\n", m.Inner.ID[:12], m.Inner.From[:16],
+			truncate(orNone(identity.Printable(m.Inner.Body.Name)), 20),
+			truncate(identity.PrintableText(m.Inner.Body.Text), 40), whereElse(m))
+		return
+	}
+	fmt.Printf("%s  from %s  %s%s\n", m.Inner.ID[:12], m.Inner.From[:16],
+		truncate(orNone(identity.PrintableText(m.Inner.Body.Subject)), 40), whereElse(m))
+}
+
 // printInboxLine is one message as the inbox lists it: unread flag, the
 // id, sender, type, subject, when it arrived, attachments, channel, and
 // where it still is besides here.
@@ -676,6 +721,12 @@ func printMessage(s *store.Store, box store.Box, m *store.Stored) {
 	// before the rule, or written by hand, is still in the spool.
 	fmt.Printf("from:    %s <%s>\n", orNone(identity.Printable(m.SenderName)), m.Inner.From[:16])
 	fmt.Printf("type:    %s\n", m.Inner.Body.Type)
+	// A knock carries the sender's own name, which is a claim and not a
+	// label: said as theirs, escaped as every word from outside is, and
+	// never written into the peer list unless a person accepts it.
+	if m.Inner.Body.Type == message.TypeKnock {
+		fmt.Printf("claims:  %s (their own claim, not a name you gave)\n", identity.Printable(m.Inner.Body.Name))
+	}
 	// The thread's subject, and under it this message's own when it was
 	// given one: a reply can be about something of its own without
 	// starting a thread of its own, and both are worth seeing.
@@ -1316,8 +1367,7 @@ func cmdQuarantine(args []string) error {
 			return nil
 		}
 		for _, m := range msgs {
-			fmt.Printf("%s  from %s  %s%s\n", m.Inner.ID[:12], m.Inner.From[:16],
-				truncate(orNone(identity.PrintableText(m.Inner.Body.Subject)), 40), whereElse(m))
+			printQuarantineLine(m)
 		}
 		fmt.Println("\nThese senders are not in your peer list. Confirm who they are out of band,")
 		fmt.Printf("then run: %s quarantine trust <id>\n", prog)
@@ -1365,7 +1415,32 @@ func cmdQuarantine(args []string) error {
 		if pub.Fingerprint() != m.Inner.From {
 			return fmt.Errorf("quarantined message has an inconsistent sender key")
 		}
-		pub.Name = promptName(pub.Fingerprint(), fallbackName(pub.Fingerprint()))
+		// A knock carries the sender's own name: offered at the prompt as
+		// the default, as a card's name is at 'peers fetch', and taken
+		// only where a person is there to accept it. A name the peer list
+		// already uses for somebody else is not offered, and the sentence
+		// says whose it is, so a refusal costs nothing.
+		//
+		// Without a terminal nothing from the wire is offered: the prompt
+		// takes its default at end of input, and this command, unlike
+		// 'knock' and 'peers fetch', does not refuse without one, so an
+		// offer made here would write a stranger's chosen name into the
+		// peer list with nobody answering. peer-<fp8> is this machine's
+		// own, and 'auu peers rm' and 'peers add' are the repair for
+		// somebody who meant the other.
+		offered, takenBy := knockName(s, m)
+		if offered != fallbackName(pub.Fingerprint()) && !stdinIsTerminal() {
+			fmt.Printf("they call themselves %s, which is their own claim; without a terminal it is not offered\n",
+				identity.Printable(m.Inner.Body.Name))
+			offered = fallbackName(pub.Fingerprint())
+		} else if takenBy != "" {
+			fmt.Printf("%q is already the name of %s on your peer list, so it is not offered\n",
+				identity.Printable(m.Inner.Body.Name), takenBy[:identity.ShortIDLen])
+		} else if offered != fallbackName(pub.Fingerprint()) {
+			fmt.Printf("they call themselves %s; that is their own claim, not a name you gave\n",
+				identity.Printable(m.Inner.Body.Name))
+		}
+		pub.Name = promptName(pub.Fingerprint(), offered)
 		if _, err := s.AddPeer(pub); err != nil {
 			return usageErrf("%v", err)
 		}
@@ -1443,12 +1518,75 @@ func cmdQuarantine(args []string) error {
 			return err
 		}
 		fmt.Printf("trusted %s and moved message %s to the inbox\n", pub.Fingerprint()[:16], m.Inner.ID[:12])
-		fmt.Printf("run '%s allow push' if your relay mailbox is restricted\n", prog)
-		return nil
+		return offerAllowPush(s, m)
 
 	default:
 		return usageErrf("unknown quarantine subcommand %q", sub)
 	}
+}
+
+// knockName is the name offered at the local-name prompt when a knock is
+// trusted: the name its sender called themselves, when the export line's
+// rule takes it and no peer's name folds equal to it, and peer-<fp8>
+// otherwise. A suggestion and never the label. Taken is what AddPeer
+// refuses on, so the offer and the refusal agree.
+func knockName(s *store.Store, m *store.Stored) (name string, takenBy string) {
+	fp := m.Inner.From
+	claimed := m.Inner.Body.Name
+	if m.Inner.Body.Type != message.TypeKnock || claimed == "" || identity.ValidName(claimed) != nil {
+		return fallbackName(fp), ""
+	}
+	// A peer list that cannot be read is AddPeer's error to report, a
+	// moment later, so the offer stands.
+	peers, _ := s.Peers()
+	for _, other := range peers {
+		if other.Fingerprint() != fp && strings.EqualFold(other.Name, claimed) {
+			return fallbackName(fp), other.Fingerprint()
+		}
+	}
+	return claimed, ""
+}
+
+// offerAllowPush is what a newly trusted sender needs before they can
+// write: on a relay this machine has pushed an allow list to, the list
+// no longer names everyone the person trusts, and the sender is refused
+// until it is pushed again. With the marker, the person is asked and the
+// push is run on yes; without one, or without a terminal, the sentence
+// that says to run it is printed as it always was. The push is a
+// send-scope signature, so an agent unlocked to receive asks for the
+// passphrase, which is why it is a question and not something done
+// silently.
+func offerAllowPush(s *store.Store, m *store.Stored) error {
+	r, err := relayOf(s, m, "")
+	if err != nil {
+		// Not a failure of the trust, which is done: the relay the
+		// message came through is not one this machine has any more.
+		fmt.Printf("run '%s allow push' if your relay mailbox is restricted\n", prog)
+		return nil
+	}
+	if _, found, err := s.AllowPushed(r); err != nil || !found {
+		fmt.Printf("run '%s allow push' if your relay mailbox is restricted\n", prog)
+		return nil
+	}
+	// Asked, not gated on a terminal: the person is already answering the
+	// local-name prompt in this command, through the same reader, and an
+	// empty answer — end of input on a pipe — is a no, which prints the
+	// push to run later.
+	if !confirm(fmt.Sprintf("Push your allow list to %s now, so %s can write to you?",
+		r.Name, identity.Printable(m.SenderName))) {
+		fmt.Printf("nothing pushed; run '%s allow push --relay %s' when you are ready\n", prog, r.Name)
+		return nil
+	}
+	_, id, err := loadIdentity()
+	if err != nil {
+		return err
+	}
+	senders, err := pushAllowTo(s, id, r)
+	if err != nil {
+		return err
+	}
+	fmt.Println(allowPushedLine(r.Name, senders))
+	return nil
 }
 
 // bodyGone is the answer when a quarantined stream's body is no longer on

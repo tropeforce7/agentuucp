@@ -161,6 +161,58 @@ func TestGivesUpWithWaitAdvice(t *testing.T) {
 	}
 }
 
+// A 429 the relay sends without a Retry-After is final: every bucket the
+// relay refuses from says when to come back, and the one refusal that
+// says nothing — the recipient holding as many knocks as the relay
+// allows — waits on its owner fetching, which no sleep here shortens.
+// A 503 without one is still retried, since a busy relay empties by
+// itself; the shortest wait is used when it does not say.
+func TestA429WithoutRetryAfterIsFinal(t *testing.T) {
+	rec := &recorder{replies: []reply{
+		{status: http.StatusTooManyRequests, body: relayapi.ErrorResponse{Error: relayapi.MsgKnocksWaiting}},
+		{status: http.StatusOK, body: relayapi.PostResponse{ID: 1}},
+	}}
+	c, slept := newTestClient(t, rec)
+	err := c.do(t.Context(), "POST", "/v1/mailbox/x/knock", []byte("{}"), nil, nil)
+	if err == nil {
+		t.Fatal("a 429 without Retry-After produced no error")
+	}
+	if rec.count() != 1 {
+		t.Fatalf("made %d attempts; a 429 with no Retry-After is final", rec.count())
+	}
+	if len(*slept) != 0 {
+		t.Fatalf("slept %v before giving up on a 429 with no Retry-After", *slept)
+	}
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) || httpErr.Status != http.StatusTooManyRequests || httpErr.Message != relayapi.MsgKnocksWaiting {
+		t.Fatalf("error %v does not surface as the relay's 429 for the caller to say", err)
+	}
+	// The same answer with a Retry-After is waited out and tried again.
+	rec = &recorder{replies: []reply{
+		{status: http.StatusTooManyRequests, retryAfter: "3", body: relayapi.ErrorResponse{Error: "rate limited: knocks"}},
+		{status: http.StatusOK, body: relayapi.PostResponse{ID: 1}},
+	}}
+	c, slept = newTestClient(t, rec)
+	if err := c.do(t.Context(), "POST", "/v1/mailbox/x/knock", []byte("{}"), nil, nil); err != nil {
+		t.Fatalf("a 429 with a Retry-After was not retried: %v", err)
+	}
+	if rec.count() != 2 || len(*slept) != 1 || (*slept)[0] != 3*time.Second {
+		t.Fatalf("%d attempts, waits %v; want two attempts and one wait of 3s", rec.count(), *slept)
+	}
+	// A 503 with no Retry-After is unchanged: retried at the shortest wait.
+	rec = &recorder{replies: []reply{
+		{status: http.StatusServiceUnavailable, body: relayapi.ErrorResponse{Error: "relay is busy"}},
+		{status: http.StatusOK, body: relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}},
+	}}
+	c, slept = newTestClient(t, rec)
+	if err := c.Health(t.Context()); err != nil {
+		t.Fatalf("a busy relay that named no wait was not retried: %v", err)
+	}
+	if rec.count() != 2 || len(*slept) != 1 || (*slept)[0] != minRetrySleep {
+		t.Fatalf("%d attempts, waits %v; want two attempts and one wait of %v", rec.count(), *slept, minRetrySleep)
+	}
+}
+
 func TestFullMailboxIsNotRetried(t *testing.T) {
 	rec := &recorder{replies: []reply{
 		{status: http.StatusInsufficientStorage, body: relayapi.ErrorResponse{Error: relayapi.MsgMailboxFull}},

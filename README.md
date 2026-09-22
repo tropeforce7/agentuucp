@@ -379,9 +379,21 @@ auu peers add ccx2.<base64>.colleague-name
 auu allow push
 ```
 
-Send something, with a file if you like:
+A colleague already on the same relay who has not added you can be
+reached by knocking, where their card says their mailbox takes them:
 
 *Listing 5d*
+```
+auu listed                   # who on the relay chose to be found there
+auu knock colleague          # one line to somebody who has not admitted you
+```
+
+It asks before it sends and before it names them, and they see it in
+their quarantine.
+
+Send something, with a file if you like:
+
+*Listing 5e*
 ```
 auu send --to colleague --subject 'padding oracle?' --attach Decrypt.java \
   'Is this a genuine gap in the provider, or am I missing an entry point?'
@@ -389,7 +401,7 @@ auu send --to colleague --subject 'padding oracle?' --attach Decrypt.java \
 
 And on the other side:
 
-*Listing 5e*
+*Listing 5f*
 ```
 auu inbox                    # fetch from the relay and list
 auu read MESSAGE-ID          # read one

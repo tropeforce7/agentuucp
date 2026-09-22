@@ -30,6 +30,7 @@ auu peers add <export-line | @file | ->            # add a colleague; the user c
 auu peers ls [--json]                              # who you can reach
 auu peers rm <name|fingerprint>
 auu peers fetch NAME|SHORT-ID|FINGERPRINT [--yes]  # add a peer found on the relay: the person's command, at a terminal; never run it
+auu knock NAME|SHORT-ID|FINGERPRINT [--text "..."] [--yes]   # one message to somebody who has not admitted you: the person's command, at a terminal; never run it
 auu allow push                                     # tell the relay to take mail only from your peers, signed
 auu allow clear                                    # accept from anyone again
 auu allow show [--json]                            # what each relay holds for you, verified with your own key
@@ -275,6 +276,12 @@ an end), `relays`, `relay_name` (when set), `relay`, `export_line`.
 and `dropped`, how many entries the relay served that did not verify and
 were left out.
 
+`auu knock --json`: `relay`, `fingerprint`, `short`, `claimed_name` (the
+name they published, their own claim), `known_as` (the local name this
+machine now uses for them), `id`, `thread`, `relay_id`, `text` and
+`allow_pushed` (whether your allow list was pushed to that relay after
+the knock, which happens when this machine has pushed one there before).
+
 `auu card show --json`: a list, one per relay, of `relay`, `state`
 (`signed`, `none` or `broken`), `issued` and `name` (when signed),
 `listed`, `knocks`, and `error` (when broken). A broken pair exits 1.
@@ -311,7 +318,10 @@ of its own), `text` (only where the whole message is printed), `attachments` of 
 `auu read --json` and `auu quarantine ls --json` print that same message
 shape: `read` one message with `text` and `thread_subject`, `quarantine ls`
 a list without either. A reply given a subject of its own carries it in
-`subject`, and the thread's in `thread_subject`.
+`subject`, and the thread's in `thread_subject`. A knock carries
+`claimed_name` beside `from_name`: the name its sender called themselves,
+their own claim, where `from_name` is what this machine calls them, which
+is empty until somebody accepts one.
 
 `auu wait --json`: `found`, `message` (when found, the message shape),
 `waited`.

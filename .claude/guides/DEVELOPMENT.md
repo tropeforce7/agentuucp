@@ -245,6 +245,22 @@ verify; refusing every post" line goes through the same limiter, keyed
 mailboxes are two. Limit by the sentence and the second mailbox is never
 mentioned; do not limit and a sender in a retry loop writes the journal.
 
+**The allow list has one exception, and the owner signs for it.** A knock
+reaches a mailbox from a sender the owner has not admitted, and it does so
+only where the owner's card, verified against their registered key at that
+moment and never read from the column the relay parsed at the push, says
+`knocks`. It is a route of its own, `POST /v1/mailbox/{fp}/knock`, with a
+cap of its own, so everything that can be judged without the body still is;
+`MayPost` is never called there, and the card is never read on the post
+route. The relay says one sentence for no card, a card that says no and a
+card that does not verify alike, since the state of somebody else's card
+is not a stranger's to learn, and the fault line for a card that does not
+verify is the allow list's shape: the mailbox alone, once a minute, under
+both access-log modes. What a knock buys its sender is one sealed line in
+the other person's quarantine; nothing on the receiving side is trusted by
+its arrival, and the name a knock carries is its sender's own claim,
+offered at a prompt and never taken as a label until a person accepts it.
+
 **Names are local labels.** A display name that arrives on the wire is
 discarded; `envelope.Open` clears `sender.Name`. Peer names come from the
 local `authorized_peers` file and nowhere else, and they must be unique
@@ -268,7 +284,8 @@ tolerance for one is a path nobody tests and a place a wrong answer
 hides. A field an end always sends has no
 `omitempty` and is required by the other end, refused by name when it is
 absent, with nothing of the answer used: `queued`, `allow`, and each row's
-`kind` and `channel` on a listing, `created` on a lookup, `registration`
+`kind` (one of `envelope`, `stream` and `knock`, a fourth refused by
+name) and `channel` on a listing, `created` on a lookup, `registration`
 and `client_certs` on the status answer, `max_bytes` on health; a stubs
 listing whose row carries an envelope is a relay that ignored the
 parameter, refused the same way. A count whose zero is a value the relay

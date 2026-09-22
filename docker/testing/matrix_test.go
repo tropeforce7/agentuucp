@@ -40,6 +40,7 @@ func TestMatrix(t *testing.T) {
 		{"L", "mail left on the relay", keepRows},
 		{"S", "a channel answered by a program", serveRows},
 		{"A", "the signed allow list", allowRows},
+		{"P", "the card, the listing and the knock", cardRows},
 	}
 	for _, f := range families {
 		f := f

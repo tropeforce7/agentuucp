@@ -9,6 +9,9 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/client"
 	"github.com/tropeforce7/agentuucp/internal/envelope"
+	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
 )
@@ -115,6 +118,51 @@ func filedUnder(sealed, outer string, m client.Message) (channel, filedAs string
 		return channel, name(outer), false
 	}
 	return channel, sealedName, true
+}
+
+// knockAgrees reports whether the word the relay listed a row under and
+// the type inside the signed record say the same thing about a knock. The
+// relay's word decides how the row was let in — a knock went past the
+// allow list because the owner's card admits knocks — and the sealed type
+// decides how it is shown and what may be done with it, so a row that
+// says one thing outside and another inside is obeyed in neither
+// direction: it is kept and acknowledged, like a message filed under the
+// wrong channel. A relay cannot forge the inside, and a sender cannot
+// change the outside, so a disagreement is one of them at fault and the
+// receiver need not decide which.
+func knockAgrees(kind, typ string) bool {
+	return (kind == relayapi.KindKnock) == (typ == message.TypeKnock)
+}
+
+// keepMiskinded keeps a message the relay listed under one kind whose
+// sealed record is another, with the cause word misfiled, as a message
+// filed under the wrong channel is kept. Acknowledged by the caller once
+// the keep has succeeded.
+func keepMiskinded(s *store.Store, r *store.Relay, id int64, received time.Time, data []byte, kind, typ string, res *fetchResult) error {
+	kept, _, err := s.KeepDamaged(store.DamagedRecord{
+		RelayID: id, Relay: r.Name, Received: received, Cause: "misfiled",
+	}, data)
+	if err != nil {
+		return fmt.Errorf("keeping relay message %d under %s: %w", id, s.DamagedDir(), err)
+	}
+	res.Unreadable++
+	// Both words are from the wire: the relay's through the client's set
+	// of three, the sender's through the message rules, and both are
+	// escaped here as every printed word from outside is.
+	said := fmt.Sprintf("relay message %d was listed as %q by %s but is sealed as %q",
+		id, identity.PrintableText(kind), r.Name, identity.PrintableText(typ))
+	if !kept {
+		fmt.Fprintf(os.Stderr, "warning: %s; it is %s and was not kept, since %s holds at most %s\n",
+			said, store.MiB(int64(len(data))), s.DamagedDir(), store.MiB(store.DamagedBudget))
+		return nil
+	}
+	res.Kept++
+	path, err := s.DamagedPath(r.Name, id)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "warning: %s; it was kept as %s\n", said, path)
+	return nil
 }
 
 // keepMisfiled keeps a message the relay filed under one channel that is

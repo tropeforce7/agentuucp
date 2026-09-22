@@ -383,6 +383,34 @@ func (s *Store) configDamaged(cause error) error {
 			"it holds only that, the stream settings and your editor")
 }
 
+// NameFree reports whether a peer may be added under the name it carries:
+// nothing else on the list folds to it. It is what AddPeer refuses on,
+// asked separately by a command that must know before it does something
+// it cannot undo — a knock is posted before the peer is added, and a
+// refusal after the post would leave the knock sent and the peer out.
+func (s *Store) NameFree(pub *identity.Public) error {
+	peers, err := s.Peers()
+	if err != nil {
+		return err
+	}
+	return nameFree(peers, pub)
+}
+
+// nameFree is NameFree over a list already read. A peer already on the
+// list under its own fingerprint is not in its own way.
+func nameFree(peers []*identity.Public, pub *identity.Public) error {
+	for _, existing := range peers {
+		if existing.Fingerprint() == pub.Fingerprint() {
+			continue
+		}
+		if existing.Name != "" && pub.Name != "" && strings.EqualFold(existing.Name, pub.Name) {
+			return fmt.Errorf("peer name %q is already used by %s; choose a different name",
+				pub.Name, existing.Short())
+		}
+	}
+	return nil
+}
+
 // Peers returns the authorized peer list in file order.
 func (s *Store) Peers() ([]*identity.Public, error) {
 	data, err := os.ReadFile(s.path(peersFile))
@@ -423,6 +451,16 @@ func (s *Store) Peers() ([]*identity.Public, error) {
 func (s *Store) AddPeer(pub *identity.Public) (added bool, err error) {
 	if self, err := s.Self(); err == nil && self.Fingerprint() == pub.Fingerprint() {
 		return false, ErrSelfPeer
+	}
+	// The name is written into the file as part of an export line, and a
+	// line the reader cannot parse makes the whole file unreadable: every
+	// peer then reads as a stranger and every message is quarantined
+	// until somebody edits it by hand. So a name this rule refuses never
+	// reaches the file, whichever command asked for it.
+	if pub.Name != "" {
+		if err := identity.ValidName(pub.Name); err != nil {
+			return false, err
+		}
 	}
 	peers, err := s.Peers()
 	if err != nil {

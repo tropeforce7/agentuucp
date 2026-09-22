@@ -152,8 +152,12 @@ func (c *Client) Blob(ctx context.Context, fp string, id int64, from, to int64) 
 		return nil, 0, watch.wrap(fmt.Errorf("contacting relay: %w", err))
 	}
 	// A refusal for now is worth waiting out, exactly as on any other route.
-	for attempt := 0; attempt < maxRetries && retryable(resp.StatusCode); attempt++ {
-		wait := retryWait(&HTTPError{RetryAfter: retryAfter(resp.Header)})
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		refusal := &HTTPError{Status: resp.StatusCode, RetryAfter: retryAfter(resp.Header)}
+		if !retryable(refusal) {
+			break
+		}
+		wait := retryWait(refusal)
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 		if err := c.sleep(ctx, wait); err != nil {

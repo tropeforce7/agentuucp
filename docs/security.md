@@ -64,6 +64,10 @@ is written to the database, and no limiter key is ever written anywhere. The
 channel a message was posted to is the one thing about a message's content
 the relay learns beyond its size. It is written to the row, served in the
 owner's own listing, and recorded in the access log under neither mode.
+A knock is seen exactly as any post is: the relay knows which identity
+posted it and to whose mailbox, and no more. The row it writes says
+`knock` and names no knocker, as no row names a sender; who is knocking
+is inside the ciphertext with everything else the sender wrote.
 
 A listing held open (`wait`) tells the relay nothing it did not know. It is
 the owner's own listing, answered later. A directory watch (`peers`) tells
@@ -308,6 +312,21 @@ asks, at a terminal, and never without a person. The name on a card is
 the owner's claim, offered at the prompt as the local name and never
 taken as one until the person accepts it. A relay that lies about its
 mode is admitting anybody, which is the case the sentence warns of.
+
+A knock is the one message that crosses without an entry, and it adds
+none. `auu knock` reaches somebody whose card says they take knocks, and
+what it buys the knocker is a sealed line in the other person's
+quarantine, where every stranger's message goes. One: `auu knock` sends
+one and then refuses, since the person is a peer by then. The relay does
+not count them — it has no memory of who knocked — so what bounds a
+knocker who is not running this client is the operator's two settings,
+`max_knocks_waiting` on the mailbox and `knocks_per_hour` on the sender. Nothing on the knocked
+side is trusted by its arrival: the name the knock carries is the
+sender's own claim, shown as theirs, offered at the prompt when somebody
+runs `auu quarantine trust` and never taken as a label until a person
+accepts it. On the knocking side the peer being added is that person's
+own decision, asked for at a terminal before anything is sent, which is
+why neither `knock` nor `peers fetch` is a command the skills run.
 The one identity trusted without an entry
 is your own. A message you sent yourself is opened, verified and delivered
 like any other, and the relay accepts it for your mailbox whatever your allow
@@ -351,7 +370,9 @@ The agent opens mail, signs the transport, and signs what lists, fetches,
 watches and acknowledges. It refuses to sign a message, a stream's
 manifest, a channel directory, an allow list, a card, a token, or any
 request that
-posts, uploads, registers, pushes or administers. Anything it does not
+posts, uploads, registers, pushes or administers, a knock among them: a
+knock is a message and its route originates, so an agent unlocked to
+receive refuses it twice over, exit 4 with nothing sent. Anything it does not
 recognise is refused too. `auu unlock --send` is everything, and then back
 to receive. It asks the passphrase again, and its window is ten minutes by
 default. An induced action in receive scope can therefore fetch mail and
