@@ -15,7 +15,10 @@ import (
 // disk under a busy relay does not fill the log with the same line. An
 // allow list that no longer verifies is said the same way, one line a
 // minute per mailbox, for the same reason: a sender retrying in a loop
-// against a broken list is the same shape as a broken disk.
+// against a broken list is the same shape as a broken disk. A card that no
+// longer verifies likewise, at a knock, naming the mailbox alone and never
+// the knocker, under both access log modes as the allow list's line is:
+// the line is about a row on this relay, not about who talks to whom.
 
 const (
 	// faultInterval is how long one path's fault line covers.
@@ -56,6 +59,15 @@ func (f *faultLog) note(path string, err error) {
 func (f *faultLog) noteAllowlist(fp string) {
 	if f.due("allowlist:" + fp) {
 		f.log.Warn(fmt.Sprintf("allow list for %s does not verify; refusing every post to it until the owner pushes again", fp))
+	}
+}
+
+// noteCard logs that a mailbox's card does not verify, so knocks to it
+// are refused, unless that was logged for the mailbox inside the last
+// minute; keyed apart from the allow list's line and a path's.
+func (f *faultLog) noteCard(fp string) {
+	if f.due("card:" + fp) {
+		f.log.Warn(fmt.Sprintf("card for %s does not verify; refusing knocks to it until the owner pushes again", fp))
 	}
 }
 

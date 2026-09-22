@@ -5,21 +5,26 @@ What the relay stores, what it sees, what protects a message, and the wire in de
 ## 1. Security model
 
 **What the relay stores.** The recipient's fingerprint, the size of each
-message, when it arrived, and the channel it was posted to. That is all. The
-sender's identity is inside the ciphertext, so the stored rows do not say who
-wrote anything. The channel is one label per message, from a list the owner
-wrote and published to every sender they admit. It is there because the
-relay routes by it. The relay refuses a post to a channel that does not
-exist or is not open before the message is stored. The owner chooses what
-the labels say. Beside the rows, per mailbox, the three documents an
-owner signs and pushes: the channel directory, the allow list, and the
-card, which says the owner's name and two words of the owner's, `listed`
-and `knocks`. Each is the bytes the owner signed and the signature,
-verified against the registered key at the push and again wherever the
-relay acts on it, and the card's two words are parsed into columns that
-decide nothing. The
-message itself is a file beside the database, which an
-operator can list, count and delete but not read. Every value the relay puts
+message, when it arrived, the channel it was posted to, and its kind. That
+is all. The sender's identity is inside the ciphertext, so the stored rows
+do not say who wrote anything. The channel is one label per message, from
+a list the owner wrote and published to every sender they admit. It is
+there because the relay routes by it. The relay refuses a post to a
+channel that does not exist or is not open before the message is stored.
+The owner chooses what the labels say. The kind is one of three words,
+`envelope`, `stream` or `knock`, given by the route the message arrived
+by and said beside the row in every listing; a knock is a stranger's one
+message, taken past the allow list only where the recipient's signed card
+says `knocks`, and it says nothing about who knocked, since that is inside
+the ciphertext like every sender. Beside the rows, per mailbox, the three
+documents an owner signs and pushes: the channel directory, the allow
+list, and the card, which says the owner's name and two words of the
+owner's, `listed` and `knocks`. Each is the bytes the owner signed and the
+signature, verified against the registered key at the push and again
+wherever the relay acts on it, and the card's two words are parsed into
+columns that decide nothing. The message itself is a file beside the
+database, which an operator can list, count and delete but not read.
+Every value the relay puts
 to that database goes as a query parameter, never into the text of a query.
 That is true of a fingerprint, a channel name, a token id and a reason
 alike. A test (`internal/sqlshape`) parses the tree and fails on any query
@@ -273,7 +278,14 @@ row, since the newer-issued rule holds only between two cards you signed.
 A mailbox with no card has said neither word, and so has one whose card
 says neither, which is what `auu card clear` pushes. The name on the card
 is a name from the wire wherever another person reads it: a suggestion at
-a prompt, and a local label only once they accept it.
+a prompt, and a local label only once they accept it. `knocks` is the
+word the relay enforces: a knock to a mailbox is let past the allow list
+only when the card, read and verified at that moment and never from the
+column the relay parsed at the push, says it, and a card that does not
+verify takes none, said in the relay's log once a minute naming the
+mailbox alone. The relay says one sentence for no card, a card that says
+no and a card that does not verify, since the state of somebody else's
+card is not a stranger's to learn.
 
 **Where trust comes from.** `authorized_peers`, and nowhere else. The relay's
 key lookup endpoint is a convenience for typing accuracy. It is not a trust
@@ -533,7 +545,7 @@ inbox` says so, with the count, the cursor file to delete and the `auu inbox
 --relay NAME` to run after. It exits 5 without acknowledging or writing
 anything. Each message listed says which channel it is under (`channel`),
 always, `default` included, held to the channel name rule as it is read.
-It says its kind too (`envelope` or `stream`). The listing says the state
+It says its kind too (`envelope`, `stream` or `knock`). The listing says the state
 of the owner's allow list (`allow`) and of their card (`card`) on every
 answer. **Nothing on the wire
 is from before.** Every released version is retracted and no peer from
@@ -794,3 +806,50 @@ the sealed copy is kept and to resume when there is room. Downloads resume
 too. The blob route honours `Range`, so a receiver that holds the first
 part of a stream asks for the rest from there. A range from the end or
 past it is `416`.
+
+### 2.3 A knock
+
+A knock is the one message that reaches a mailbox from somebody its owner
+has not admitted, and it reaches it only where the owner has said so on
+their signed card. On the wire it is an ordinary sealed envelope, sign
+then encrypt like every message, posted to a route of its own, `POST
+/v1/mailbox/{fp}/knock`, and stored with the kind `knock`. It is a route
+and not a field of the post because everything that can be judged without
+the body is judged before it, and a kind inside the body would have the
+relay read a whole post before learning it was a knock. So the route has a
+cap of its own, `knock_max_bytes` plus 64 KiB of framing, and a body that
+declares itself over it is refused `413` before a byte of it is read.
+
+The relay checks, in this order, after the certificate, the auth header,
+the identity, the body under the knock cap, the signature and the
+knocker's own block: that the envelope is under `knock_max_bytes`, naming
+the setting; the post budgets, charged as for any post; that the envelope
+parses, is addressed to the mailbox and names no channel, since which
+channels exist is the owner's to publish to the senders they admit and a
+knocker is not one; that the mailbox exists and its owner is not blocked;
+then the card, read from the database and verified against the mailbox's
+registered key at that moment, never cached and never read from the
+`knocks` column the relay parsed at the push; then the knocker's
+`knocks_per_hour`, refused `429` with `Retry-After`; then the store, which
+inside the transaction that inserts the row counts the knocks the mailbox
+already holds and refuses at `max_knocks_waiting` with a `429` that
+carries no `Retry-After`, since the relay cannot say when the owner will
+fetch, and gives the knocker's token back. What bounds that cap is the
+knocker's own hourly budget, so one identity may fill a mailbox's cap in
+a burst and the door stays shut to every other knocker until the owner's
+next fetch empties it; the two settings are the operator's, and a smaller
+`knocks_per_hour` spreads the cap across more knockers. The allow list is
+never read on this route, and the card is never read on the post route.
+No card, a card that says no and a card that does not verify are one
+refusal, `403 the
+recipient does not take knocks`, since the state of somebody else's card
+is not a stranger's to learn; the relay's own log says once a minute, under
+either access log mode, that the card for the mailbox does not verify,
+naming the mailbox and never the knocker.
+
+Sealed inside a knock, where the relay reads none of it, are the knocker's
+name, which is their own claim held to the name rule at both ends and
+escaped wherever it is shown, and one line of text of at most 512 bytes
+with no line break, tab or character a terminal would obey rather than
+show. A knock opens a thread and answers nothing, carries no subject and no
+attachment, and is never a stream: a manifest that says knock is refused.

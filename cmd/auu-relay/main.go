@@ -68,6 +68,9 @@ type flagValues struct {
 	mailboxMaxBytes      int64
 	relayMaxBytes        int64
 	maxOpenUploads       int64
+	knockMaxBytes        int64
+	maxKnocksWaiting     int64
+	knocksPerHour        int64
 	maxInflight          int64
 	maxWaiting           int64
 	accessLog            string
@@ -136,6 +139,12 @@ func registerFlags(fs *flag.FlagSet) *flagValues {
 		"requests handled at once before answering 503 (0: unlimited)")
 	fs.Int64Var(&f.maxWaiting, "max-waiting", d.Limits.MaxWaiting,
 		"listings held open at once before the next is answered without a hold (0: unlimited)")
+	fs.Int64Var(&f.knockMaxBytes, "knock-max-bytes", d.Limits.KnockMaxBytes,
+		"largest knock envelope, at most max-bytes (0: max-bytes)")
+	fs.Int64Var(&f.maxKnocksWaiting, "max-knocks-waiting", d.Limits.MaxKnocksWaiting,
+		"most knocks one mailbox holds, at most 1000 (0: unlimited)")
+	fs.Int64Var(&f.knocksPerHour, "knocks-per-hour", d.Limits.KnocksPerHour,
+		"knocks an hour, per identity, across every mailbox (0: unlimited)")
 	fs.StringVar(&f.accessLog, "access-log", d.AccessLog,
 		"full, or minimal to log the route instead of the path and omit the caller")
 	return f
@@ -512,6 +521,9 @@ func logLimits(cfg Config, log *slog.Logger) {
 		"max_open_uploads", l.MaxOpenUploads,
 		"max_inflight", l.MaxInflight,
 		"max_waiting", l.MaxWaiting,
+		"knock_max_bytes", l.KnockMaxBytes,
+		"max_knocks_waiting", l.MaxKnocksWaiting,
+		"knocks_per_hour", l.KnocksPerHour,
 		"access_log", cfg.AccessLog)
 	if cfg.AccessLog == relay.AccessLogFull {
 		log.Info("the access log records the verified caller and the request path, " +

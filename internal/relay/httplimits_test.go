@@ -169,7 +169,9 @@ func fullAllowList(t *testing.T, owner *identity.Identity, at time.Time) relayap
 // its own cap, and a body that declares itself over the cap is answered
 // 413 before a byte of it is read, the sentence naming the cap in bytes
 // and the connection closed behind the answer. The post route takes
-// max_bytes + FramingAllowance; two of the three owner-signed documents
+// max_bytes + FramingAllowance, and the knock route knock_max_bytes +
+// FramingAllowance, which at knock_max_bytes zero is the post's
+// (TestLimitAKnockIsHeldToKnockMaxBytes walks the setting); two of the three owner-signed documents
 // take MaxDocumentBytes, and a directory and an allow list built at every
 // maximum and marshalled as the client marshals them — 565,026 and 89,622
 // bytes — are taken under it, one byte over refused with the hint to send
@@ -242,6 +244,7 @@ func TestLimitBodyCapsPerRoute(t *testing.T) {
 		{"the allow list", "PUT", "/v1/mailbox/" + me + "/allow", alice, relayapi.MaxDocumentBytes, hintCompact},
 		{"the card", "PUT", "/v1/mailbox/" + me + "/card", alice, relayapi.FramingAllowance, hintCompact},
 		{"the post", "POST", "/v1/mailbox/" + bob.Fingerprint(), alice, 1<<20 + relayapi.FramingAllowance, ""},
+		{"the knock", "POST", "/v1/mailbox/" + bob.Fingerprint() + "/knock", alice, 1<<20 + relayapi.FramingAllowance, ""},
 		{"the stream open", "POST", "/v1/mailbox/" + bob.Fingerprint() + "/streams", alice, relayapi.FramingAllowance, ""},
 		{"the registration", "POST", "/v1/register", alice, relayapi.FramingAllowance, ""},
 		{"the certificate request", "POST", "/v1/mailbox/" + me + "/certs", alice, relayapi.FramingAllowance, ""},

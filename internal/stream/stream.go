@@ -270,6 +270,11 @@ func (m *Manifest) Validate() error {
 	if err := message.ValidHeader(m.Body.Type, m.Body.Thread, m.Body.InReplyTo, m.Body.Subject); err != nil {
 		return fmt.Errorf("%w: %v", ErrForm, err)
 	}
+	// A knock carries no attachment, so it is never a stream: a manifest
+	// that says knock is a knock with attachments by another door.
+	if m.Body.Type == message.TypeKnock {
+		return fmt.Errorf("%w: a knock is one envelope, never a stream", ErrForm)
+	}
 	if err := message.ValidText(m.Body.Text); err != nil {
 		return fmt.Errorf("%w: %v", ErrForm, err)
 	}

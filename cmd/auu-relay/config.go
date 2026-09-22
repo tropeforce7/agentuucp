@@ -143,10 +143,27 @@ type LimitsConfig struct {
 	MaxOpenUploads int64 `json:"max_open_uploads"`
 	MaxInflight    int64 `json:"max_inflight"`
 	MaxWaiting     int64 `json:"max_waiting"`
+	// KnockMaxBytes is the largest knock envelope, on the knock route's
+	// own cap; zero means max_bytes, since zero is unlimited everywhere
+	// and a knock is a post, and over max_bytes it is refused at the
+	// read, since a setting pair that cancels a guarantee is refused,
+	// not documented.
+	KnockMaxBytes int64 `json:"knock_max_bytes"`
+	// MaxKnocksWaiting is the knocks one mailbox holds, the
+	// second limit with a ceiling, maxKnocksWaitingCeiling, for the
+	// reason max_open_uploads has one: each is a file and a row the relay
+	// holds for a mailbox its owner has not fetched.
+	MaxKnocksWaiting int64 `json:"max_knocks_waiting"`
+	// KnocksPerHour is the knocks one sender may post in an hour across
+	// every mailbox.
+	KnocksPerHour int64 `json:"knocks_per_hour"`
 }
 
 // maxOpenUploadsCeiling is the most max_open_uploads may be set to.
 const maxOpenUploadsCeiling = 1000
+
+// maxKnocksWaitingCeiling is the most max_knocks_waiting may be set to.
+const maxKnocksWaitingCeiling = 1000
 
 // TLSConfig selects how the relay obtains its certificate.
 type TLSConfig struct {
@@ -274,6 +291,9 @@ func Defaults() Config {
 			MaxOpenUploads:           d.MaxOpenUploads,
 			MaxInflight:              d.MaxInflight,
 			MaxWaiting:               d.MaxWaiting,
+			KnockMaxBytes:            d.KnockMaxBytes,
+			MaxKnocksWaiting:         d.MaxKnocksWaiting,
+			KnocksPerHour:            d.KnocksPerHour,
 		},
 		AccessLog: relay.AccessLogFull,
 	}
@@ -481,6 +501,12 @@ func (c *Config) Merge(fs *flag.FlagSet, f *flagValues) {
 			c.Limits.MaxInflight = f.maxInflight
 		case "max-waiting":
 			c.Limits.MaxWaiting = f.maxWaiting
+		case "knock-max-bytes":
+			c.Limits.KnockMaxBytes = f.knockMaxBytes
+		case "max-knocks-waiting":
+			c.Limits.MaxKnocksWaiting = f.maxKnocksWaiting
+		case "knocks-per-hour":
+			c.Limits.KnocksPerHour = f.knocksPerHour
 		case "access-log":
 			c.AccessLog = f.accessLog
 		}
@@ -591,6 +617,13 @@ func (c Config) Validate() error {
 	}
 	if err := c.Limits.validate(); err != nil {
 		return err
+	}
+	// A knock cap over the post's would let the knock route take what the
+	// post route refuses: a setting pair that cancels a guarantee is
+	// refused here, not documented. Zero is max_bytes and needs no check.
+	if c.Limits.KnockMaxBytes > c.MaxBytes {
+		return fmt.Errorf("knock_max_bytes (%d) must be at most max_bytes (%d): a knock is a post, "+
+			"and its cap cannot be over the post's (use 0 for max_bytes)", c.Limits.KnockMaxBytes, c.MaxBytes)
 	}
 	if c.AccessLog != relay.AccessLogFull && c.AccessLog != relay.AccessLogMinimal {
 		return fmt.Errorf("access_log must be %q or %q, got %q",
@@ -712,6 +745,9 @@ func (l LimitsConfig) validate() error {
 		{"max_open_uploads", l.MaxOpenUploads},
 		{"max_inflight", l.MaxInflight},
 		{"max_waiting", l.MaxWaiting},
+		{"knock_max_bytes", l.KnockMaxBytes},
+		{"max_knocks_waiting", l.MaxKnocksWaiting},
+		{"knocks_per_hour", l.KnocksPerHour},
 	} {
 		if f.value < 0 {
 			return fmt.Errorf("%s must not be negative, got %d (use 0 for unlimited)", f.name, f.value)
@@ -720,6 +756,10 @@ func (l LimitsConfig) validate() error {
 	if l.MaxOpenUploads > maxOpenUploadsCeiling {
 		return fmt.Errorf("max_open_uploads must be at most %d, got %d (use 0 for unlimited)",
 			maxOpenUploadsCeiling, l.MaxOpenUploads)
+	}
+	if l.MaxKnocksWaiting > maxKnocksWaitingCeiling {
+		return fmt.Errorf("max_knocks_waiting must be at most %d, got %d (use 0 for unlimited)",
+			maxKnocksWaitingCeiling, l.MaxKnocksWaiting)
 	}
 	// A held listing keeps an in-flight slot for as long as it is held, so
 	// holds allowed up to the in-flight cap could take every slot and the
@@ -747,6 +787,9 @@ func (l LimitsConfig) Relay() relay.Limits {
 		MaxOpenUploads:           l.MaxOpenUploads,
 		MaxInflight:              l.MaxInflight,
 		MaxWaiting:               l.MaxWaiting,
+		KnockMaxBytes:            l.KnockMaxBytes,
+		MaxKnocksWaiting:         l.MaxKnocksWaiting,
+		KnocksPerHour:            l.KnocksPerHour,
 	}
 }
 

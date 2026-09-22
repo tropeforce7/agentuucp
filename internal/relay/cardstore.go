@@ -128,6 +128,36 @@ func (s *Store) CardState(fp string) (string, error) {
 	return state, err
 }
 
+// TakesKnocks reports whether a mailbox's card says knocks, reading the
+// card and verifying it every time, as MayPost reads the allow list: there
+// is no cache, and the knocks column is never read, since a cache would
+// hide an edit made while the relay runs and the column is the relay's
+// own parse, which an editor can set. A mailbox with no card takes none;
+// one whose card no longer verifies takes none and is said in the log
+// once a minute. Whether the mailbox exists is the caller's to have
+// settled first; one that does not takes none.
+func (s *Store) TakesKnocks(fp string) (bool, error) {
+	var bundle, doc, sig []byte
+	var has int
+	err := s.db.QueryRow(`SELECT m.bundle, c.doc, c.sig, c.fp IS NOT NULL FROM mailboxes m
+		LEFT JOIN cards c ON c.fp = m.fp WHERE m.fp = ?`, fp).Scan(&bundle, &doc, &sig, &has)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if has == 0 {
+		return false, nil
+	}
+	state, d := cardDecision(bundle, doc, sig)
+	if state == relayapi.CardBroken {
+		s.faults.noteCard(fp)
+		return false, nil
+	}
+	return d.Knocks, nil
+}
+
 // cardDecision reads a stored card as the relay enforces it: verified
 // against the mailbox's registered key, and broken otherwise, with no
 // document, so the caller takes no knock and lists nothing. A row with no

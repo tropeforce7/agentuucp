@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/tropeforce7/agentuucp/internal/channels"
+	"github.com/tropeforce7/agentuucp/internal/identity"
 )
 
 // Message types.
@@ -21,7 +22,18 @@ const (
 	TypeReply = "reply"
 	TypeNote  = "note"
 	TypeAck   = "ack"
+	// TypeKnock is a stranger's one message: who they are, in a name
+	// that is their own claim, and one line of text, sealed and signed
+	// as every message is, and posted to the knock route of a mailbox
+	// whose card says knocks. It opens a thread and answers nothing,
+	// carries no subject and no attachment, and its text is one line
+	// of at most MaxKnockText bytes, since it is printed in a listing
+	// beside a stranger's name before anyone has decided to read it.
+	TypeKnock = "knock"
 )
+
+// MaxKnockText is the most bytes a knock's text may carry.
+const MaxKnockText = 512
 
 const (
 	maxNameBytes    = 255
@@ -37,6 +49,13 @@ type Body struct {
 	InReplyTo   string       `json:"in_reply_to,omitempty"`
 	Text        string       `json:"text"`
 	Attachments []Attachment `json:"attachments,omitempty"`
+	// Name is the knocker's own identity name, on a knock alone: the
+	// one message that reaches somebody who has no entry for its sender
+	// carries what the sender calls themselves, held to the name rule
+	// at Validate and at Load, escaped when shown, and offered as the
+	// default at the local-name prompt, never taken as the label. Every
+	// other type refuses it: a peer's name is the peer list's.
+	Name string `json:"name,omitempty"`
 }
 
 // Attachment is a whole file, carried inline. There is no chunking: a message
@@ -52,10 +71,45 @@ type Attachment struct {
 // ValidType reports whether t is a known message type.
 func ValidType(t string) bool {
 	switch t {
-	case TypeAsk, TypeReply, TypeNote, TypeAck:
+	case TypeAsk, TypeReply, TypeNote, TypeAck, TypeKnock:
 		return true
 	}
 	return false
+}
+
+// validKnock is the rule a knock is held to beyond every message's, and
+// the rule that keeps a name off every other type. It runs at Validate on
+// both ends and at Load of a record, after ValidHeader and ValidText, so
+// a knock's text has met the text rule before it is held to one line.
+func (b *Body) validKnock() error {
+	if b.Type != TypeKnock {
+		if b.Name != "" {
+			return errors.New("message: name is a knock's alone")
+		}
+		return nil
+	}
+	if b.Subject != "" {
+		return errors.New("message: a knock has no subject")
+	}
+	if b.InReplyTo != "" {
+		return errors.New("message: a knock opens a thread and answers nothing")
+	}
+	if len(b.Attachments) != 0 {
+		return errors.New("message: a knock carries no attachment")
+	}
+	if b.Name == "" {
+		return errors.New("message: a knock carries the knocker's name")
+	}
+	if err := identity.ValidName(b.Name); err != nil {
+		return fmt.Errorf("message: a knock's name: %s", strings.TrimPrefix(err.Error(), "identity: "))
+	}
+	if len(b.Text) > MaxKnockText {
+		return fmt.Errorf("message: a knock's text is %d bytes; at most %d", len(b.Text), MaxKnockText)
+	}
+	if strings.ContainsAny(b.Text, "\n\t\r") {
+		return errors.New("message: a knock's text is one line, without a tab")
+	}
+	return nil
 }
 
 // IDLen is the length of a message id: 16 random bytes as hex.
@@ -270,6 +324,9 @@ func (b *Body) ValidShape() error {
 	if err := ValidText(b.Text); err != nil {
 		return err
 	}
+	if err := b.validKnock(); err != nil {
+		return err
+	}
 	for i := range b.Attachments {
 		a := &b.Attachments[i]
 		// The name to what any text is held to, as at Open: the write
@@ -326,6 +383,9 @@ func (b *Body) Validate() error {
 		return err
 	}
 	if err := ValidText(b.Text); err != nil {
+		return err
+	}
+	if err := b.validKnock(); err != nil {
 		return err
 	}
 	for i := range b.Attachments {

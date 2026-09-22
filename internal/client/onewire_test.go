@@ -96,8 +96,10 @@ func TestAnAnswerWithoutARequiredFieldIsRefusedByName(t *testing.T) {
 		{"a health answer with a fourth word", "/v1/health", "registration", "one of open, token, closed", over(health, "registration", "invite"), healthCall, health},
 		{"a card answer without state", "/v1/mailbox/" + fp + "/card", "state", "one of signed, none, broken", without(cardAnswer, "state"), cardCall, cardAnswer},
 		{"a card answer with another word", "/v1/mailbox/" + fp + "/card", "state", "one of signed, none, broken", over(cardAnswer, "state", "lost"), cardCall, cardAnswer},
-		{"a row without kind", "/v1/mailbox/" + fp, "kind", "a message kind (envelope or stream)", listing(nil, row(map[string]any{"kind": nil})), list, listing(nil, row(nil))},
-		{"a row with another kind", "/v1/mailbox/" + fp, "kind", "a message kind (envelope or stream)", listing(nil, row(map[string]any{"kind": "letter"})), list, listing(nil, row(nil))},
+		{"a row without kind", "/v1/mailbox/" + fp, "kind", "a message kind (envelope, stream or knock)", listing(nil, row(map[string]any{"kind": nil})), list, listing(nil, row(nil))},
+		// The whole here is a row of the third kind, a knock, taken as an
+		// envelope's row is; the fourth word is refused.
+		{"a row with another kind", "/v1/mailbox/" + fp, "kind", "a message kind (envelope, stream or knock)", listing(nil, row(map[string]any{"kind": "letter"})), list, listing(nil, row(map[string]any{"kind": "knock"}))},
 		{"a row without channel", "/v1/mailbox/" + fp, "channel", "a channel name", listing(nil, row(map[string]any{"channel": nil})), list, listing(nil, row(nil))},
 		{"a row whose channel is not a name", "/v1/mailbox/" + fp, "channel", "a channel name", listing(nil, row(map[string]any{"channel": "bad\x1bname"})), list, listing(nil, row(nil))},
 		{"a stubs listing with an envelope", "/v1/mailbox/" + fp, "envelope", "absent: a stubs listing carries no envelope", listing(nil, row(nil)), stubs, listing(nil, row(map[string]any{"envelope": nil}))},

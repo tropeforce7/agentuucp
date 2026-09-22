@@ -230,10 +230,16 @@ func TestValidateHoldsTheManifestBodyToTheMessageRules(t *testing.T) {
 		{"an in_reply_to that is a path", Body{Type: "reply", Thread: good.Thread, InReplyTo: "../x", Text: "hello"}},
 		{"a type nobody knows", Body{Type: "exec", Thread: good.Thread, Text: "hello"}},
 		{"a subject over the limit", Body{Type: "ask", Thread: good.Thread, Subject: strings.Repeat("s", 4097), Text: "hello"}},
+		// A knock carries no attachment, so a manifest that says knock is
+		// a knock with attachments by another door.
+		{"a knock", Body{Type: "knock", Thread: good.Thread, Text: "hello"}},
 	} {
 		if err := buildWith(tc.body); !errors.Is(err, ErrForm) {
 			t.Errorf("%s: %v, want ErrForm", tc.name, err)
 		}
+	}
+	if err := buildWith(Body{Type: "knock", Thread: good.Thread, Text: "hello"}); err == nil || !strings.Contains(err.Error(), "a knock is one envelope, never a stream") {
+		t.Errorf("a knock manifest: %v; want the sentence", err)
 	}
 	// An attachment's media type, which an envelope's Open refuses empty
 	// and the sender never writes empty: crafted past BuildManifest, as a

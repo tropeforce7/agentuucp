@@ -41,6 +41,7 @@ func TestTheClassifierAgreesWithTheRelay(t *testing.T) {
 		// Everything that originates.
 		"POST /v1/register":                        agent.ScopeSend,
 		"POST /v1/mailbox/{fp}":                    agent.ScopeSend,
+		"POST /v1/mailbox/{fp}/knock":              agent.ScopeSend,
 		"POST /v1/mailbox/{fp}/streams":            agent.ScopeSend,
 		"PUT /v1/uploads/{id}":                     agent.ScopeSend,
 		"DELETE /v1/uploads/{id}":                  agent.ScopeSend,

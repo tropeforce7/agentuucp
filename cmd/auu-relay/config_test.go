@@ -134,7 +134,9 @@ func TestDefaultsAlone(t *testing.T) {
 // The precedence rule that is easiest to get wrong: a flag the operator did
 // not type must not clobber the file with its own default.
 func TestUntypedFlagDoesNotOverrideFile(t *testing.T) {
-	file := writeFile(t, `{"listen": ":8443", "db": "from-file.db", "max_bytes": 4096}`)
+	// knock_max_bytes beside a max_bytes under its default, as the
+	// refusal of the pair asks.
+	file := writeFile(t, `{"listen": ":8443", "db": "from-file.db", "max_bytes": 4096, "limits": {"knock_max_bytes": 0}}`)
 
 	cfg, err := resolve(t, file)
 	if err != nil {

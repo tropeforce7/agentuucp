@@ -170,6 +170,9 @@ func (s *Server) handleAdminStatus(w http.ResponseWriter, r *http.Request, body 
 			MaxOpenUploads:           l.MaxOpenUploads,
 			MaxInflight:              l.MaxInflight,
 			MaxWaiting:               l.MaxWaiting,
+			KnockMaxBytes:            l.KnockMaxBytes,
+			MaxKnocksWaiting:         l.MaxKnocksWaiting,
+			KnocksPerHour:            l.KnocksPerHour,
 		},
 		TokenMaxAgeSecs: int64(s.cfg.TokenMaxAge / time.Second),
 	})

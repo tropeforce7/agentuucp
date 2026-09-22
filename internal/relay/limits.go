@@ -37,6 +37,22 @@ type Limits struct {
 	// soonest expiry.
 	MaxOpenUploads int64
 
+	// KnockMaxBytes caps one knock envelope on the knock route, a stranger's
+	// one message; zero means MaxBytes, the post's cap, since zero is
+	// unlimited everywhere and a knock is a post. auu-relay holds it to
+	// MaxBytes at the config's read.
+	KnockMaxBytes int64
+	// MaxKnocksWaiting caps the knocks one mailbox holds, rows the relay
+	// has whatever the owner has read: a knock is refused 429 without a
+	// Retry-After at it, since the relay cannot say when the owner will
+	// fetch or remove them. Zero is unlimited; auu-relay holds it to
+	// 1000, for the reason MaxOpenUploads has a ceiling.
+	MaxKnocksWaiting int64
+	// KnocksPerHour caps the knocks one sender may post in an hour across
+	// every mailbox, keyed by the verified fingerprint like every other
+	// per-identity limit. Zero is unlimited.
+	KnocksPerHour int64
+
 	// MaxInflight caps requests being handled at once.
 	MaxInflight int64
 	// MaxWaiting caps listings held open at once across the relay. Over
@@ -62,6 +78,9 @@ func DefaultLimits() Limits {
 		MailboxMaxBytes:          1 << 30,
 		RelayMaxBytes:            0,
 		MaxOpenUploads:           4,
+		KnockMaxBytes:            8192,
+		MaxKnocksWaiting:         10,
+		KnocksPerHour:            10,
 		MaxInflight:              256,
 		MaxWaiting:               64,
 	}
@@ -74,6 +93,7 @@ func (l Limits) Quotas() Quotas {
 		MailboxMaxBytes:    l.MailboxMaxBytes,
 		RelayMaxBytes:      l.RelayMaxBytes,
 		MaxOpenUploads:     l.MaxOpenUploads,
+		MaxKnocksWaiting:   l.MaxKnocksWaiting,
 	}
 }
 
@@ -99,6 +119,12 @@ const (
 	limitMailboxFull     = "mailbox"
 	limitRelayFull       = "relay storage"
 	limitOpenUploads     = "open uploads"
+	// limitKnocks is the sender's knock budget, knocks_per_hour, refused
+	// with a Retry-After; limitKnocksWaiting is the recipient's,
+	// max_knocks_waiting, refused without one, since the relay cannot say
+	// when the recipient will fetch.
+	limitKnocks        = "knocks"
+	limitKnocksWaiting = "knocks_waiting"
 	// limitWaiting is logged on a listing that asked to be held and was
 	// answered at once because a cap on holds was reached. The request
 	// was not refused; the field says why a held request was not held.
@@ -122,6 +148,7 @@ type limiters struct {
 	requests        *ratelimit.Limiter // keyed by verified fingerprint
 	posts           *ratelimit.Limiter // keyed by verified fingerprint
 	postBytes       *ratelimit.Limiter // keyed by verified fingerprint
+	knocks          *ratelimit.Limiter // keyed by verified fingerprint
 	unauthenticated *ratelimit.Limiter // keyed by source address
 	registrations   *ratelimit.Limiter // keyed by source address
 }
@@ -131,6 +158,7 @@ func newLimiters(l Limits, now func() time.Time) limiters {
 		requests:        ratelimit.New(l.RequestsPerMinute, time.Minute, time.Minute, now),
 		posts:           ratelimit.New(l.PostsPerMinute, time.Minute, time.Minute, now),
 		postBytes:       ratelimit.New(l.PostBytesPerHour, time.Hour, time.Hour, now),
+		knocks:          ratelimit.New(l.KnocksPerHour, time.Hour, time.Hour, now),
 		unauthenticated: ratelimit.New(l.UnauthenticatedPerMinute, time.Minute, time.Minute, now),
 		registrations:   ratelimit.New(l.RegistrationsPerHour, time.Hour, time.Hour, now),
 	}

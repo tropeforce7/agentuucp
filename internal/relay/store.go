@@ -34,6 +34,9 @@ var (
 	ErrMailboxFull = errors.New("relay: mailbox is full")
 	// ErrRelayFull means the relay as a whole has run out of room.
 	ErrRelayFull = errors.New("relay: storage is full")
+	// ErrKnocksWaiting means the mailbox holds as many knocks as the relay
+	// lets one hold; the knock is refused and nothing is stored.
+	ErrKnocksWaiting = errors.New("relay: the mailbox has as many knocks waiting as allowed")
 	// ErrTooManyMailboxes means the relay is not accepting new registrations.
 	ErrTooManyMailboxes = errors.New("relay: mailbox limit reached")
 )
@@ -60,7 +63,7 @@ var (
 // database at another version is one nobody runs, and a path that
 // migrated it would be a path nobody tests. The refusal says to delete the
 // database and its message directory; the next start recreates both.
-const schemaVersion = 9
+const schemaVersion = 10
 
 // SchemaVersion is schemaVersion for the version line and the container
 // suite.
@@ -113,6 +116,12 @@ type Quotas struct {
 	// MaxOpenUploads is the most uploads one sender may have open at
 	// once; zero is no cap.
 	MaxOpenUploads int64
+	// MaxKnocksWaiting is the most knocks one mailbox holds, rows of the
+	// kind whatever the owner has read; zero is no cap. It is judged
+	// inside Put's transaction, beside the
+	// room, so two knocks at once cannot each be told there is room for
+	// the last.
+	MaxKnocksWaiting int64
 }
 
 // connectionPragmas apply to the connection, not the file, so they run on
@@ -181,6 +190,10 @@ CREATE INDEX IF NOT EXISTS cards_listed ON cards(listed, fp);`
 	// envelope; the relay routes by it and reports it in every listing. It
 	// is one owner-published label per message, and the security model
 	// says so.
+	//
+	// kind is envelope, stream or knock, the word the relay lists the row
+	// under; the index on it is what makes the count of one mailbox's
+	// knocks at a knock's Put a range and not a scan of its page.
 	messagesTable = `CREATE TABLE IF NOT EXISTS messages (
 	id       INTEGER PRIMARY KEY AUTOINCREMENT,
 	to_fp    TEXT NOT NULL REFERENCES mailboxes(fp) ON DELETE CASCADE,
@@ -189,7 +202,8 @@ CREATE INDEX IF NOT EXISTS cards_listed ON cards(listed, fp);`
 	kind     TEXT NOT NULL DEFAULT 'envelope',
 	channel  TEXT NOT NULL DEFAULT 'default'
 );
-CREATE INDEX IF NOT EXISTS messages_to ON messages(to_fp, id);`
+CREATE INDEX IF NOT EXISTS messages_to ON messages(to_fp, id);
+CREATE INDEX IF NOT EXISTS messages_kind ON messages(to_fp, kind);`
 
 	// uploads is the one place the relay records who sent a message, because
 	// it must know who may append to a half-finished one. The row is deleted
@@ -687,16 +701,20 @@ func (s *Store) Exists(fp string) (bool, error) {
 	return err == nil, err
 }
 
-// Put stores a sealed envelope under a channel and returns its relay id.
-// The channel is the caller's to have checked against the directory; the
-// row records whatever name it is given.
+// Put stores a sealed envelope under a channel, as the kind it will be
+// listed under, envelope or knock, and returns its relay id. The channel
+// is the caller's to have checked against the directory; the row records
+// whatever name it is given. The kind is the route's word: the post route
+// stores an envelope and the knock route a knock, and a knock is held to
+// the mailbox's knock cap here, inside the transaction, so two knocks at
+// once cannot each be told there is room for the last.
 //
 // The body is written to a temporary file and fsynced, then the row is
 // inserted and the file renamed into place, all before the transaction
 // commits. That ordering is what makes the invariant hold: after a commit
 // there is always a file, and every crash leaves at most an unreferenced file
 // for the sweep, never a row promising a message that is not there.
-func (s *Store) Put(toFP, channel string, raw []byte, q Quotas) (int64, error) {
+func (s *Store) Put(toFP, channel, kind string, raw []byte, q Quotas) (int64, error) {
 	size := int64(len(raw))
 	tmp, err := s.writeTemp(raw)
 	if err != nil {
@@ -716,9 +734,14 @@ func (s *Store) Put(toFP, channel string, raw []byte, q Quotas) (int64, error) {
 	if err := roomFor(tx, toFP, size, q); err != nil {
 		return 0, err
 	}
+	if kind == relayapi.KindKnock {
+		if err := roomForKnock(tx, toFP, q); err != nil {
+			return 0, err
+		}
+	}
 
-	res, err := tx.Exec(`INSERT INTO messages (to_fp, received, size, channel) VALUES (?, ?, ?, ?)`,
-		toFP, time.Now().UTC().Format(time.RFC3339), size, channel)
+	res, err := tx.Exec(`INSERT INTO messages (to_fp, received, size, kind, channel) VALUES (?, ?, ?, ?, ?)`,
+		toFP, time.Now().UTC().Format(time.RFC3339), size, kind, channel)
 	if err != nil {
 		return 0, err
 	}
@@ -740,6 +763,29 @@ func (s *Store) Put(toFP, channel string, raw []byte, q Quotas) (int64, error) {
 		return 0, err
 	}
 	return id, nil
+}
+
+// roomForKnock is the one arithmetic for the knock cap: the knocks the
+// mailbox holds, counted, against q.MaxKnocksWaiting, in the transaction
+// the row is inserted in. The count is over one mailbox's rows under the
+// messages_kind index, bounded by mailbox_max_messages, which is why a
+// count is right here where the guide's counter rule, about sums over
+// the whole table, keeps the mailbox's counters instead: a knock is the
+// rare row, and a counter for it would be one more thing the sweep must
+// correct.
+func roomForKnock(tx *sql.Tx, toFP string, q Quotas) error {
+	if q.MaxKnocksWaiting <= 0 {
+		return nil
+	}
+	var waiting int64
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM messages WHERE to_fp = ? AND kind = ?`,
+		toFP, relayapi.KindKnock).Scan(&waiting); err != nil {
+		return err
+	}
+	if waiting >= q.MaxKnocksWaiting {
+		return ErrKnocksWaiting
+	}
+	return nil
 }
 
 // Row is one stored message. Envelope is nil for a stream, which the client

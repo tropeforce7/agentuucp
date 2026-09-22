@@ -59,6 +59,9 @@ Later ones win. A flag you do not type never overrides the file.
 | `--max-open-uploads N` | `limits.max_open_uploads` | 4, at most 1000 |
 | `--max-inflight N` | `limits.max_inflight` | 256 |
 | `--max-waiting N` | `limits.max_waiting` | 64 |
+| `--knock-max-bytes N` | `limits.knock_max_bytes` | 8192, at most `max_bytes`; 0 is `max_bytes` |
+| `--max-knocks-waiting N` | `limits.max_knocks_waiting` | 10, at most 1000 |
+| `--knocks-per-hour N` | `limits.knocks_per_hour` | 10 |
 | `--access-log full\|minimal` | `access_log` | `full` |
 | `--print-config` | | print the merged settings and exit |
 | `--version` | | print `auu-relay vX (schema N)` and exit; needs no settings |
@@ -115,7 +118,7 @@ beside it.
 *Listing 1.1a*
 ```
 /var/lib/auu/
-  relay.db                     mailboxes, counters, one row per message, the three owner-signed documents
+  relay.db                     mailboxes, counters, one row per message with its kind, the three owner-signed documents
   messages/
     tmp/                       writes in progress, swept at startup
     uploads/                   streams still being uploaded
@@ -141,7 +144,11 @@ line and decide nothing: an edit to those columns changes what
 or the signature makes the row `broken`, which the owner is told of at
 their next fetch and repairs with a push, whatever issue time the edit
 left. The name on a card is not stored a second time; the relay has no
-use for it.
+use for it. A message row carries its kind, `envelope`, `stream` or
+`knock`, the word the route it arrived by gives it and the word every
+listing says beside the row; a knock is an envelope a stranger posted to
+the knock route of a mailbox whose card, verified at that moment and
+never read from the column, says `knocks`.
 
 An operator can list all of this, and count it, and delete it. None of it can
 be read. Every file is a sealed envelope or a sealed stream. **Back up the
@@ -256,6 +263,9 @@ switch the lot off.
 | `max_open_uploads` | uploads one sender may have open at once, across every mailbox it sends to; each is a file and a reservation the relay holds for that sender, so 0, unlimited like the rest, lets one sender hold as many as it likes; at most 1000 | 4 |
 | `max_inflight` | requests being handled at once | 256 |
 | `max_waiting` | listings held open at once for watchers; over it the next is answered at once rather than held, and each held listing keeps an in-flight slot, so keep this well under `max_inflight` | 64 |
+| `knock_max_bytes` | the largest knock envelope, on the knock route's own cap, so a stranger's one message is read under a bound of its own; 0 is `max_bytes`, since a knock is a post, and a value over `max_bytes` is refused at startup naming both | 8192 |
+| `max_knocks_waiting` | knocks one mailbox holds, counted as rows the relay has whatever the owner has read; a knock at it is refused `429` with no `Retry-After`, since the relay cannot say when the owner will fetch or remove them, and the sender's knock is not charged for it; 0 is unlimited; at most 1000, for the reason `max_open_uploads` has a ceiling | 10 |
+| `knocks_per_hour` | knocks one sender may post in an hour, across every mailbox, beside the post budgets every knock is charged as a post; 0 is unlimited | 10 |
 
 The three queue limits count a stream from the moment it is opened. What
 an unfinished upload has reserved is charged against the mailbox's messages
@@ -287,6 +297,28 @@ so a sender who waited is not refused for a slot the purge had not yet
 freed. An upload in flight, its bytes still arriving, holds its slot for
 as long as they do, and the relay cannot say when that ends. A sender at
 the cap over such uploads is asked back in a second.
+
+A knock is a post to the knock route, `POST /v1/mailbox/{fp}/knock`, and
+the relay judges it in this order: the route's cap, `knock_max_bytes`
+plus 64 KiB, before a byte of the body; the post budgets,
+`posts_per_minute` and `post_bytes_per_hour`, charged as for any post;
+the envelope, which must be addressed to the mailbox and name no channel;
+the mailbox, which must exist and not be blocked; the recipient's card,
+read and verified then and there, refused `403 the recipient does not
+take knocks` for no card, a card that says no and a card that does not
+verify alike, since the state of somebody else's card is not a stranger's
+to learn, with a card that does not verify said in the log once a minute
+naming the mailbox; the sender's `knocks_per_hour`, refused `429 rate
+limited: knocks` with `Retry-After`; and the mailbox's
+`max_knocks_waiting`, judged inside the store's transaction with the
+room, refused `429` with the sentence naming the setting and no
+`Retry-After`, the sender's knock token given back. The two 429s are
+`limit=knocks` and `limit=knocks_waiting` in the access log. A knock
+refused by the store after the post budgets were charged keeps the post
+token it spent, as an envelope refused for a full mailbox does. The allow
+list is never read on the knock route, and the card is never read on the
+post route: a sender the owner admits posts, a stranger the owner's card
+invites knocks, and the two doors do not open each other.
 
 Two limits are not settings. An allow list may name at most 1000 senders.
 A channel directory may hold at most 64 channels, each with a name of at
@@ -332,6 +364,7 @@ The HTTP layer has bounds of its own, none of them settings:
 |---|---|---|
 | request line and headers | 32 KiB | over it the answer is `431`, written by Go's `net/http` before the relay sees the request (it reads the block through a 4 KiB buffer, so the cut lands at 36 KiB); the largest header the protocol carries, the request signature, is about 200 bytes, and the relay refuses an auth header longer than its five fields can be before it reads one |
 | body of a post | `max_bytes` + 64 KiB | the envelope with its JSON and base64 framing |
+| body of a knock | `knock_max_bytes` + 64 KiB | the same framing over a knock envelope, which the handler then holds to `knock_max_bytes` itself, refusing one over it `413` naming the setting |
 | body of an allow list or a channel directory | 1 MiB | two of the three owner-signed documents, sized to their own maxima on the wire — a full directory of 64 channels at every cap is 565,026 bytes as the client sends it — with the room above for a signer that indents; over it the answer is `413` naming the bytes and saying to send the document compact |
 | body of every other request | 64 KiB | a card (whose document inside is held to 512 bytes besides), a registration, a certificate request, an admin token, a stream's open; none reaches a tenth of it |
 | the stream `PUT` | the size the open declared | its `Content-Length` must equal what is left of that size, judged before a byte is read |

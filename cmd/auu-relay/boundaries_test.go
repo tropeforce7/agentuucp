@@ -29,9 +29,12 @@ func TestLimitMaxBytesBoundaries(t *testing.T) {
 		{math.MaxInt64, false},
 		{math.MaxInt64 - relayapi.FramingAllowance, false},
 	}
+	// knock_max_bytes must sit at or under max_bytes, and its default
+	// does not under a small max_bytes, so it is unset beside, as
+	// max_waiting is beside a small max_inflight.
 	for _, c := range cases {
 		t.Run(strconv.FormatInt(c.value, 10), func(t *testing.T) {
-			_, err := resolve(t, "", "--max-bytes", strconv.FormatInt(c.value, 10))
+			_, err := resolve(t, "", "--max-bytes", strconv.FormatInt(c.value, 10), "--knock-max-bytes", "0")
 			if c.accept && err != nil {
 				t.Fatalf("max_bytes %d was refused: %v", c.value, err)
 			}

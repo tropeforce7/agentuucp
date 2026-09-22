@@ -49,7 +49,7 @@ const (
 	wantCount       = "a count (zero or more)"
 	wantID          = "a message id (one or more)"
 	wantMLDSA       = "an ML-DSA parameter set (44, 65 or 87, or 0 for none)"
-	wantKind        = "a message kind (envelope or stream)"
+	wantKind        = "a message kind (envelope, stream or knock)"
 	wantChannelName = "a channel name"
 	wantTime        = "a time"
 )
@@ -67,7 +67,7 @@ var (
 	mailboxAllowWords = []string{"", relayapi.AllowSigned, relayapi.AllowNone, relayapi.AllowBroken}
 	cardWords         = []string{relayapi.CardSigned, relayapi.CardNone, relayapi.CardBroken}
 	mailboxCardWords  = []string{"", relayapi.CardSigned, relayapi.CardNone, relayapi.CardBroken}
-	kinds             = []string{relayapi.KindEnvelope, relayapi.KindStream}
+	kinds             = []string{relayapi.KindEnvelope, relayapi.KindStream, relayapi.KindKnock}
 	tokenUses         = []string{token.UseRegister, token.UseCert}
 	tokenStates       = []string{relayapi.TokenLive, relayapi.TokenSpent, relayapi.TokenRevoked, relayapi.TokenExpired}
 )
@@ -127,7 +127,9 @@ func (c *Client) checkStatus(st *relayapi.AdminStatusResponse) error {
 		count{"limits.registrations_per_hour", l.RegistrationsPerHour}, count{"limits.max_mailboxes", l.MaxMailboxes},
 		count{"limits.mailbox_max_messages", l.MailboxMaxMessages}, count{"limits.mailbox_max_bytes", l.MailboxMaxBytes},
 		count{"limits.relay_max_bytes", l.RelayMaxBytes}, count{"limits.max_open_uploads", l.MaxOpenUploads},
-		count{"limits.max_inflight", l.MaxInflight}, count{"limits.max_waiting", l.MaxWaiting})
+		count{"limits.max_inflight", l.MaxInflight}, count{"limits.max_waiting", l.MaxWaiting},
+		count{"limits.knock_max_bytes", l.KnockMaxBytes}, count{"limits.max_knocks_waiting", l.MaxKnocksWaiting},
+		count{"limits.knocks_per_hour", l.KnocksPerHour})
 }
 
 // checkHealth is the shape of a relay's health: the parameter set it

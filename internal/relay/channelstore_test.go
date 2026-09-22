@@ -10,6 +10,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 // directoryStore is a store with two registered identities, for the
@@ -170,7 +171,7 @@ func TestAReplacedDirectoryLeavesARemovedChannelsMail(t *testing.T) {
 	}
 	var ids []int64
 	for _, ch := range []string{"bugs", "default", "bugs"} {
-		id, err := s.Put(fp, ch, sealed(t, alice, bob.Public(), "x"), Quotas{})
+		id, err := s.Put(fp, ch, relayapi.KindEnvelope, sealed(t, alice, bob.Public(), "x"), Quotas{})
 		if err != nil {
 			t.Fatal(err)
 		}

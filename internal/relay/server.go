@@ -179,6 +179,7 @@ func NewServer(store *Store, cfg Config) *Server {
 	s.route("PUT /v1/mailbox/{fp}/card", s.authedBody(relayapi.FramingAllowance, hintCompact, s.handleSetCard))
 	s.route("GET /v1/mailbox/{fp}/card", s.authed(s.handleGetCard))
 	s.route("POST /v1/mailbox/{fp}", s.authedBody(s.postCap(), "", s.handlePost))
+	s.route("POST /v1/mailbox/{fp}/knock", s.authedBody(s.knockCap(), "", s.handleKnock))
 	s.route("GET /v1/mailbox/{fp}", s.authed(s.handleList))
 	s.route("DELETE /v1/mailbox/{fp}/{id}", s.authed(s.handleDelete))
 
@@ -454,9 +455,10 @@ func (s *Server) rateLimited(w http.ResponseWriter, which string, retryAfter tim
 // about it.
 //
 // The caps are per route and are the wire's constants: the post route
-// takes max_bytes plus relayapi.FramingAllowance, two of the three
-// owner-signed documents relayapi.MaxDocumentBytes, and every other body
-// route relayapi.FramingAllowance alone, the card among them, since a card
+// takes max_bytes plus relayapi.FramingAllowance, the knock route
+// knock_max_bytes plus it, two of the three owner-signed documents
+// relayapi.MaxDocumentBytes, and every other body route
+// relayapi.FramingAllowance alone, the card among them, since a card
 // is a few hundred bytes. The stream PUT never comes here: its
 // body is judged by Content-Length against the size the open declared
 // and streamed to disk, in handlePutStream.
@@ -510,6 +512,20 @@ const hintCompact = "send the document compact, without indentation"
 // postCap is the post route's body cap: an envelope of max_bytes with the
 // framing allowance for its JSON and base64.
 func (s *Server) postCap() int64 { return s.cfg.MaxBytes + relayapi.FramingAllowance }
+
+// knockMax is the largest knock envelope: knock_max_bytes, or max_bytes
+// when that is zero, since zero is unlimited everywhere and a knock is a
+// post, so unlimited is the post's cap.
+func (s *Server) knockMax() int64 {
+	if s.cfg.Limits.KnockMaxBytes > 0 {
+		return s.cfg.Limits.KnockMaxBytes
+	}
+	return s.cfg.MaxBytes
+}
+
+// knockCap is the knock route's body cap: knockMax with the framing
+// allowance, as postCap is max_bytes with it.
+func (s *Server) knockCap() int64 { return s.knockMax() + relayapi.FramingAllowance }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// The registration mode is what admission to this relay means, and
@@ -1066,7 +1082,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 	if !ok {
 		return
 	}
-	id, err := s.store.Put(fp, channel, body, s.cfg.Limits.Quotas())
+	id, err := s.store.Put(fp, channel, relayapi.KindEnvelope, body, s.cfg.Limits.Quotas())
 	switch {
 	case errors.Is(err, ErrMailboxFull):
 		// Not the sender's fault and not something they can retry around: the

@@ -26,7 +26,10 @@ func TestLimitDefaults(t *testing.T) {
 		got.RelayMaxBytes != want.RelayMaxBytes ||
 		got.MaxOpenUploads != want.MaxOpenUploads ||
 		got.MaxInflight != want.MaxInflight ||
-		got.MaxWaiting != want.MaxWaiting {
+		got.MaxWaiting != want.MaxWaiting ||
+		got.KnockMaxBytes != want.KnockMaxBytes ||
+		got.MaxKnocksWaiting != want.MaxKnocksWaiting ||
+		got.KnocksPerHour != want.KnocksPerHour {
 		t.Fatalf("the command's defaults have drifted from the relay's:\n got %+v\nwant %+v", got, want)
 	}
 	if cfg.AccessLog != relay.AccessLogFull {
@@ -48,7 +51,10 @@ func TestLimitsFromFile(t *testing.T) {
 	    "relay_max_bytes": 4096,
 	    "max_open_uploads": 6,
 	    "max_inflight": 9,
-	    "max_waiting": 8
+	    "max_waiting": 8,
+	    "knock_max_bytes": 512,
+	    "max_knocks_waiting": 3,
+	    "knocks_per_hour": 2
 	  },
 	  "access_log": "minimal"
 	}`)
@@ -74,6 +80,9 @@ func TestLimitsFromFile(t *testing.T) {
 		{"max_open_uploads", l.MaxOpenUploads, 6},
 		{"max_inflight", l.MaxInflight, 9},
 		{"max_waiting", l.MaxWaiting, 8},
+		{"knock_max_bytes", l.KnockMaxBytes, 512},
+		{"max_knocks_waiting", l.MaxKnocksWaiting, 3},
+		{"knocks_per_hour", l.KnocksPerHour, 2},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s = %d, want %d", c.name, c.got, c.want)
@@ -98,7 +107,10 @@ func TestEveryLimitFlagOverridesTheFile(t *testing.T) {
 	    "relay_max_bytes": 10,
 	    "max_open_uploads": 10,
 	    "max_inflight": 10,
-	    "max_waiting": 10
+	    "max_waiting": 10,
+	    "knock_max_bytes": 10,
+	    "max_knocks_waiting": 10,
+	    "knocks_per_hour": 10
 	  },
 	  "access_log": "full"
 	}`)
@@ -115,6 +127,9 @@ func TestEveryLimitFlagOverridesTheFile(t *testing.T) {
 		"--max-open-uploads", "13",
 		"--max-inflight", "12",
 		"--max-waiting", "11",
+		"--knock-max-bytes", "14",
+		"--max-knocks-waiting", "15",
+		"--knocks-per-hour", "16",
 		"--access-log", "minimal")
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +152,9 @@ func TestEveryLimitFlagOverridesTheFile(t *testing.T) {
 		{"max_open_uploads", l.MaxOpenUploads, 13},
 		{"max_inflight", l.MaxInflight, 12},
 		{"max_waiting", l.MaxWaiting, 11},
+		{"knock_max_bytes", l.KnockMaxBytes, 14},
+		{"max_knocks_waiting", l.MaxKnocksWaiting, 15},
+		{"knocks_per_hour", l.KnocksPerHour, 16},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s = %d, want %d", c.name, c.got, c.want)
@@ -161,7 +179,10 @@ func TestZeroLimitsSurviveTheFile(t *testing.T) {
 	    "mailbox_max_bytes": 0,
 	    "max_open_uploads": 0,
 	    "max_inflight": 0,
-	    "max_waiting": 0
+	    "max_waiting": 0,
+	    "knock_max_bytes": 0,
+	    "max_knocks_waiting": 0,
+	    "knocks_per_hour": 0
 	  }
 	}`)
 	cfg, err := resolve(t, file)
@@ -172,7 +193,8 @@ func TestZeroLimitsSurviveTheFile(t *testing.T) {
 	if l.RequestsPerMinute != 0 || l.PostsPerMinute != 0 || l.PostBytesPerHour != 0 ||
 		l.UnauthenticatedPerMinute != 0 || l.RegistrationsPerHour != 0 ||
 		l.MailboxMaxMessages != 0 || l.MailboxMaxBytes != 0 || l.MaxOpenUploads != 0 ||
-		l.MaxInflight != 0 || l.MaxWaiting != 0 {
+		l.MaxInflight != 0 || l.MaxWaiting != 0 ||
+		l.KnockMaxBytes != 0 || l.MaxKnocksWaiting != 0 || l.KnocksPerHour != 0 {
 		t.Fatalf("a limit the file set to zero came back with a default: %+v", l)
 	}
 }
@@ -194,6 +216,11 @@ func TestBadLimitsAreRefused(t *testing.T) {
 		{"negative relay bytes", []string{"--relay-max-bytes", "-1"}, "relay_max_bytes"},
 		{"negative open uploads", []string{"--max-open-uploads", "-1"}, "max_open_uploads"},
 		{"open uploads over the ceiling", []string{"--max-open-uploads", "1001"}, "max_open_uploads must be at most 1000"},
+		{"negative knock bytes", []string{"--knock-max-bytes", "-1"}, "knock_max_bytes"},
+		{"negative knocks waiting", []string{"--max-knocks-waiting", "-1"}, "max_knocks_waiting"},
+		{"knocks waiting over the ceiling", []string{"--max-knocks-waiting", "1001"}, "max_knocks_waiting must be at most 1000"},
+		{"negative knocks per hour", []string{"--knocks-per-hour", "-1"}, "knocks_per_hour"},
+		{"knock bytes over max_bytes", []string{"--knock-max-bytes", "8193", "--max-bytes", "8192"}, "knock_max_bytes (8193) must be at most max_bytes (8192)"},
 		{"negative inflight", []string{"--max-inflight", "-1"}, "max_inflight"},
 		{"negative waiting", []string{"--max-waiting", "-1"}, "max_waiting"},
 		{"unknown access log", []string{"--access-log", "verbose"}, "access_log"},
@@ -268,7 +295,8 @@ func TestPrintedConfigCarriesTheLimits(t *testing.T) {
 		"requests_per_minute", "posts_per_minute", "post_bytes_per_hour",
 		"unauthenticated_per_minute", "registrations_per_hour", "max_mailboxes",
 		"mailbox_max_messages", "mailbox_max_bytes", "relay_max_bytes",
-		"max_inflight", "max_waiting", "access_log",
+		"max_inflight", "max_waiting", "knock_max_bytes", "max_knocks_waiting",
+		"knocks_per_hour", "access_log",
 	} {
 		if !strings.Contains(printed, key) {
 			t.Errorf("--print-config output is missing %q", key)

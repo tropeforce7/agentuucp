@@ -187,8 +187,8 @@ type (
 	StoredMessage struct {
 		ID       int64     `json:"id"`
 		Received time.Time `json:"received"`
-		// Kind is envelope or stream, always present; a client refuses a
-		// row without it, or with any other word, by name.
+		// Kind is envelope, stream or knock, always present; a client
+		// refuses a row without it, or with any other word, by name.
 		Kind string `json:"kind"`
 		Size int64  `json:"size,omitempty"`
 		// Channel is the name the message was posted under, always
@@ -320,6 +320,9 @@ type (
 		MaxOpenUploads           int64 `json:"max_open_uploads"`
 		MaxInflight              int64 `json:"max_inflight"`
 		MaxWaiting               int64 `json:"max_waiting"`
+		KnockMaxBytes            int64 `json:"knock_max_bytes"`
+		MaxKnocksWaiting         int64 `json:"max_knocks_waiting"`
+		KnocksPerHour            int64 `json:"knocks_per_hour"`
 	}
 
 	// MailboxRecord is one mailbox as an administrator sees it. It never
@@ -617,11 +620,28 @@ const MsgBodyTooLarge = "request body larger than this route takes"
 const MaxBytesCeiling int64 = 1 << 30
 
 // Message kinds. An envelope travels inline in a list response; a stream is
-// fetched from its own endpoint, because it may be larger than memory.
+// fetched from its own endpoint, because it may be larger than memory. A
+// knock is an envelope posted to the knock route: a stranger's one
+// message to a mailbox whose card says knocks, past no allow list, listed
+// by its own word so a receiver can file it as a knock before opening it.
+// A client refuses a fourth word by name.
 const (
 	KindEnvelope = "envelope"
 	KindStream   = "stream"
+	KindKnock    = "knock"
 )
+
+// MsgNoKnocks is the 403 a knock meets at a mailbox that takes none: no
+// card, a card that says no, or a card that no longer verifies, in one
+// sentence, since the state of somebody else's card is not a stranger's
+// to learn. auu knock tells it apart to say what the other person can run.
+const MsgNoKnocks = "the recipient does not take knocks"
+
+// MsgKnocksWaiting is the 429 a knock meets when the mailbox already
+// holds as many knocks as the relay lets one hold. It carries no
+// Retry-After: the relay cannot say when the recipient will fetch or
+// remove them, and a client treats a 429 without one as final.
+const MsgKnocksWaiting = "the recipient has as many knocks waiting as this relay allows (max_knocks_waiting)"
 
 // UploadOffsetHeader is the header an upload attempt carries, saying where
 // in the stream its body begins, and the header a 409 carries back, saying

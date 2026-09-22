@@ -699,16 +699,43 @@ func TestAccessLogModes(t *testing.T) {
 	})
 }
 
-// The limit field is what turns a wall of 429s into a diagnosis.
+// The limit field is what turns a wall of 429s into a diagnosis. The two
+// knock refusals are named apart: the sender's budget as knocks, the
+// recipient's cap as knocks_waiting.
 func TestRefusalsAreNamedInTheLog(t *testing.T) {
-	h := newHarness(t, Config{Limits: Limits{UnauthenticatedPerMinute: 1}})
-	alice := ids(t, "alice")[0]
-	h.enroll(alice)
+	h := newHarness(t, Config{Limits: Limits{UnauthenticatedPerMinute: 1, KnocksPerHour: 1, MaxKnocksWaiting: 1}})
+	people := ids(t, "alice", "bob", "carol")
+	alice, bob, carol := people[0], people[1], people[2]
+	h.enroll(alice, bob, carol)
 	h.send(nil, "GET", "/v1/keys/"+alice.Fingerprint(), nil, nil)
 	h.send(nil, "GET", "/v1/keys/"+alice.Fingerprint(), nil, nil)
 
 	if !strings.Contains(h.logs.String(), "limit=unauthenticated") {
 		t.Fatalf("the log does not name the limit that refused a request:\n%s", h.logs.String())
+	}
+	if status, body, _ := h.pushCard(bob, bob, time.Now(), false, true); status != http.StatusNoContent {
+		t.Fatalf("card push: %d %s", status, body)
+	}
+	if status, body, _ := h.knock(alice, bob, "hi"); status != http.StatusOK {
+		t.Fatalf("the first knock: %d %s", status, body)
+	}
+	if status, _, _ := h.knock(carol, bob, "hi"); status != http.StatusTooManyRequests {
+		t.Fatalf("a knock at the recipient's cap: %d", status)
+	}
+	if status, _, _ := h.knock(alice, bob, "hi"); status != http.StatusTooManyRequests {
+		t.Fatalf("a knock over the sender's budget: %d", status)
+	}
+	lines := strings.Split(h.logs.String(), "\n")
+	named := func(limit string) bool {
+		for _, l := range lines {
+			if strings.Contains(l, "status=429") && strings.Contains(l, "limit="+limit+" ") {
+				return true
+			}
+		}
+		return false
+	}
+	if !named("knocks_waiting") || !named("knocks") {
+		t.Fatalf("the log does not name the two knock limits apart:\n%s", h.logs.String())
 	}
 }
 
