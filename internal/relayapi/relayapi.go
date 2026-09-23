@@ -227,6 +227,12 @@ type (
 		// Always present; a client refuses a listing without it, or with
 		// any other word, by name.
 		Card string `json:"card"`
+		// Directory is the state of the owner's channel directory, one of
+		// the Directory* words, always sent and refused by name when it is
+		// absent. A directory that does not verify routes nothing: every
+		// named channel is refused until the owner pushes again, and the
+		// owner would otherwise learn that from their senders' silence.
+		Directory string `json:"directory"`
 	}
 	HealthResponse struct {
 		OK bool `json:"ok"`
@@ -525,6 +531,16 @@ const (
 	// key, a row with no signature included. The relay refuses every post
 	// to the mailbox until the owner pushes again.
 	AllowBroken = "broken"
+)
+
+// The states of a mailbox's channel directory, the same three words the
+// allow list and the card use, as the owner's listing reports it. The
+// relay verifies the directory at every post, so a broken one refuses
+// every named channel until the owner pushes again.
+const (
+	DirectorySigned = "signed"
+	DirectoryNone   = "none"
+	DirectoryBroken = "broken"
 )
 
 // The states of a mailbox's card, the allow list's three words, as the

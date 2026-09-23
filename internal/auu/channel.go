@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 	"unicode"
@@ -11,6 +12,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/client"
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
 
@@ -200,4 +202,21 @@ func plural(n int, thing string) string {
 		return "1 " + thing
 	}
 	return fmt.Sprintf("%d %ss", n, thing)
+}
+
+// warnDirectoryState says, on stderr, what a fetch's listing said about
+// this identity's channel directory on one relay, when there is something
+// to say. Only broken: a relay that holds none is a relay this machine
+// has pushed none to, since a push is the only thing that makes one, and
+// there is no marker file for it as there is for the allow list and the
+// card — a home with no directory has published no names, and nothing is
+// missing.
+func warnDirectoryState(r *store.Relay, state string) error {
+	if state != relayapi.DirectoryBroken {
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "%s: your channel directory on %s does not verify, so every post to you is refused "+
+		"there; run %s channel push, and if you did not change it, tell the relay's operator\n",
+		prog, r.Name, prog)
+	return nil
 }

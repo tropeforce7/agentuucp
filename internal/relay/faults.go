@@ -16,9 +16,11 @@ import (
 // allow list that no longer verifies is said the same way, one line a
 // minute per mailbox, for the same reason: a sender retrying in a loop
 // against a broken list is the same shape as a broken disk. A card that no
-// longer verifies likewise, at a knock, naming the mailbox alone and never
-// the knocker, under both access log modes as the allow list's line is:
-// the line is about a row on this relay, not about who talks to whom.
+// longer verifies likewise, at a knock, and a channel directory that does
+// not verify, at a post to a named channel — each naming the mailbox alone
+// and never the sender, under both access log modes as the allow list's
+// line is: the line is about a row on this relay, not about who talks to
+// whom.
 
 const (
 	// faultInterval is how long one path's fault line covers.
@@ -68,6 +70,16 @@ func (f *faultLog) noteAllowlist(fp string) {
 func (f *faultLog) noteCard(fp string) {
 	if f.due("card:" + fp) {
 		f.log.Warn(fmt.Sprintf("card for %s does not verify; refusing knocks to it until the owner pushes again", fp))
+	}
+}
+
+// noteDirectory logs that a mailbox's channel directory does not verify,
+// so every named channel is refused, unless that was logged for the
+// mailbox inside the last minute; keyed apart from the allow list's line,
+// the card's and a path's.
+func (f *faultLog) noteDirectory(fp string) {
+	if f.due("directory:" + fp) {
+		f.log.Warn(fmt.Sprintf("channel directory for %s does not verify; refusing every named channel to it until the owner pushes again", fp))
 	}
 }
 

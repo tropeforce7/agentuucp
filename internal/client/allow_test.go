@@ -58,7 +58,7 @@ func TestAllowlistAndTheListingCarryTheState(t *testing.T) {
 	rec := &recorder{replies: []reply{
 		{status: http.StatusOK, body: relayapi.AllowResponse{Document: []byte(`{"v":1}`), Signature: []byte{9}, State: "signed"}},
 		{status: http.StatusOK, body: relayapi.AllowResponse{State: "none"}},
-		{status: http.StatusOK, body: map[string]any{"messages": []any{}, "queued": 0, "allow": "broken", "card": "none"}},
+		{status: http.StatusOK, body: map[string]any{"messages": []any{}, "queued": 0, "allow": "broken", "card": "none", "directory": "none"}},
 		{status: http.StatusOK, body: map[string]any{"messages": []any{}, "queued": 0}},
 	}}
 	c, _ := newTestClient(t, rec)

@@ -177,6 +177,15 @@ while it goes on. Tell the user to treat the host as compromised and look
 at who could write `/var/lib/auu/relay.db`; asking the owner to push
 again clears the state but not the question.
 
+The same journal line, in its own words, says a **card** does not verify
+(`card for FP does not verify; refusing knocks to it…`) or a **channel
+directory** does not (`channel directory for FP does not verify; refusing
+every named channel to it…`). All three mean the same thing: a document
+the owner signed has been changed by something that is not their push, so
+the relay refuses on their behalf — every post, every knock, or every
+named channel — until they push again. Read any of them as an incident on
+the host.
+
 **TLS is the default.** `tls.mode` is `files` unless the settings say
 `off`, and a relay with no bundle and no certificate refuses to start in
 one sentence naming `auu-ca init`, `auu-ca relay` and `--tls-mode off`.

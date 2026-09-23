@@ -2,6 +2,7 @@ package relay
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -332,5 +333,214 @@ func TestTheAccessLogNamesNoChannel(t *testing.T) {
 				t.Fatalf("the full log does not name the path:\n%s", logs)
 			}
 		})
+	}
+}
+
+// listedDirectory is what the owner's own listing says their channel
+// directory is.
+func (h *harness) listedDirectory(owner *identity.Identity) string {
+	h.t.Helper()
+	status, body := h.do(owner, "GET", "/v1/mailbox/"+owner.Fingerprint(), nil, nil)
+	if status != http.StatusOK {
+		h.t.Fatalf("listing: %d %s", status, body)
+	}
+	var resp relayapi.ListResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		h.t.Fatal(err)
+	}
+	return resp.Directory
+}
+
+// The relay routes a post by the directory the owner signed, verified at
+// the post, and not by the channels rows it parsed at the push. A row
+// inserted by hand for a name the document does not carry routes nothing,
+// and a row whose period was edited to open a channel the document closes
+// does not open it: the rows are the administrator's count and the
+// watch's, and they decide nothing.
+func TestAPostIsRoutedByTheVerifiedDirectoryAndNotTheRows(t *testing.T) {
+	h := newHarness(t, Config{})
+	people := ids(t, "alice", "bob")
+	alice, bob := people[0], people[1]
+	h.register(alice)
+	h.register(bob)
+	fp := bob.Fingerprint()
+	// The relay judges a period by its own clock, which the harness sets,
+	// so the bound is taken from there and not from time.Now.
+	closed := h.clock.Now().Add(-2 * time.Hour)
+	if status, body, _ := h.pushDirectory(bob, bob, time.Now(),
+		channels.Channel{Name: "bug reports"},
+		channels.Channel{Name: "cfp", NotAfter: &closed}); status != http.StatusNoContent {
+		t.Fatalf("directory push: %d %s", status, body)
+	}
+	post := func(channel string) (int, string) {
+		env := sealedTo(t, alice, bob.Public(), "x", channel)
+		status, body := h.do(alice, "POST", "/v1/mailbox/"+fp, env, nil)
+		if status == http.StatusOK {
+			return status, ""
+		}
+		return status, errorText(t, body)
+	}
+	// The document routes: the open name is taken, the closed one refused
+	// as closed, a name it does not carry refused as no such channel.
+	if status, msg := post("bug reports"); status != http.StatusOK {
+		t.Fatalf("a channel the document carries: %d %s", status, msg)
+	}
+	if status, msg := post("cfp"); status != http.StatusForbidden || !strings.Contains(msg, "is not open") {
+		t.Fatalf("a channel the document closes: %d %s", status, msg)
+	}
+	if status, msg := post("invented"); status != http.StatusNotFound || !strings.Contains(msg, `no such channel "invented"`) {
+		t.Fatalf("a channel nobody published: %d %s", status, msg)
+	}
+
+	// A row for a name the document does not carry, inserted as somebody
+	// with the database open would: it routes nothing.
+	if _, err := h.store.db.Exec(
+		`INSERT INTO channels (fp, name, description, position) VALUES (?, 'invented', '', 9)`, fp); err != nil {
+		t.Fatal(err)
+	}
+	if status, msg := post("invented"); status != http.StatusNotFound || !strings.Contains(msg, `no such channel "invented"`) {
+		t.Fatalf("a channel the rows carry and the document does not: %d %s; want it refused", status, msg)
+	}
+	// And a row whose period is edited to open what the document closes.
+	if _, err := h.store.db.Exec(`UPDATE channels SET not_after = NULL WHERE fp = ? AND name = 'cfp'`, fp); err != nil {
+		t.Fatal(err)
+	}
+	if status, msg := post("cfp"); status != http.StatusForbidden || !strings.Contains(msg, "is not open") {
+		t.Fatalf("a period the rows open and the document closes: %d %s; want it refused", status, msg)
+	}
+	// The owner's listing says the directory is signed throughout: the
+	// rows are not what it reads either.
+	if got := h.listedDirectory(bob); got != relayapi.DirectorySigned {
+		t.Fatalf("the listing says %q, want signed", got)
+	}
+}
+
+// A channel directory that does not verify closes the mailbox: every
+// name is refused, default and the owner's own post included, since
+// falling back to default would open a channel the owner's own document
+// may have removed or closed, and a signed thing that no longer verifies
+// refuses here as a broken allow list does. The sender is told only that
+// there is no such channel; the owner's listing says broken, the relay's
+// log says so once a minute naming the mailbox alone under either access
+// log mode, and the owner's push is the whole repair.
+func TestABrokenDirectoryClosesTheMailbox(t *testing.T) {
+	for _, mode := range []string{AccessLogFull, AccessLogMinimal} {
+		t.Run(mode, func(t *testing.T) {
+			h := newHarness(t, Config{AccessLog: mode})
+			people := ids(t, "alice", "bob")
+			alice, bob := people[0], people[1]
+			h.register(alice)
+			h.register(bob)
+			fp := bob.Fingerprint()
+			if status, body, _ := h.pushDirectory(bob, bob, time.Now(),
+				channels.Channel{Name: "bug reports"}); status != http.StatusNoContent {
+				t.Fatalf("directory push: %d %s", status, body)
+			}
+			post := func(channel string) (int, string) {
+				env := sealedTo(t, alice, bob.Public(), "x", channel)
+				status, body := h.do(alice, "POST", "/v1/mailbox/"+fp, env, nil)
+				if status == http.StatusOK {
+					return status, ""
+				}
+				return status, errorText(t, body)
+			}
+			if status, msg := post("bug reports"); status != http.StatusOK {
+				t.Fatalf("before the edit: %d %s", status, msg)
+			}
+
+			// One bit of the signature, as somebody with the database open.
+			line := fmt.Sprintf("channel directory for %s does not verify; "+
+				"refusing every named channel to it until the owner pushes again", fp)
+			logged := func() int { return strings.Count(h.logs.String(), line) }
+			m := logged()
+			var sig []byte
+			if err := h.store.db.QueryRow(`SELECT sig FROM directories WHERE fp = ?`, fp).Scan(&sig); err != nil {
+				t.Fatal(err)
+			}
+			sig[0] ^= 1
+			if _, err := h.store.db.Exec(`UPDATE directories SET sig = ? WHERE fp = ?`, sig, fp); err != nil {
+				t.Fatal(err)
+			}
+			// Every named channel is refused, and the channels rows still
+			// carry the name: it is the document that decides.
+			for range 2 {
+				if status, msg := post("bug reports"); status != http.StatusNotFound ||
+					!strings.Contains(msg, `no such channel "bug reports"`) {
+					t.Fatalf("a named channel under a broken directory: %d %s", status, msg)
+				}
+			}
+			// And default, which a mailbox with no directory would have:
+			// a directory that has gone wrong must not open a name its
+			// owner's own document may have removed or closed.
+			if status, msg := post(""); status != http.StatusNotFound ||
+				!strings.Contains(msg, `no such channel "default"`) {
+				t.Fatalf("default under a broken directory: %d %s; want it refused", status, msg)
+			}
+			// The owner's own note to themselves, which the allow list
+			// lets through, meets the same closed mailbox.
+			own := sealedTo(t, bob, bob.Public(), "x", "")
+			if status, body := h.do(bob, "POST", "/v1/mailbox/"+fp, own, nil); status != http.StatusNotFound ||
+				!strings.Contains(errorText(t, body), `no such channel "default"`) {
+				t.Fatalf("the owner's own post under a broken directory: %d %s; want it refused", status, body)
+			}
+			// Nothing was stored by any of them.
+			if n := h.messageCount(fp); n != 1 {
+				t.Fatalf("%d messages after the refusals, want the one taken before the edit", n)
+			}
+			// One line for the burst, a second after the clock advances.
+			if got := logged() - m; got != 1 {
+				t.Fatalf("%d log lines for two refusals inside a minute, want 1", got)
+			}
+			h.clock.advance(2 * time.Minute)
+			post("bug reports")
+			if got := logged() - m; got != 2 {
+				t.Fatalf("%d log lines after a minute, want 2", got)
+			}
+			// The line names the mailbox and never the sender.
+			for _, l := range strings.Split(h.logs.String(), "\n") {
+				if strings.Contains(l, "channel directory for ") && strings.Contains(l, alice.Fingerprint()[:16]) {
+					t.Fatalf("the fault line names the sender:\n%s", l)
+				}
+			}
+			// The owner is told on their own listing.
+			if got := h.listedDirectory(bob); got != relayapi.DirectoryBroken {
+				t.Fatalf("the listing says %q, want broken", got)
+			}
+			// The repair: a fresh push, and the name routes again.
+			if status, body, _ := h.pushDirectory(bob, bob, time.Now().Add(time.Second),
+				channels.Channel{Name: "bug reports"}); status != http.StatusNoContent {
+				t.Fatalf("the repairing push: %d %s", status, body)
+			}
+			if status, msg := post("bug reports"); status != http.StatusOK {
+				t.Fatalf("after the repair: %d %s", status, msg)
+			}
+			if got := h.listedDirectory(bob); got != relayapi.DirectorySigned {
+				t.Fatalf("the listing after the repair says %q, want signed", got)
+			}
+		})
+	}
+}
+
+// The three words on the owner's listing, and what each means: none for a
+// mailbox that has pushed no directory, signed for one that has, broken
+// for one whose row no longer verifies.
+func TestTheListingSaysTheDirectoryState(t *testing.T) {
+	h := newHarness(t, Config{})
+	bob := ids(t, "bob")[0]
+	h.register(bob)
+	if got := h.listedDirectory(bob); got != relayapi.DirectoryNone {
+		t.Fatalf("a mailbox with no directory says %q, want none", got)
+	}
+	if status, body, _ := h.pushDirectory(bob, bob, time.Now(), channels.Channel{Name: "bug reports"}); status != http.StatusNoContent {
+		t.Fatalf("directory push: %d %s", status, body)
+	}
+	if got := h.listedDirectory(bob); got != relayapi.DirectorySigned {
+		t.Fatalf("a pushed directory says %q, want signed", got)
+	}
+	if _, err := h.store.db.Exec(`UPDATE directories SET sig = X'' WHERE fp = ?`, bob.Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.listedDirectory(bob); got != relayapi.DirectoryBroken {
+		t.Fatalf("a blanked signature says %q, want broken", got)
 	}
 }

@@ -869,6 +869,11 @@ type Listing struct {
 	// Card is the state of this mailbox's card as the relay holds it, one
 	// of the relayapi.Card* words, always sent.
 	Card string
+	// Directory is the state of this mailbox's channel directory as the
+	// relay holds it, one of the relayapi.Directory* words, always sent.
+	// A directory that does not verify refuses every named channel the
+	// owner published, which is why the owner is told.
+	Directory string
 }
 
 // ListRequest is what a listing asks for beyond the page.
@@ -975,7 +980,7 @@ func (c *Client) ListWait(ctx context.Context, req ListRequest) (Listing, error)
 		out = append(out, msg)
 	}
 	return Listing{Messages: out, Queued: resp.Queued, DirectoriesChanged: resp.DirectoriesChanged,
-		Allow: resp.Allow, Card: resp.Card}, nil
+		Allow: resp.Allow, Card: resp.Card, Directory: resp.Directory}, nil
 }
 
 // Ack deletes a message from the relay once it is safely on disk locally.

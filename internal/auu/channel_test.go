@@ -2,6 +2,7 @@ package auu
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relay"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
 
@@ -399,5 +401,87 @@ func TestAnEditProceedsWhenTheRelaysHoldThisIssue(t *testing.T) {
 	got, found, err := s.Directory()
 	if err != nil || !found || len(got.Channels) != 2 || !got.Issued.After(local.Issued) {
 		t.Fatalf("the local file after: %+v %v %v", got, found, err)
+	}
+}
+
+// The owner is told, once per run, when the relay holds a channel
+// directory of theirs that no longer verifies: posts to their channels
+// are refused there, and they would otherwise learn it from their
+// senders' silence. None is silent, since a home that has pushed no
+// directory has published no names and nothing is missing; signed is
+// silent; broken says what to run. auu wait says it too.
+func TestInboxSaysWhenTheDirectoryDoesNotVerify(t *testing.T) {
+	relayURL, st, db, _ := startEditableRelay(t)
+	alice := newUser(t, "alice", relayURL)
+	bob := newUser(t, "bob", relayURL)
+	alice.run("peers", "add", bob.exportLine())
+	bob.run("peers", "add", alice.exportLine())
+	fp := alice.exportFingerprint()
+	rn := alice.relayName()
+	inbox := func() (string, string) {
+		var out string
+		warning := captureStderr(t, func() { out = alice.run("inbox") })
+		return out, warning
+	}
+	const broken = "auu: your channel directory on %s does not verify, so every post to you is refused there; " +
+		"run auu channel push, and if you did not change it, tell the relay's operator\n"
+
+	// No directory: silence, and no marker to say one is missing.
+	if _, warning := inbox(); warning != "" {
+		t.Fatalf("a warning with no directory:\n%s", warning)
+	}
+	// Pushed and signed: silence.
+	alice.run("channel", "create", "bug reports")
+	alice.run("channel", "push")
+	if _, warning := inbox(); warning != "" {
+		t.Fatalf("a warning with a signed directory:\n%s", warning)
+	}
+	// Broken: the signature blanked on the host. A message queued first,
+	// so the fetch has something to list before the warning.
+	bob.run("send", "--to", "alice", "before the edit")
+	if _, err := db.Exec(`UPDATE directories SET sig = X'' WHERE fp = ?`, fp); err != nil {
+		t.Fatal(err)
+	}
+	out, warning := inbox()
+	if warning != fmt.Sprintf(broken, rn) {
+		t.Fatalf("the warning:\n%s\nwant\n%s", warning, fmt.Sprintf(broken, rn))
+	}
+	if !strings.Contains(out, "fetched 1 new message(s)") {
+		t.Fatalf("the fetch itself did not report:\n%s", out)
+	}
+	// Once per run, whatever the fetch found: a second inbox says it
+	// again, and a run that fetches nothing still says it. (Nothing new
+	// can arrive now: the mailbox is closed until the push.)
+	if _, warning := inbox(); warning != fmt.Sprintf(broken, rn) {
+		t.Fatalf("the warning on an empty fetch:\n%s", warning)
+	}
+	// The sender meets it as a channel that is not there, for a named
+	// channel and for the default one alike: the mailbox is closed, and
+	// what a sender learns is only that there is no such channel.
+	bob.run("channel", "ls")
+	_, err := bob.tryRun("send", "--to", "alice", "--channel", "bug reports", "after the edit")
+	if err == nil || !strings.Contains(err.Error(), `alice has no channel "bug reports"`) {
+		t.Fatalf("a post to a named channel under a broken directory: %v", err)
+	}
+	// For the default channel the sender is told the same thing, under
+	// its name rather than an empty pair of quotes, and their own fetch
+	// of alice's directory says why it cannot be listed.
+	_, err = bob.tryRun("send", "--to", "alice", "to the default channel")
+	if err == nil || !strings.Contains(err.Error(), `alice has no channel "default" on `+rn+
+		`, and the directory `+rn+` served for alice does not verify against the key you hold; do not trust it`) {
+		t.Fatalf("a post to the default channel under a broken directory: %v", err)
+	}
+	// auu wait says it too, once, before it times out.
+	warning = captureStderr(t, func() { alice.tryRun("wait", "--thread", strings.Repeat("ab", 8), "--timeout", "1s") })
+	if !strings.Contains(warning, "your channel directory on "+rn+" does not verify") {
+		t.Fatalf("auu wait did not say it:\n%s", warning)
+	}
+	// The push is the repair, and the relay says signed again.
+	alice.run("channel", "push")
+	if _, warning := inbox(); warning != "" {
+		t.Fatalf("a warning after the repair:\n%s", warning)
+	}
+	if state, err := st.DirectoryState(fp); err != nil || state != relayapi.DirectorySigned {
+		t.Fatalf("the relay says %q %v after the repair", state, err)
 	}
 }

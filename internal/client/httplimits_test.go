@@ -163,7 +163,7 @@ func TestLimitAnAnswerIsHeldToWhatItsRouteHolds(t *testing.T) {
 			"messages": []map[string]any{{"id": 1, "received": "2026-09-20T00:00:00Z", "kind": "envelope",
 				"size": page.Load(), "channel": "default", "envelope": map[string]any{"v": 1, "to": "x", "ct": strings.Repeat("A", int(page.Load()))}}},
 			"queued": 1,
-			"allow":  "none", "card": "none",
+			"allow":  "none", "card": "none", "directory": "none",
 		})
 	}))
 	t.Cleanup(srv.Close)
@@ -172,7 +172,7 @@ func TestLimitAnAnswerIsHeldToWhatItsRouteHolds(t *testing.T) {
 		t.Fatal(err)
 	}
 	hold := int64(2*maxBytes + relayapi.FramingAllowance)
-	page.Store(hold - 200) // the envelope's framing is under 200 bytes
+	page.Store(hold - 250) // the answer's fields and the envelope's framing are under 250 bytes
 	if _, err := c.List(context.Background(), 0, 10); err != nil {
 		t.Fatalf("a page under the cap: %v; want it taken", err)
 	}
@@ -230,7 +230,7 @@ func TestARaisedMaxBytesIsLearnedWhenAPageIsRefusedForItsSize(t *testing.T) {
 			"messages": []map[string]any{{"id": 1, "received": "2026-09-20T00:00:00Z", "kind": "envelope",
 				"size": page.Load(), "channel": "default", "envelope": map[string]any{"v": 1, "to": "x", "ct": strings.Repeat("A", int(page.Load()))}}},
 			"queued": 1,
-			"allow":  "none", "card": "none",
+			"allow":  "none", "card": "none", "directory": "none",
 		})
 	}))
 	t.Cleanup(srv.Close)
@@ -240,7 +240,7 @@ func TestARaisedMaxBytesIsLearnedWhenAPageIsRefusedForItsSize(t *testing.T) {
 	}
 	holdFor := func(m int64) int64 { return 2*m + relayapi.FramingAllowance }
 	old := holdFor(100 << 10)
-	page.Store(old - 200)
+	page.Store(old - 250) // the answer's fields and the envelope's framing
 	if _, err := c.List(context.Background(), 0, 10); err != nil {
 		t.Fatalf("a page under the hold: %v", err)
 	}
@@ -616,7 +616,7 @@ func TestAHeldListingCompletes(t *testing.T) {
 			return
 		}
 		time.Sleep(relayapi.MaxWait)
-		json.NewEncoder(w).Encode(map[string]any{"messages": []any{}, "queued": 0, "allow": "none", "card": "none"})
+		json.NewEncoder(w).Encode(map[string]any{"messages": []any{}, "queued": 0, "allow": "none", "card": "none", "directory": "none"})
 	}))
 	t.Cleanup(srv.Close)
 	c, err := New(srv.URL, testIdentity(t, "alice"), nil)

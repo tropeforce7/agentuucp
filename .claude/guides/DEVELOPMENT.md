@@ -275,8 +275,22 @@ about which channels exist, and before anything is stored or charged, so a
 refused channel costs nothing; it is written to the row and served in the
 owner's listing, and no log line names it under either access-log mode. What
 the channels are for is the owner's business with their senders: the relay
-keeps the signed directory to serve it back verbatim and unpacks it only as
-far as a name and its period, which is what a post is checked against.
+keeps the signed directory to serve it back verbatim, and the name and the
+period a post is checked against come out of that document, verified
+against the mailbox's registered key at the post itself. Policy the relay
+enforces for a user is verified where it is enforced, which is the rule the
+allow list and the card already followed: the relay also unpacks the
+directory into rows at the push, but those are the administrator's count
+and the watch's issue time, and routing does not read them, so an edit to
+them changes what an operator is shown and not what the relay does. A
+directory that does not verify closes the mailbox: every name is refused,
+default and the owner's own post included, and the relay says so once a
+minute in its own log, naming the mailbox. It fails closed rather than
+falling back to default, since falling back would open a name the owner's
+own document may have removed or closed, and since a broken allow list
+already refuses every sender to a mailbox — malformed authentication data
+has no state here that means "not yet". The owner is told by the word on
+their listing and by what auu inbox prints, and their push is the repair.
 
 **Nothing on the wire is from before.** Every released version is
 retracted and no peer from before this batch is supported, so every

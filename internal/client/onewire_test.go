@@ -39,7 +39,7 @@ func TestAnAnswerWithoutARequiredFieldIsRefusedByName(t *testing.T) {
 		return m
 	}
 	listing := func(over map[string]any, rows ...map[string]any) map[string]any {
-		m := map[string]any{"messages": rows, "queued": len(rows), "allow": "none", "card": "none"}
+		m := map[string]any{"messages": rows, "queued": len(rows), "allow": "none", "card": "none", "directory": "none"}
 		for k, v := range over {
 			if v == nil {
 				delete(m, k)
@@ -92,6 +92,8 @@ func TestAnAnswerWithoutARequiredFieldIsRefusedByName(t *testing.T) {
 		{"a listing without allow", "/v1/mailbox/" + fp, "allow", "one of signed, none, broken", listing(map[string]any{"allow": nil}, row(nil)), list, listing(nil, row(nil))},
 		{"a listing without card", "/v1/mailbox/" + fp, "card", "one of signed, none, broken", listing(map[string]any{"card": nil}, row(nil)), list, listing(nil, row(nil))},
 		{"a listing with another card word", "/v1/mailbox/" + fp, "card", "one of signed, none, broken", listing(map[string]any{"card": "lost"}, row(nil)), list, listing(nil, row(nil))},
+		{"a listing without directory", "/v1/mailbox/" + fp, "directory", "one of signed, none, broken", listing(map[string]any{"directory": nil}, row(nil)), list, listing(nil, row(nil))},
+		{"a listing with another directory word", "/v1/mailbox/" + fp, "directory", "one of signed, none, broken", listing(map[string]any{"directory": "lost"}, row(nil)), list, listing(nil, row(nil))},
 		{"a health answer without registration", "/v1/health", "registration", "one of open, token, closed", without(health, "registration"), healthCall, health},
 		{"a health answer with a fourth word", "/v1/health", "registration", "one of open, token, closed", over(health, "registration", "invite"), healthCall, health},
 		{"a card answer without state", "/v1/mailbox/" + fp + "/card", "state", "one of signed, none, broken", without(cardAnswer, "state"), cardCall, cardAnswer},

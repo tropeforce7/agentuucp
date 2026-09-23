@@ -305,8 +305,10 @@ own line for each round that did something, and nothing for a quiet one.
 `kept` and `channels_gone` (when set); `relays`, a list of `relay`, `url`,
 the same fetch counts, `queued` (what that relay still holds), `allow`
 (the state of your allow list there: `signed`, `none` or
-`broken`), `card` (the state of your card there, the same three words)
-and `error` (when
+`broken`), `card` (the state of your card there, the same three words),
+`directory` (the state of your channel directory there, the same three
+words again; `broken` means posts to your named channels are refused
+until the user runs `auu channel push`) and `error` (when
 set); and `messages`, each `id`, `thread`, `in_reply_to` (when set),
 `type`, `subject`, `from`, `from_name`, `time`, `received`, `read`, `box`,
 `thread_subject` (only where the whole message is printed: the subject the

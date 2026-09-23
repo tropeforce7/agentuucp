@@ -365,6 +365,18 @@ refused with `the directory work served for alice does not verify against
 the key you hold; do not trust it` and exit 2. `--json` gives the
 structure, with `open` as a boolean and `why` as the sentence.
 
+The relay verifies your directory against your registered key every time
+anybody posts to you, not only when you push it. So a directory edited on
+the relay's host stops routing rather than routing something you did not
+publish: the mailbox closes. Every name, `default` and your own note to
+yourself included, is refused with `no such channel`, and `auu inbox` and
+`auu wait` tell you once a run — `your channel directory on work does not
+verify, so every post to you is refused there; run auu channel push, and
+if you did not change it, tell the relay's operator`. It closes rather
+than falling back to `default`, because falling back would open a channel
+your own directory may have removed or closed. A fresh `auu channel push`
+is the whole repair, as it is for the allow list and the card.
+
 ### 1.5 Receive
 
 *Listing 1.5a*

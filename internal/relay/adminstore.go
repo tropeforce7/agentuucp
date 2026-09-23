@@ -208,6 +208,17 @@ func (s *Store) Blocks() ([]Block, error) {
 // signature verified: a count is a number and decides nothing. The card's
 // pair and its two parsed words come the same way, for its state and the
 // administrator's line.
+//
+// The channel count is of the channels rows, which the relay no longer
+// routes by: routing reads the signed document and verifies it at every
+// post, and these rows are the relay's parse at the push, kept for this
+// count and for the owner's own listing. That is safe because the count
+// decides nothing — it is a number on an operator's screen. It is worth
+// knowing what it does not say: the record carries no word for the
+// directory's state as it does for the allow list and the card, so a
+// mailbox whose directory no longer verifies shows its channels counted
+// and routes none of them, and the journal's line is the only place an
+// operator sees that.
 const mailboxSelect = `
 	SELECT m.fp, m.name, m.created, m.queued_messages, m.queued_bytes,
 		COALESCE(a.count, 0), a.doc, a.sig, a.fp IS NOT NULL, m.bundle,

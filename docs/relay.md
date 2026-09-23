@@ -136,7 +136,17 @@ The database also holds, per mailbox, the three documents an owner signs
 and pushes — the channel directory in `directories` and `channels`, the
 allow list in `allowlists`, and the card in `cards`, each the bytes the
 owner signed and the signature over them, verified against the mailbox's
-registered key at the push and again wherever the relay acts on one.
+registered key at the push and again wherever the relay acts on one: the
+allow list at every post, the card at every knock, and the directory at
+every post and every stream open, `default` included. The
+`channels` rows beside the directory's bytes are the relay's parse at the
+push, kept for the administrator's count and for the watch's issue time;
+nothing routes by them, so a row inserted or edited with the database open
+changes what `auu-admin` prints and not where a message goes, and a
+directory whose bytes or signature are edited routes nothing at all: the
+mailbox is closed to every post, `default` and the owner's own included,
+until they push again, as a mailbox whose allow list does not verify is,
+and the owner is told at their next fetch.
 Beside a card's bytes sit its issue time and the two words the relay
 parsed from it, `listed` and `knocks`, which are for the administrator's
 line and decide nothing: an edit to those columns changes what

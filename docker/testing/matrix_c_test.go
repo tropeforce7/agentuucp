@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Channels: the named sub-mailboxes bob defines and alice chooses between.
@@ -18,6 +19,7 @@ var channelRows = []matrixRow{
 	{"C04", "default_removed", "bob deletes default, and alice sends without --channel", c04},
 	{"C05", "deleted_with_mail", "bob deletes a channel with a message queued under it", c05},
 	{"C06", "close", "bob closes a channel, and alice posts to it", c06},
+	{"C07", "directory_edited_on_the_host", "the stored directory's signature edited, and a post to a named channel and to default", c07},
 }
 
 const (
@@ -187,4 +189,41 @@ func c06(t *testing.T) {
 		t.Errorf("the close time is not UTC on this machine: %s", closedAt)
 	}
 	verdict(t, "ok", "")
+}
+
+func c07(t *testing.T) {
+	// The relay verifies the directory where it routes, so an edit on the
+	// host stops routing rather than routing something the owner did not
+	// publish. One byte of the signature, as an intruder with the database
+	// open would.
+	m := logMark()
+	sqlEdit(t, `UPDATE directories SET sig = X'00' || substr(sig, 2) WHERE fp = '`+state.bobFP+`'`)
+	// Every name bob published is refused. The sender is told twice over,
+	// which is worth having: the relay refuses the name, and the client's
+	// own fetch of bob's directory — which it makes to list what he does
+	// have — meets the same broken document and says so.
+	refusedSend(t, `auu: bob has no channel "`+bugChannel+`" on `+relayName+
+		`, and the directory `+relayName+` served for bob does not verify against the key you hold; do not trust it`,
+		"--channel", bugChannel)
+	// And default with it: the mailbox is closed, not fallen back to the
+	// one channel a mailbox with no directory has, since falling back
+	// would open a channel bob's own document might have removed.
+	refusedSend(t, `auu: bob has no channel "default" on `+relayName+
+		`, and the directory `+relayName+` served for bob does not verify against the key you hold; do not trust it`)
+	// The operator's journal names the mailbox, once a minute.
+	waitRelayLog(t, m, "channel directory for "+state.bobFP+
+		" does not verify; refusing every named channel to it until the owner pushes again", 5*time.Second)
+	// Bob's own fetch tells him, after the messages and on stderr.
+	r := bob.auu("inbox")
+	expectCode(t, r, 0)
+	stderrIs(t, r, "auu: your channel directory on "+relayName+" does not verify, so every post to you is "+
+		"refused there; run auu channel push, and if you did not change it, tell the relay's operator")
+	// The push is the repair, and the name routes again.
+	expectSays(t, bob.auu("channel", "push"), 0, relayName+": directory pushed")
+	sendJSON(t, alice, "bob", "--channel", bugChannel, "--subject", "after the repair", "back again")
+	drain(bob)
+	verdict(t, "ok", "An edit to the stored directory closes the mailbox rather than routing what the owner did "+
+		"not publish: every channel is refused, default included, and the sender's own fetch of the directory "+
+		"says why; the operator's journal names the mailbox, the owner is told at their next fetch, and their "+
+		"push is the whole repair.")
 }

@@ -66,6 +66,7 @@ var (
 	allowWords        = []string{relayapi.AllowSigned, relayapi.AllowNone, relayapi.AllowBroken}
 	mailboxAllowWords = []string{"", relayapi.AllowSigned, relayapi.AllowNone, relayapi.AllowBroken}
 	cardWords         = []string{relayapi.CardSigned, relayapi.CardNone, relayapi.CardBroken}
+	directoryWords    = []string{relayapi.DirectorySigned, relayapi.DirectoryNone, relayapi.DirectoryBroken}
 	mailboxCardWords  = []string{"", relayapi.CardSigned, relayapi.CardNone, relayapi.CardBroken}
 	kinds             = []string{relayapi.KindEnvelope, relayapi.KindStream, relayapi.KindKnock}
 	tokenUses         = []string{token.UseRegister, token.UseCert}
@@ -196,6 +197,9 @@ func (c *Client) checkListing(page *relayapi.ListResponse, stubs bool) error {
 	}
 	if !oneOf(page.Card, cardWords) {
 		return c.malformed(answer, "card", wantOneOf(cardWords))
+	}
+	if !oneOf(page.Directory, directoryWords) {
+		return c.malformed(answer, "directory", wantOneOf(directoryWords))
 	}
 	for i := range page.Messages {
 		m := &page.Messages[i]

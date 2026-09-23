@@ -74,7 +74,8 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 	listing := func(set func(l *relayapi.ListResponse, n int64)) func(int64) any {
 		return func(n int64) any {
 			l := relayapi.ListResponse{Allow: relayapi.AllowNone, Card: relayapi.CardNone,
-				Messages: []relayapi.StoredMessage{{ID: 1, Size: 10, Kind: relayapi.KindStream, Channel: "default"}}}
+				Directory: relayapi.DirectoryNone,
+				Messages:  []relayapi.StoredMessage{{ID: 1, Size: 10, Kind: relayapi.KindStream, Channel: "default"}}}
 			set(&l, n)
 			return l
 		}

@@ -321,10 +321,16 @@ CREATE INDEX IF NOT EXISTS certs_fp ON certs(fp, not_after);`
 	sig    BLOB NOT NULL,
 	issued TEXT NOT NULL
 );`
-	// channels is the directory unpacked, one row per channel, so that a
-	// post can be checked against a name and a period with one indexed
-	// read and the administrator can count them. position keeps the
-	// owner's order for the owner's own listing.
+	// channels is the directory unpacked at the push, one row per
+	// channel, kept for the administrator's count and for the owner's own
+	// listing, which position keeps the owner's order for. Nothing routes
+	// by these rows: a post's channel and its period come out of the
+	// signed document, verified at the post itself, and a document that
+	// does not verify closes the mailbox rather than falling back to
+	// these. So a row inserted or edited by somebody with the database
+	// open changes what an operator is shown and not where a message
+	// goes. Do not make them the router again — that is the fault this
+	// table's shape invites and the verification exists to close.
 	channelsTable = `CREATE TABLE IF NOT EXISTS channels (
 	fp          TEXT NOT NULL REFERENCES mailboxes(fp) ON DELETE CASCADE,
 	name        TEXT NOT NULL,

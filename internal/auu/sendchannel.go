@@ -75,6 +75,15 @@ type peerish interface {
 func noSuchChannel(s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay, recipient peerish, channel string) error {
 	var who *identity.Public
 	var has, whose, mailbox, served, key string
+	// The name to show: a person who passed no --channel posted to
+	// default, and the relay refused "default", so that is the name in
+	// the sentence rather than an empty pair of quotes. The branches
+	// below still read channel itself, since "they removed their default
+	// channel" and "they have no channel x" are different things to say.
+	shown := channel
+	if shown == "" {
+		shown = channels.Default
+	}
 	if recipient.Fingerprint() == id.Fingerprint() {
 		who = id.Public()
 		has, whose, mailbox, served, key = "you have", "your", "your mailbox", "serves for you", "your key"
@@ -85,7 +94,7 @@ func noSuchChannel(s *store.Store, id *identity.Identity, c *client.Client, r *s
 			// The relay's word is all there is, and it is not to be
 			// trusted for a listing.
 			return fmt.Errorf("%s has no channel %q on %s, and their directory cannot be checked: %v",
-				recipient.Fingerprint()[:16], channel, r.Name, err)
+				recipient.Fingerprint()[:16], shown, r.Name, err)
 		}
 		who = peer
 		label := peerLabel(peer)
@@ -94,7 +103,7 @@ func noSuchChannel(s *store.Store, id *identity.Identity, c *client.Client, r *s
 	res, err := c.Directory(ctx(), who.Fingerprint())
 	if err != nil {
 		return fmt.Errorf("%s no channel %q on %s, and %s channels could not be listed: %v",
-			has, channel, r.Name, whose, err)
+			has, shown, r.Name, whose, err)
 	}
 	if res.None {
 		if channel == "" {
@@ -107,13 +116,13 @@ func noSuchChannel(s *store.Store, id *identity.Identity, c *client.Client, r *s
 	d, err := channels.Verify(who, res.Document, res.Signature)
 	if err != nil {
 		return fmt.Errorf("%s no channel %q on %s, and the directory %s %s does not verify "+
-			"against %s; do not trust it", has, channel, r.Name, r.Name, served, key)
+			"against %s; do not trust it", has, shown, r.Name, r.Name, served, key)
 	}
 	var b strings.Builder
 	if channel == "" {
 		fmt.Fprintf(&b, "%s removed %s default channel; choose one with --channel:", has, whose)
 	} else {
-		fmt.Fprintf(&b, "%s no channel %q; %s channels are:", has, channel, whose)
+		fmt.Fprintf(&b, "%s no channel %q; %s channels are:", has, shown, whose)
 	}
 	if len(d.Channels) == 0 {
 		b.WriteString(" none; their directory is empty, so nobody can post to them")

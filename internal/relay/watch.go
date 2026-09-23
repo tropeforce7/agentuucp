@@ -213,11 +213,19 @@ func (s *Server) look(fp string, after int64, limit int, stubs bool, peers map[s
 	if err != nil {
 		return resp, false, err
 	}
+	// And the channel directory's: one that no longer verifies refuses
+	// every named channel the owner published, which their senders meet
+	// as "no such channel" and the owner would otherwise meet as silence.
+	directory, err := s.store.DirectoryState(fp)
+	if err != nil {
+		return resp, false, err
+	}
 	resp = relayapi.ListResponse{
-		Messages: make([]relayapi.StoredMessage, 0, len(listing.Rows)),
-		Queued:   listing.Queued,
-		Allow:    allow,
-		Card:     cardState,
+		Messages:  make([]relayapi.StoredMessage, 0, len(listing.Rows)),
+		Queued:    listing.Queued,
+		Allow:     allow,
+		Card:      cardState,
+		Directory: directory,
 	}
 	for _, row := range listing.Rows {
 		msg := relayapi.StoredMessage{
@@ -228,6 +236,13 @@ func (s *Server) look(fp string, after int64, limit int, stubs bool, peers map[s
 		}
 		resp.Messages = append(resp.Messages, msg)
 	}
+	// The watch reads the issued column rather than the verified document,
+	// deliberately: this answer is a hint, and the peer that receives it
+	// fetches the directory and verifies it themselves, so nothing here
+	// decides anything. A column an intruder moved forward wakes a
+	// watcher once for a fetch that then fails to verify, which is a
+	// thing the watcher should find out; verifying here would cost a
+	// signature per watched peer per wake to hide it.
 	for peer, held := range peers {
 		issued, stored, err := s.store.DirectoryIssued(peer)
 		if err != nil {

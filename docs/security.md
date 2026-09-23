@@ -9,9 +9,18 @@ message, when it arrived, the channel it was posted to, and its kind. That
 is all. The sender's identity is inside the ciphertext, so the stored rows
 do not say who wrote anything. The channel is one label per message, from
 a list the owner wrote and published to every sender they admit. It is
-there because the relay routes by it. The relay refuses a post to a
-channel that does not exist or is not open before the message is stored.
-The owner chooses what the labels say. The kind is one of three words,
+there because the relay routes by it. The name and the period it is
+checked against come out of the directory the owner signed, verified
+against their registered key at the post itself and not read from the
+rows the relay parsed at the push: a post to a channel that does not
+exist, or is not open, is refused before the message is stored, and a
+directory that no longer verifies closes the mailbox — every name
+refused, `default` and the owner's own post included — until they push
+again. It closes rather than falling back to `default`, because falling
+back would open a name an owner's own document may have removed or
+closed, and because that is what a signed thing that no longer verifies
+does here: a broken allow list already refuses every sender. The owner is
+told at their next fetch, and `auu channel push` is the repair. The owner chooses what the labels say. The kind is one of three words,
 `envelope`, `stream` or `knock`, given by the route the message arrived
 by and said beside the row in every listing; a knock is a stranger's one
 message, taken past the allow list only where the recipient's signed card
@@ -593,8 +602,13 @@ inbox` says so, with the count, the cursor file to delete and the `auu inbox
 anything. Each message listed says which channel it is under (`channel`),
 always, `default` included, held to the channel name rule as it is read.
 It says its kind too (`envelope`, `stream` or `knock`). The listing says the state
-of the owner's allow list (`allow`) and of their card (`card`) on every
-answer. **Nothing on the wire
+of the owner's allow list (`allow`), of their card (`card`) and of their
+channel directory (`directory`) on every answer — the same three words for
+each, `signed`, `none` or `broken` — since each of the three is verified
+where the relay acts on it and a broken one refuses something on the
+owner's behalf that they would otherwise learn of only from silence: a
+broken allow list every sender, a broken card every knock, a broken
+directory every post. **Nothing on the wire
 is from before.** Every released version is retracted and no peer from
 before this batch is supported. So a field one end always sends is
 required by the other and refused by name when it is absent, with nothing

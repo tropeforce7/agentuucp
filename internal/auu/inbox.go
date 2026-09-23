@@ -94,10 +94,11 @@ type relayFetch struct {
 	Queued int64 `json:"queued"`
 	// Allow is the state of this identity's allow list on the relay, as
 	// the relay said it: signed, none or broken. Card is the same for the
-	// card.
-	Allow string `json:"allow,omitempty"`
-	Card  string `json:"card,omitempty"`
-	Error string `json:"error,omitempty"`
+	// card, and Directory for the channel directory.
+	Allow     string `json:"allow,omitempty"`
+	Card      string `json:"card,omitempty"`
+	Directory string `json:"directory,omitempty"`
+	Error     string `json:"error,omitempty"`
 }
 
 // relaySaid is what a relay's last listing said beside the messages: how
@@ -105,9 +106,10 @@ type relayFetch struct {
 // read, and the state of the allow list, which the warning after the
 // messages reads.
 type relaySaid struct {
-	Queued int64
-	Allow  string
-	Card   string
+	Queued    int64
+	Allow     string
+	Card      string
+	Directory string
 }
 
 // fetch drains one relay's mailbox into the local spool.
@@ -196,7 +198,7 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 			return res, said, transportErr(err)
 		}
 		hold = 0
-		said = relaySaid{Queued: page.Queued, Allow: page.Allow, Card: page.Card}
+		said = relaySaid{Queued: page.Queued, Allow: page.Allow, Card: page.Card, Directory: page.Directory}
 		if len(page.Messages) == 0 {
 			// Nothing after the cursor, and yet the relay holds mail: the
 			// cursor is past it. The relay says how many, the sentence
@@ -443,6 +445,7 @@ func fetchEvery(s *store.Store, id *identity.Identity, relays []*store.Relay, na
 			var said relaySaid
 			report.fetchResult, said, err = fetch(ctx(), s, id, c, r, 0)
 			report.Queued, report.Allow, report.Card = said.Queued, said.Allow, said.Card
+			report.Directory = said.Directory
 		}
 		if err == nil {
 			// A relay this identity has drained is a relay it has a mailbox
@@ -581,6 +584,9 @@ func cmdInbox(args []string) error {
 				return err
 			}
 			if err := warnCardState(s, r, rep.Card); err != nil {
+				return err
+			}
+			if err := warnDirectoryState(r, rep.Directory); err != nil {
 				return err
 			}
 		}
@@ -1156,6 +1162,9 @@ func cmdWait(args []string) error {
 				err = warnAllowState(s, r, said.Allow)
 				if err == nil {
 					err = warnCardState(s, r, said.Card)
+				}
+				if err == nil {
+					err = warnDirectoryState(r, said.Directory)
 				}
 			}
 			if err == nil {

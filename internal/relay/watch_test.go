@@ -789,18 +789,20 @@ func TestAListingWithoutWaitIsUnchanged(t *testing.T) {
 		Envelope json.RawMessage `json:"envelope,omitempty"`
 	}
 	want, err := json.Marshal(struct {
-		Messages []listedMessage `json:"messages"`
-		Queued   int64           `json:"queued"`
-		Allow    string          `json:"allow"`
-		Card     string          `json:"card"`
+		Messages  []listedMessage `json:"messages"`
+		Queued    int64           `json:"queued"`
+		Allow     string          `json:"allow"`
+		Card      string          `json:"card"`
+		Directory string          `json:"directory"`
 	}{
 		Messages: []listedMessage{{
 			ID: row.Rows[0].ID, Received: row.Rows[0].Received, Kind: row.Rows[0].Kind,
 			Size: row.Rows[0].Size, Channel: row.Rows[0].Channel, Envelope: json.RawMessage(row.Rows[0].Envelope),
 		}},
-		Queued: 1,
-		Allow:  "none",
-		Card:   "none",
+		Queued:    1,
+		Allow:     "none",
+		Card:      "none",
+		Directory: "none",
 	})
 	if err != nil {
 		t.Fatal(err)
