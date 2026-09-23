@@ -68,9 +68,15 @@ var (
 	cardWords         = []string{relayapi.CardSigned, relayapi.CardNone, relayapi.CardBroken}
 	directoryWords    = []string{relayapi.DirectorySigned, relayapi.DirectoryNone, relayapi.DirectoryBroken}
 	mailboxCardWords  = []string{"", relayapi.CardSigned, relayapi.CardNone, relayapi.CardBroken}
-	kinds             = []string{relayapi.KindEnvelope, relayapi.KindStream, relayapi.KindKnock}
-	tokenUses         = []string{token.UseRegister, token.UseCert}
-	tokenStates       = []string{relayapi.TokenLive, relayapi.TokenSpent, relayapi.TokenRevoked, relayapi.TokenExpired}
+	// The three words again for a mailbox record, where empty is the
+	// value for a mailbox that has never pushed a directory, as it is for
+	// the allow list and the card. The owner's own listing is the other
+	// shape: there the relay always sends a word and an absence is
+	// refused.
+	mailboxDirectoryWords = []string{"", relayapi.DirectorySigned, relayapi.DirectoryNone, relayapi.DirectoryBroken}
+	kinds                 = []string{relayapi.KindEnvelope, relayapi.KindStream, relayapi.KindKnock}
+	tokenUses             = []string{token.UseRegister, token.UseCert}
+	tokenStates           = []string{relayapi.TokenLive, relayapi.TokenSpent, relayapi.TokenRevoked, relayapi.TokenExpired}
 )
 
 // oneOf reports whether v is in the set.
@@ -309,6 +315,9 @@ func (c *Client) checkMailbox(answer string, m *relayapi.MailboxRecord) error {
 	}
 	if !oneOf(m.Card, mailboxCardWords) {
 		return c.malformed(answer, "card", wantOneOf(mailboxCardWords))
+	}
+	if !oneOf(m.Directory, mailboxDirectoryWords) {
+		return c.malformed(answer, "directory", wantOneOf(mailboxDirectoryWords))
 	}
 	return c.counts(answer, count{"queued_messages", m.QueuedMessages}, count{"queued_bytes", m.QueuedBytes},
 		count{"channels", m.Channels}, count{"allowlist_size", m.AllowlistSize})

@@ -450,7 +450,7 @@ func TestABrokenDirectoryClosesTheMailbox(t *testing.T) {
 
 			// One bit of the signature, as somebody with the database open.
 			line := fmt.Sprintf("channel directory for %s does not verify; "+
-				"refusing every named channel to it until the owner pushes again", fp)
+				"refusing every post to it until the owner pushes again", fp)
 			logged := func() int { return strings.Count(h.logs.String(), line) }
 			m := logged()
 			var sig []byte
@@ -502,9 +502,16 @@ func TestABrokenDirectoryClosesTheMailbox(t *testing.T) {
 					t.Fatalf("the fault line names the sender:\n%s", l)
 				}
 			}
-			// The owner is told on their own listing.
+			// The owner is told on their own listing, and the operator
+			// on the administrator's record, where the count of the
+			// channels the push parsed stands beside the word that says
+			// none of them routes.
 			if got := h.listedDirectory(bob); got != relayapi.DirectoryBroken {
 				t.Fatalf("the listing says %q, want broken", got)
+			}
+			rec, err := h.store.MailboxRecord(fp)
+			if err != nil || rec.Directory != relayapi.DirectoryBroken || rec.Channels != 1 {
+				t.Fatalf("the administrator's record under a broken directory: %+v, %v", rec, err)
 			}
 			// The repair: a fresh push, and the name routes again.
 			if status, body, _ := h.pushDirectory(bob, bob, time.Now().Add(time.Second),
@@ -516,6 +523,9 @@ func TestABrokenDirectoryClosesTheMailbox(t *testing.T) {
 			}
 			if got := h.listedDirectory(bob); got != relayapi.DirectorySigned {
 				t.Fatalf("the listing after the repair says %q, want signed", got)
+			}
+			if rec, err := h.store.MailboxRecord(fp); err != nil || rec.Directory != relayapi.DirectorySigned {
+				t.Fatalf("the administrator's record after the repair: %+v, %v", rec, err)
 			}
 		})
 	}

@@ -212,7 +212,10 @@ func c07(t *testing.T) {
 		`, and the directory `+relayName+` served for bob does not verify against the key you hold; do not trust it`)
 	// The operator's journal names the mailbox, once a minute.
 	waitRelayLog(t, m, "channel directory for "+state.bobFP+
-		" does not verify; refusing every named channel to it until the owner pushes again", 5*time.Second)
+		" does not verify; refusing every post to it until the owner pushes again", 5*time.Second)
+	// The operator sees it in the record too, beside the count of the
+	// channels the push parsed: the mailbox has them and routes none.
+	expectSays(t, operator.admin("mailboxes", "show", state.bobFP), 0, "directory:   broken", "channels:    2")
 	// Bob's own fetch tells him, after the messages and on stderr.
 	r := bob.auu("inbox")
 	expectCode(t, r, 0)
@@ -220,10 +223,11 @@ func c07(t *testing.T) {
 		"refused there; run auu channel push, and if you did not change it, tell the relay's operator")
 	// The push is the repair, and the name routes again.
 	expectSays(t, bob.auu("channel", "push"), 0, relayName+": directory pushed")
+	expectSays(t, operator.admin("mailboxes", "show", state.bobFP), 0, "directory:   signed")
 	sendJSON(t, alice, "bob", "--channel", bugChannel, "--subject", "after the repair", "back again")
 	drain(bob)
 	verdict(t, "ok", "An edit to the stored directory closes the mailbox rather than routing what the owner did "+
 		"not publish: every channel is refused, default included, and the sender's own fetch of the directory "+
-		"says why; the operator's journal names the mailbox, the owner is told at their next fetch, and their "+
-		"push is the whole repair.")
+		"says why; the operator's journal names the mailbox and their listing says broken beside the channels "+
+		"still counted, the owner is told at their next fetch, and their push is the whole repair.")
 }

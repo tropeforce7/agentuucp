@@ -772,6 +772,8 @@ func TestAnAnswerIsCheckedForShapeBeforeItIsReturned(t *testing.T) {
 		{"/v1/admin/mailboxes/" + fp, "allow", relayapi.MailboxRecord{FP: fp, Allow: "broken\x1b"}},
 		{"/v1/admin/mailboxes", "card", relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{{FP: fp, Card: "signed\x1b"}}}},
 		{"/v1/admin/mailboxes/" + fp, "card", relayapi.MailboxRecord{FP: fp, Card: "broken\x1b"}},
+		{"/v1/admin/mailboxes", "directory", relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{{FP: fp, Directory: "signed\x1b"}}}},
+		{"/v1/admin/mailboxes/" + fp, "directory", relayapi.MailboxRecord{FP: fp, Directory: "broken\x1b"}},
 		{"/v1/admin/certs", "serial", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: "ab", FP: fp}}}},
 		{"/v1/admin/certs", "fp", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: serial, FP: "ab"}}}},
 		{"/v1/admin/certs", "fp", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: serial}}}},

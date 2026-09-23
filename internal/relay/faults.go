@@ -74,12 +74,14 @@ func (f *faultLog) noteCard(fp string) {
 }
 
 // noteDirectory logs that a mailbox's channel directory does not verify,
-// so every named channel is refused, unless that was logged for the
-// mailbox inside the last minute; keyed apart from the allow list's line,
-// the card's and a path's.
+// so every post to the mailbox is refused, default included, unless that
+// was logged for the mailbox inside the last minute; keyed apart from the
+// allow list's line, the card's and a path's. It says the same thing the
+// allow list's line says because it now means the same thing: the
+// mailbox is closed until its owner pushes again.
 func (f *faultLog) noteDirectory(fp string) {
 	if f.due("directory:" + fp) {
-		f.log.Warn(fmt.Sprintf("channel directory for %s does not verify; refusing every named channel to it until the owner pushes again", fp))
+		f.log.Warn(fmt.Sprintf("channel directory for %s does not verify; refusing every post to it until the owner pushes again", fp))
 	}
 }
 

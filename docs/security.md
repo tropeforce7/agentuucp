@@ -269,10 +269,22 @@ API is Anthropic's TLS and outside this.
 **What an administrator sees.** The list of mailboxes, with fingerprints,
 display names, how much each is holding, and how many channels each has
 defined. That is the count, never the names, which are the owner's to
-publish to their senders. Never a message. An administrator has exactly the
-same view of the ciphertext as the relay does, which is none. That list is
-inherent in running a relay, which is why the file naming administrators
-belongs to whoever runs the host and to nobody else.
+publish to their senders. Beside it, the state of each of the three
+documents that owner signed — the allow list, the card and the channel
+directory. Every state is reached by verifying that stored document
+against the registered key at the moment the record is read, never by
+reading a column the push wrote, and a mailbox that has never pushed one
+of them has no state to show for it. What is printed of each differs, since
+each says something different when it is there: a count and `signed` for
+the allow list, what the card says of itself for the card, and the bare
+word for the directory. `broken` is the word to look for in any of the
+three, and it is what an administrator is there for: it means the row was
+changed by something that was not the owner's push, and the relay is
+refusing on the owner's behalf until they push again. Never a message.
+An administrator has exactly the same view of the ciphertext as the relay
+does, which is none. That list is inherent in running a relay, which is
+why the file naming administrators belongs to whoever runs the host and
+to nobody else.
 
 **Enrolment tokens.** Signed by the issuing administrator's own identity key,
 so the relay holds no new private key material. Removing an administrator

@@ -666,14 +666,18 @@ relay did not start. Take the backup below before an upgrade all the same
 — `update` takes one of the database itself, but not of the message
 files, which an update does not touch.
 
-A list showing `broken` in `auu-admin mailboxes ls` is an incident on the
-host and not a user error: the row no longer verifies against its owner's
-key, so it was changed by something other
-than that owner's push, and the relay refuses every post to the mailbox
-until the owner pushes again — the journal says
-`allow list for FP does not verify; refusing every post to it until the
-owner pushes again`, once a minute while it goes on. Look at who could
-write `relay.db` before asking the owner to push.
+`broken` in any of the three document columns of `auu-admin mailboxes ls`
+— `ALLOW`, `CARD`, `DIRECTORY` — is an incident on the host and not a
+user error: that row no longer verifies against its owner's key, so it
+was changed by something other than that owner's push, and the relay
+refuses on the owner's behalf until they push again. A broken allow list
+refuses every post to the mailbox, a broken card every knock, and a
+broken channel directory every post again, `default` included, since a
+document that does not verify says nothing about which channels the owner
+has. The journal says which, once a minute while it goes on — `allow
+list for FP does not verify; refusing every post to it until the owner
+pushes again`, and its two counterparts for the card and the directory.
+Look at who could write `relay.db` before asking the owner to push.
 
 **Backups** are small, because the relay holds only what is in transit and
 cannot read any of it. What is worth keeping is the `auu-ca` directory on your

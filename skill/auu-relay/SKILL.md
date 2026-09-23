@@ -167,24 +167,24 @@ start, after which every machine enrolled on the relay enrols again. The
 refusal in the journal says exactly that, naming both paths, and `update`
 stops at it.
 
-**A `broken` allow list** in `auu-admin mailboxes ls` is an incident on
-the host, not a user error: the list no longer verifies against the
-owner's key, which means the row was changed by something other than the
-owner's push, and the relay refuses every post to that mailbox until the
-owner pushes again. The journal has `allow list for FP does not verify;
-refusing every post to it until the owner pushes again`, once a minute
-while it goes on. Tell the user to treat the host as compromised and look
-at who could write `/var/lib/auu/relay.db`; asking the owner to push
-again clears the state but not the question.
+**A `broken` document** in `auu-admin mailboxes ls`, in any of the three
+columns `ALLOW`, `CARD` and `DIRECTORY`, is an incident on the host, not
+a user error: that document no longer verifies against the owner's key,
+which means the row was changed by something other than the owner's push,
+and the relay refuses on their behalf until they push again — a broken
+allow list refuses every post to that mailbox, a broken card every knock,
+and a broken channel directory every post again, `default` and the
+owner's own post included, since a document that does not verify says
+nothing about which channels its owner has. Tell the user to treat the
+host as compromised and look at who could write `/var/lib/auu/relay.db`;
+asking the owner to push again clears the state but not the question.
 
-The same journal line, in its own words, says a **card** does not verify
-(`card for FP does not verify; refusing knocks to it…`) or a **channel
-directory** does not (`channel directory for FP does not verify; refusing
-every named channel to it…`). All three mean the same thing: a document
-the owner signed has been changed by something that is not their push, so
-the relay refuses on their behalf — every post, every knock, or every
-named channel — until they push again. Read any of them as an incident on
-the host.
+The journal says which it is, once a minute while it goes on: `allow list
+for FP does not verify; refusing every post to it until the owner pushes
+again`, `card for FP does not verify; refusing knocks to it…`, or
+`channel directory for FP does not verify; refusing every post to it…`.
+Each names the mailbox and nobody else. Read any of them as an incident
+on the host.
 
 **TLS is the default.** `tls.mode` is `files` unless the settings say
 `off`, and a relay with no bundle and no certificate refuses to start in

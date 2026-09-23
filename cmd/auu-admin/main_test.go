@@ -321,8 +321,11 @@ func TestMailboxesAndBlocks(t *testing.T) {
 		t.Fatalf("mailboxes show:\n%s", out)
 	}
 	// The channel count, zero with no directory and the number of rows
-	// once one is pushed; the names are the owner's and never shown.
-	if out := f.boss.run("mailboxes", "show", alice.Fingerprint()); !strings.Contains(out, "channels:    0\n") {
+	// once one is pushed; the names are the owner's and never shown. The
+	// directory's own word stands beside the count: none until one is
+	// pushed, and "-" in the listing, as the allow list and the card are.
+	if out := f.boss.run("mailboxes", "show", alice.Fingerprint()); !strings.Contains(out, "channels:    0\n") ||
+		!strings.Contains(out, "directory:   none\n") {
 		t.Fatalf("mailboxes show does not count channels:\n%s", out)
 	}
 	d := &channels.Directory{Issued: time.Now(), Channels: []channels.Channel{
@@ -335,12 +338,32 @@ func TestMailboxesAndBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := f.boss.run("mailboxes", "show", alice.Fingerprint())
-	if !strings.Contains(out, "channels:    3\n") || strings.Contains(out, "xylophone") {
+	if !strings.Contains(out, "channels:    3\n") || !strings.Contains(out, "directory:   signed\n") ||
+		strings.Contains(out, "xylophone") {
 		t.Fatalf("mailboxes show after a directory:\n%s", out)
 	}
 	if out := f.boss.run("mailboxes", "show", alice.Fingerprint(), "--json"); !strings.Contains(out, `"channels": 3`) ||
-		strings.Contains(out, "xylophone") {
+		!strings.Contains(out, `"directory": "signed"`) || strings.Contains(out, "xylophone") {
 		t.Fatalf("mailboxes show --json:\n%s", out)
+	}
+	// The listing's whole row, the columns' padding collapsed to one
+	// space: the directory's word has a column of its own between the
+	// card's and the block state, and the two documents alice has not
+	// pushed read "-".
+	for _, want := range []string{
+		"FINGERPRINT NAME QUEUED BYTES ALLOW CARD DIRECTORY STATE",
+		alice.Fingerprint()[:16] + " alice 0 0 B - - signed -",
+	} {
+		found := false
+		ls := f.boss.run("mailboxes", "ls")
+		for _, l := range strings.Split(ls, "\n") {
+			if strings.Join(strings.Fields(l), " ") == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("no row %q in mailboxes ls:\n%s", want, ls)
+		}
 	}
 
 	// The allow list: none until one is pushed, then the count and the
@@ -428,6 +451,20 @@ func TestMailboxesAndBlocks(t *testing.T) {
 	}
 	if out := f.boss.run("mailboxes", "ls"); !strings.Contains(out, "  broken  ") {
 		t.Fatalf("mailboxes ls with a broken card:\n%s", out)
+	}
+
+	// The directory, once its row no longer verifies: the count stands
+	// and the word says none of those channels routes, which is the pair
+	// an operator reads together.
+	if _, err := db.Exec(`UPDATE directories SET sig = X'00' WHERE fp = ?`, alice.Fingerprint()); err != nil {
+		t.Fatal(err)
+	}
+	if out := f.boss.run("mailboxes", "show", alice.Fingerprint()); !strings.Contains(out, "directory:   broken\n") ||
+		!strings.Contains(out, "channels:    3\n") {
+		t.Fatalf("mailboxes show with a broken directory:\n%s", out)
+	}
+	if out := f.boss.run("mailboxes", "show", alice.Fingerprint(), "--json"); !strings.Contains(out, `"directory": "broken"`) {
+		t.Fatalf("mailboxes show --json with a broken directory:\n%s", out)
 	}
 
 	// Blocking, listing, and lifting it.
@@ -1151,6 +1188,29 @@ func TestMailboxListingHoldsTheCardWordToItsSet(t *testing.T) {
 		}
 		if err == nil || !strings.Contains(err.Error(), "card is not one of signed, none, broken") {
 			t.Errorf("auu-admin %s with a card word outside the set: %v, want the malformed-answer sentence", strings.Join(args, " "), err)
+		}
+	}
+}
+
+func TestMailboxListingHoldsTheDirectoryWordToItsSet(t *testing.T) {
+	boss, err := identity.Generate("boss")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := boss.Fingerprint()
+	rec := relayapi.MailboxRecord{FP: fp, Name: "alice", Directory: "signed" + escapeSeq, Channels: 3}
+	srv := fakeRelay(t, map[string]any{
+		"/v1/admin/mailboxes":       relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{rec}},
+		"/v1/admin/mailboxes/" + fp: rec,
+	})
+	p := newPersona(t, "boss", srv.URL)
+	for _, args := range [][]string{{"mailboxes", "ls"}, {"mailboxes", "show", fp}} {
+		out, err := p.tryRun(args...)
+		if c, found := controlBytes(out); found {
+			t.Errorf("auu-admin %s printed byte %#x from the relay's directory field:\n%q", strings.Join(args, " "), c, out)
+		}
+		if err == nil || !strings.Contains(err.Error(), "directory is not one of signed, none, broken") {
+			t.Errorf("auu-admin %s with a directory word outside the set: %v, want the malformed-answer sentence", strings.Join(args, " "), err)
 		}
 	}
 }

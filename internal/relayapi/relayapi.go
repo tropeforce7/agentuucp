@@ -355,10 +355,21 @@ type (
 		Card       string `json:"card,omitempty"`
 		CardListed bool   `json:"card_listed"`
 		CardKnocks bool   `json:"card_knocks"`
+		// Directory is the state of the channel directory, one of the
+		// Directory* words, or empty for a mailbox that has never pushed
+		// one, which is a value and not an absence: that mailbox has the
+		// one channel, default. As with the allow list and the card,
+		// "broken" is the word to look for after an incident, and it is
+		// the heaviest of the three: a directory that does not verify
+		// closes the mailbox to every post, default included.
+		Directory string `json:"directory,omitempty"`
 		// Channels is how many channels the mailbox's directory lists, zero
 		// for a mailbox with none, which has default by that fact rather
 		// than by a row. A count and never the names: what an owner's
-		// channels are called is theirs to publish to their senders.
+		// channels are called is theirs to publish to their senders. It is
+		// the count of what the relay parsed at the push and decides
+		// nothing; Directory beside it is the word that says whether any
+		// of them routes.
 		Channels int64 `json:"channels"`
 		Blocked  bool  `json:"blocked"`
 	}

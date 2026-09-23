@@ -209,23 +209,36 @@ func (s *Store) Blocks() ([]Block, error) {
 // pair and its two parsed words come the same way, for its state and the
 // administrator's line.
 //
+// The directory's pair and the bundle come the same way again, for its
+// state, which is verified here exactly as the other two are: the three
+// documents an owner signs each say their own word in the record, and
+// each word is the verification and not a column. The cost is in the
+// bytes and not in the count: a page is at most relayapi.MaxListLimit
+// mailboxes, and for each one an allow list and a directory are verified
+// whole, both of them held to nothing smaller than the request that
+// pushed them, relayapi.MaxDocumentBytes, where the card is held to
+// relayapi.MaxCardBytes at its every reader. So this is the one route
+// that verifies in bulk, the bulk is set by what the owners signed, and
+// what bounds it is the page's own ceiling and the fact that an
+// administrator has been authenticated before any of it is read.
+//
 // The channel count is of the channels rows, which the relay no longer
 // routes by: routing reads the signed document and verifies it at every
 // post, and these rows are the relay's parse at the push, kept for this
 // count and for the owner's own listing. That is safe because the count
-// decides nothing — it is a number on an operator's screen. It is worth
-// knowing what it does not say: the record carries no word for the
-// directory's state as it does for the allow list and the card, so a
-// mailbox whose directory no longer verifies shows its channels counted
-// and routes none of them, and the journal's line is the only place an
-// operator sees that.
+// decides nothing — it is a number on an operator's screen. Read it
+// beside the directory's word, which is what says whether any of those
+// channels routes: a mailbox whose directory no longer verifies shows
+// its channels counted, "broken" beside them, and takes no post at all.
 const mailboxSelect = `
 	SELECT m.fp, m.name, m.created, m.queued_messages, m.queued_bytes,
 		COALESCE(a.count, 0), a.doc, a.sig, a.fp IS NOT NULL, m.bundle,
 		(SELECT COUNT(*) FROM channels c WHERE c.fp = m.fp),
 		EXISTS (SELECT 1 FROM blocks b WHERE b.fp = m.fp),
-		k.doc, k.sig, k.fp IS NOT NULL, COALESCE(k.listed, 0), COALESCE(k.knocks, 0)
-	FROM mailboxes m LEFT JOIN allowlists a ON a.fp = m.fp LEFT JOIN cards k ON k.fp = m.fp`
+		k.doc, k.sig, k.fp IS NOT NULL, COALESCE(k.listed, 0), COALESCE(k.knocks, 0),
+		d.doc, d.sig, d.fp IS NOT NULL
+	FROM mailboxes m LEFT JOIN allowlists a ON a.fp = m.fp LEFT JOIN cards k ON k.fp = m.fp
+		LEFT JOIN directories d ON d.fp = m.fp`
 
 // Mailboxes returns a page of mailboxes ordered by fingerprint, starting after
 // the one given. Keyset paging, so a page is stable while mailboxes come and
@@ -261,11 +274,11 @@ func scanMailboxes(rows *sql.Rows) ([]relayapi.MailboxRecord, error) {
 	for rows.Next() {
 		var m relayapi.MailboxRecord
 		var created string
-		var blocked, hasList, hasCard, listed, knocks int
-		var doc, sig, bundle, cardDoc, cardSig []byte
+		var blocked, hasList, hasCard, listed, knocks, hasDir int
+		var doc, sig, bundle, cardDoc, cardSig, dirDoc, dirSig []byte
 		if err := rows.Scan(&m.FP, &m.Name, &created, &m.QueuedMessages, &m.QueuedBytes,
 			&m.AllowlistSize, &doc, &sig, &hasList, &bundle, &m.Channels, &blocked,
-			&cardDoc, &cardSig, &hasCard, &listed, &knocks); err != nil {
+			&cardDoc, &cardSig, &hasCard, &listed, &knocks, &dirDoc, &dirSig, &hasDir); err != nil {
 			return nil, err
 		}
 		m.Created, _ = time.Parse(time.RFC3339, created)
@@ -276,6 +289,9 @@ func scanMailboxes(rows *sql.Rows) ([]relayapi.MailboxRecord, error) {
 		if hasCard != 0 {
 			m.Card, _ = cardDecision(bundle, cardDoc, cardSig)
 			m.CardListed, m.CardKnocks = listed != 0, knocks != 0
+		}
+		if hasDir != 0 {
+			m.Directory = directoryWord(bundle, dirDoc, dirSig)
 		}
 		out = append(out, m)
 	}

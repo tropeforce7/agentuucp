@@ -117,15 +117,15 @@ func mailboxesList(args []string) error {
 		return nil
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "FINGERPRINT\tNAME\tQUEUED\tBYTES\tALLOW\tCARD\tSTATE")
+	fmt.Fprintln(w, "FINGERPRINT\tNAME\tQUEUED\tBYTES\tALLOW\tCARD\tDIRECTORY\tSTATE")
 	for _, m := range resp.Mailboxes {
 		state := "-"
 		if m.Blocked {
 			state = "blocked"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%s\t%s\t%s\n",
 			m.FP[:16], truncate(orNone(identity.Printable(m.Name)), 20), m.QueuedMessages,
-			term.HumanBytes(m.QueuedBytes), allowColumn(m), cardColumn(m), state)
+			term.HumanBytes(m.QueuedBytes), allowColumn(m), cardColumn(m), directoryColumn(m), state)
 	}
 	if err := w.Flush(); err != nil {
 		return err
@@ -163,6 +163,7 @@ func mailboxShow(args []string) error {
 	fmt.Printf("queued:      %d messages, %s\n", m.QueuedMessages, term.HumanBytes(m.QueuedBytes))
 	fmt.Printf("allowlist:   %s\n", allowField(*m))
 	fmt.Printf("card:        %s\n", cardField(*m))
+	fmt.Printf("directory:   %s\n", directoryField(*m))
 	fmt.Printf("channels:    %d\n", m.Channels)
 	fmt.Printf("blocked:     %t\n", m.Blocked)
 	return nil
@@ -217,6 +218,29 @@ func cardField(m relayapi.MailboxRecord) string {
 		return "knocks"
 	}
 	return "neither"
+}
+
+// directoryColumn is a mailbox's channel directory in the listing: "-" for
+// a mailbox that has never pushed one, which has the one channel, default,
+// and otherwise the word the relay reached by verifying the stored
+// document against the owner's key. "broken" here is the heaviest of the
+// three: that mailbox takes no post at all until its owner pushes again.
+// The channel count is not in this line; 'show' has it, beside the word
+// that says whether any of them routes.
+func directoryColumn(m relayapi.MailboxRecord) string {
+	if m.Directory == "" {
+		return "-"
+	}
+	return m.Directory
+}
+
+// directoryField is the same for 'show', in words: "none" for a mailbox
+// that has never pushed one, and otherwise the word.
+func directoryField(m relayapi.MailboxRecord) string {
+	if m.Directory == "" {
+		return "none"
+	}
+	return m.Directory
 }
 
 // mailboxRemove backs both rm and purge, which differ only in whether the

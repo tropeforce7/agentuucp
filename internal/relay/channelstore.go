@@ -274,10 +274,20 @@ func (s *Store) DirectoryState(fp string) (string, error) {
 	if has == 0 {
 		return relayapi.DirectoryNone, nil
 	}
+	return directoryWord(bundle, doc, sig), nil
+}
+
+// directoryWord is the state of a directory row whose bytes the caller has
+// already read, in the two words a row that exists can be. DirectoryState
+// reads its own row for one mailbox; the administrator's record reads every
+// mailbox in one query and arrives here with the bytes in hand. Both say
+// the same word about the same row because both ask directoryDecision,
+// which is the one place a stored directory is judged.
+func directoryWord(bundle, doc, sig []byte) string {
 	if _, ok := directoryDecision(bundle, doc, sig); !ok {
-		return relayapi.DirectoryBroken, nil
+		return relayapi.DirectoryBroken
 	}
-	return relayapi.DirectorySigned, nil
+	return relayapi.DirectorySigned
 }
 
 // ChannelCounts is how many messages are queued under each name a mailbox

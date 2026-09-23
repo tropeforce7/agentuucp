@@ -372,7 +372,9 @@ func TestTheListingSaysWhichChannel(t *testing.T) {
 
 // The administrator's record counts a mailbox's channels and never names
 // them: zero for a mailbox with no directory, which has default by that
-// fact and not by a row.
+// fact and not by a row. Beside the count is the directory's state, the
+// same word the owner's own listing carries, and absent for a mailbox
+// that has never pushed one, as the allow list's word and the card's are.
 func TestTheAdministratorCountsChannelsAndNeverNamesThem(t *testing.T) {
 	people := ids(t, "boss", "alice", "bob")
 	boss, alice, bob := people[0], people[1], people[2]
@@ -398,6 +400,9 @@ func TestTheAdministratorCountsChannelsAndNeverNamesThem(t *testing.T) {
 	if !strings.Contains(string(body), `"channels":2`) {
 		t.Fatalf("the field is not named channels: %s", body)
 	}
+	if rec.Directory != relayapi.DirectorySigned || !strings.Contains(string(body), `"directory":"signed"`) {
+		t.Fatalf("bob's record says directory %q: %s", rec.Directory, body)
+	}
 	for _, word := range []string{"xylophone", "quiet ones", "default"} {
 		if strings.Contains(string(body), word) {
 			t.Fatalf("the administrator's record names a channel (%q): %s", word, body)
@@ -407,11 +412,17 @@ func TestTheAdministratorCountsChannelsAndNeverNamesThem(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("mailbox: %d %s", status, body)
 	}
-	if err := json.Unmarshal(body, &rec); err != nil {
+	// A record of its own: a field that is absent leaves whatever the
+	// last unmarshal put there, and the directory's word is absent here.
+	var hers relayapi.MailboxRecord
+	if err := json.Unmarshal(body, &hers); err != nil {
 		t.Fatal(err)
 	}
-	if rec.Channels != 0 || !strings.Contains(string(body), `"channels":0`) {
+	if hers.Channels != 0 || !strings.Contains(string(body), `"channels":0`) {
 		t.Fatalf("alice's record, with no directory: %s", body)
+	}
+	if hers.Directory != "" || strings.Contains(string(body), `"directory"`) {
+		t.Fatalf("alice's record carries a directory word with no directory pushed: %s", body)
 	}
 	// And the page.
 	status, body, _ = h.send(boss, "GET", "/v1/admin/mailboxes", nil, nil)
@@ -423,11 +434,16 @@ func TestTheAdministratorCountsChannelsAndNeverNamesThem(t *testing.T) {
 		t.Fatal(err)
 	}
 	counts := map[string]int64{}
+	words := map[string]string{}
 	for _, m := range list.Mailboxes {
 		counts[m.FP] = m.Channels
+		words[m.FP] = m.Directory
 	}
 	if counts[bob.Fingerprint()] != 2 || counts[alice.Fingerprint()] != 0 {
 		t.Fatalf("the page's counts: %v", counts)
+	}
+	if words[bob.Fingerprint()] != relayapi.DirectorySigned || words[alice.Fingerprint()] != "" {
+		t.Fatalf("the page's directory words: %v", words)
 	}
 	if strings.Contains(string(body), "xylophone") {
 		t.Fatalf("the page names a channel: %s", body)
