@@ -602,31 +602,62 @@ const (
 // none of which reaches a tenth of it.
 const FramingAllowance = 1 << 16
 
+// MaxDirectoryBytes caps a channel directory's document, the bytes the
+// owner signed. A directory at every maximum — MaxChannels channels, each
+// name MaxChannelNameBytes and each description MaxChannelDescriptionBytes,
+// both bounds set on every channel, and issued and both bounds carried to
+// the nanosecond — measured on a document that passed Validate and as this
+// client marshals it:
+//
+//	compact, times on UTC:        425,289 bytes
+//	compact, times at +10:00:     425,934   <- the larger: a signer need not be on UTC
+//	the same, tab-indented:       427,613
+//	the same, four spaces:        430,700
+//
+// The names in that document are 63 "&" and one byte to tell them apart,
+// "&" being the only byte a channel name may hold that encoding/json
+// writes as a six-byte escape — a name refuses "<" and ">", which the
+// Windows file-name rule forbids, while a description admits them.
+//
+// The cap leaves about 91 KiB above the widest of those, which is the room
+// for a signer whose encoder indents further than this one: the bytes are
+// whatever that encoder produced and the signature covers them, so another
+// client may indent, and one that indents past the cap is told to send it
+// compact. It is the wire's rule and both ends run it — the relay at the
+// push and at every reading of a stored directory, this client before it
+// sends one — before the signature is checked, since a length is checked
+// before anything is decoded. Without it a registered identity could push a
+// directory padded with whitespace to MaxDocumentBytes and have the relay
+// verify that padding whole on every post to the mailbox and on every
+// administrator's page.
+const MaxDirectoryBytes = 512 << 10
+
+// MaxAllowlistBytes caps an allow list's document, the same rule for the
+// smaller of the two. A list of MaxAllowlist fingerprints, measured the
+// same way:
+//
+//	compact, times on UTC:         67,136 bytes
+//	compact, times at +10:00:      67,141   <- the larger, for the same reason
+//	the same, tab-indented:        70,156
+//	the same, four spaces:         76,171
+//
+// with about 54 KiB above the widest of those for an encoder that indents
+// further, and run in the same four places.
+const MaxAllowlistBytes = 128 << 10
+
 // MaxDocumentBytes caps the request body of the two owner-signed
 // documents, the allow list and the channel directory, at
 // PUT /v1/mailbox/{fp}/allow and PUT /v1/mailbox/{fp}/channels; the client
 // holds a request to it before the PUT and the relay refuses one over it
-// before a byte of the body is read. It is sized to the documents' own
-// maxima and not the other way round. The worst case is a directory:
-// MaxChannels entries of a name and a description at their caps with
-// every byte a six-byte JSON escape, which is the most any encoder does to
-// one byte (\u003c for <, which the description rule admits and
-// encoding/json writes that way; a name refuses < and takes &, written
-// \u0026), the two times and the framing of an entry, plus the document's
-// own version, owner and issued:
-//
-//	64 × (6×1024 + 6×64 + 2×22 + ~80) + ~200 ≈ 423,679 bytes, measured
-//
-// and the request carries that document base64-encoded beside its
-// signature, 4/3 of it plus the envelope: 565,026 bytes measured. An allow
-// list is the smaller, MaxAllowlist fingerprints inside the signed
-// document: a document of 67,126 bytes and a request of 89,622. The cap
-// is the round number
-// above the larger, the room being for whitespace inside the signed
-// document — it is whatever bytes the signer's encoder produced, and the
-// signature covers them, so another client may indent it — while the
-// envelope around it is this protocol's own; a document indented past the
-// cap is told to send it compact.
+// before a byte of the body is read. That is its whole role: the route's
+// read cap, the envelope around the document rather than the document.
+// What the documents themselves may be is MaxDirectoryBytes and
+// MaxAllowlistBytes above, which carry the measurements; this cap sits
+// above the larger of them with room for the base64 the request carries it
+// in, 4/3 of the document plus the envelope — 568,030 bytes measured for a
+// directory at every maximum and 89,642 for an allow list, and 699,170 and
+// 174,882 for one padded to its own cap — so that a document at its own cap
+// always fits in a request this cap admits.
 const MaxDocumentBytes = 1 << 20
 
 // MaxHeaderBytes caps a request's line and headers together on the relay

@@ -534,15 +534,41 @@ the protocol carries, the request signature, is Ed25519 and about 200
 bytes. The relay refuses an auth header longer than its five fields can be
 before it cuts a field from it. Every body is read under the cap of its
 route. A post is read at `max_bytes` plus 64 KiB of framing. An allow list
-or a channel directory is read at 1 MiB, sized to the documents' own
-maxima on the wire. Every other request is read at 64 KiB, a card among
-them, since one at its maximum is a few hundred bytes. A body that
-declares itself over the cap is refused `413` before a byte of it is read,
-the sentence naming the cap. The stream `PUT` is bounded by the size its
-open declared. On every authenticated route the order is the certificate,
-the auth header parsed, the identity it names looked up, then the body,
-then the signature, the stream PUT excepted, whose signature is over an
-empty body and comes before it. Everything that can be judged without the body is
+or a channel directory is read at 1 MiB, the envelope those documents
+travel in. Every other request is read at 64 KiB, a card among them, since
+one at its maximum is a few hundred bytes. A body that declares itself
+over the cap is refused `413` before a byte of it is read, the sentence
+naming the cap.
+
+The signed documents have caps of their own, which are not the bodies':
+512 KiB for a channel directory, 128 KiB for an allow list, 512 bytes for
+a card. Each is the document at every maximum as a client marshals it
+compact — 425,934, 67,141 and 199 bytes, measured — with room above for a
+signer whose encoder indents, since the bytes are whatever that encoder
+produced and the signature covers them. Each is checked **before the
+signature**, at the push, at every reading of a stored document, and by
+the client before it sends one: a length is the one check that costs
+nothing and tells the caller nothing, and without it a registered identity
+could pad a document with whitespace to the route's cap and have every
+reader verify the padding — the relay on every post to that mailbox, an
+administrator's listing on every mailbox in a page. A push over the cap is
+refused `400` naming the bytes, the cap and to send it compact, and
+nothing is stored. A stored document over it reads as broken, which fails
+closed as any document that does not verify does: an allow list refuses
+every sender, and a directory closes the mailbox to every post, `default`
+included, until the owner pushes again. No document `auu` signs can be
+over a cap and no push can store one, so a stored document that is over
+one was put there by something that is not a push — an edit on the host,
+or an older relay that held a document another tool signed before these
+caps existed. The owner is told at their next fetch, and their push is
+the whole repair: the relay holds a push to the time inside the verified
+document, so a row that does not verify is no bar to replacing it.
+
+The stream `PUT` is bounded by the size its open declared. On every
+authenticated route the order is the certificate, the auth header parsed,
+the identity it names looked up, then the body, then the signature, the
+stream PUT excepted, whose signature is over an empty body and comes
+before it. Everything that can be judged without the body is
 judged before it, so a stranger's sixteen megabytes are refused unread.
 The signature comes after the body because it is over the body. Every
 refusal before the body closes the connection behind its answer, the
@@ -641,9 +667,14 @@ that is not encrypted are each refused so.
 Two routes carry a mailbox's channel directory, the signed list of named
 sub-mailboxes an owner defines. The owner pushes it with `PUT
 /v1/mailbox/{fp}/channels` as the document bytes and the signature over them
-(`document`, `signature`). The relay verifies the signature against the
-registered key before storing either. It answers `401` for one that does
-not verify, `400` with the rule broken, and `409` for a directory issued no
+(`document`, `signature`). The document is at most 512 KiB — a directory
+at every maximum is 425,934 bytes as `auu` writes it — a rule both ends
+run before the signature is checked, since a directory padded to the
+route's cap would otherwise be verified whole on every post to the
+mailbox and on every administrator's page. The relay verifies the
+signature against the registered key before storing either. It answers
+`401` for one that does not verify, `400` with the rule broken or the
+document over its bytes, and `409` for a directory issued no
 later than the one it holds, naming when that was issued — a stored row
 that no longer verifies being no bar, whatever issue time an editor left
 on it, since the relay verifies the stored row before its time can refuse
@@ -663,11 +694,13 @@ else's does.
 
 The allow list travels the same way. `PUT /v1/mailbox/{fp}/allow` carries
 two fields, `document` and `signature`, the list as the owner signed it
-under its own domain.
+under its own domain, and at most 128 KiB of them — a list of a thousand
+fingerprints is 67,141 bytes as `auu` writes it — the same rule run in the
+same places, before the signature.
 The relay verifies the pair against the registered key before storing
 either. It answers `401` for a signature that does not verify, `400` with
-the rule broken, and `409` for a list issued no later than the one it
-holds, a broken row being no bar. A body with no document is answered `400 this relay takes a signed
+the rule broken or the document over its bytes, and `409` for a list
+issued no later than the one it holds, a broken row being no bar. A body with no document is answered `400 this relay takes a signed
 allow list; the request carries no document`, which stores nothing. The
 owner reads it back with `GET /v1/mailbox/{fp}/allow`. That answer is the
 pair verbatim and `state`, one of `signed`, `none` and `broken`. `none`

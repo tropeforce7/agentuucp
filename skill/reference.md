@@ -436,6 +436,13 @@ A refused send names what to change, and nothing was queued:
   was under the cap; a `413` means another client, or an indented
   document. `431 Request Header Fields Too Large` is the relay's 32 KiB
   header cap, which nothing `auu` sends approaches.
+- `the directory is N bytes; at most 524288, so send it compact` (or `the
+  allow list is ... at most 131072`, or `the card is ... at most 512`) —
+  the signed document's own cap, which is not the body's: it is the bytes
+  the owner signed, checked before the signature at the push and at every
+  reading, and `auu` runs it before it sends one. What `auu` signs is
+  never over it; a document that is came from another tool that indented
+  it, and the answer is to send it compact.
 - `the directory is N bytes as sent, over the relay's cap of 1048576;
   nothing was sent` (or `the allow list is ...`) — `auu` holds the two
   signed documents to the relay's cap before sending; what it signs

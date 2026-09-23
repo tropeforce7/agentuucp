@@ -444,3 +444,61 @@ func TestOpenAtIsInclusiveAtBothEdges(t *testing.T) {
 		})
 	}
 }
+
+// A document over relayapi.MaxDirectoryBytes is refused by the length
+// before the signature is checked, on Verify and on the decode every
+// reader goes through: a padded document is what a reader must not spend
+// a signature check on, and the refusal names the bytes and the cap. At
+// the cap it is taken.
+func TestADirectoryIsHeldToItsBytesBeforeTheSignature(t *testing.T) {
+	id := owner(t)
+	doc, sig, err := Sign(id, base(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Padded with spaces inside the object, which a decoder ignores and
+	// the signature covers when signed by hand: the bytes are whatever
+	// the signer's encoder produced, and this is what a wider one does.
+	pad := func(n int) []byte {
+		out := append([]byte{}, doc[:len(doc)-1]...)
+		out = append(out, strings.Repeat(" ", n-len(doc))...)
+		return append(out, '}')
+	}
+	atCap := pad(relayapi.MaxDirectoryBytes)
+	d, err := Verify(id.Public(), atCap, mustSign(t, id, signingBytes(atCap)))
+	if err != nil {
+		t.Fatalf("a document at the cap, %d bytes: %v", len(atCap), err)
+	}
+	if len(d.Channels) != len(base(id).Channels) {
+		t.Fatalf("a document at the cap came back as %+v", d)
+	}
+	over := pad(relayapi.MaxDirectoryBytes + 1)
+	// Signed by nobody, since the length refuses it before the signature
+	// is looked at; the signature is a valid one over other bytes.
+	_, err = Verify(id.Public(), over, sig)
+	if !errors.Is(err, ErrForm) ||
+		err.Error() != fmt.Sprintf("directory is malformed: the directory is %d bytes; at most %d, so send it compact",
+			relayapi.MaxDirectoryBytes+1, relayapi.MaxDirectoryBytes) {
+		t.Fatalf("a document one over the cap: %v", err)
+	}
+	// And under a good signature all the same: the length is the refusal.
+	if _, err := Verify(id.Public(), over, mustSign(t, id, signingBytes(over))); !errors.Is(err, ErrForm) {
+		t.Fatalf("a signed document one over the cap: %v", err)
+	}
+	// And under the wrong key, where the signature would otherwise refuse.
+	if _, err := Verify(owner(t).Public(), over, sig); !errors.Is(err, ErrForm) {
+		t.Fatalf("over the cap under the wrong key: %v; want the length's refusal", err)
+	}
+	// The decode every reader goes through runs the rule too, so a path
+	// that reads a document's bytes without a signature has run it.
+	if _, err := decode(over); !errors.Is(err, ErrForm) {
+		t.Fatalf("decode of a document one over the cap: %v", err)
+	}
+	if _, err := decode(atCap); err != nil {
+		t.Fatalf("decode of a document at the cap: %v", err)
+	}
+	// And this client never signs one over: Sign runs it after marshalling.
+	if err := CheckLength(over); err == nil {
+		t.Fatal("CheckLength took a document one over the cap")
+	}
+}

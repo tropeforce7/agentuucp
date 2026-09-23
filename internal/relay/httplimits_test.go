@@ -172,10 +172,12 @@ func fullAllowList(t *testing.T, owner *identity.Identity, at time.Time) relayap
 // max_bytes + FramingAllowance, and the knock route knock_max_bytes +
 // FramingAllowance, which at knock_max_bytes zero is the post's
 // (TestLimitAKnockIsHeldToKnockMaxBytes walks the setting); two of the three owner-signed documents
-// take MaxDocumentBytes, and a directory and an allow list built at every
-// maximum and marshalled as the client marshals them — 565,026 and 89,622
-// bytes — are taken under it, one byte over refused with the hint to send
-// the document compact; every other body route takes FramingAllowance
+// take MaxDocumentBytes on the body, and a directory and an allow list
+// built at every maximum and marshalled as the client marshals them are
+// taken under it, one byte over refused with the hint to send the
+// document compact; the documents inside have caps of their own,
+// MaxDirectoryBytes and MaxAllowlistBytes, which the packages that own
+// them test and which the measurements live in the comments of; every other body route takes FramingAllowance
 // alone, shown on the card, the registration, the stream open and an
 // admin token. A card at its maximum, a name of 64 bytes, is a few
 // hundred bytes and is taken under the general cap.

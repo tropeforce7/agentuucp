@@ -578,3 +578,59 @@ func TestAnUnsignedAllowlistIsBroken(t *testing.T) {
 		t.Fatal("the signed list did not replace the unsigned one")
 	}
 }
+
+// The same rule for the smaller document: an allow list padded past its
+// own cap is refused at the push by the length, before the signature,
+// with the sentence, and nothing is stored; at the cap it is taken and
+// admits the sender it names. A row edited past the cap on the host reads
+// as broken, so the list fails closed and every sender is refused.
+func TestAnAllowlistIsHeldToItsCapAtThePushAndAtEveryReader(t *testing.T) {
+	people := ids(t, "alice", "bob")
+	alice, bob := people[0], people[1]
+	h := newHarness(t, Config{})
+	h.register(alice)
+	h.register(bob)
+	fp := bob.Fingerprint()
+
+	compact, _ := json.Marshal(&allowlist.Document{V: 1, Owner: fp, Issued: h.clock.Now(),
+		Senders: []string{alice.Fingerprint()}})
+	pad := func(n int) []byte {
+		out := append([]byte{}, compact[:len(compact)-1]...)
+		out = append(out, strings.Repeat(" ", n-len(compact))...)
+		return append(out, '}')
+	}
+	push := func(doc []byte) (int, []byte) {
+		return h.do(bob, "PUT", "/v1/mailbox/"+fp+"/allow", relayapi.AllowRequest{
+			Document: doc, Signature: mustSign(t, bob, append([]byte("ccx-allow-v1"), doc...))}, nil)
+	}
+
+	over := pad(relayapi.MaxAllowlistBytes + 1)
+	status, body := push(over)
+	if status != http.StatusBadRequest ||
+		errorText(t, body) != fmt.Sprintf("allow list is malformed: the allow list is %d bytes; at most %d, so send it compact",
+			relayapi.MaxAllowlistBytes+1, relayapi.MaxAllowlistBytes) {
+		t.Fatalf("a list one over its cap: %d %s", status, body)
+	}
+	if _, _, _, found, err := h.store.Allowlist(fp); err != nil || found {
+		t.Fatal("a list over its cap was stored")
+	}
+
+	atCap := pad(relayapi.MaxAllowlistBytes)
+	if status, body := push(atCap); status != http.StatusNoContent {
+		t.Fatalf("a list at its cap: %d %s", status, body)
+	}
+	if may, err := h.store.MayPost(fp, alice.Fingerprint()); err != nil || !may {
+		t.Fatal("the list at its cap did not admit the sender it names")
+	}
+
+	if _, err := h.store.db.Exec(`UPDATE allowlists SET doc = ?, sig = ? WHERE fp = ?`,
+		over, mustSign(t, bob, append([]byte("ccx-allow-v1"), over...)), fp); err != nil {
+		t.Fatal(err)
+	}
+	if may, err := h.store.MayPost(fp, alice.Fingerprint()); err != nil || may {
+		t.Fatal("an over-long list admitted a sender; it fails closed")
+	}
+	if rec, err := h.store.MailboxRecord(fp); err != nil || rec.Allow != relayapi.AllowBroken {
+		t.Fatalf("the administrator's record: %+v, %v", rec, err)
+	}
+}

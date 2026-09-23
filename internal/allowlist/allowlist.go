@@ -138,6 +138,13 @@ func Sign(id *identity.Identity, d *Document) (doc, sig []byte, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// A list this client signs is never over the cap, for the reason a
+	// directory's is not, and like that one this cannot fire while
+	// Validate's bound on the senders holds. The same test measures a
+	// list at every maximum against this cap.
+	if err := CheckLength(doc); err != nil {
+		return nil, nil, err
+	}
 	sig, err = id.Sign(signingBytes(doc))
 	if err != nil {
 		return nil, nil, err
@@ -150,12 +157,20 @@ func Sign(id *identity.Identity, d *Document) (doc, sig []byte, err error) {
 // its owner. Nothing it returns has come from bytes the signature did not
 // cover.
 //
-// The signature is checked first so that a caller learns nothing about a
-// document's content from a refusal, and so that the JSON decoder never runs
-// on bytes nobody vouched for.
+// The length is checked first, since it costs nothing and tells the
+// caller nothing; then the signature, so that a caller learns nothing
+// about a document's content from a refusal and the JSON decoder never
+// runs on bytes nobody vouched for.
 func Verify(pub *identity.Public, doc, sig []byte) (*Document, error) {
 	if pub == nil {
 		return nil, ErrOwner
+	}
+	// The length before anything else, as a card's reader and a
+	// directory's do: a document over the cap is not verified, so no
+	// post spends a signature check on a list padded past what a list
+	// can be.
+	if err := CheckLength(doc); err != nil {
+		return nil, err
 	}
 	if !pub.Verify(signingBytes(doc), sig) {
 		return nil, ErrSignature
@@ -176,6 +191,9 @@ func Verify(pub *identity.Public, doc, sig []byte) (*Document, error) {
 // no signature is broken, not parsed — and it is exported for a reader,
 // such as a test, that wants to see what a document says.
 func Parse(doc []byte) (*Document, error) {
+	if err := CheckLength(doc); err != nil {
+		return nil, err
+	}
 	d, err := decode(doc)
 	if err != nil {
 		return nil, err
@@ -184,6 +202,18 @@ func Parse(doc []byte) (*Document, error) {
 		return nil, err
 	}
 	return d, nil
+}
+
+// CheckLength holds a document's bytes to relayapi.MaxAllowlistBytes: the
+// wire's rule, run at the push, at every reading of a stored list, and by
+// this client before it sends one. The sentence says the bytes and the
+// cap, and what to do.
+func CheckLength(doc []byte) error {
+	if len(doc) > relayapi.MaxAllowlistBytes {
+		return fmt.Errorf("%w: the allow list is %d bytes; at most %d, so send it compact",
+			ErrForm, len(doc), relayapi.MaxAllowlistBytes)
+	}
+	return nil
 }
 
 // signingBytes is the exact input to the signature.

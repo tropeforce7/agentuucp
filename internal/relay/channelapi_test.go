@@ -554,3 +554,75 @@ func TestTheListingSaysTheDirectoryState(t *testing.T) {
 		t.Fatalf("a blanked signature says %q, want broken", got)
 	}
 }
+
+// A directory padded past its own cap is refused at the push by the
+// length, before the signature, with the sentence naming the bytes and
+// the cap, and nothing is stored; at the cap it is taken and stored as
+// signed. A row that holds one all the same — an edit on the host, since
+// no push can put one there — reads as broken, which closes the mailbox,
+// and the administrator's record says so.
+func TestADirectoryIsHeldToItsCapAtThePushAndAtEveryReader(t *testing.T) {
+	people := ids(t, "boss", "alice", "bob")
+	boss, alice, bob := people[0], people[1], people[2]
+	h := newHarness(t, Config{AdminFile: adminFile(t, boss)})
+	h.register(alice)
+	h.register(bob)
+	fp := bob.Fingerprint()
+
+	compact, _ := json.Marshal(&channels.Directory{V: 1, Owner: fp, Issued: h.clock.Now(),
+		Channels: []channels.Channel{{Name: "bug reports"}}})
+	pad := func(n int) []byte {
+		out := append([]byte{}, compact[:len(compact)-1]...)
+		out = append(out, strings.Repeat(" ", n-len(compact))...)
+		return append(out, '}')
+	}
+	push := func(doc []byte) (int, []byte) {
+		return h.do(bob, "PUT", "/v1/mailbox/"+fp+"/channels", relayapi.ChannelsRequest{
+			Document: doc, Signature: mustSign(t, bob, append([]byte("ccx-channels-v1"), doc...))}, nil)
+	}
+
+	over := pad(relayapi.MaxDirectoryBytes + 1)
+	status, body := push(over)
+	if status != http.StatusBadRequest ||
+		errorText(t, body) != fmt.Sprintf("directory is malformed: the directory is %d bytes; at most %d, so send it compact",
+			relayapi.MaxDirectoryBytes+1, relayapi.MaxDirectoryBytes) {
+		t.Fatalf("a directory one over its cap: %d %s", status, body)
+	}
+	if _, _, found, err := h.store.Directory(fp); err != nil || found {
+		t.Fatal("a directory over its cap was stored")
+	}
+
+	atCap := pad(relayapi.MaxDirectoryBytes)
+	if status, body := push(atCap); status != http.StatusNoContent {
+		t.Fatalf("a directory at its cap: %d %s", status, body)
+	}
+	got, _, found, err := h.store.Directory(fp)
+	if err != nil || !found || string(got) != string(atCap) {
+		t.Fatal("the padded directory at the cap was not stored as signed")
+	}
+	// It routes: the length is a cap and not a refusal of what is under it.
+	if status, _ := h.do(alice, "POST", "/v1/mailbox/"+fp,
+		sealedTo(t, alice, bob.Public(), "x", "bug reports"), nil); status != http.StatusOK {
+		t.Fatal("a post to a channel of the directory at its cap was refused")
+	}
+
+	// The row edited past the cap on the host: every reader runs the same
+	// rule, so the mailbox closes rather than the relay verifying bytes
+	// no push could have put there.
+	if _, err := h.store.db.Exec(`UPDATE directories SET doc = ?, sig = ? WHERE fp = ?`,
+		over, mustSign(t, bob, append([]byte("ccx-channels-v1"), over...)), fp); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := h.store.DirectoryState(fp); err != nil || state != relayapi.DirectoryBroken {
+		t.Fatalf("the owner's listing says %q, want broken", state)
+	}
+	if rec, err := h.store.MailboxRecord(fp); err != nil || rec.Directory != relayapi.DirectoryBroken {
+		t.Fatalf("the administrator's record: %+v, %v", rec, err)
+	}
+	for _, channel := range []string{"bug reports", ""} {
+		status, body := h.do(alice, "POST", "/v1/mailbox/"+fp, sealedTo(t, alice, bob.Public(), "x", channel), nil)
+		if status != http.StatusNotFound {
+			t.Fatalf("a post to %q under an over-long directory: %d %s", channel, status, body)
+		}
+	}
+}

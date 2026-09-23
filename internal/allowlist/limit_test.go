@@ -1,9 +1,13 @@
 package allowlist
 
 import (
+	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 // TestLimitDocumentV: a list's v is 1, and Validate refuses every other
@@ -39,5 +43,22 @@ func TestLimitSenderOneShort(t *testing.T) {
 	d.Owner = strings.Repeat("a", 63)
 	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "owner is not a fingerprint") {
 		t.Errorf("owner one short: %v; want the refusal", err)
+	}
+}
+
+// TestLimitAnAllowlistDocumentIsCapped: the same edges for the smaller of
+// the two documents.
+func TestLimitAnAllowlistDocumentIsCapped(t *testing.T) {
+	id := owner(t)
+	for _, n := range []int{relayapi.MaxAllowlistBytes + 1, relayapi.MaxAllowlistBytes * 2, relayapi.MaxDocumentBytes} {
+		doc := []byte("{" + strings.Repeat(" ", n-2) + "}")
+		_, err := Verify(id.Public(), doc, mustSign(t, id, signingBytes(doc)))
+		if !errors.Is(err, ErrForm) ||
+			!strings.Contains(err.Error(), fmt.Sprintf("the allow list is %d bytes; at most %d", n, relayapi.MaxAllowlistBytes)) {
+			t.Errorf("%d bytes: %v; want the length's refusal", n, err)
+		}
+	}
+	if _, err := Verify(id.Public(), nil, nil); !errors.Is(err, ErrSignature) {
+		t.Errorf("an empty document: %v; want the signature's refusal", err)
 	}
 }

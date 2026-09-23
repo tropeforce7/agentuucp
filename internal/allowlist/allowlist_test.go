@@ -345,3 +345,49 @@ func TestAllowlistSignatureDomainIsSeparate(t *testing.T) {
 		}
 	}
 }
+
+// A document over relayapi.MaxAllowlistBytes is refused by the length
+// before the signature is checked, on Verify and on Parse, and the
+// refusal names the bytes and the cap. At the cap it is taken.
+func TestAnAllowlistIsHeldToItsBytesBeforeTheSignature(t *testing.T) {
+	id := owner(t)
+	doc, sig, err := Sign(id, base(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pad := func(n int) []byte {
+		out := append([]byte{}, doc[:len(doc)-1]...)
+		out = append(out, strings.Repeat(" ", n-len(doc))...)
+		return append(out, '}')
+	}
+	atCap := pad(relayapi.MaxAllowlistBytes)
+	d, err := Verify(id.Public(), atCap, mustSign(t, id, signingBytes(atCap)))
+	if err != nil {
+		t.Fatalf("a document at the cap, %d bytes: %v", len(atCap), err)
+	}
+	if len(d.Senders) != len(base(id).Senders) {
+		t.Fatalf("a document at the cap came back as %+v", d)
+	}
+	over := pad(relayapi.MaxAllowlistBytes + 1)
+	_, err = Verify(id.Public(), over, sig)
+	if !errors.Is(err, ErrForm) ||
+		err.Error() != fmt.Sprintf("allow list is malformed: the allow list is %d bytes; at most %d, so send it compact",
+			relayapi.MaxAllowlistBytes+1, relayapi.MaxAllowlistBytes) {
+		t.Fatalf("a document one over the cap: %v", err)
+	}
+	if _, err := Verify(id.Public(), over, mustSign(t, id, signingBytes(over))); !errors.Is(err, ErrForm) {
+		t.Fatalf("a signed document one over the cap: %v", err)
+	}
+	if _, err := Verify(owner(t).Public(), over, sig); !errors.Is(err, ErrForm) {
+		t.Fatalf("over the cap under the wrong key: %v; want the length's refusal", err)
+	}
+	if _, err := Parse(over); !errors.Is(err, ErrForm) {
+		t.Fatalf("Parse of a document one over the cap: %v", err)
+	}
+	if _, err := Parse(atCap); err != nil {
+		t.Fatalf("Parse of a document at the cap: %v", err)
+	}
+	if err := CheckLength(over); err == nil {
+		t.Fatal("CheckLength took a document one over the cap")
+	}
+}

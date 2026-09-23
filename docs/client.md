@@ -320,13 +320,15 @@ writing over each other. Every edit first asks each relay what it holds. A
 relay holding a directory issued later than this machine's stops the edit
 with `work holds a directory issued T, newer than this machine's; run 'auu
 channel pull --relay work' to take it first`. `pull` takes that directory
-into the local file, and the edit goes through after. A directory or an
-allow list is held to 1 MiB as it is sent, the relay's cap on the two
-routes. A full directory of 64 channels at every limit is about 565 KB on
-the wire and a full allow list about 157 KB, so what `auu` signs always
-fits. A document that does not fit (`the directory is N bytes as sent,
-over the relay's cap of 1048576; nothing was sent`) is one another tool
-indented.
+into the local file, and the edit goes through after. A directory is held to
+512 KiB and an allow list to 128 KiB — the bytes the owner signed, checked
+before either is sent and again by the relay before the signature — and
+the request that carries one to 1 MiB, the relay's cap on the two routes.
+A full directory of 64 channels at every limit is about 426 KB signed and
+568 KB on the wire, and a full allow list 67 KB and 90 KB, so what `auu`
+signs always fits with room to spare. A document that does not fit (`the
+directory is N bytes; at most 524288, so send it compact; nothing was
+sent`) is one another tool indented, and the answer is in the sentence.
 
 Sending to a channel is `--channel NAME` on `send` and on `reply`. Without
 it a message goes to the recipient's `default`. A reply goes to the

@@ -139,8 +139,9 @@ func Sign(id *identity.Identity, d *Document) (doc, sig []byte, err error) {
 // its owner. Nothing it returns has come from bytes the signature did not
 // cover.
 //
-// The signature is checked first so that a caller learns nothing about a
-// document's content from a refusal, and so that the JSON decoder never
+// The length is checked first, since it costs nothing and tells the
+// caller nothing; then the signature, so that a caller learns nothing
+// about a document's content from a refusal and the JSON decoder never
 // runs on bytes nobody vouched for.
 func Verify(pub *identity.Public, doc, sig []byte) (*Document, error) {
 	if pub == nil {

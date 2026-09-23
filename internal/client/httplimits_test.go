@@ -362,14 +362,17 @@ func TestLimitAStreamAnswerIsHeldTo64KiB(t *testing.T) {
 }
 
 // TestLimitADocumentIsHeldToTheCapBeforeThePut: the client holds the three
-// owner-signed documents' requests to their routes' caps before a byte
-// goes on the wire: the directory and the allow list to
-// relayapi.MaxDocumentBytes, the card to relayapi.FramingAllowance, the
-// general cap its route reads under. A directory and an allow list at
-// every maximum, marshalled as the client marshals them (565,026 and
-// 89,622 bytes), and a card at its own (393 bytes), are sent; a request
-// one byte over its cap is refused here with the bytes and the cap in
-// the sentence and the relay sees nothing of it.
+// owner-signed documents to two caps before a byte goes on the wire: the
+// document's own — MaxDirectoryBytes, MaxAllowlistBytes, MaxCardBytes —
+// and then its route's, MaxDocumentBytes for the two large ones and
+// FramingAllowance for the card. A directory and an allow list at every
+// maximum, marshalled as the client marshals them, and a card at its own
+// are sent, and each is measured against its own cap here so that a
+// remeasurement is due the moment one of them grows; a document one byte
+// over its cap is refused with the bytes and the cap in the sentence and
+// the relay sees nothing of it. The two caps' order is pinned as well: a
+// document at its own cap still fits in a request its route admits, so
+// the second refusal cannot fire through these three calls.
 func TestLimitADocumentIsHeldToTheCapBeforeThePut(t *testing.T) {
 	var puts atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -396,12 +399,24 @@ func TestLimitADocumentIsHeldToTheCapBeforeThePut(t *testing.T) {
 			NotBefore:   &nb, NotAfter: &na,
 		})
 	}
-	doc, sig, err := channels.Sign(owner, &channels.Directory{Issued: at, Channels: chs})
+	full := &channels.Directory{Issued: at, Channels: chs}
+	doc, sig, err := channels.Sign(owner, full)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if wire, _ := json.Marshal(relayapi.ChannelsRequest{Document: doc, Signature: sig}); len(wire) < 500_000 || len(wire) > relayapi.MaxDocumentBytes {
 		t.Fatalf("the full directory is %d bytes on the wire; want between 500,000 and the cap", len(wire))
+	}
+	// The document itself against its own cap, and the claim
+	// MaxDirectoryBytes's comment makes about the room above the
+	// measurement: that the same document indented still fits, since the
+	// bytes are the signer's encoder's and another client may indent. If
+	// either fails the measurement is stale and the cap would refuse what
+	// this client, or a wider one, signed.
+	indented, _ := json.MarshalIndent(full, "", "    ")
+	if len(doc) >= relayapi.MaxDirectoryBytes || len(indented) >= relayapi.MaxDirectoryBytes {
+		t.Fatalf("a directory at every maximum is %d bytes compact and %d indented, against a cap of %d: remeasure",
+			len(doc), len(indented), relayapi.MaxDirectoryBytes)
 	}
 	if err := c.SetDirectory(context.Background(), doc, sig); err != nil {
 		t.Fatalf("a directory at every maximum: %v; want it sent", err)
@@ -410,9 +425,15 @@ func TestLimitADocumentIsHeldToTheCapBeforeThePut(t *testing.T) {
 	for i := 0; i < relayapi.MaxAllowlist; i++ {
 		senders = append(senders, fmt.Sprintf("%064x", i+1))
 	}
-	adoc, asig, err := allowlist.Sign(owner, &allowlist.Document{Issued: at, Senders: senders})
+	fullList := &allowlist.Document{Issued: at, Senders: senders}
+	adoc, asig, err := allowlist.Sign(owner, fullList)
 	if err != nil {
 		t.Fatal(err)
+	}
+	aIndented, _ := json.MarshalIndent(fullList, "", "    ")
+	if len(adoc) >= relayapi.MaxAllowlistBytes || len(aIndented) >= relayapi.MaxAllowlistBytes {
+		t.Fatalf("an allow list at every maximum is %d bytes compact and %d indented, against a cap of %d: remeasure",
+			len(adoc), len(aIndented), relayapi.MaxAllowlistBytes)
 	}
 	if err := c.SetAllowlist(context.Background(), adoc, asig); err != nil {
 		t.Fatalf("an allow list at every maximum: %v; want it sent", err)
@@ -431,40 +452,48 @@ func TestLimitADocumentIsHeldToTheCapBeforeThePut(t *testing.T) {
 		t.Fatalf("the relay saw %d PUTs, want 3", n)
 	}
 
-	// One byte over the cap: the document's bytes are the signer's, so a
-	// document the cap does not hold is made by size alone.
+	// One byte over the document's own cap: the bytes are the signer's,
+	// so a document the cap does not hold is made by size alone, and the
+	// refusal is the one the relay would give, before a request.
 	over := func(t *testing.T, name string, limit int, send func(doc []byte) error) {
 		t.Helper()
-		// The request is the document in base64 beside a signature; find
-		// the document length that puts the request exactly one over.
-		probe := func(n int) int {
-			wire, _ := json.Marshal(relayapi.ChannelsRequest{Document: bytes.Repeat([]byte("d"), n), Signature: []byte("s")})
-			return len(wire)
-		}
-		n := limit * 3 / 4
-		for probe(n) < limit+1 {
-			n++
-		}
-		for probe(n) > limit+1 {
-			n--
-		}
-		if probe(n) != limit+1 {
-			// Base64 grows in steps of four; the nearest size over is
-			// what the sentence then names.
-			n++
-		}
 		before := puts.Load()
-		err := send(bytes.Repeat([]byte("d"), n))
-		if err == nil || !strings.Contains(err.Error(), name+" is") || !strings.Contains(err.Error(), fmt.Sprintf("over the relay's cap of %d", limit)) {
-			t.Fatalf("%s one byte over the cap: %v; want the refusal naming the bytes and the cap", name, err)
+		err := send(bytes.Repeat([]byte("d"), limit+1))
+		want := fmt.Sprintf("%s is %d bytes; at most %d, so send it compact; nothing was sent", name, limit+1, limit)
+		if err == nil || err.Error() != want {
+			t.Fatalf("%s one byte over its cap: %v; want %q", name, err, want)
 		}
 		if puts.Load() != before {
-			t.Fatalf("%s over the cap reached the relay", name)
+			t.Fatalf("%s over its cap reached the relay", name)
 		}
 	}
-	over(t, "the directory", relayapi.MaxDocumentBytes, func(d []byte) error { return c.SetDirectory(context.Background(), d, []byte("s")) })
-	over(t, "the allow list", relayapi.MaxDocumentBytes, func(d []byte) error { return c.SetAllowlist(context.Background(), d, []byte("s")) })
-	over(t, "the card", relayapi.FramingAllowance, func(d []byte) error { return c.SetCard(context.Background(), d, []byte("s")) })
+	over(t, "the directory", relayapi.MaxDirectoryBytes, func(d []byte) error { return c.SetDirectory(context.Background(), d, []byte("s")) })
+	over(t, "the allow list", relayapi.MaxAllowlistBytes, func(d []byte) error { return c.SetAllowlist(context.Background(), d, []byte("s")) })
+	over(t, "the card", relayapi.MaxCardBytes, func(d []byte) error { return c.SetCard(context.Background(), d, []byte("s")) })
+
+	// The two caps in their order: a document at its own cap always fits
+	// in a request the route's cap admits, which is what documentBody's
+	// comment claims and why its second refusal cannot fire through these
+	// three calls. Measured on the request this client builds, since the
+	// document travels base64-encoded beside its signature.
+	for _, tc := range []struct {
+		name          string
+		docCap, route int
+		req           func(doc, sig []byte) any
+	}{
+		{"the directory", relayapi.MaxDirectoryBytes, relayapi.MaxDocumentBytes,
+			func(d, s []byte) any { return relayapi.ChannelsRequest{Document: d, Signature: s} }},
+		{"the allow list", relayapi.MaxAllowlistBytes, relayapi.MaxDocumentBytes,
+			func(d, s []byte) any { return relayapi.AllowRequest{Document: d, Signature: s} }},
+		{"the card", relayapi.MaxCardBytes, relayapi.FramingAllowance,
+			func(d, s []byte) any { return relayapi.CardRequest{Document: d, Signature: s} }},
+	} {
+		wire, _ := json.Marshal(tc.req(bytes.Repeat([]byte("d"), tc.docCap), sig))
+		if len(wire) >= tc.route {
+			t.Errorf("%s at its cap is %d bytes as sent, which the route's cap of %d does not hold",
+				tc.name, len(wire), tc.route)
+		}
+	}
 }
 
 // TestAStalledStreamIsCutInsideTheWindow: the stream routes run on a client

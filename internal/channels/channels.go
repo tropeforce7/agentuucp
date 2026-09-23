@@ -353,6 +353,19 @@ func Sign(id *identity.Identity, d *Directory) (doc, sig []byte, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	// A directory this client signs is never over the cap: Validate has
+	// just bounded the channels, the names and the descriptions, and the
+	// cap was measured from a document at every one of those maxima as
+	// this marshals it. So this cannot fire today, and it is here because
+	// that is a premise and not a law — raise MaxChannels or a field's cap
+	// without remeasuring and the client would otherwise sign a document
+	// the relay refuses. The invariant itself is tested, in the client's
+	// TestLimitADocumentIsHeldToTheCapBeforeThePut, which signs a
+	// directory at every maximum and measures it against the cap
+	// compact and indented.
+	if err := CheckLength(doc); err != nil {
+		return nil, nil, err
+	}
 	sig, err = id.Sign(signingBytes(doc))
 	if err != nil {
 		return nil, nil, err
@@ -365,12 +378,21 @@ func Sign(id *identity.Identity, d *Directory) (doc, sig []byte, err error) {
 // fingerprint as its owner. Nothing it returns has come from bytes the
 // signature did not cover.
 //
-// The signature is checked first so that a caller learns nothing about a
-// document's content from a refusal, and so that the JSON decoder never runs
-// on bytes nobody vouched for.
+// The length is checked first, since it costs nothing and tells the
+// caller nothing; then the signature, so that a caller learns nothing
+// about a document's content from a refusal and the JSON decoder never
+// runs on bytes nobody vouched for.
 func Verify(pub *identity.Public, doc, sig []byte) (*Directory, error) {
 	if pub == nil {
 		return nil, ErrOwner
+	}
+	// The length before anything else, as a card's reader does it: it is
+	// the one check that costs nothing and reveals nothing, and a
+	// document over the cap is not verified, so neither the relay on a
+	// post nor an administrator's page spends a signature check on a
+	// directory padded past what a directory can be.
+	if err := CheckLength(doc); err != nil {
+		return nil, err
 	}
 	if !pub.Verify(signingBytes(doc), sig) {
 		return nil, ErrSignature
@@ -388,6 +410,19 @@ func Verify(pub *identity.Public, doc, sig []byte) (*Directory, error) {
 	return d, nil
 }
 
+// CheckLength holds a document's bytes to relayapi.MaxDirectoryBytes: the
+// wire's rule, run at the push, at every reading of a stored directory,
+// and by this client before it sends one. The sentence says the bytes and
+// the cap, and what to do. It is exported because the client runs it
+// before a request, where a card's reader is inside its own package.
+func CheckLength(doc []byte) error {
+	if len(doc) > relayapi.MaxDirectoryBytes {
+		return fmt.Errorf("%w: the directory is %d bytes; at most %d, so send it compact",
+			ErrForm, len(doc), relayapi.MaxDirectoryBytes)
+	}
+	return nil
+}
+
 // signingBytes is the exact input to the signature.
 func signingBytes(doc []byte) []byte {
 	out := make([]byte, 0, len(signDomain)+len(doc))
@@ -397,8 +432,13 @@ func signingBytes(doc []byte) []byte {
 
 // decode reads a document strictly. An unknown field is an error: a signed
 // directory is not a place for extensions one side understands and the other
-// ignores.
+// ignores. The length is held here too, so that every path that reads a
+// document's bytes has run the rule, whether or not a signature came with
+// them.
 func decode(doc []byte) (*Directory, error) {
+	if err := CheckLength(doc); err != nil {
+		return nil, err
+	}
 	dec := json.NewDecoder(bytes.NewReader(doc))
 	dec.DisallowUnknownFields()
 	var d Directory

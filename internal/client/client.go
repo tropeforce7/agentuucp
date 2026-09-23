@@ -640,30 +640,51 @@ func (c *Client) FetchKey(ctx context.Context, fp string) (*identity.Public, err
 // against this identity's registered key and answers 409 when it holds a
 // directory issued no earlier, which comes back as an HTTPError.
 func (c *Client) SetDirectory(ctx context.Context, doc, sig []byte) error {
-	body, err := documentBody("the directory", relayapi.ChannelsRequest{Document: doc, Signature: sig}, relayapi.MaxDocumentBytes)
+	body, err := documentBody("the directory", doc, relayapi.MaxDirectoryBytes,
+		relayapi.ChannelsRequest{Document: doc, Signature: sig}, relayapi.MaxDocumentBytes)
 	if err != nil {
 		return err
 	}
 	return c.do(ctx, "PUT", "/v1/mailbox/"+c.id.Fingerprint()+"/channels", body, nil, nil)
 }
 
-// documentBody marshals one of the three owner-signed documents' requests
-// and holds it to the relay's cap on its route, before a byte goes on the
-// wire: a document over it is refused here with the bytes and the cap in
-// the sentence rather than 413 by the relay after the upload. The
-// directory and the allow list are read at relayapi.MaxDocumentBytes,
-// which holds either at every maximum as this client marshals it; the
-// card, a few hundred bytes at its own, at relayapi.FramingAllowance, the
-// general cap. What runs over a cap is whitespace inside the signed
-// document, which is the signer's encoder's.
-func documentBody(what string, req any, limit int) ([]byte, error) {
+// documentBody holds one of the three owner-signed documents to its own
+// cap and then the request that carries it to the route's, before a byte
+// goes on the wire, so that what a relay would refuse is refused here with
+// the bytes and the cap in the sentence rather than after the upload.
+//
+// The two caps are different things and both are run. A document's cap —
+// relayapi.MaxDirectoryBytes, MaxAllowlistBytes, MaxCardBytes — is the
+// wire's rule about the bytes the owner signed, the same rule the relay
+// runs at the push and at every reading of a stored document, and the same
+// sentence, so that a caller who hands this client a document from
+// somewhere else is told here rather than at the relay. The route's cap —
+// relayapi.MaxDocumentBytes for the two large ones, FramingAllowance for
+// the card — is about the envelope the document travels in, base64 and
+// all. What runs over either is whitespace inside the signed document,
+// which is the signer's encoder's, and the answer to both is to send it
+// compact.
+//
+// With the document caps in place the second refusal cannot fire through
+// the three calls here: a document at its own cap, carried base64 beside
+// a signature, is well inside the route's cap — 699 KiB against 1 MiB for
+// a directory, 175 KiB for an allow list, a kilobyte against 64 KiB for a
+// card. It stays because the two caps are independent numbers that a
+// later change may move apart, and this client must not send what the
+// relay would refuse; TestLimitADocumentIsHeldToTheCapBeforeThePut pins
+// the arithmetic so that a change to either number is seen here.
+func documentBody(what string, doc []byte, docLimit int, req any, bodyLimit int) ([]byte, error) {
+	if len(doc) > docLimit {
+		return nil, fmt.Errorf("%s is %d bytes; at most %d, so send it compact; nothing was sent",
+			what, len(doc), docLimit)
+	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	if len(body) > limit {
+	if len(body) > bodyLimit {
 		return nil, fmt.Errorf("%s is %d bytes as sent, over the relay's cap of %d; nothing was sent",
-			what, len(body), limit)
+			what, len(body), bodyLimit)
 	}
 	return body, nil
 }
@@ -706,7 +727,8 @@ func (c *Client) Directory(ctx context.Context, fp string) (*DirectoryResult, er
 // verifies against this identity's registered key. A relay holding a list
 // issued no earlier answers 409, which comes back as an HTTPError.
 func (c *Client) SetAllowlist(ctx context.Context, doc, sig []byte) error {
-	body, err := documentBody("the allow list", relayapi.AllowRequest{Document: doc, Signature: sig}, relayapi.MaxDocumentBytes)
+	body, err := documentBody("the allow list", doc, relayapi.MaxAllowlistBytes,
+		relayapi.AllowRequest{Document: doc, Signature: sig}, relayapi.MaxDocumentBytes)
 	if err != nil {
 		return err
 	}
@@ -739,7 +761,8 @@ func (c *Client) Allowlist(ctx context.Context) (*AllowlistResult, error) {
 // this identity's registered key. A relay holding a card issued no earlier
 // answers 409, which comes back as an HTTPError.
 func (c *Client) SetCard(ctx context.Context, doc, sig []byte) error {
-	body, err := documentBody("the card", relayapi.CardRequest{Document: doc, Signature: sig}, relayapi.FramingAllowance)
+	body, err := documentBody("the card", doc, relayapi.MaxCardBytes,
+		relayapi.CardRequest{Document: doc, Signature: sig}, relayapi.FramingAllowance)
 	if err != nil {
 		return err
 	}

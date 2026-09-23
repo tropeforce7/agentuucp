@@ -916,12 +916,23 @@ is held to `relayapi.MaxAuthHeader`, the length its five fields can
 reach, before a field is cut from it; every body is read under its
 route's cap, `readBody` taking the cap as an argument — the post route at
 `max_bytes` plus `FramingAllowance`, two of the three owner-signed
-documents at `MaxDocumentBytes`, sized to their maxima as the client
-marshals them (the document is base64 inside the envelope, so 4/3 of it,
-measured and written in the constant's comment), and every other body
-route at `FramingAllowance` alone, the card among them, since a card at
-its maximum is a few hundred bytes — with a body that declares itself over the cap
-refused `413` before a byte, naming the cap; and HTTP/2 is off on the
+documents at `MaxDocumentBytes`, and every other body route at
+`FramingAllowance` alone, the card among them, since a card at its
+maximum is a few hundred bytes — with a body that declares itself over the cap
+refused `413` before a byte, naming the cap. **A signed document has a
+cap of its own, and it is not the body's**: `MaxDirectoryBytes`,
+`MaxAllowlistBytes` and `MaxCardBytes` bound the bytes the owner signed,
+each measured from a document at every maximum as this client marshals it
+compact with room above for a signer that indents, each written in the
+constant's comment, and each run **before the signature** — at the push,
+at every reading of a stored document, and by the client before it sends
+one — since a length is the one check that costs nothing and tells the
+caller nothing. Without them a registered identity pads a document with
+whitespace to the route's cap and every reader verifies the padding: the
+relay on every post, and an administrator's page on every mailbox in it.
+A document over its cap is not verified, which for a stored row means it
+reads as broken and fails closed like any other document that does not
+verify; and HTTP/2 is off on the
 relay's listener, `TLSNextProto` an empty map and `NextProtos` http/1.1
 alone, so the drain, `Connection: close` and the stall deadline are
 proven under the protocol that is deployed. A cap is the plainest bound

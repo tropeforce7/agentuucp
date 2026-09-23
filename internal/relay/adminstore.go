@@ -215,12 +215,14 @@ func (s *Store) Blocks() ([]Block, error) {
 // each word is the verification and not a column. The cost is in the
 // bytes and not in the count: a page is at most relayapi.MaxListLimit
 // mailboxes, and for each one an allow list and a directory are verified
-// whole, both of them held to nothing smaller than the request that
-// pushed them, relayapi.MaxDocumentBytes, where the card is held to
-// relayapi.MaxCardBytes at its every reader. So this is the one route
-// that verifies in bulk, the bulk is set by what the owners signed, and
-// what bounds it is the page's own ceiling and the fact that an
-// administrator has been authenticated before any of it is read.
+// whole. What bounds that is each document's own cap —
+// relayapi.MaxAllowlistBytes and MaxDirectoryBytes, with the card at
+// MaxCardBytes — so a full page reads and verifies at most 200 times
+// 640 KiB of signed bytes, and not the 200 times 2 MiB that the request
+// cap alone would have allowed. So this is the one route that verifies
+// in bulk, the bulk is bounded by what a document may be rather than by
+// what a request may carry, and an administrator has been authenticated
+// before any of it is read.
 //
 // The channel count is of the channels rows, which the relay no longer
 // routes by: routing reads the signed document and verifies it at every
