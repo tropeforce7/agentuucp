@@ -181,7 +181,7 @@ func TestRenewIfExpiringDoesNothingWithoutACertificate(t *testing.T) {
 	s, id, r := home(t)
 	var said int
 	d := Dialer{Prog: "auu", Note: func(string) { said++ }}
-	if d.RenewIfExpiring(s, id, nil, r, time.Now()) {
+	if d.RenewIfExpiring(t.Context(), s, id, nil, r, time.Now()) {
 		t.Error("renewed a certificate this machine does not have")
 	}
 	if said != 0 {

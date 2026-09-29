@@ -537,6 +537,21 @@ wrap), with the open uploads' reservations counted for an envelope as
 for a stream, and both callers ask it. Two callers with two arithmetics
 are a quota with a gap between them.
 
+**A worker that waits on a timer needs the waiting injected, and the loop
+needs an exit outside it.** The queue's workers wait for the next turn on a
+function the relay hands them, so a test drives one without sleeping — a
+test that sleeps is slow when it passes and flaky when it does not — and
+that function returns early when the relay is stopping. Making it a
+function is where the bug was: the `select` it replaced had the `return`
+in it, and a loop whose only exit was inside the thing it called spun on a
+cancelled context instead of ending, which a stop then waited on for ever.
+The test that found it was not a test of stopping; it was every test that
+built a relay with a neighbour, because the fixture stops the workers as
+soon as it has built one — every such test hung before its first line ran,
+which is a better place to find this than a cleanup, where a hang looks
+like the suite being slow. Put the exit in the loop, after the wait, where
+it can be seen.
+
 **Housekeeping never waits on a sender.** The upload purge runs inside an
 unrelated caller's request, every hundredth, and it took each expired
 upload's lock as an abort does — the lock an append holds across the

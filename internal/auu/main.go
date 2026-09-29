@@ -406,7 +406,7 @@ func dialer() relaydial.Dialer {
 // command here calls them by; the bodies moved to that package when the relay
 // came to need the same dialling and the same renewal.
 func dial(s *store.Store, id *identity.Identity, r *store.Relay) (*client.Client, error) {
-	return dialer().Dial(s, id, r)
+	return dialer().Dial(ctx(), s, id, r)
 }
 
 func dialNoRenew(s *store.Store, id *identity.Identity, r *store.Relay) (*client.Client, error) {

@@ -140,7 +140,7 @@ func TestACouriersFileWithABadLineIsAStartupFailure(t *testing.T) {
 func TestPrintedConfigCarriesTheCourierBlock(t *testing.T) {
 	home := courierHome(t, "bar", "https://bar.example")
 	file := couriersFile(t, "bar")
-	cfg, err := resolve(t, "", "--courier-home", home, "--courier-file", file)
+	cfg, err := resolve(t, "", "--registration", "closed", "--courier-home", home, "--courier-file", file)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestTheCourierFlagsWinOverTheFile(t *testing.T) {
 		t.Errorf("a flag nobody typed set the home to %q", kept.Courier.Home)
 	}
 
-	over, err := resolve(t, file, "--courier-file", fromFlag, "--courier-home", home)
+	over, err := resolve(t, file, "--registration", "closed", "--courier-file", fromFlag, "--courier-home", home)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestTheCourierFlagsWinOverTheFile(t *testing.T) {
 // relay that does not start.
 func TestAStartWithAPeeringBuildsTheCourier(t *testing.T) {
 	home := courierHome(t, "bar", "https://bar.example")
-	cfg, err := resolve(t, "", "--courier-home", home, "--courier-file", couriersFile(t, "bar"))
+	cfg, err := resolve(t, "", "--registration", "closed", "--courier-home", home, "--courier-file", couriersFile(t, "bar"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +224,7 @@ func TestAPeeringThatCannotWorkStopsTheStart(t *testing.T) {
 	if _, err := store.Open(root); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := resolve(t, "", "--courier-home", root)
+	cfg, err := resolve(t, "", "--registration", "closed", "--courier-home", root)
 	if err != nil {
 		t.Fatalf("the settings themselves are fine and were refused: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestAPeeringThatCannotWorkStopsTheStart(t *testing.T) {
 // to print.
 func TestValidatingTheSettingsDoesNotMakeAHome(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "not-made-yet")
-	cfg, err := resolve(t, "", "--courier-home", home)
+	cfg, err := resolve(t, "", "--registration", "closed", "--courier-home", home)
 	if err != nil {
 		t.Fatalf("settings naming a home that does not exist: %v; the start is what refuses that", err)
 	}
@@ -285,6 +285,7 @@ func TestTheCourierDefaultsMatchTheLibrarys(t *testing.T) {
 		got.ForwardTTL != want.ForwardTTL ||
 		got.QueueMaxBytes != want.QueueMaxBytes ||
 		got.QueueMaxMessages != want.QueueMaxMessages ||
+		got.QueueMaxMessagesPerPoster != want.QueueMaxMessagesPerPoster ||
 		got.QueueMaxBytesPerPoster != want.QueueMaxBytesPerPoster ||
 		got.PostsPerMinute != want.PostsPerMinute ||
 		got.PostBytesPerHour != want.PostBytesPerHour ||
@@ -353,6 +354,7 @@ func TestLimitCourierSettingRanges(t *testing.T) {
 			"--courier-queue-max-bytes", "--courier-queue-max-bytes-per-poster",
 			"--courier-posts-per-minute", "--courier-post-bytes-per-hour",
 			"--courier-carried-max-rows", "--courier-queue-max-messages",
+			"--courier-queue-max-messages-per-poster",
 		} {
 			// Zero is unlimited and is taken; a negative one is refused with
 			// the sentence that says what zero means.
@@ -369,16 +371,19 @@ func TestLimitCourierSettingRanges(t *testing.T) {
 				t.Errorf("%s MinInt64 was taken", f)
 			}
 		}
-		// The one with a ceiling, at it and one over.
-		if _, err := resolve(t, "", "--courier-queue-max-messages", strconv.Itoa(maxQueueMessagesCeiling)); err != nil {
-			t.Errorf("queue_max_messages at its ceiling: %v", err)
-		}
-		_, err := resolve(t, "", "--courier-queue-max-messages", strconv.Itoa(maxQueueMessagesCeiling+1))
-		if err == nil || !strings.Contains(err.Error(), "at most") {
-			t.Errorf("queue_max_messages one over its ceiling: %v; want the refusal", err)
-		}
-		if _, err := resolve(t, "", "--courier-queue-max-messages", strconv.FormatInt(math.MaxInt64, 10)); err == nil {
-			t.Errorf("queue_max_messages MaxInt64 was taken")
+		// The two with a ceiling, at it and one over. They are a count of
+		// rows and of files the relay holds, which is why each has one.
+		for _, f := range []string{"--courier-queue-max-messages", "--courier-queue-max-messages-per-poster"} {
+			if _, err := resolve(t, "", f, strconv.Itoa(maxQueueMessagesCeiling)); err != nil {
+				t.Errorf("%s at its ceiling: %v", f, err)
+			}
+			_, err := resolve(t, "", f, strconv.Itoa(maxQueueMessagesCeiling+1))
+			if err == nil || !strings.Contains(err.Error(), "at most") {
+				t.Errorf("%s one over its ceiling: %v; want the refusal", f, err)
+			}
+			if _, err := resolve(t, "", f, strconv.FormatInt(math.MaxInt64, 10)); err == nil {
+				t.Errorf("%s MaxInt64 was taken", f)
+			}
 		}
 	})
 }
@@ -396,7 +401,8 @@ func TestPrintedConfigCarriesTheCourierNumbers(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, key := range []string{"max_hops", "forward_ttl", "queue_max_bytes", "queue_max_messages",
-		"queue_max_bytes_per_poster", "posts_per_minute", "post_bytes_per_hour", "carried_max_rows"} {
+		"queue_max_messages_per_poster", "queue_max_bytes_per_poster", "posts_per_minute",
+		"post_bytes_per_hour", "carried_max_rows"} {
 		if !strings.Contains(out.String(), key) {
 			t.Errorf("--print-config output is missing %q", key)
 		}
@@ -409,5 +415,40 @@ func TestPrintedConfigCarriesTheCourierNumbers(t *testing.T) {
 	// print it: the printed configuration is their file back again.
 	if back.Courier.MaxHops != 3 || back.Courier.ForwardTTL != "5h" || back.Courier.CarriedMaxRows != 7 {
 		t.Fatalf("the courier's numbers did not round trip: %+v", back.Courier)
+	}
+}
+
+// TestOpenRegistrationBesideACourierHomeIsRefused: a pair that cancels a
+// guarantee is refused at the start and not written down somewhere hopeful.
+//
+// The forward route is open to every identity with a mailbox on this relay,
+// because forwarding is what this relay's own users do. With registration
+// open, anybody can become one of those users in a single request and post
+// through this relay to its neighbours, arriving there under this relay's own
+// courier identity. Nothing of it is delivered — the recipient's allow list
+// runs at the relay that delivers — but the neighbour's queue and the budget
+// they gave this relay are spent, and their only remedy is to stop accepting
+// from an operator who did nothing wrong.
+func TestOpenRegistrationBesideACourierHomeIsRefused(t *testing.T) {
+	home := courierHome(t, "bar", "https://bar.example")
+	_, err := resolve(t, "", "--courier-home", home)
+	if err == nil {
+		t.Fatal("open registration beside a courier home started")
+	}
+	for _, want := range []string{"registration is open", "courier.home",
+		"under this relay's own courier", "token or closed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("%v does not say %q", err, want)
+		}
+	}
+	// Either repair is taken.
+	if _, err := resolve(t, "", "--registration", "closed", "--courier-home", home); err != nil {
+		t.Errorf("registration closed beside a home: %v", err)
+	}
+	// And accepting from neighbours under open registration is not the
+	// pair: what arrives that way is bounded by the couriers file, and
+	// nothing leaves this relay on a stranger's account.
+	if _, err := resolve(t, "", "--courier-file", couriersFile(t, "bar")); err != nil {
+		t.Errorf("open registration beside a couriers file: %v; that is not the pair", err)
 	}
 }

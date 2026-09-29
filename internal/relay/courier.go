@@ -340,6 +340,29 @@ func (c *Courier) Accepts(fp string) (string, bool) {
 	return c.couriers.lookup(fp)
 }
 
+// isCourierMailbox reports whether a mailbox on this relay belongs to a
+// neighbouring relay's courier — one of the identities this relay's own
+// couriers file admits.
+//
+// It is the couriers file and not the courier home that answers, and that is
+// the whole of why this works: the mailbox that needs protecting is always at
+// the relay whose file names its owner. A courier enrols at its neighbour so
+// that its relay can forward through it, and those forwards are accepted only
+// where that neighbour's file lists it, so a courier's mailbox and the line
+// admitting it are always at the same relay. A relay that does not list an
+// identity has no business calling that identity's mailbox anything but
+// ordinary, and does not.
+//
+// The set is the live one, so a mailbox becomes a courier's the moment an
+// operator adds the line, without a restart.
+func (s *Server) isCourierMailbox(fp string) bool {
+	if s.courier == nil {
+		return false
+	}
+	_, ok := s.courier.Accepts(fp)
+	return ok
+}
+
 // Identity is the courier's own identity, what this relay posts to its
 // neighbours as.
 func (c *Courier) Identity() *identity.Identity {

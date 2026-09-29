@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/envelope"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 // The queue a relay keeps for mail it has taken and has still to hand to a
@@ -27,15 +29,18 @@ import (
 // path writes a row and a file in one transaction and answers at once, and
 // a worker per neighbour empties the queue afterwards.
 
-// OutWaiting is a row the neighbour has not taken yet, which is every row
-// this commit writes.
-//
-// The column's other two words, for a row a neighbour has taken and one that
-// will not be delivered, arrive with the worker that writes them: the table's
-// comment in store.go describes all three, because the table holds all three
-// from the moment it exists, but a constant nothing writes is a name a reader
-// has to guess the use of.
-const OutWaiting = "waiting"
+// The three states an outbound row is in.
+const (
+	// OutWaiting is a row the neighbour has not taken yet.
+	OutWaiting = "waiting"
+	// OutHanded is a row the neighbour took. Its file is gone and its
+	// recipient is blanked; what is left names the poster, the neighbour
+	// and the address, and waits for an undeliverable that may never come.
+	OutHanded = "handed"
+	// OutFinal is a row that will not be delivered, with the code and the
+	// sentence saying why, kept a day so the poster can read it.
+	OutFinal = "final"
+)
 
 // carriedDomain separates this hash from every other hash this tree makes.
 //
@@ -247,10 +252,11 @@ func (s *Store) PurgeCarried(now time.Time) error {
 // CourierQuotas is what the queue and the carried table are bounded by.
 // Zero is unlimited for every field, as everywhere else.
 type CourierQuotas struct {
-	QueueMaxBytes          int64
-	QueueMaxMessages       int64
-	QueueMaxBytesPerPoster int64
-	CarriedMaxRows         int64
+	QueueMaxBytes             int64
+	QueueMaxMessages          int64
+	QueueMaxMessagesPerPoster int64
+	QueueMaxBytesPerPoster    int64
+	CarriedMaxRows            int64
 }
 
 // roomInQueue answers whether there is room for one more row, by
@@ -258,14 +264,17 @@ type CourierQuotas struct {
 // roomFor's reason: two callers with two arithmetics are a quota with a gap
 // between them, and this is the one place the question is asked.
 //
-// The relay-wide bound is over every row; the per-poster bounds are over the
-// rows this poster has waiting. A courier's rows are counted against the
-// relay's bound alone: a courier carries many people's mail, and holding it
-// to one poster's share would refuse a neighbour's whole queue for being
-// busy, which the relay-wide bound and the couriers file already answer.
+// The relay-wide bounds are over every row waiting; the per-poster bounds
+// are over the rows this poster has waiting. A courier is held to the
+// relay-wide pair and to neither per-poster one: a courier carries many
+// people's mail, so one poster's share would refuse a busy neighbour's whole
+// queue, which the couriers file is the answer to instead. It is held to the
+// relay-wide rows as well as the bytes because bytes do not bound rows —
+// ten million hundred-byte envelopes are a gigabyte and ten million files.
 func roomInQueue(tx *sql.Tx, posterFP string, size int64, q CourierQuotas) error {
-	var allBytes int64
-	if err := tx.QueryRow(`SELECT outbound_bytes FROM relay_stats WHERE id = 1`).Scan(&allBytes); err != nil {
+	var allMessages, allBytes int64
+	if err := tx.QueryRow(`SELECT outbound_messages, outbound_bytes FROM relay_stats WHERE id = 1`).
+		Scan(&allMessages, &allBytes); err != nil {
 		return err
 	}
 	if size > math.MaxInt64-allBytes {
@@ -274,14 +283,26 @@ func roomInQueue(tx *sql.Tx, posterFP string, size int64, q CourierQuotas) error
 	if q.QueueMaxBytes > 0 && size > q.QueueMaxBytes-allBytes {
 		return ErrQueueFull
 	}
-	if q.QueueMaxMessages > 0 || q.QueueMaxBytesPerPoster > 0 {
+	// The relay-wide row bound, which is the one a courier is held to as
+	// well: bytes do not bound rows, and rows are files. The guard above it
+	// is for the same reason the bytes have one — a counter that has been
+	// corrupted, or has run up against the type, must refuse rather than
+	// wrap into room — and it stands whether or not a bound is set, since
+	// unlimited is a supported setting and is where nothing else would.
+	if allMessages == math.MaxInt64 {
+		return ErrQueueFull
+	}
+	if q.QueueMaxMessages > 0 && allMessages >= q.QueueMaxMessages {
+		return ErrQueueFull
+	}
+	if q.QueueMaxMessagesPerPoster > 0 || q.QueueMaxBytesPerPoster > 0 {
 		var mine, mineBytes int64
 		if err := tx.QueryRow(
 			`SELECT COUNT(*), COALESCE(SUM(size), 0) FROM outbound WHERE poster_fp = ? AND state = ?`,
 			posterFP, OutWaiting).Scan(&mine, &mineBytes); err != nil {
 			return err
 		}
-		if q.QueueMaxMessages > 0 && mine >= q.QueueMaxMessages {
+		if q.QueueMaxMessagesPerPoster > 0 && mine >= q.QueueMaxMessagesPerPoster {
 			return ErrQueueFull
 		}
 		if q.QueueMaxBytesPerPoster > 0 && size > q.QueueMaxBytesPerPoster-mineBytes {
@@ -329,8 +350,13 @@ func (s *Store) OutboundBody(id int64) ([]byte, error) {
 // never the caller's to answer with: the row is committed and the envelope
 // taken, so there is nobody to answer it to, and it is noted for the
 // operator. The startup sweep does not reach this directory — it walks the
-// mailboxes — so a file left here by a failed unlink is an orphan until the
-// queue's own purge, which arrives with the worker that ends rows.
+// mailboxes — so a file left here by a failed unlink waits for the purge,
+// which takes the file again as it takes the row: a handed row's file is
+// asked for twice, once when the neighbour took it and once when the row's
+// window runs out, and a disk that refused the first unlink will usually
+// have been mended by the second. A file that survives both is an orphan
+// nothing looks for, which is a fault of this relay's own storage twice
+// over and is in the operator's log both times.
 func (s *Store) removeOutbound(id int64) error {
 	err := os.Remove(s.outboundPath(id))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -373,4 +399,243 @@ func SplitPath(joined string) []string {
 		return nil
 	}
 	return strings.Split(joined, "!")
+}
+
+// NextOutbound is the oldest row waiting for a neighbour whose next attempt
+// is due, or nil when there is none.
+func (s *Store) NextOutbound(neighbour string, now time.Time) (*Outbound, error) {
+	row := s.db.QueryRow(`SELECT id, poster_fp, neighbour, path, via, to_fp, hash, size, kind,
+		received, state, tries, last_try, next_try, gives_up, their_id, code, said
+		FROM outbound WHERE neighbour = ? AND state = ? AND next_try <= ?
+		ORDER BY id LIMIT 1`, neighbour, OutWaiting, now.Unix())
+	o, err := scanOutbound(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return o, err
+}
+
+// scanOutbound reads one row.
+func scanOutbound(row *sql.Row) (*Outbound, error) {
+	var o Outbound
+	var received, lastTry, nextTry, givesUp int64
+	if err := row.Scan(&o.ID, &o.PosterFP, &o.Neighbour, &o.Path, &o.Via, &o.ToFP, &o.Hash,
+		&o.Size, &o.Kind, &received, &o.State, &o.Tries, &lastTry, &nextTry, &givesUp,
+		&o.TheirID, &o.Code, &o.Said); err != nil {
+		return nil, err
+	}
+	o.Received = time.Unix(received, 0).UTC()
+	o.LastTry = time.Unix(lastTry, 0).UTC()
+	o.NextTry = time.Unix(nextTry, 0).UTC()
+	o.GivesUp = time.Unix(givesUp, 0).UTC()
+	return &o, nil
+}
+
+// Handed records that the neighbour took the envelope: the file goes and the
+// recipient is blanked at once, and what is left names the poster and the
+// neighbour until the carried window is out.
+//
+// theirID is the id the neighbour answered with, which is the one number
+// both sides hold and what an undeliverable coming back will name. A 409
+// from a neighbour carries one only when this relay is the poster of the row
+// it already holds, so zero here is honest and means no report can be
+// matched to this row.
+func (s *Store) Handed(id, theirID int64, now time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var size int64
+	var state string
+	if err := tx.QueryRow(`SELECT size, state FROM outbound WHERE id = ?`, id).Scan(&size, &state); err != nil {
+		return err
+	}
+	if state != OutWaiting {
+		return fmt.Errorf("relay: outbound %d is %s, not %s", id, state, OutWaiting)
+	}
+	if _, err := tx.Exec(`UPDATE outbound SET state = ?, to_fp = '', their_id = ?, last_try = ?, tries = tries + 1
+		WHERE id = ?`, OutHanded, theirID, now.Unix(), id); err != nil {
+		return err
+	}
+	if err := adjustQueueCounters(tx, -1, -size); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	// After the commit, as Put removes a replaced knock's body: the row is
+	// committed and the envelope handed over, so a failure here is the
+	// operator's line and not an answer to anybody.
+	s.removeOutbound(id)
+	return nil
+}
+
+// Failed records that this row will not be delivered, with the code and the
+// sentence a person reads. The file goes and the recipient is blanked as at
+// a handing, since neither is any use now.
+func (s *Store) Failed(id int64, code, said string, now time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var size int64
+	var state string
+	if err := tx.QueryRow(`SELECT size, state FROM outbound WHERE id = ?`, id).Scan(&size, &state); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE outbound SET state = ?, to_fp = '', code = ?, said = ?, last_try = ?,
+		tries = tries + 1 WHERE id = ?`, OutFinal, code, said, now.Unix(), id); err != nil {
+		return err
+	}
+	// A row that was waiting is still charged to the queue; one that was
+	// already handed was charged off when it was handed.
+	if state == OutWaiting {
+		if err := adjustQueueCounters(tx, -1, -size); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.removeOutbound(id)
+	return nil
+}
+
+// Retry puts a row back for another attempt at next, counting the one that
+// just failed.
+func (s *Store) Retry(id int64, now, next time.Time) error {
+	_, err := s.db.Exec(`UPDATE outbound SET tries = tries + 1, last_try = ?, next_try = ? WHERE id = ?`,
+		now.Unix(), next.Unix(), id)
+	return err
+}
+
+// PurgeOutbound removes the rows whose time is up: a final row a day after
+// it failed, a handed row when the carried window it was waiting through has
+// passed. It returns how many went.
+//
+// A waiting row is never purged here: its own gives_up is what ends it, and
+// that is the worker's to notice, so that the poster is told rather than
+// finding their mail gone.
+//
+// This runs inside somebody's request, every hundredth, on the one
+// connection the store has, over a table whose size is a neighbour's
+// traffic: so it reads only rows that could be due and writes once. Only
+// could-be-due, by asking the index for the rows whose last attempt is
+// older than the shortest retention either rule allows — a row newer than
+// that is due under neither, and reading it to decide so is the scan this
+// purge used to be. Once, because a delete per row was a transaction per
+// row, each with its own fsync, where what is wanted is that the rows go
+// together or not at all. handedFor must not answer less for a longer path
+// than for a shorter one, which is what makes the cutoff sound;
+// CourierLimits.CarriedWindow, its only caller, is one hop's time per hop.
+func (s *Store) PurgeOutbound(now time.Time, finalFor time.Duration, handedFor func(pathLeft int) time.Duration) (int, error) {
+	shortest := min(finalFor, handedFor(0))
+	if shortest < 0 {
+		shortest = 0
+	}
+	rows, err := s.db.Query(`SELECT id, state, path, last_try FROM outbound
+		WHERE state IN (?, ?) AND last_try <= ?`,
+		OutFinal, OutHanded, now.Add(-shortest).Unix())
+	if err != nil {
+		return 0, err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id, lastTry int64
+		var state, path string
+		if err := rows.Scan(&id, &state, &path, &lastTry); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		// A handed row waits out the window its own envelope could still
+		// be alive in, which is the window its hash was written with and
+		// depends on how far it had left to go; the shortest window would
+		// take a two-hop row while the hop after it was still trying.
+		keep := finalFor
+		if state == OutHanded {
+			keep = handedFor(len(SplitPath(path)))
+		}
+		if time.Unix(lastTry, 0).Add(keep).After(now) {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	for _, id := range ids {
+		if _, err := tx.Exec(`DELETE FROM outbound WHERE id = ?`, id); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	// After the commit, as a handing takes its file after the commit: the
+	// rows are gone, so a failure here is the operator's line and nobody's
+	// answer. Most of these files went when the row ended; this is the
+	// second ask, for the one whose unlink failed then.
+	for _, id := range ids {
+		s.removeOutbound(id)
+	}
+	return len(ids), nil
+}
+
+// GiveUp fails every row whose gives_up has passed, with the sentence that
+// says how long the relay tried and since when the neighbour has been
+// unreachable. It answers how many it ended.
+//
+// It ends one row per transaction, since each is a file removed as well as
+// a row and a counter moved, and there can be a great many of them: a
+// worker only reaches this when its neighbour's backoff lifts, so one pass
+// can cover an hour of arrivals. That is why it takes a context. A relay
+// stopping must not wait out the whole of it — the stop is what runs before
+// the listener's own grace period, so an unbounded wait here is a relay
+// that is killed rather than stopped — and a row left for the next start is
+// a row still waiting, which is the state it was already in.
+func (s *Store) GiveUp(ctx context.Context, neighbour string, now time.Time, ttl time.Duration) (int, error) {
+	rows, err := s.db.Query(`SELECT id, received FROM outbound
+		WHERE neighbour = ? AND state = ? AND gives_up <= ?`, neighbour, OutWaiting, now.Unix())
+	if err != nil {
+		return 0, err
+	}
+	type dead struct {
+		id       int64
+		received int64
+	}
+	var ended []dead
+	for rows.Next() {
+		var d dead
+		if err := rows.Scan(&d.id, &d.received); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ended = append(ended, d)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	for i, d := range ended {
+		if ctx.Err() != nil {
+			return i, nil
+		}
+		said := fmt.Sprintf("gave up after %s; %s has been unreachable since %s",
+			ttl, neighbour, time.Unix(d.received, 0).UTC().Format(time.RFC3339))
+		if err := s.Failed(d.id, relayapi.CodeGaveUp, said, now); err != nil {
+			return i, err
+		}
+	}
+	return len(ended), nil
 }

@@ -108,6 +108,7 @@ cmd/auu-relay/config.go CourierConfig int PostsPerMinute int64 = 0 or >= 0 shown
 cmd/auu-relay/config.go CourierConfig int QueueMaxBytes int64 = 0 or >= 0 shown by TestLimitCourierSettingRanges
 cmd/auu-relay/config.go CourierConfig int QueueMaxBytesPerPoster int64 = 0 or >= 0 shown by TestLimitCourierSettingRanges
 cmd/auu-relay/config.go CourierConfig int QueueMaxMessages int64 = 0 or [1, 100000] shown by TestLimitCourierSettingRanges
+cmd/auu-relay/config.go CourierConfig int QueueMaxMessagesPerPoster int64 = 0 or [1, 100000] shown by TestLimitCourierSettingRanges
 cmd/auu-relay/config.go LimitsConfig int KnockMaxBytes int64 = 0 or [1, 1073741824] shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int KnocksPerHour int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MailboxMaxBytes int64 = >= 0 shown by TestLimitRelaySettings
@@ -131,6 +132,7 @@ cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierPostsPerMinute) = 
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierQueueMaxBytes) = 0 or >= 0 shown by TestLimitCourierSettingRanges
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierQueueMaxBytesPerPoster) = 0 or >= 0 shown by TestLimitCourierSettingRanges
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierQueueMaxMessages) = 0 or [1, 100000] shown by TestLimitCourierSettingRanges
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierQueueMaxMessagesPerPoster) = 0 or [1, 100000] shown by TestLimitCourierSettingRanges
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.knockMaxBytes) = 0 or [1, 1073741824] shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.knocksPerHour) = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.limitPostBytes) = >= 0 shown by TestLimitRelaySettings
@@ -316,6 +318,8 @@ internal/relay/streamapi.go checkStreamShape int binary.BigEndian.Uint32(header[
 internal/relay/streamapi.go checkStreamShape string header[stream.EncSize:] = local: header is HeaderSize bytes by make and ReadFull
 internal/relay/watch.go (*Server).watchParams int strconv.ParseInt(issued) = open shown by TestLimitWatchIssued
 internal/relay/watch.go (*Server).watchParams int time.ParseDuration(raw) = >= 0s shown by TestLimitWaitParameter
+internal/relay/worker.go said string message[:runeBoundary(message, relayapi.MaxSaid)] = local: runeBoundary answers a rune boundary at or below relayapi.MaxSaid, which len(message) is over by the check before
+internal/relay/worker.go said string s[:runeBoundary(s, relayapi.MaxSaid)] = local: runeBoundary answers a rune boundary at or below relayapi.MaxSaid, which len(s) is over by the check before
 internal/relayapi/relayapi.go AdminStatusResponse int Administrators int = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go AdminStatusResponse int Blocks int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go AdminStatusResponse int CertLifetimeSecs int64 = [0, 3153600000] shown by TestLimitRelayAnswerIntegers

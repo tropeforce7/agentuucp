@@ -75,11 +75,18 @@ neighbour, and the address: the relays the message came through and the
 ones it has still to go to, by the names each relay knows them by. That
 last is relay-granularity routing — not who wrote to whom, since the
 recipient is gone and the sender was never there, but which relays
-carried it — and it stays as long as the row does. In
-an ordinary hour that is seconds. When a neighbour is unreachable it is as
-long as the relay keeps trying, which `courier.forward_ttl` sets and which
-is three days by default. A relay with no `courier` block — every relay
-until its operator peers one — holds none of this. Those three rows are
+carried it — and it stays as long as the row does, which outlasts the
+envelope. In an ordinary hour the file and the recipient go within seconds,
+because a worker hands the envelope over as soon as one arrives; what is
+left goes when the window in which something could still come back about
+that message has passed, which is `courier.forward_ttl` for each hop the
+message had left to go, and so three days at the defaults for the last hop
+and longer for a message with further to travel. When a neighbour is
+unreachable the whole row waits as long as the relay keeps trying, which
+`courier.forward_ttl` also sets; after that the row is failed, the poster
+can read what happened to their mail for a day, and then it goes. A relay
+with no `courier` block — every relay until its operator peers one — holds
+none of this. Those three rows are
 the whole of what the relay writes down about who is sending something.
 
 While an upload's row lives, the reservation counts against the recipient's quotas

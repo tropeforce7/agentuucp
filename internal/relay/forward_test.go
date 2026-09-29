@@ -26,14 +26,19 @@ import (
 func peered(t *testing.T, neighbours []string, accept []*identity.Identity, limits *CourierLimits) *harness {
 	t.Helper()
 	urls := map[string]string{}
-	for _, n := range neighbours {
-		urls[n] = "https://" + n + ".example"
+	for i, n := range neighbours {
+		// A port nothing listens on, so a worker that gets a turn before a
+		// test quiets it is refused at once rather than asking the world's
+		// resolvers about a name in the example domain. One port each,
+		// since a home refuses to know two relays at one URL.
+		urls[n] = fmt.Sprintf("http://127.0.0.1:%d", i+1)
 	}
 	root := courierHome(t, urls)
-	file := ""
-	if len(accept) > 0 {
-		file = couriersFile(t, accept...)
-	}
+	// Always a file, even with nobody in it: a relay that accepts from
+	// nobody yet is a relay with an empty couriers file, and a test that
+	// wants to add a neighbour later needs the file the set is watching to
+	// exist from the start.
+	file := couriersFile(t, accept...)
 	c, err := NewCourier(CourierConfig{
 		Home: root, AuthorizedFile: file, PublicURL: "https://mine.example",
 	}, slogDiscard())
@@ -44,7 +49,23 @@ func peered(t *testing.T, neighbours []string, accept []*identity.Identity, limi
 	if limits != nil {
 		cl = *limits
 	}
-	return newHarness(t, Config{Courier: c, CourierLimits: cl, Limits: DefaultLimits()})
+	h := newHarness(t, Config{Courier: c, CourierLimits: cl, Limits: DefaultLimits()})
+	quiet(t, h)
+	return h
+}
+
+// quiet stops the workers a relay with neighbours starts for itself.
+//
+// Every test here is about what the relay accepts, stores or decides, and
+// drives a worker — where it wants one at all — from its own goroutine
+// through drain or attempt, which is deterministic and needs no clock. Left
+// running, the workers would be dialling names like bar.example throughout,
+// which is slow, noisy in the log a test then reads, and a race against any
+// test that hands the set its own dialling.
+func quiet(t *testing.T, h *harness) {
+	t.Helper()
+	h.server.workers.Stop()
+	h.server.workers = nil
 }
 
 // sealedFor is an envelope addressed to a fingerprint, with ciphertext that
@@ -502,7 +523,7 @@ func TestTheCarriedCeilingRefusesRatherThanForgetting(t *testing.T) {
 func TestTheQueueIsBoundedForEveryoneAndForEachPoster(t *testing.T) {
 	t.Run("one poster's messages", func(t *testing.T) {
 		limits := DefaultCourierLimits()
-		limits.QueueMaxMessages = 2
+		limits.QueueMaxMessagesPerPoster = 2
 		h := peered(t, []string{"bar"}, nil, &limits)
 		alice, bob := h.user(t, "alice"), h.user(t, "bob")
 		to := h.fpOf(t, "carol")
@@ -540,6 +561,7 @@ func TestTheQueueIsBoundedForEveryoneAndForEachPoster(t *testing.T) {
 		h2 := serveStore(t, h.store, Config{
 			Courier: h.server.courier, CourierLimits: limits, Limits: DefaultLimits(),
 		})
+		quiet(t, h2)
 		status, _, body := h2.forward(user, request(sealedFor(to, "ct2"), []string{"bar"}, nil))
 		if status != 507 {
 			t.Fatalf("at the relay's bound: status %d: %s", status, body)
@@ -552,12 +574,12 @@ func TestTheQueueIsBoundedForEveryoneAndForEachPoster(t *testing.T) {
 
 // TestACouriersQueueIsTheRelaysBoundAlone: a courier carries many people's
 // mail, so holding it to one poster's share would refuse a neighbour's whole
-// queue for being busy. The relay-wide bound and the couriers file are what
-// answer that instead.
+// queue for being busy. The relay-wide bounds and the couriers file are what
+// answer that instead — and both of them, which the test below is about.
 func TestACouriersQueueIsTheRelaysBoundAlone(t *testing.T) {
 	courier := neighbourID(t, "alpha")
 	limits := DefaultCourierLimits()
-	limits.QueueMaxMessages = 1
+	limits.QueueMaxMessagesPerPoster = 1
 	h := peered(t, []string{"bar"}, []*identity.Identity{courier}, &limits)
 	h.enroll(courier)
 	to := h.fpOf(t, "bob")
@@ -669,6 +691,7 @@ func TestTheQueuesCountersAreReconciledAtEveryOpen(t *testing.T) {
 		Courier: mustCourier(t, []string{"bar"}, nil), CourierLimits: DefaultCourierLimits(),
 		Limits: DefaultLimits(),
 	})
+	quiet(t, h)
 	user := h.user(t, "alice")
 	req := request(sealedFor(h.fpOf(t, "bob"), "ct"), []string{"bar"}, nil)
 	if status, _, body := h.forward(user, req); status != 201 {
@@ -787,8 +810,12 @@ func TestLimitTheCarriedWindowIsTheEnvelopesRemainingLife(t *testing.T) {
 func mustCourier(t *testing.T, neighbours []string, accept []*identity.Identity) *Courier {
 	t.Helper()
 	urls := map[string]string{}
-	for _, n := range neighbours {
-		urls[n] = "https://" + n + ".example"
+	for i, n := range neighbours {
+		// A port nothing listens on, so a worker that gets a turn before a
+		// test quiets it is refused at once rather than asking the world's
+		// resolvers about a name in the example domain. One port each,
+		// since a home refuses to know two relays at one URL.
+		urls[n] = fmt.Sprintf("http://127.0.0.1:%d", i+1)
 	}
 	file := ""
 	if len(accept) > 0 {
@@ -1007,6 +1034,7 @@ func TestAPostersBytesAreBoundedToo(t *testing.T) {
 	h2 := serveStore(t, h.store, Config{
 		Courier: h.server.courier, CourierLimits: limits, Limits: DefaultLimits(),
 	})
+	quiet(t, h2)
 	status, _, body := h2.forward(user, request(sealedFor(to, "ct2"), []string{"bar"}, nil))
 	if status != 507 {
 		t.Fatalf("at the poster's byte bound: status %d: %s", status, body)
@@ -1054,6 +1082,7 @@ func TestTheQueuesArithmeticCannotWrap(t *testing.T) {
 	limits.QueueMaxBytes = 0
 	limits.QueueMaxBytesPerPoster = 0
 	limits.QueueMaxMessages = 0
+	limits.QueueMaxMessagesPerPoster = 0
 	h := peered(t, []string{"bar"}, nil, &limits)
 	user := h.user(t, "alice")
 	// A counter close to the maximum, as a corrupted or edited database
@@ -1181,5 +1210,49 @@ func TestTheCarriedPurgeRuns(t *testing.T) {
 	}
 	if n := h.carriedRows(t); n != 0 {
 		t.Errorf("%d hashes after the window and a hundred requests; the purge is written and not run", n)
+	}
+}
+
+// TestTheRelayWideRowBoundHoldsACourier: a courier is exempt from the two
+// per-poster bounds and from neither relay-wide one, and the rows are the one
+// that matters for a courier.
+//
+// Bytes do not bound rows. The smallest envelope this relay takes is about a
+// hundred bytes, so a gigabyte of them — the relay-wide byte default — is ten
+// million rows and ten million files, put there by one neighbour carrying for
+// a relay that is down. A relay that fills up should say so while it still
+// has somewhere to write the saying.
+func TestTheRelayWideRowBoundHoldsACourier(t *testing.T) {
+	courier := neighbourID(t, "alpha")
+	limits := DefaultCourierLimits()
+	limits.QueueMaxMessages = 2
+	// The per-poster bounds off, so what refuses the third is the
+	// relay-wide count and nothing else.
+	limits.QueueMaxMessagesPerPoster = 0
+	limits.QueueMaxBytesPerPoster = 0
+	h := peered(t, []string{"bar"}, []*identity.Identity{courier}, &limits)
+	h.enroll(courier)
+	to := h.fpOf(t, "bob")
+
+	for i := range 2 {
+		status, _, body := h.forward(courier, request(sealedFor(to, fmt.Sprintf("ct%d", i)), []string{"bar"}, nil))
+		if status != 201 {
+			t.Fatalf("%d: status %d: %s", i, status, body)
+		}
+	}
+	status, _, body := h.forward(courier, request(sealedFor(to, "one too many"), []string{"bar"}, nil))
+	if status != 507 {
+		t.Fatalf("at the relay's row bound: status %d: %s; a courier is held to it", status, body)
+	}
+	if got := errorText(t, body); got != relayapi.MsgQueueFull {
+		t.Errorf("%q; want exactly %q, which is what a client matches", got, relayapi.MsgQueueFull)
+	}
+	if n := h.outboundRows(t); n != 2 {
+		t.Errorf("%d rows, want the 2 the bound allows", n)
+	}
+	// A user meets the same bound: it is the relay's, not a courier's.
+	user := h.user(t, "alice")
+	if status, _, _ := h.forward(user, request(sealedFor(to, "u0"), []string{"bar"}, nil)); status != 507 {
+		t.Errorf("a user at the relay's row bound: status %d, want 507", status)
 	}
 }

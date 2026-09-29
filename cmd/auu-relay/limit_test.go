@@ -293,7 +293,7 @@ func TestLimitConfigPathsResolveAgainstTheirFile(t *testing.T) {
 	elsewhere := t.TempDir()
 	t.Chdir(elsewhere)
 	file := filepath.Join(fileDir, "relay.json")
-	if err := os.WriteFile(file, []byte(`{"tls": {"mode": "off"}, "db": "relay.db", "messages_dir": "bodies", "admin": {"authorized_file": "admins"}, "courier": {"home": "courier", "authorized_file": "couriers"}}`), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(`{"tls": {"mode": "off"}, "db": "relay.db", "messages_dir": "bodies", "admin": {"authorized_file": "admins"}, "courier": {"home": "courier", "authorized_file": "couriers"}, "registration": "closed"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// The administrators' file is looked for where the setting resolves

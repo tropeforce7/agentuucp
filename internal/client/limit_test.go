@@ -400,3 +400,33 @@ func TestLimitAnswerShapesOneShort(t *testing.T) {
 		}
 	}
 }
+
+// TestLimitAConflictsForwardIDIsHeldToItsShape: the id a relay sends with a
+// 409 on the forward route comes from a relay and goes into a row, so it is
+// held to the shape every id from a relay is held to. A negative one, which
+// no relay of this tree sends, leaves the field at zero — which already means
+// "no row of this caller's to name" — rather than reaching a database as a
+// number nothing would ever match.
+func TestLimitAConflictsForwardIDIsHeldToItsShape(t *testing.T) {
+	for _, tc := range []struct {
+		body string
+		want int64
+	}{
+		{`{"id":7}`, 7},
+		{`{"id":0}`, 0},
+		{`{"id":-1}`, 0},
+		{`{"id":-9223372036854775808}`, 0},
+		{`{}`, 0},
+		{`not json`, 0},
+	} {
+		resp := &http.Response{StatusCode: http.StatusConflict}
+		if got := httpError(resp, []byte(tc.body)).ForwardID; got != tc.want {
+			t.Errorf("%s: ForwardID %d, want %d", tc.body, got, tc.want)
+		}
+	}
+	// And no other answer carries one, whatever its body says.
+	resp := &http.Response{StatusCode: http.StatusBadRequest}
+	if got := httpError(resp, []byte(`{"id":7}`)).ForwardID; got != 0 {
+		t.Errorf("a 400 carried ForwardID %d, want 0", got)
+	}
+}

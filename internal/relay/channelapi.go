@@ -122,7 +122,7 @@ func (s *Server) handleGetChannels(w http.ResponseWriter, r *http.Request, body 
 		return
 	}
 	if !allowed {
-		s.fail(w, http.StatusForbidden, "sender is not on the recipient's allow list")
+		s.fail(w, http.StatusForbidden, msgNotAllowed)
 		return
 	}
 	doc, sig, found, err := s.store.Directory(fp)

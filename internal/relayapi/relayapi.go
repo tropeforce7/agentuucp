@@ -845,6 +845,38 @@ const (
 	MsgCarriedFull = "this relay is already carrying as many messages as carried_max_rows allows"
 )
 
+// The codes a failed outbound row carries, which say what kind of failure it
+// was where the sentence beside them says whose and why.
+//
+// This is not the whole set. An undeliverable reported back from a later hop
+// carries a code of its own out of a closed set — no mailbox, blocked,
+// refused by an allow list, no such channel, full, too large, no neighbour,
+// already carried — and those arrive with the route that reports them, since
+// nothing here reads them yet. These two are what a relay writes about its
+// own attempts to hand an envelope over.
+const (
+	// CodeGaveUp is forward_ttl having run out with the neighbour still
+	// unreachable. The sentence says how long the relay tried and since
+	// when.
+	CodeGaveUp = "gave-up"
+	// CodeRefused is the neighbour answering with something final — a
+	// request it will not take, an address it cannot route — with its own
+	// sentence kept beside it, so the poster reads which hop refused and
+	// what it said.
+	CodeRefused = "refused"
+)
+
+// MaxSaid caps the sentence a relay keeps about why a message it was
+// carrying could not be delivered.
+//
+// The text is another relay's, and what a relay will read from another is
+// bounded by the response hold and nothing smaller, so without this a
+// neighbour would choose how large this relay's database and log grew: one
+// sentence per message handed over, kept a day. A few hundred bytes is more
+// than any refusal in this tree, and what is cut is cut on a rune boundary
+// with an ellipsis, since it is read by a person.
+const MaxSaid = 512
+
 // MsgAlreadyCarried is the 409 for an envelope this relay has already taken.
 //
 // It is the answer to a retry after a lost answer and to a loop arriving

@@ -113,8 +113,8 @@ func NewMachineKey(s *store.Store, id *identity.Identity, r *store.Relay, params
 // RelayParams asks the relay which parameter set it wants a client key to
 // have. The relay refuses a key of any other set, so asking first is what
 // saves the person a failed enrolment with a message about key sizes.
-func RelayParams(c *client.Client) (mldsa.Parameters, error) {
-	n, err := c.MLDSA(context.Background())
+func RelayParams(ctx context.Context, c *client.Client) (mldsa.Parameters, error) {
+	n, err := c.MLDSA(ctx)
 	if err != nil {
 		return mldsa.Parameters{}, err
 	}
@@ -185,12 +185,12 @@ func SaveIssued(s *store.Store, r *store.Relay, label string, key *MachineKey, c
 // RenewCert asks for a fresh certificate and stores it, replacing the one this
 // machine holds. The connection is dropped afterwards so the next request uses
 // the new one.
-func RenewCert(s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay) (*store.CertRecord, error) {
+func RenewCert(ctx context.Context, s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay) (*store.CertRecord, error) {
 	old, err := s.CertFor(r)
 	if err != nil {
 		return nil, err
 	}
-	params, err := RelayParams(c)
+	params, err := RelayParams(ctx, c)
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +198,7 @@ func RenewCert(s *store.Store, id *identity.Identity, c *client.Client, r *store
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.RenewCert(context.Background(), csr)
+	resp, err := c.RenewCert(ctx, csr)
 	if err != nil {
 		return nil, err
 	}
@@ -216,12 +216,12 @@ func RenewCert(s *store.Store, id *identity.Identity, c *client.Client, r *store
 // A failure here is a warning, never a failure of the command: the current
 // certificate is still good for weeks, and a relay that is briefly unreachable
 // must not stop somebody reading their mail.
-func (d Dialer) RenewIfExpiring(s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay, now time.Time) bool {
+func (d Dialer) RenewIfExpiring(ctx context.Context, s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay, now time.Time) bool {
 	rec, err := s.CertFor(r)
 	if err != nil || !rec.Expiring(now) {
 		return false
 	}
-	if _, err := RenewCert(s, id, c, r); err != nil {
+	if _, err := RenewCert(ctx, s, id, c, r); err != nil {
 		// A renewal refused because the relay's own certificate has run
 		// out is not this machine's problem, and the command that follows
 		// is about to say whose it is; a warning here would put the same
@@ -241,7 +241,13 @@ func (d Dialer) RenewIfExpiring(s *store.Store, id *identity.Identity, c *client
 // A certificate close to its expiry is renewed first, so a machine in regular
 // use never reaches the day it stops working. The renewal is best-effort: see
 // RenewIfExpiring.
-func (d Dialer) Dial(s *store.Store, id *identity.Identity, r *store.Relay) (*client.Client, error) {
+//
+// The context is the caller's whole patience for the renewal, which is the
+// only part of this that talks to the relay. It matters for a caller that is
+// not a person waiting at a terminal: a relay stopping cancels it, and
+// without that a shutdown waits on a neighbour that has stopped answering
+// for as long as the transport's own timeout allows.
+func (d Dialer) Dial(ctx context.Context, s *store.Store, id *identity.Identity, r *store.Relay) (*client.Client, error) {
 	c, err := d.NoRenew(s, id, r)
 	if err != nil {
 		return nil, err
@@ -250,7 +256,7 @@ func (d Dialer) Dial(s *store.Store, id *identity.Identity, r *store.Relay) (*cl
 	// client that performed it is holding a revoked one. Rebuilt here, with
 	// the certificate that came back, or the very next request would be
 	// refused for the renewal having succeeded.
-	if d.RenewIfExpiring(s, id, c, r, time.Now()) {
+	if d.RenewIfExpiring(ctx, s, id, c, r, time.Now()) {
 		return d.NoRenew(s, id, r)
 	}
 	return c, nil

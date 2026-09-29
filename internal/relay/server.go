@@ -109,6 +109,10 @@ type Server struct {
 	// courier is nil on a relay that neither forwards nor accepts forwarded
 	// mail, which is every relay that has not been given a courier block.
 	courier *Courier
+	// workers empties the forwarding queue, one goroutine per neighbour.
+	// Nil on a relay that dials nobody, and every method on it takes a nil
+	// receiver, so no caller has to ask first.
+	workers *workers
 	started time.Time
 	// notify wakes a listing held open for a mailbox when a row arrives in
 	// it, or a directory it watches is replaced; holds counts the listings
@@ -121,7 +125,22 @@ type Server struct {
 
 // Refusals whose exact words two packages depend on.
 const (
-	msgBlocked           = "this identity is blocked on this relay"
+	msgBlocked = "this identity is blocked on this relay"
+	// msgNotAllowed is what a sender the recipient has not admitted is
+	// told, on every route that carries something into a mailbox.
+	//
+	// It is a constant rather than three spellings because a second thing
+	// now answers with it: a mailbox belonging to a neighbouring relay's
+	// courier refuses every sender, exactly as a mailbox whose allow list
+	// named nobody would, and the whole value of that is in the two being
+	// one sentence. Ruling 10 wanted a list that admits nobody; the signed
+	// format cannot spell one, since an empty list admits everybody and
+	// Validate refuses a list naming only the owner. So the relay keeps
+	// that list for a courier's mailbox itself, and says what it would
+	// say. Nothing on the wire tells the two apart, which is the point: a
+	// refusal of its own would make these routes the place a stranger
+	// holding a fingerprint could ask which relays this one peers with.
+	msgNotAllowed        = "sender is not on the recipient's allow list"
 	msgNotAccepting      = "this relay is not accepting new registrations"
 	msgTokenNotFromAdmin = "enrolment token was not issued by an administrator of this relay"
 	msgTokenWrongUse     = "enrolment token does not authorise this"
@@ -133,6 +152,11 @@ const (
 // yet to be made.
 const msgCertTokenForNew = "enrolment token is a certificate token, which adds a machine to an identity " +
 	"already on this relay, and this identity has no mailbox here: ask the administrator for a registration token"
+
+// finalRowRetention is how long a queue row that failed is kept, so that the
+// person who posted it can read what happened to their mail. A day, which is
+// long enough for somebody who reads their mail once a day.
+const finalRowRetention = 24 * time.Hour
 
 // expiredTokenRetention is how long a spent or expired token is kept so an
 // administrator can still see what happened.
@@ -184,6 +208,12 @@ func NewServer(store *Store, cfg Config) *Server {
 	if cfg.Limits.MaxInflight > 0 {
 		s.inflight = make(chan struct{}, cfg.Limits.MaxInflight)
 	}
+	// The workers start with the relay and stop with it, and are started
+	// after the server is built so a wake from a request can never reach a
+	// half-built one. The first thing each does is look at what the last run
+	// left waiting, so a relay that was stopped mid-outage picks the queue
+	// up where it was.
+	s.workers = startWorkers(store, cfg.Courier, cfg.CourierLimits, cfg.Logger, cfg.Now)
 
 	s.route("GET "+healthPath, s.handleHealth)
 	s.route("POST /v1/register", s.handleRegister)
@@ -236,6 +266,13 @@ func NewServer(store *Store, cfg Config) *Server {
 // minute would otherwise be waited on for a minute.
 func (s *Server) Close() {
 	s.notify.Close()
+	// The workers stop with the relay. An attempt in flight is abandoned
+	// rather than waited out — its context is this one — and the row stays
+	// waiting, which is safe because the neighbour may have taken the
+	// envelope: the retry after the restart is answered already-carried and
+	// read as handed. Stopping here rather than in the drain means a stop
+	// does not wait on a neighbour that is not answering.
+	s.workers.Stop()
 }
 
 // route registers a handler and records which route matched, so the access log
@@ -308,6 +345,18 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// cannot be shown to run at all.
 		if err := s.store.PurgeCarried(s.cfg.Now()); err != nil {
 			s.log.Warn("carried purge failed", "err", err)
+		}
+		// The queue's own dead rows: a failed one a day after it failed, so
+		// its poster has had a chance to read what happened, and a handed
+		// one once the window an undeliverable could arrive in has passed.
+		// A waiting row is never taken here — its own gives_up ends it, and
+		// that is the worker's, so that the poster is told rather than
+		// finding their mail gone.
+		if n, err := s.store.PurgeOutbound(s.cfg.Now(), finalRowRetention,
+			s.cfg.CourierLimits.CarriedWindow); err != nil {
+			s.log.Warn("outbound purge failed", "err", err)
+		} else if n > 0 {
+			s.log.Info("courier: queue rows purged", "rows", n)
 		}
 		// Long-dead tokens. Anything an administrator could still act on,
 		// including one that expired yesterday, stays.
@@ -1105,13 +1154,31 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 		s.fail(w, http.StatusForbidden, "recipient is blocked on this relay")
 		return
 	}
+	// A mailbox that belongs to a neighbouring relay's courier refuses
+	// every sender, as a mailbox whose allow list named nobody would. The
+	// courier enrolled here only so that its relay could forward through
+	// this one, and nothing on either side reads what arrives in it;
+	// without this it is an ordinary mailbox that any registered identity
+	// can fill, and the storage it spends is this relay's.
+	//
+	// The refusal is after the mailbox exists and is not blocked, and
+	// before the allow list, so nothing is stored or charged; and it is the
+	// allow list's own sentence, so nothing on the wire says which of the
+	// two refused. This relay knows which mailboxes they are from its own
+	// couriers file, and from nothing else: the mailbox that needs it is
+	// always at the relay whose file names its owner, since a courier's
+	// forwards only work where it is listed.
+	if s.isCourierMailbox(fp) {
+		s.fail(w, http.StatusForbidden, msgNotAllowed)
+		return
+	}
 	allowed, err := s.store.MayPost(fp, callerFP)
 	if err != nil {
 		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
 		return
 	}
 	if !allowed {
-		s.fail(w, http.StatusForbidden, "sender is not on the recipient's allow list")
+		s.fail(w, http.StatusForbidden, msgNotAllowed)
 		return
 	}
 	// After the allow list, deliberately: which channels exist is the

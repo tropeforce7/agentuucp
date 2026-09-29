@@ -78,13 +78,22 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 		s.fail(w, http.StatusForbidden, "recipient is blocked on this relay")
 		return
 	}
+	// A courier's mailbox refuses every sender, in the allow list's own
+	// words and at the allow list's own place in the order: the mailbox
+	// exists and is not blocked, nothing is stored or charged, and nothing
+	// on the wire says which of the two refused. The post route's comment
+	// says why the two are one sentence.
+	if s.isCourierMailbox(fp) {
+		s.fail(w, http.StatusForbidden, msgNotAllowed)
+		return
+	}
 	allowed, err := s.store.MayPost(fp, callerFP)
 	if err != nil {
 		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
 		return
 	}
 	if !allowed {
-		s.fail(w, http.StatusForbidden, "sender is not on the recipient's allow list")
+		s.fail(w, http.StatusForbidden, msgNotAllowed)
 		return
 	}
 	// The same place as a post's check: after the allow list, and before
@@ -277,6 +286,17 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, callerFP string)
 func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerFP string) {
 	u, ok := s.upload(w, r, callerFP)
 	if !ok {
+		return
+	}
+	// A courier's mailbox refuses every sender, and an upload opened
+	// before its owner was admitted as one is the way round the refusal on
+	// the open: the bytes are refused here, before any of them is read,
+	// rather than at the placement, which is the store's and has no
+	// business knowing which relays this one peers with. The sentence is
+	// the allow list's, as on the open, since what has changed under this
+	// sender is that the recipient now admits nobody.
+	if s.isCourierMailbox(u.To) {
+		s.refuseUnread(w, http.StatusForbidden, msgNotAllowed)
 		return
 	}
 	offset, err := strconv.ParseInt(r.Header.Get(relayapi.UploadOffsetHeader), 10, 64)

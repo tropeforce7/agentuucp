@@ -76,6 +76,21 @@ func (s *Server) handleKnock(w http.ResponseWriter, r *http.Request, body []byte
 		s.fail(w, http.StatusForbidden, "recipient is blocked on this relay")
 		return
 	}
+	// A courier's mailbox takes no knocks either — in the words every
+	// mailbox that takes none gets, not words of its own.
+	//
+	// The sentence below is deliberately the same for no card, a card that
+	// says no, and a card that does not verify, because the state of
+	// somebody else's card is not a stranger's to learn. A courier pushes
+	// no card, so this is what it answered before this commit and what it
+	// answers now. The post and the stream do the same thing with the
+	// sentence they have: a courier's mailbox refuses every sender exactly
+	// as a mailbox whose allow list named nobody would, so on none of the
+	// four routes does an answer say which relays this one peers with.
+	if s.isCourierMailbox(fp) {
+		s.fail(w, http.StatusForbidden, relayapi.MsgNoKnocks)
+		return
+	}
 	takes, err := s.store.TakesKnocks(fp)
 	if err != nil {
 		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)

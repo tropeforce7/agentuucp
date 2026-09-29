@@ -368,7 +368,7 @@ func TestTheCouriersReloadWithoutARestart(t *testing.T) {
 func TestAcceptsAnswersThisRelaysNameForANeighbour(t *testing.T) {
 	bar := neighbourID(t, "bar")
 	stranger := neighbourID(t, "nobody")
-	root := courierHome(t, map[string]string{"bar": "https://bar.example"})
+	root := courierHome(t, map[string]string{"bar": "http://127.0.0.1:1"})
 	c, err := NewCourier(CourierConfig{
 		Home: root, AuthorizedFile: couriersFile(t, bar), PublicURL: "https://a.example",
 	}, slog.Default())
@@ -381,7 +381,7 @@ func TestAcceptsAnswersThisRelaysNameForANeighbour(t *testing.T) {
 	if name, ok := c.Accepts(stranger.Public().Fingerprint()); ok {
 		t.Errorf("Accepts(a stranger) = %q, %v; want none", name, ok)
 	}
-	if r, ok := c.Neighbour("bar"); !ok || r.URL != "https://bar.example" {
+	if r, ok := c.Neighbour("bar"); !ok || r.URL != "http://127.0.0.1:1" {
 		t.Errorf("Neighbour(bar) = %v, %v; want the entry from the home", r, ok)
 	}
 	if _, ok := c.Neighbour("baz"); ok {
@@ -407,8 +407,8 @@ func TestTheStartSaysWhichPeeringsAreOneWay(t *testing.T) {
 	bar := neighbourID(t, "bar")
 	qux := neighbourID(t, "qux")
 	root := courierHome(t, map[string]string{
-		"bar": "https://bar.example",
-		"baz": "https://baz.example",
+		"bar": "http://127.0.0.1:1",
+		"baz": "http://127.0.0.1:2",
 	})
 	var buf bytes.Buffer
 	if _, err := NewCourier(CourierConfig{
@@ -432,7 +432,7 @@ func TestTheStartSaysWhichPeeringsAreOneWay(t *testing.T) {
 // or a file and no home, meant one-way, and saying so at every start would be
 // noise rather than news.
 func TestOneWayByConfigurationIsNotRemarkedOn(t *testing.T) {
-	root := courierHome(t, map[string]string{"bar": "https://bar.example"})
+	root := courierHome(t, map[string]string{"bar": "http://127.0.0.1:1"})
 	var buf bytes.Buffer
 	if _, err := NewCourier(CourierConfig{Home: root}, logTo(&buf)); err != nil {
 		t.Fatal(err)
@@ -459,7 +459,7 @@ func TestOneWayByConfigurationIsNotRemarkedOn(t *testing.T) {
 // and one damaged certificate must not take the relay away from everybody it
 // serves.
 func TestTheStartSaysWhenACourierCertificateCannotBeRead(t *testing.T) {
-	root := courierHome(t, map[string]string{"bar": "https://bar.example"})
+	root := courierHome(t, map[string]string{"bar": "http://127.0.0.1:1"})
 	s, err := store.Open(root)
 	if err != nil {
 		t.Fatal(err)
@@ -493,7 +493,7 @@ func TestTheStartSaysWhenACourierCertificateCannotBeRead(t *testing.T) {
 		}
 	}
 	// A neighbour with no certificate at all is a state, not a fault.
-	quiet := courierHome(t, map[string]string{"baz": "https://baz.example"})
+	quiet := courierHome(t, map[string]string{"baz": "http://127.0.0.1:2"})
 	buf.Reset()
 	if _, err := NewCourier(CourierConfig{Home: quiet}, logTo(&buf)); err != nil {
 		t.Fatal(err)
@@ -540,7 +540,7 @@ func TestTheCourierSetIsNotServedInTheStatusAnswer(t *testing.T) {
 // line, so what is loaded is always a file that was whole, and the relay goes
 // on with the neighbours it had.
 func TestAReloadWillNotAdmitThisRelaysOwnCourier(t *testing.T) {
-	root := courierHome(t, map[string]string{"bar": "https://bar.example"})
+	root := courierHome(t, map[string]string{"bar": "http://127.0.0.1:1"})
 	s, err := store.Open(root)
 	if err != nil {
 		t.Fatal(err)
@@ -597,7 +597,7 @@ func TestAReloadWillNotAdmitThisRelaysOwnCourier(t *testing.T) {
 // home saying bar is one correctly configured neighbour reported as one-way
 // in both directions, and a path naming Bar would find no neighbour at all.
 func TestAPeeringIsOneNeighbourWhateverTheCase(t *testing.T) {
-	root := courierHome(t, map[string]string{"bar": "https://bar.example"})
+	root := courierHome(t, map[string]string{"bar": "http://127.0.0.1:1"})
 	var buf bytes.Buffer
 	c, err := NewCourier(CourierConfig{
 		Home:           root,
@@ -622,7 +622,7 @@ func TestAPeeringIsOneNeighbourWhateverTheCase(t *testing.T) {
 // unsynchronised write the first time a neighbour's authority rotated, and
 // the callers are the next commit's workers, one per neighbour.
 func TestNeighbourHandsOutACopy(t *testing.T) {
-	root := courierHome(t, map[string]string{"bar": "https://bar.example"})
+	root := courierHome(t, map[string]string{"bar": "http://127.0.0.1:1"})
 	c, err := NewCourier(CourierConfig{Home: root}, slog.Default())
 	if err != nil {
 		t.Fatal(err)
@@ -650,7 +650,7 @@ func TestNeighbourHandsOutACopy(t *testing.T) {
 // certificate and the anchor, and a damaged anchor is the same fault for the
 // same operator, so the start says it in the same shape.
 func TestTheStartSaysWhenAPinnedAnchorCannotBeRead(t *testing.T) {
-	root := courierHome(t, map[string]string{"bar": "https://bar.example"})
+	root := courierHome(t, map[string]string{"bar": "http://127.0.0.1:1"})
 	s, err := store.Open(root)
 	if err != nil {
 		t.Fatal(err)
@@ -684,8 +684,8 @@ func TestTheStartSaysWhenAPinnedAnchorCannotBeRead(t *testing.T) {
 // only after somebody has edited the file.
 func TestTheStartSaysThePeeringIsOn(t *testing.T) {
 	root := courierHome(t, map[string]string{
-		"bar": "https://bar.example",
-		"baz": "https://baz.example",
+		"bar": "http://127.0.0.1:1",
+		"baz": "http://127.0.0.1:2",
 	})
 	var buf bytes.Buffer
 	if _, err := NewCourier(CourierConfig{
@@ -711,8 +711,8 @@ func TestTheStartSaysThePeeringIsOn(t *testing.T) {
 func TestTheCourierLogsNameNoFingerprint(t *testing.T) {
 	bar, qux := neighbourID(t, "bar"), neighbourID(t, "qux")
 	root := courierHome(t, map[string]string{
-		"bar": "https://bar.example",
-		"baz": "https://baz.example",
+		"bar": "http://127.0.0.1:1",
+		"baz": "http://127.0.0.1:2",
 	})
 	path := filepath.Join(t.TempDir(), "couriers")
 	writeCouriers(t, path, bar, qux)

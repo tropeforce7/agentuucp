@@ -284,9 +284,19 @@ func httpError(resp *http.Response, body []byte) *HTTPError {
 	// is the one place an answer becomes an error, and a caller cannot
 	// reach the body afterwards. Any other answer has no such field and
 	// leaves it zero.
+	//
+	// It is held to the shape every id from a relay is held to, since it
+	// comes from one and goes into a row: a relay that answers zero, a
+	// negative or nothing at all leaves it zero, which already means "no
+	// row of this caller's to name". The 201's own id goes through
+	// checkID on the way out of Forward; this is that check for the other
+	// answer, at the one place this one can be read.
 	var fwd relayapi.ForwardResponse
 	if resp.StatusCode == http.StatusConflict {
 		_ = json.Unmarshal(body, &fwd)
+		if fwd.ID < 0 {
+			fwd.ID = 0
+		}
 	}
 	return &HTTPError{
 		Status:     resp.StatusCode,

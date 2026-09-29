@@ -107,13 +107,23 @@ type CourierLimits struct {
 	ForwardTTL time.Duration
 	// QueueMaxBytes caps the bytes waiting to leave across the relay.
 	QueueMaxBytes int64
-	// QueueMaxMessages caps the rows waiting for one poster, and
+	// QueueMaxMessages caps the rows waiting to leave across the relay, as
+	// QueueMaxBytes caps their bytes.
+	//
+	// A courier is exempt from the two per-poster bounds below and not from
+	// this one, which is what it is for. The bytes alone do not bound a
+	// courier in any useful way: the smallest envelope is about a hundred
+	// of them, so a gigabyte is ten million rows, and ten million rows is
+	// ten million files. A relay carrying for a neighbour that is down
+	// should fill up and say so, not fill up its inodes.
+	QueueMaxMessages int64
+	// QueueMaxMessagesPerPoster caps the rows waiting for one poster, and
 	// QueueMaxBytesPerPoster their bytes. Neither applies to a courier: a
 	// courier carries many people's mail, so one poster's share would
-	// refuse a neighbour's queue for being busy, and the relay-wide bound
+	// refuse a neighbour's queue for being busy, and the relay-wide bounds
 	// and the couriers file are what answer that instead.
-	QueueMaxMessages       int64
-	QueueMaxBytesPerPoster int64
+	QueueMaxMessagesPerPoster int64
+	QueueMaxBytesPerPoster    int64
 	// PostsPerMinute and PostBytesPerHour are a courier's budgets, in
 	// place of a user's on the forward route, keyed by the verified
 	// fingerprint as every per-identity limit is.
@@ -131,12 +141,18 @@ type CourierLimits struct {
 // relays, and the container suite is where that happens.
 func DefaultCourierLimits() CourierLimits {
 	return CourierLimits{
-		MaxHops:                8,
-		ForwardTTL:             72 * time.Hour,
-		QueueMaxBytes:          1 << 30,
-		QueueMaxMessages:       100,
-		QueueMaxBytesPerPoster: 256 << 20,
-		PostsPerMinute:         600,
+		MaxHops:       8,
+		ForwardTTL:    72 * time.Hour,
+		QueueMaxBytes: 1 << 30,
+		// A hundred thousand rows across the relay: a thousand times one
+		// poster's share, so a hundred people all waiting out the same
+		// outage are nowhere near it, and at the smallest envelope it is
+		// about ten megabytes of rows and a thousand files in each of the
+		// hundred shards the queue's directory has.
+		QueueMaxMessages:          100_000,
+		QueueMaxMessagesPerPoster: 100,
+		QueueMaxBytesPerPoster:    256 << 20,
+		PostsPerMinute:            600,
 		// Unlimited by default: a courier carries many people's mail, and
 		// the relay-wide queue cap and the couriers file are the bounds
 		// that suit that. A relay whose neighbour floods it removes one
@@ -149,19 +165,27 @@ func DefaultCourierLimits() CourierLimits {
 // Quotas extracts what the queue and the carried table are bounded by.
 func (c CourierLimits) Quotas() CourierQuotas {
 	return CourierQuotas{
-		QueueMaxBytes:          c.QueueMaxBytes,
-		QueueMaxMessages:       c.QueueMaxMessages,
-		QueueMaxBytesPerPoster: c.QueueMaxBytesPerPoster,
-		CarriedMaxRows:         c.CarriedMaxRows,
+		QueueMaxBytes:             c.QueueMaxBytes,
+		QueueMaxMessages:          c.QueueMaxMessages,
+		QueueMaxMessagesPerPoster: c.QueueMaxMessagesPerPoster,
+		QueueMaxBytesPerPoster:    c.QueueMaxBytesPerPoster,
+		CarriedMaxRows:            c.CarriedMaxRows,
 	}
 }
 
-// CourierQuotasFor is a courier's own quotas: the relay-wide bounds alone,
-// for the reason on QueueMaxMessages.
+// CourierQuotasFor is a courier's own quotas: the relay-wide bounds, both of
+// them, and neither per-poster one.
+//
+// Both, rather than the bytes alone, because bytes do not bound rows: the
+// smallest envelope this relay will take is about a hundred bytes, so a
+// gigabyte of them is ten million rows and ten million files, put there by
+// one neighbour. A relay that has filled up should say so while it still has
+// somewhere to write the saying.
 func (c CourierLimits) CourierQuotasFor() CourierQuotas {
 	return CourierQuotas{
-		QueueMaxBytes:  c.QueueMaxBytes,
-		CarriedMaxRows: c.CarriedMaxRows,
+		QueueMaxBytes:    c.QueueMaxBytes,
+		QueueMaxMessages: c.QueueMaxMessages,
+		CarriedMaxRows:   c.CarriedMaxRows,
 	}
 }
 

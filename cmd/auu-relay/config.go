@@ -114,12 +114,18 @@ type CourierConfig struct {
 	// ForwardTTL is how long mail waits for an unreachable neighbour before
 	// the relay gives up on it, as a Go duration. No honest zero either.
 	ForwardTTL string `json:"forward_ttl"`
-	// QueueMaxBytes caps the bytes waiting to leave across the relay.
-	QueueMaxBytes int64 `json:"queue_max_bytes"`
-	// QueueMaxMessages and QueueMaxBytesPerPoster bound one poster's share.
-	// Neither applies to a courier, which carries many people's mail.
-	QueueMaxMessages       int64 `json:"queue_max_messages"`
-	QueueMaxBytesPerPoster int64 `json:"queue_max_bytes_per_poster"`
+	// QueueMaxBytes and QueueMaxMessages bound what waits to leave across
+	// the whole relay, in bytes and in messages. Both bind a courier as
+	// well as a user: bytes alone do not bound messages, and a message is
+	// a row and a file.
+	QueueMaxBytes    int64 `json:"queue_max_bytes"`
+	QueueMaxMessages int64 `json:"queue_max_messages"`
+	// QueueMaxMessagesPerPoster and QueueMaxBytesPerPoster bound one
+	// poster's share. Neither applies to a courier, which carries many
+	// people's mail and would have a busy neighbour's whole queue refused
+	// for one person's share.
+	QueueMaxMessagesPerPoster int64 `json:"queue_max_messages_per_poster"`
+	QueueMaxBytesPerPoster    int64 `json:"queue_max_bytes_per_poster"`
 	// PostsPerMinute and PostBytesPerHour are a courier's budgets on the
 	// forward route, in place of a user's posts_per_minute and
 	// post_bytes_per_hour.
@@ -169,14 +175,15 @@ func (c CourierConfig) Relay() (relay.CourierLimits, error) {
 		return relay.CourierLimits{}, err
 	}
 	return relay.CourierLimits{
-		MaxHops:                c.MaxHops,
-		ForwardTTL:             ttl,
-		QueueMaxBytes:          c.QueueMaxBytes,
-		QueueMaxMessages:       c.QueueMaxMessages,
-		QueueMaxBytesPerPoster: c.QueueMaxBytesPerPoster,
-		PostsPerMinute:         c.PostsPerMinute,
-		PostBytesPerHour:       c.PostBytesPerHour,
-		CarriedMaxRows:         c.CarriedMaxRows,
+		MaxHops:                   c.MaxHops,
+		ForwardTTL:                ttl,
+		QueueMaxBytes:             c.QueueMaxBytes,
+		QueueMaxMessages:          c.QueueMaxMessages,
+		QueueMaxMessagesPerPoster: c.QueueMaxMessagesPerPoster,
+		QueueMaxBytesPerPoster:    c.QueueMaxBytesPerPoster,
+		PostsPerMinute:            c.PostsPerMinute,
+		PostBytesPerHour:          c.PostBytesPerHour,
+		CarriedMaxRows:            c.CarriedMaxRows,
 	}, nil
 }
 
@@ -374,14 +381,15 @@ func Defaults() Config {
 		// asked is a setting, and nothing reads them until there is a
 		// courier. Only the two paths decide whether there is one.
 		Courier: CourierConfig{
-			MaxHops:                c.MaxHops,
-			ForwardTTL:             c.ForwardTTL.String(),
-			QueueMaxBytes:          c.QueueMaxBytes,
-			QueueMaxMessages:       c.QueueMaxMessages,
-			QueueMaxBytesPerPoster: c.QueueMaxBytesPerPoster,
-			PostsPerMinute:         c.PostsPerMinute,
-			PostBytesPerHour:       c.PostBytesPerHour,
-			CarriedMaxRows:         c.CarriedMaxRows,
+			MaxHops:                   c.MaxHops,
+			ForwardTTL:                c.ForwardTTL.String(),
+			QueueMaxBytes:             c.QueueMaxBytes,
+			QueueMaxMessages:          c.QueueMaxMessages,
+			QueueMaxMessagesPerPoster: c.QueueMaxMessagesPerPoster,
+			QueueMaxBytesPerPoster:    c.QueueMaxBytesPerPoster,
+			PostsPerMinute:            c.PostsPerMinute,
+			PostBytesPerHour:          c.PostBytesPerHour,
+			CarriedMaxRows:            c.CarriedMaxRows,
 		},
 		ClientCerts: ClientCertsConfig{
 			Mode:     relayapi.ClientCertsOff,
@@ -667,6 +675,8 @@ func (c *Config) Merge(fs *flag.FlagSet, f *flagValues) {
 			c.Courier.QueueMaxBytes = f.courierQueueMaxBytes
 		case "courier-queue-max-messages":
 			c.Courier.QueueMaxMessages = f.courierQueueMaxMessages
+		case "courier-queue-max-messages-per-poster":
+			c.Courier.QueueMaxMessagesPerPoster = f.courierQueueMaxMessagesPerPoster
 		case "courier-queue-max-bytes-per-poster":
 			c.Courier.QueueMaxBytesPerPoster = f.courierQueueMaxBytesPerPoster
 		case "courier-posts-per-minute":
@@ -765,6 +775,25 @@ func (c Config) Validate() error {
 		if _, err := relay.LoadAdmins(c.Admin.AuthorizedFile); err != nil {
 			return err
 		}
+	}
+	// A pair that cancels a guarantee is refused and not documented. The
+	// forward route is open to every identity with a mailbox here — it has
+	// to be, since forwarding is what this relay's own users do — so with
+	// registration open a stranger makes a mailbox in one request and posts
+	// through it, and it arrives at the neighbour under this relay's own
+	// courier. Nothing of it is delivered, because the recipient's allow
+	// list runs at the relay that delivers; what it spends is the budget
+	// the neighbour gave this relay and the queue this relay is holding for
+	// them, and their remedy is to stop accepting from an honest operator.
+	//
+	// The pair is open registration with a home to dial from. Accepting
+	// from neighbours under open registration is not the same thing: what
+	// arrives that way is bounded by the couriers file and nothing leaves.
+	if c.Registration == relayapi.RegistrationOpen && c.Courier.Home != "" {
+		return errors.New("registration is open and courier.home is set: the forward route is open " +
+			"to every identity with a mailbox here, so with open registration anyone can make one " +
+			"and post through this relay to its neighbours, under this relay's own courier. " +
+			"Set registration to token or closed, or remove courier.home")
 	}
 	if err := c.courierValidate(); err != nil {
 		return err
@@ -983,6 +1012,7 @@ func (c Config) courierValidate() error {
 	}{
 		{"courier.queue_max_bytes", c.Courier.QueueMaxBytes},
 		{"courier.queue_max_messages", c.Courier.QueueMaxMessages},
+		{"courier.queue_max_messages_per_poster", c.Courier.QueueMaxMessagesPerPoster},
 		{"courier.queue_max_bytes_per_poster", c.Courier.QueueMaxBytesPerPoster},
 		{"courier.posts_per_minute", c.Courier.PostsPerMinute},
 		{"courier.post_bytes_per_hour", c.Courier.PostBytesPerHour},
@@ -992,9 +1022,17 @@ func (c Config) courierValidate() error {
 			return fmt.Errorf("%s must not be negative, got %d (use 0 for unlimited)", f.name, f.value)
 		}
 	}
-	if c.Courier.QueueMaxMessages > maxQueueMessagesCeiling {
-		return fmt.Errorf("courier.queue_max_messages must be at most %d, got %d (use 0 for unlimited)",
-			maxQueueMessagesCeiling, c.Courier.QueueMaxMessages)
+	for _, f := range []struct {
+		name  string
+		value int64
+	}{
+		{"courier.queue_max_messages", c.Courier.QueueMaxMessages},
+		{"courier.queue_max_messages_per_poster", c.Courier.QueueMaxMessagesPerPoster},
+	} {
+		if f.value > maxQueueMessagesCeiling {
+			return fmt.Errorf("%s must be at most %d, got %d (use 0 for unlimited)",
+				f.name, maxQueueMessagesCeiling, f.value)
+		}
 	}
 	// max_hops and forward_ttl have no honest zero: an address of no relays
 	// is not an address, and a queue that gives up at once is a relay that

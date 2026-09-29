@@ -27,7 +27,7 @@ import (
 // out who makes this machine's key.
 type machineKey = relaydial.MachineKey
 
-func relayParams(c *client.Client) (mldsa.Parameters, error) { return relaydial.RelayParams(c) }
+func relayParams(c *client.Client) (mldsa.Parameters, error) { return relaydial.RelayParams(ctx(), c) }
 
 func newCSR(s *store.Store, id *identity.Identity, r *store.Relay, label, tok string, params mldsa.Parameters) (*machineKey, []byte, error) {
 	return relaydial.NewCSR(s, id, r, label, tok, params)
@@ -242,11 +242,11 @@ func certRenew(args []string) error {
 }
 
 func renewCert(s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay) (*store.CertRecord, error) {
-	return relaydial.RenewCert(s, id, c, r)
+	return relaydial.RenewCert(ctx(), s, id, c, r)
 }
 
 func renewIfExpiring(s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay, now time.Time) bool {
-	return dialer().RenewIfExpiring(s, id, c, r, now)
+	return dialer().RenewIfExpiring(ctx(), s, id, c, r, now)
 }
 
 // until renders how long is left, for a person.

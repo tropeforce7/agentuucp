@@ -36,16 +36,17 @@ Later ones win. A flag you do not type never overrides the file.
 | `--max-bytes N` | `max_bytes` | 16 MiB, at most 1 GiB |
 | `--streams` | `streams` | true |
 | `--max-stream-bytes N` | `max_stream_bytes` | 4 GiB, 0 is unlimited |
-| `--registration open\|token\|closed` | `registration` | `open`; the health answer carries the word, since it is what a name listed on this relay rests on |
+| `--registration open\|token\|closed` | `registration` | `open`; the health answer carries the word, since it is what a name listed on this relay rests on; `open` refuses to start with `courier.home` set |
 | `--public-url URL` | `public_url` | none |
 | `--admin-file PATH` | `admin.authorized_file` | none, no administrators |
 | `--token-max-age DURATION` | `admin.token_max_age` | `720h` |
-| `--courier-home PATH` | `courier.home` | none, this relay dials no other relay; see 1.10 |
+| `--courier-home PATH` | `courier.home` | none, this relay dials no other relay; needs `registration` `token` or `closed`; see 1.10 |
 | `--courier-file PATH` | `courier.authorized_file` | none, this relay accepts no forwarded mail; see 1.10 |
 | `--courier-max-hops N` | `courier.max_hops` | 8, between 1 and 32 |
 | `--courier-forward-ttl DURATION` | `courier.forward_ttl` | `72h`, between `1m` and `720h` |
 | `--courier-queue-max-bytes N` | `courier.queue_max_bytes` | 1 GiB, 0 is unlimited |
-| `--courier-queue-max-messages N` | `courier.queue_max_messages` | 100 per poster, at most 100000, 0 is unlimited |
+| `--courier-queue-max-messages N` | `courier.queue_max_messages` | 100000 across the relay, at most 100000, 0 is unlimited |
+| `--courier-queue-max-messages-per-poster N` | `courier.queue_max_messages_per_poster` | 100, at most 100000, 0 is unlimited |
 | `--courier-queue-max-bytes-per-poster N` | `courier.queue_max_bytes_per_poster` | 256 MiB, 0 is unlimited |
 | `--courier-posts-per-minute N` | `courier.posts_per_minute` | 600, a neighbour's own rate, 0 is unlimited |
 | `--courier-post-bytes-per-hour N` | `courier.post_bytes_per_hour` | 0, unlimited; see 1.10 |
@@ -865,30 +866,62 @@ identity: the courier is a postman, not a reader. Protect the file as the
 relay's bundle is protected — the relay's user alone, 0600, under the unit's
 hardening.
 
-**Close registration before you peer.** The forward route is open to every
-identity with a mailbox on this relay — it has to be, since forwarding is
-something your own users do — so on a relay with `registration: open` a
-stranger can make a mailbox in one request and post mail through it. It
-reaches your neighbour under *your* relay's courier identity, spends the
-budget your neighbour gave you, and fills the queue you are holding for
-them. Nothing of it is delivered, because the recipient's allow list runs
-at the relay that delivers; but the remedy your neighbour has is to stop
-accepting from you. Set `registration` to `token` or `closed` on a relay
-that peers with another.
+**A relay that dials cannot leave registration open**, and it refuses to
+start if you try:
+
+```
+registration is open and courier.home is set: the forward route is open to
+every identity with a mailbox here, so with open registration anyone can
+make one and post through this relay to its neighbours, under this relay's
+own courier. Set registration to token or closed, or remove courier.home
+```
+
+The forward route is open to every identity with a mailbox on this relay —
+it has to be, since forwarding is something your own users do — so with
+`registration: open` a stranger makes a mailbox in one request and posts
+through it. It reaches your neighbour under *your* relay's courier
+identity, spends the budget they gave you, and fills the queue you are
+holding for them. Nothing of it is delivered, because the recipient's
+allow list runs at the relay that delivers; but the remedy your neighbour
+has is to stop accepting from you. It is a refusal rather than a warning
+because the two settings are each reasonable alone and together undo what
+one of them is for.
+
+Accepting forwarded mail under open registration is not the same thing and
+is allowed: what arrives that way is bounded by your couriers file, and
+nothing leaves on a stranger's account.
 
 **What the relay holds, and for how long.** Mail this relay has taken for a
 neighbour waits in a queue: one row and one file per envelope, under
-`courier.queue_max_bytes` across the relay and
-`courier.queue_max_messages` and `courier.queue_max_bytes_per_poster` for
-each person posting. Over any of them the relay answers `507` and the
-sender tries again later; the queue empties itself as the neighbour takes
-what is waiting, so there is nobody to tell. A neighbour's own posting is
-bounded by `courier.posts_per_minute` and `courier.post_bytes_per_hour`
-rather than by a user's rates, because a courier carries many people's
-mail: held to one person's rate, a busy neighbour's whole queue would be
-refused. The bytes are unlimited by default for the same reason, and what
-bounds a neighbour that floods you is the relay-wide queue and one line
-removed from your couriers file.
+`courier.queue_max_bytes` and `courier.queue_max_messages` across the
+relay, and `courier.queue_max_messages_per_poster` and
+`courier.queue_max_bytes_per_poster` for each person posting. The
+relay-wide pair is two bounds because bytes do not bound files: the
+smallest envelope is about a hundred bytes, so a gigabyte of them is ten
+million rows and ten million files, and a relay that fills up should say
+so while it still has somewhere to write the saying. Over any of them the
+relay answers `507` and the sender tries again later; the queue empties
+itself as the neighbour takes what is waiting, so there is nobody to tell.
+A neighbour is held to the relay-wide pair and to neither per-poster
+bound, because a courier carries many people's mail and one person's share
+would refuse a busy neighbour's whole queue. Its own posting is bounded by
+`courier.posts_per_minute` and `courier.post_bytes_per_hour` rather than by
+a user's rates, for the same reason, and the bytes there are unlimited by
+default. So what stands between one neighbour and the whole of your queue
+is the relay-wide pair, and, for a neighbour that floods you anyway, one
+line removed from your couriers file.
+
+**How the queue empties.** One worker per neighbour, woken when mail for it
+arrives and by its own timer, takes the oldest first and posts each to that
+neighbour's forward route. A neighbour that is not answering is left alone
+for a minute, then two, doubling to an hour, less a random part so that two
+relays which lost the same cable do not knock on the same second every hour
+for a week; the backing off is per neighbour and not per message, since a
+neighbour that is down is down for every message waiting for it. A
+neighbour that refuses one message finally — an address it cannot route, a
+request it will not take — ends that message and goes on to the next, and
+the sentence it gave is kept with the hop's name in front of it, so the
+person who sent it reads which relay refused and why.
 
 `courier.forward_ttl` is how long the relay keeps trying a neighbour that
 is not answering — three days by default — after which the mail is failed
@@ -897,6 +930,18 @@ one address may name, counting the path still ahead and the hops already
 taken together; it is at most 32, which every client holds an address to
 as well, so an address that this relay would refuse is one a sender is
 told about before anything is sealed.
+
+**What is left after a message is gone.** The moment a neighbour takes an
+envelope the file and the recipient's fingerprint go, and what is left is
+one row naming who posted it, your name for the neighbour, and the address
+it came by and was going on to. That row stays for as long as something
+could still come back about the message — `courier.forward_ttl` for each
+hop it had left to go, so three days at the defaults for the last hop and
+longer for a message with further to travel — and is then purged. A
+message that failed keeps the hop's sentence for a day, so its sender can
+read what happened, and then goes the same way. A message still waiting is
+never purged: its own `courier.forward_ttl` ends it, and that tells the
+sender rather than leaving them to find their mail gone.
 
 The relay also remembers the envelopes it has carried, by a hash of the
 recipient and the ciphertext, so that it never carries or delivers one
@@ -911,9 +956,40 @@ setting.
 A courier is a registered identity of the relay it posts to, so it has a
 mailbox there as any user does. Nothing writes to it and nothing reads it:
 mail for the people a relay serves goes to their own mailboxes, and a
-courier's is a side effect of enrolling. Nothing stops somebody posting to
-one — it is an ordinary mailbox — and what that costs is that neighbour's
-quota, which their operator can see and their allow list can end.
+courier's is a side effect of enrolling. Left ordinary it is a mailbox any
+registered identity can fill at your expense, so a listed courier's mailbox
+refuses every sender, as a mailbox with an allow list naming nobody would,
+and nothing distinguishes it from one on the wire. A post, a post to a
+channel and a stream get the sentence a refused sender always gets:
+
+```
+sender is not on the recipient's allow list
+```
+
+and a knock gets the sentence a mailbox that takes no knocks always gets:
+
+```
+the recipient does not take knocks
+```
+
+which is also what a mailbox with no card, a card that says no and a card
+that does not verify each get. There is no list to write: an allow list
+naming nobody cannot be signed, since an empty one admits every registered
+sender and one naming only the owner is refused, so the relay holds that
+list for a courier's mailbox itself and answers as it would.
+
+Saying more would cost you something. Before this, a post to a courier's
+mailbox was simply taken, so the answer said nothing about your couriers
+file; a refusal of its own would turn these routes into a way for anyone
+holding a courier's fingerprint to ask which relays you accept forwards
+from, one fingerprint at a time.
+
+This is a refusal the relay can make because the mailbox that needs it is
+always at the relay whose file names its owner: a courier enrols at its
+neighbour so that its relay can forward through it, and those forwards are
+accepted only where that neighbour's file lists it. A relay that has not
+admitted an identity treats that identity's mailbox as any other, which is
+right: it has no grounds to call it anything else.
 
 ## 2. Administering a relay
 

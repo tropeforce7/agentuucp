@@ -278,7 +278,11 @@ CREATE INDEX IF NOT EXISTS uploads_from_fp ON uploads(from_fp);`
 	// the neighbour answered with, which is the one number both sides
 	// hold. The index is by neighbour and next_try, which is what makes a
 	// worker's next row a lookup and not a scan, and by poster for the
-	// owner's own queue listing.
+	// owner's own queue listing. The fourth is the purge's: without it the
+	// only index carrying state leads on neighbour, so a purge that asks
+	// for every ended row scans the table — inside a sender's request, on
+	// the one connection the store has, over a table a neighbour's traffic
+	// fills.
 	outboundTable = `CREATE TABLE IF NOT EXISTS outbound (
 	id        INTEGER PRIMARY KEY AUTOINCREMENT,
 	poster_fp TEXT NOT NULL,
@@ -301,7 +305,8 @@ CREATE INDEX IF NOT EXISTS uploads_from_fp ON uploads(from_fp);`
 );
 CREATE INDEX IF NOT EXISTS outbound_work ON outbound(neighbour, state, next_try);
 CREATE INDEX IF NOT EXISTS outbound_poster ON outbound(poster_fp, id);
-CREATE INDEX IF NOT EXISTS outbound_handed ON outbound(neighbour, their_id);`
+CREATE INDEX IF NOT EXISTS outbound_handed ON outbound(neighbour, their_id);
+CREATE INDEX IF NOT EXISTS outbound_purge ON outbound(state, last_try);`
 
 	// carried is every envelope this relay has taken, by hash, so that it
 	// never carries or delivers one twice: a retry after a lost answer is

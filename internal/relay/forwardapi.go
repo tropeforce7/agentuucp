@@ -170,13 +170,10 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, body []by
 		s.storageFault(w, r, err)
 		return
 	}
-	// The row is written and the answer goes back. Nothing empties the
-	// queue yet: the worker that dials this neighbour, and the wake this
-	// request will give it, arrive with the commit after this one, so a row
-	// written here waits where it is. That is a state no relay is released
-	// in — nothing between here and the last commit of this plan is — and
-	// it is what makes this commit's question the one a reader can answer:
-	// is what this relay takes, and stores, right.
+	// The worker for that neighbour is woken, and never waited for: the
+	// wake is a send on a channel that holds one and cannot block, so no
+	// request waits on the queue and the queue waits on no request.
+	s.wake(neighbour.Name)
 	s.writeJSON(w, http.StatusCreated, relayapi.ForwardResponse{ID: id})
 }
 
@@ -299,6 +296,11 @@ func parseForwarded(raw []byte) (*envelope.Envelope, error) {
 // envelope with two short lists beside it. max_hops names of 64 bytes and
 // their JSON fit inside the allowance many times over.
 func (s *Server) forwardCap() int64 { return s.cfg.MaxBytes + relayapi.FramingAllowance }
+
+// wake nudges the worker for one neighbour. A nil set of workers is a relay
+// that dials nobody, which is every relay without a courier home and every
+// harness that has not been given one.
+func (s *Server) wake(neighbour string) { s.workers.wake(neighbour) }
 
 // storageFault answers a fault that is the relay's own, noting it once a
 // minute per path for the operator, as every storage fault is answered.
