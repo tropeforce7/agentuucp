@@ -1,7 +1,6 @@
 package auu
 
 import (
-	"crypto"
 	"crypto/mldsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -9,129 +8,33 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"os"
-	"strings"
 	"time"
 
-	"github.com/tropeforce7/agentuucp/internal/agent"
 	"github.com/tropeforce7/agentuucp/internal/client"
 	"github.com/tropeforce7/agentuucp/internal/clientca"
+	relaydial "github.com/tropeforce7/agentuucp/internal/dial"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
 
-// machineKey is a client key this machine has just made: what signs the
-// certificate request, and what cert.json will carry.
-//
-// In a plain home the key is made here and the PEM is its PKCS#8. In an
-// encrypted home the agent makes it, holds it under a pending name, and
-// hands back the wrapped PEM; the signer asks the agent, and the key is
-// never in this process at all.
-type machineKey struct {
-	signer crypto.Signer
-	pem    string
-}
+// machineKey is internal/dial's, under the name every command here calls it
+// by, and the wrappers below are that package's functions under theirs. All
+// of it moved when the relay came to need the same dialling and the same
+// renewal; the names are kept so that no call site here changed. Two of the
+// moved functions are not here: newMachineKey and machineLabel were only ever
+// called by newCSR and saveIssued, whose bodies moved with them, so a wrapper
+// for either would be a name nothing calls in the file a reader greps to find
+// out who makes this machine's key.
+type machineKey = relaydial.MachineKey
 
-// newMachineKey generates this machine's client key, of the parameter set the
-// relay requires. It is fresh every time, including at renewal: a key that
-// never leaves one machine is the whole difference between a client
-// certificate and the identity, which is meant to be portable.
-func newMachineKey(s *store.Store, id *identity.Identity, r *store.Relay, params mldsa.Parameters) (*machineKey, error) {
-	if id.Remote() {
-		c, err := agent.NewClient(s.Root())
-		if err != nil {
-			return nil, err
-		}
-		g, err := c.Generate(agent.CertPrefix+r.Name, clientca.ParameterNumber(params))
-		if err != nil {
-			return nil, err
-		}
-		return &machineKey{signer: c.CertSigner(g.Handle, g.Public), pem: string(g.Wrapped)}, nil
-	}
-	key, err := mldsa.GenerateKey(params)
-	if err != nil {
-		return nil, err
-	}
-	der, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		return nil, err
-	}
-	return &machineKey{
-		signer: key,
-		pem:    string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})),
-	}, nil
-}
+func relayParams(c *client.Client) (mldsa.Parameters, error) { return relaydial.RelayParams(c) }
 
-// relayParams asks the relay which parameter set it wants a client key to
-// have. The relay refuses a key of any other set, so asking first is what
-// saves the person a failed enrolment with a message about key sizes.
-func relayParams(c *client.Client) (mldsa.Parameters, error) {
-	n, err := c.MLDSA(ctx())
-	if err != nil {
-		return mldsa.Parameters{}, err
-	}
-	params, err := clientca.ParameterSet(n)
-	if err != nil {
-		return mldsa.Parameters{}, fmt.Errorf("the relay asks for a key this build cannot make: %v", err)
-	}
-	return params, nil
-}
-
-// machineLabel is what a machine calls itself when it enrols. The hostname is
-// what an administrator listing certificates will recognise.
-func machineLabel(explicit string) string {
-	if explicit != "" {
-		return explicit
-	}
-	host, err := os.Hostname()
-	if err != nil || host == "" {
-		return "unnamed"
-	}
-	// The short form: "laptop" reads better in a list than
-	// "laptop.corp.example.com".
-	if i := strings.IndexByte(host, '.'); i > 0 {
-		host = host[:i]
-	}
-	return host
-}
-
-// newCSR generates a key of the given set and the request that asks for a
-// certificate for it.
 func newCSR(s *store.Store, id *identity.Identity, r *store.Relay, label, tok string, params mldsa.Parameters) (*machineKey, []byte, error) {
-	key, err := newMachineKey(s, id, r, params)
-	if err != nil {
-		return nil, nil, fmt.Errorf("generating this machine's key: %w", err)
-	}
-	csr, err := clientca.NewCSR(key.signer, machineLabel(label), tok)
-	if err != nil {
-		return nil, nil, fmt.Errorf("building the certificate request: %w", err)
-	}
-	return key, csr, nil
+	return relaydial.NewCSR(s, id, r, label, tok, params)
 }
 
-// saveIssued writes a freshly issued certificate and the key it belongs to,
-// into the directory of the relay that issued it.
 func saveIssued(s *store.Store, r *store.Relay, label string, key *machineKey, cert, ca []byte) (*store.CertRecord, error) {
-	leaf, err := x509.ParseCertificate(cert)
-	if err != nil {
-		return nil, fmt.Errorf("the relay returned a certificate we cannot read: %w", err)
-	}
-	rec := &store.CertRecord{
-		Relay:     r.URL,
-		Serial:    clientca.FormatSerial(leaf.SerialNumber),
-		Label:     machineLabel(label),
-		Key:       key.pem,
-		Cert:      string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert})),
-		NotBefore: leaf.NotBefore,
-		NotAfter:  leaf.NotAfter,
-	}
-	if len(ca) > 0 {
-		rec.CA = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca}))
-	}
-	if err := s.SaveCertFor(r, rec); err != nil {
-		return nil, err
-	}
-	return rec, nil
+	return relaydial.SaveIssued(s, r, label, key, cert, ca)
 }
 
 // cmdCert is the machine's view of its own certificate.
@@ -338,57 +241,12 @@ func certRenew(args []string) error {
 	return nil
 }
 
-// renewCert asks for a fresh certificate and stores it, replacing the one this
-// machine holds. The connection is dropped afterwards so the next request uses
-// the new one.
 func renewCert(s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay) (*store.CertRecord, error) {
-	old, err := s.CertFor(r)
-	if err != nil {
-		return nil, err
-	}
-	params, err := relayParams(c)
-	if err != nil {
-		return nil, err
-	}
-	key, csr, err := newCSR(s, id, r, old.Label, "", params)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.RenewCert(ctx(), csr)
-	if err != nil {
-		return nil, err
-	}
-	rec, err := saveIssued(s, r, old.Label, key, resp.Cert, resp.CA)
-	if err != nil {
-		return nil, err
-	}
-	c.CloseIdle()
-	return rec, nil
+	return relaydial.RenewCert(s, id, c, r)
 }
 
-// renewIfExpiring renews a certificate that is close to its expiry, before the
-// command that needs it runs. It reports whether a new one was issued.
-//
-// A failure here is a warning, never a failure of the command: the current
-// certificate is still good for weeks, and a relay that is briefly unreachable
-// must not stop somebody reading their mail.
 func renewIfExpiring(s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay, now time.Time) bool {
-	rec, err := s.CertFor(r)
-	if err != nil || !rec.Expiring(now) {
-		return false
-	}
-	if _, err := renewCert(s, id, c, r); err != nil {
-		// A renewal refused because the relay's own certificate has run
-		// out is not this machine's problem, and the command that follows
-		// is about to say whose it is; a warning here would put the same
-		// words in front of it, in brackets, as a renewal failure.
-		if !client.RelayExpired(err) {
-			fmt.Fprintf(os.Stderr, "%s: certificate renewal for %s failed (%v); it expires on %s\n",
-				prog, r.Name, err, rec.NotAfter.Local().Format("2006-01-02"))
-		}
-		return false
-	}
-	return true
+	return dialer().RenewIfExpiring(s, id, c, r, now)
 }
 
 // until renders how long is left, for a person.

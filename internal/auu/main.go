@@ -9,7 +9,6 @@ package auu
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -17,10 +16,10 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/agent"
 	"github.com/tropeforce7/agentuucp/internal/client"
+	relaydial "github.com/tropeforce7/agentuucp/internal/dial"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
@@ -392,107 +391,30 @@ func requireIdentity() (*store.Store, *identity.Public, error) {
 	return s, self, nil
 }
 
-// dial builds a client for one relay, presenting this machine's client
-// certificate when it has one there.
-//
-// A certificate close to its expiry is renewed first, so a machine in regular
-// use never reaches the day it stops working. The renewal is best-effort: see
-// renewIfExpiring.
+// dialer is this program as internal/dial sees it: the name it was installed
+// under, which its advice quotes, and standard error for the two remarks that
+// package makes. It is built per call rather than once, since prog is not
+// known until Main has run.
+func dialer() relaydial.Dialer {
+	return relaydial.Dialer{
+		Prog: prog,
+		Note: func(s string) { fmt.Fprintf(os.Stderr, "%s: %s\n", prog, s) },
+	}
+}
+
+// dial, dialNoRenew and dialNoCert are internal/dial's, under the names every
+// command here calls them by; the bodies moved to that package when the relay
+// came to need the same dialling and the same renewal.
 func dial(s *store.Store, id *identity.Identity, r *store.Relay) (*client.Client, error) {
-	c, err := dialNoRenew(s, id, r)
-	if err != nil {
-		return nil, err
-	}
-	// A renewal retires the certificate it was authenticated with, so the
-	// client that performed it is holding a revoked one. Rebuilt here, with
-	// the certificate that came back, or the very next request would be
-	// refused for the renewal having succeeded.
-	if renewIfExpiring(s, id, c, r, time.Now()) {
-		return dialNoRenew(s, id, r)
-	}
-	return c, nil
+	return dialer().Dial(s, id, r)
 }
 
-// dialNoRenew is dial without the renewal check, for the paths that are the
-// renewal, or that run before this machine has a certificate at all.
 func dialNoRenew(s *store.Store, id *identity.Identity, r *store.Relay) (*client.Client, error) {
-	var cert *tls.Certificate
-	rec, err := s.CertFor(r)
-	switch {
-	case err == nil:
-		if cert, err = rec.TLS(); err != nil {
-			// A certificate file we cannot read is worth saying out loud:
-			// the alternative is a puzzling 401 from the relay.
-			return nil, fmt.Errorf("%w; run '%s register --relay %s --token TOKEN' to replace it",
-				err, prog, r.Name)
-		}
-	case errors.Is(err, store.ErrNoCert):
-		// None is a state, not a failure: a relay may not use them at all,
-		// and a machine not yet enrolled has none to offer.
-	default:
-		// A file that is there and wrong is not a file that is missing.
-		// Dialling without it, as before, left the relay's refusal of a
-		// certificate it never saw as the only word said; the store's
-		// sentence names the file and what to run.
-		return nil, err
-	}
-	anchor, err := pinnedAnchor(s, r)
-	if err != nil {
-		return nil, err
-	}
-	c, err := client.NewWithAnchor(r.URL, id, cert, anchor)
-	if err != nil {
-		return nil, err
-	}
-	return c, nil
+	return dialer().NoRenew(s, id, r)
 }
 
-// dialNoCert is dialNoRenew without this machine's certificate.
-//
-// Registering is how a machine whose certificate the relay refuses replaces
-// it, and a refusal happens in the handshake, before any route is chosen: a
-// client that offered the old one would fail the very command sent to fix it,
-// and the advice it printed would name that command. Neither /v1/register nor
-// /v1/health reads a client certificate, so there is nothing to leave behind.
 func dialNoCert(s *store.Store, id *identity.Identity, r *store.Relay) (*client.Client, error) {
-	anchor, err := pinnedAnchor(s, r)
-	if err != nil {
-		return nil, err
-	}
-	return client.NewWithAnchor(r.URL, id, nil, anchor)
-}
-
-// pinnedAnchor builds the trust anchor half of a client, if this machine
-// pinned one for that relay, wired to say once when the relay's authority is
-// rotated and to remember it afterwards.
-//
-// The ratchet is the relay's own: a rotation on one relay says nothing about
-// another, and comparing one relay's intermediate against another's record
-// would refuse an honest relay as a replay.
-func pinnedAnchor(s *store.Store, r *store.Relay) (*client.Anchor, error) {
-	rec, err := s.AnchorFor(r)
-	if errors.Is(err, store.ErrNoAnchor) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &client.Anchor{
-		Cert:          rec.Cert,
-		SeenSPKI:      r.ServerIntSPKI,
-		SeenNotBefore: r.ServerIntNotBefore,
-		OnRotation: func(now, before time.Time) {
-			fmt.Fprintf(os.Stderr,
-				"%s: the server certificate authority of %s was rotated: issued %s, "+
-					"replacing one issued %s. Only the relay operator's offline authority "+
-					"can issue one, so this is a rotation, not an attack; recorded.\n",
-				prog, r.Name,
-				now.Local().Format(client.StampFormat), before.Local().Format(client.StampFormat))
-		},
-		OnSeen: func(spki string, notBefore time.Time) error {
-			return s.SeenIntermediateFor(r, spki, notBefore)
-		},
-	}, nil
+	return dialer().NoCert(s, id, r)
 }
 
 // relayFlag registers --relay on a command that talks to one. It is here

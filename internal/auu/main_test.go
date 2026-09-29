@@ -585,3 +585,37 @@ func TestAdviceSurvivesBeingWrapped(t *testing.T) {
 		})
 	}
 }
+
+// TestTheDialerCarriesTheNameThisProgramWasInstalledUnder: prog is a variable
+// Main sets from the name the binary was installed under, so the dialer handed
+// to internal/dial is built per call and never once at initialisation. Built
+// once it would carry "auu" for the life of the process, and every piece of
+// advice that quotes a command — "run 'auu register --relay work --token
+// TOKEN'" — would name a command somebody with only agentuucp on their PATH
+// does not have. The whole suite passes with it built once, since prog is
+// already "auu" here; this is the test that does not.
+//
+// It pins the other half too: internal/dial hands back a remark as a whole
+// sentence with no name in front and no newline at the end, and this is where
+// the name and the line ending go back on. The renewal warning's join is
+// proven by the tests that capture it whole, but the rotation notice's is
+// proven in the Go suite only here — nothing else in it fires that callback,
+// and the container suite, which does, is run by hand and never in CI. Write
+// the Note as Fprintln(os.Stderr, s) and a security notice loses the name of
+// the program saying it, with every other test still green.
+func TestTheDialerCarriesTheNameThisProgramWasInstalledUnder(t *testing.T) {
+	was := prog
+	t.Cleanup(func() { prog = was })
+	for _, name := range []string{"auu", "agentuucp", "courier"} {
+		prog = name
+		if got := dialer().Prog; got != name {
+			t.Errorf("installed as %q: the dialer says %q", name, got)
+		}
+		got := captureStderr(t, func() {
+			dialer().Note("the server certificate authority of work was rotated")
+		})
+		if want := name + ": the server certificate authority of work was rotated\n"; got != want {
+			t.Errorf("installed as %q: the remark reached stderr as %q, want %q", name, got, want)
+		}
+	}
+}

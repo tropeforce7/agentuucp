@@ -146,10 +146,9 @@ internal/auu/allow.go printAllowShow string sender.Fingerprint[:identity.ShortID
 internal/auu/anchor.go anchorPin string hash[:16] = local: ValidFingerprint at anchorPin shown by TestLimitAnchorArgsOneShort
 internal/auu/anchor.go anchorStatus string out.ServerIntermediate[:16] = local: ValidFingerprint at readRelay shown by TestLimitRelayRecordHashes
 internal/auu/cert.go certList string cert.Serial[:16] = local: ValidSerial at checkCerts shown by TestLimitAnswerShapesOneShort
-internal/auu/cert.go certRenew string rec.Serial[:16] = local: FormatSerial writes 32 hex characters, in saveIssued
+internal/auu/cert.go certRenew string rec.Serial[:16] = local: FormatSerial writes 32 hex characters, in dial.SaveIssued
 internal/auu/cert.go certStatus string fp[:16] = local: caFingerprint writes a fingerprint or nothing, checked != ""
 internal/auu/cert.go certStatusOutput int MLDSA int = output
-internal/auu/cert.go machineLabel string host[:i] = local: i from IndexByte of "." in host, checked > 0
 internal/auu/channel_cmds.go relayChannelsJSON int Queued map[string]int64 = output
 internal/auu/completion.go messages string m.Inner.From[:12] = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
 internal/auu/completion.go shorten string all[i].value[:12] = local: len(all[i].value) == 32 by the check before
@@ -260,6 +259,7 @@ internal/channels/channels.go listedDevice string stem[:3] = local: len(stem) >=
 internal/client/client.go retryAfter int strconv.ParseInt(raw) = [0, 86400] shown by TestLimitRetryAfter
 internal/client/shape.go (*Client).parseOffset int strconv.ParseInt(raw) = >= 0 shown by TestLimitUploadOffsetAnswer
 internal/clientca/csr.go cleanLabel string s[:len(s) - size] = local: size from DecodeLastRuneInString of s
+internal/dial/dial.go MachineLabel string host[:i] = local: i from IndexByte of "." in host, checked > 0
 internal/envelope/envelope.go Envelope int V int = [1, 1] shown by TestLimitEnvelopeV
 internal/envelope/envelope.go Open string plaintext[:sigLen] = local: len(plaintext) >= sigLen by the check before
 internal/envelope/envelope.go Open string plaintext[sigLen:] = local: len(plaintext) >= sigLen by the check before
