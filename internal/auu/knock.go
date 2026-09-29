@@ -64,6 +64,15 @@ func cmdKnock(args []string) error {
 		return usageErrf("usage: %s knock NAME|SHORT-ID|FINGERPRINT [--text \"...\"] [--relay NAME] [--yes]", prog)
 	}
 	query := positional[0]
+	// A knock takes no path. It is a request to a mailbox's own relay for
+	// its owner's card — the one message somebody who is not yet a peer may
+	// send — and it is answered by that relay from what it holds. Nothing
+	// carries one to a neighbour, and a bang in the name would otherwise be
+	// looked up as a peer and not found, which says nothing about why.
+	if path, _ := store.SplitAddress(query); len(path) > 0 {
+		return usageErrf("a knock goes to the relay that holds the mailbox and takes no path: "+
+			"%q names relays to go by way of", query)
+	}
 	s, id, err := loadIdentity()
 	if err != nil {
 		return err

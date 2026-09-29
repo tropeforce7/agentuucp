@@ -14,6 +14,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/regular"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/token"
 )
 
@@ -74,6 +75,74 @@ func ValidRelayName(name string) error {
 		return fmt.Errorf("relay name %q begins with %s, a device name on Windows, where it could not be a directory", name, strings.ToUpper(stem))
 	}
 	return nil
+}
+
+// CheckAddress holds a bang-path address to its rule: every name is a relay
+// name, no name is repeated, and the whole address names at most hops
+// relays. path is what is left to travel and via the hops already made; the
+// rule is over both together, since an address is one address however far
+// along it is.
+//
+// It lives here, beside ValidRelayName, because both ends run it and this is
+// the one package both ends already have. A relay runs it on every forward
+// request, before it parses the envelope, so that an address nobody could
+// route costs nothing; `auu send` runs it before anything is sealed, so that
+// a person who typed an address wrong is told at their terminal by the
+// program they typed it into. Two copies of it would be two rules, which is
+// the fault this project has a guide paragraph about.
+//
+// hops is the caller's because the two ends differ honestly. A relay refuses
+// above its own courier.max_hops, eight by default; nothing on the wire
+// carries that number, so a client can hold an address only to the
+// protocol's ceiling, relayapi.MaxHops. An address between the two passes at
+// the terminal and is refused at the first hop, with that hop's sentence.
+func CheckAddress(path, via []string, hops int64) error {
+	if int64(len(path)+len(via)) > hops {
+		// Wrapped, so that a caller which knows what set the ceiling can
+		// say so: the relay names courier.max_hops, and the terminal names
+		// nothing, because the protocol's ceiling is not a setting
+		// anybody turned.
+		return fmt.Errorf("an address names %d relays; at most %d%w", len(path)+len(via), hops, ErrAddressHops)
+	}
+	seen := map[string]bool{}
+	for _, name := range append(append([]string{}, path...), via...) {
+		if err := ValidRelayName(name); err != nil {
+			return err
+		}
+		// Folded, since a name is a directory at the hop that reads it and
+		// two filesystems spell Bar and bar as one. An address that repeats
+		// a relay is a loop somebody wrote down, and the relay refuses it
+		// for the same reason this does.
+		folded := strings.ToLower(name)
+		if seen[folded] {
+			return fmt.Errorf("address repeats %q: %s", name, relayapi.MsgAddressRepeats)
+		}
+		seen[folded] = true
+	}
+	return nil
+}
+
+// ErrAddressHops marks the one refusal whose sentence a caller finishes: the
+// ceiling is the caller's, so what set it is the caller's to name. It is
+// wrapped with no text of its own, so the sentence reads as one sentence.
+var ErrAddressHops = errors.New("")
+
+// SplitAddress splits a bang path into the relays it names and the peer at
+// the end: "bar!baz!bob" is ["bar", "baz"] and "bob".
+//
+// An address with no "!" is a peer and no relays, which is every address
+// anybody wrote before relays could forward, so the ordinary case comes back
+// unchanged. Nothing here validates: an empty name between two bangs is left
+// as the empty string for CheckAddress to refuse by the name rule, since a
+// sentence about relay names is what a person who typed "bar!!bob" needs.
+// JoinAddress is SplitAddress's other half for a path alone: the relay names
+// joined by "!", and the empty string for no relays, which is the value the
+// record leaves out.
+func JoinAddress(path []string) string { return strings.Join(path, "!") }
+
+func SplitAddress(address string) (path []string, peer string) {
+	parts := strings.Split(address, "!")
+	return parts[:len(parts)-1], parts[len(parts)-1]
 }
 
 func (s *Store) relayDir(name string) string { return s.path(relaysDir, name) }

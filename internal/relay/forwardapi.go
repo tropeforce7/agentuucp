@@ -234,28 +234,22 @@ func (s *Server) alreadyCarried(w http.ResponseWriter, callerFP, hash, courierNa
 // that is the right trade, because the sender cannot tell those two cases
 // apart either.
 func (s *Server) checkAddress(path, via []string) error {
+	// The rule is store.CheckAddress, which `auu send` runs too: a name has
+	// one rule and both ends run it. What is this relay's own is the
+	// ceiling, clamped here because a zero or a nonsense max_hops is the
+	// zero value of the settings struct, which an embedder can hand over
+	// and auu-relay never does.
 	hops := s.cfg.CourierLimits.MaxHops
 	if hops <= 0 || hops > relayapi.MaxHops {
 		hops = relayapi.MaxHops
 	}
-	if int64(len(path)+len(via)) > hops {
-		return fmt.Errorf("an address names %d relays; at most %d (courier.max_hops)",
-			len(path)+len(via), hops)
+	err := store.CheckAddress(path, via, hops)
+	if errors.Is(err, store.ErrAddressHops) {
+		// The one sentence this relay finishes, since the ceiling is its
+		// operator's and the setting's name is what they would change.
+		return fmt.Errorf("%v (courier.max_hops)", err)
 	}
-	seen := map[string]bool{}
-	for _, name := range append(append([]string{}, path...), via...) {
-		if err := store.ValidRelayName(name); err != nil {
-			return err
-		}
-		// Folded, since a name is a directory at the hop that reads it and
-		// two filesystems spell Bar and bar as one.
-		folded := strings.ToLower(name)
-		if seen[folded] {
-			return fmt.Errorf("address repeats %q: %s", name, relayapi.MsgAddressRepeats)
-		}
-		seen[folded] = true
-	}
-	return nil
+	return err
 }
 
 // parseForwarded reads the envelope out of a forward request and holds it to

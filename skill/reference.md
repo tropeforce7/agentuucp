@@ -61,12 +61,27 @@ Sending:
 ```
 auu send --to NAME|self [--subject S] [--channel NAME] [--attach FILE]... TEXT
 auu send --to NAME --body-file FILE                # or - to read the body from stdin
+auu send --to 'bar!bob' TEXT                       # somebody on a relay yours peers with
+auu send --to bob --via bar TEXT                   # the same address, no bang to quote
 auu send --resume                                  # finish an interrupted upload: from the relay's partial, or anew
 auu reply MESSAGE-ID|THREAD-ID [--subject S] [--channel NAME] [--attach FILE]... TEXT
 ```
 
 `send` and `reply` take `--json`. Always give the text: with no body and a
 terminal, `--edit` opens an editor and waits, which an agent cannot drive.
+
+An address with `!` in it goes by way of another relay: each name before the
+recipient is what *your* relay calls the next one, with no global directory,
+so the names come from whoever gave you the address and nothing lists them;
+a wrong one comes back as `no neighbour named "bar" on this relay` with
+nothing queued. Quote the address, or use `--via`, since `!` is history
+expansion in a shell; both at once is refused.
+The `id` in `--json` is then a row in your relay's queue, not a message in a
+mailbox, and `path` beside it is where it went. A message large enough to
+become a stream, which is 64 KiB unless the user has changed it, does not
+cross a relay yet — `a large message does not cross a relay yet` — and a `--channel` on a path is sent unchecked, since the relay
+that knows the recipient's channels is the last hop; a name it refuses comes
+back later as a failed message and not as an error from `send`.
 
 Reading:
 

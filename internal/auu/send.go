@@ -1,12 +1,14 @@
 package auu
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/client"
@@ -34,11 +36,17 @@ type sentJSON struct {
 	// Channel is the recipient's channel the message went to; absent for
 	// default.
 	Channel string `json:"channel,omitempty"`
+	// Path is the relays the message went by, nearest first, joined by
+	// "!"; absent for a recipient on the relay it was posted to.
+	Path string `json:"path,omitempty"`
 }
 
 func cmdSend(args []string) error {
 	fs := newFlagSet("send")
-	to := fs.String("to", "", "recipient: peer name or fingerprint, or self for a note to yourself")
+	to := fs.String("to", "", "recipient: peer name or fingerprint, or self for a note to yourself; "+
+		"'bar!bob' sends to bob by way of the relay your relay calls bar")
+	via := fs.String("via", "", "relays to send by way of, nearest first, as 'bar' or 'bar!baz'; "+
+		"the same as putting them in --to, for a script that would rather not quote a bang")
 	subject := fs.String("subject", "", "one-line subject")
 	thread := fs.String("thread", "", "existing thread id (default: start a new thread)")
 	replyTo := fs.String("reply-to", "", "message id this answers")
@@ -58,7 +66,7 @@ func cmdSend(args []string) error {
 		return err
 	}
 	if *resume {
-		if *to != "" || len(attach) > 0 || len(positional) > 0 || *channel != "" {
+		if *to != "" || *via != "" || len(attach) > 0 || len(positional) > 0 || *channel != "" {
 			return usageErrf("--resume finishes what is already sealed; it takes no other arguments")
 		}
 		s, id, err := loadIdentity()
@@ -69,6 +77,14 @@ func cmdSend(args []string) error {
 	}
 	if *to == "" {
 		return usageErrf("--to is required")
+	}
+	var path []string
+	var peer string
+	if path, peer, err = address(*to, *via); err != nil {
+		return err
+	}
+	if err != nil {
+		return err
 	}
 	if *msgType != message.TypeAsk && *msgType != message.TypeNote {
 		return usageErrf("--type must be ask or note")
@@ -110,7 +126,7 @@ func cmdSend(args []string) error {
 	if err != nil {
 		return err
 	}
-	recipient, err := s.Resolve(*to)
+	recipient, err := s.Resolve(peer)
 	if err != nil {
 		return usageErrf("%v", err)
 	}
@@ -149,7 +165,8 @@ func cmdSend(args []string) error {
 		InReplyTo: *replyTo,
 		Text:      text,
 	}
-	err = sealAndSend(s, id, r, recipient, body, attach, sendMode{*forceStream, *forceInline, *channel}, *asJSON)
+	err = sealAndSend(s, id, r, recipient, body, attach,
+		sendMode{stream: *forceStream, inline: *forceInline, channel: *channel, path: path}, *asJSON)
 	if err != nil && compose {
 		return draftKept(s, err)
 	}
@@ -273,7 +290,8 @@ func cmdReply(args []string) error {
 	}
 	// A reply goes to the sender's default unless --channel says otherwise:
 	// a channel is the receiver's sorting, not a thread.
-	err = sealAndSend(s, id, r, recipient, body, attach, sendMode{*forceStream, *forceInline, *channel}, *asJSON)
+	err = sealAndSend(s, id, r, recipient, body, attach,
+		sendMode{stream: *forceStream, inline: *forceInline, channel: *channel}, *asJSON)
 	if err != nil && compose {
 		return draftKept(s, err)
 	}
@@ -282,9 +300,52 @@ func cmdReply(args []string) error {
 
 // sendMode is what the flags say, before the size is consulted: the two
 // that force a shape, and the recipient's channel, empty for default.
+// address reads where a message is going: the relays to send it by way of,
+// nearest first, and the peer at the end.
+//
+// Two spellings, one meaning. "bar!baz!bob" is the address as a person
+// writes it; --to bob --via 'bar!baz' is the same address for a script that
+// would rather not put a bang inside quotes. Both at once is a usage error
+// rather than a merge, because there is no order between them a reader could
+// guess, and a silent guess about where somebody's mail goes is the wrong
+// kind of convenience.
+//
+// The rule runs here, before anything is sealed or dialled, and it is
+// store.CheckAddress — the same function the relay runs on every forward
+// request. What differs is the ceiling: this holds an address to the
+// protocol's, since nothing on the wire says what a given relay allows, so
+// an address inside 32 hops but over that relay's own courier.max_hops
+// passes here and is refused at the first hop, in that hop's words.
+func address(to, via string) (path []string, peer string, err error) {
+	path, peer = store.SplitAddress(to)
+	if via != "" {
+		if len(path) > 0 {
+			return nil, "", usageErrf("--to %q already names the relays to go by; "+
+				"--via is for giving them separately, as --to %q --via %q", to, peer, strings.Join(path, "!"))
+		}
+		path = strings.Split(via, "!")
+	}
+	if len(path) == 0 {
+		return nil, peer, nil
+	}
+	if peer == "" {
+		return nil, "", usageErrf("an address ends in the recipient: %q names relays and nobody to give it to", to)
+	}
+	if err := store.CheckAddress(path, nil, relayapi.MaxHops); err != nil {
+		return nil, "", usageErrf("%v", err)
+	}
+	return path, peer, nil
+}
+
 type sendMode struct {
 	stream, inline bool
 	channel        string
+	// path is the relays an address names before the recipient, nearest
+	// first, empty for a recipient on the relay being posted to — which is
+	// every message anybody sent before relays could forward, and still
+	// most of them. A path sends to the first hop's forward route instead
+	// of the recipient's mailbox.
+	path []string
 }
 
 // sealAndSend is the common tail of send and reply: the message sent, and
@@ -346,7 +407,27 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 		return sentJSON{}, newThread, err
 	}
 	estimate := raw + raw/3
-	if mode.stream || (!mode.inline && estimate > set.threshold) {
+	// Whether this becomes a stream, decided once and used twice: a message
+	// that would become one cannot cross a relay, and the two questions have
+	// to be the same question. Asked separately they were not — the refusal
+	// asked whether the message was over the relay's own limit, 16 MiB,
+	// where the switch asks whether it is over the stream threshold, 64 KiB
+	// — so everything between fell through to sendStream, which takes a
+	// channel and no path, and went into a mailbox on the sender's own
+	// relay with the path dropped and nothing said. One expression, so
+	// there is no between.
+	becomesStream := mode.stream || (!mode.inline && estimate > set.threshold)
+	// A message that crosses a relay goes as one envelope or it does not go.
+	// A stream is an upload held open at the relay it is going to, resumed
+	// by a route that names its id, and nothing carries one to a neighbour;
+	// both spellings of "this is large" are refused here, before anything is
+	// read, rather than at a relay that would have to explain a route it
+	// does not have.
+	if len(mode.path) > 0 && becomesStream {
+		return sentJSON{}, newThread, usageErrf("a large message does not cross a relay yet%s",
+			largestAttachmentHint(attachments))
+	}
+	if becomesStream {
 		out, err := sendStream(s, id, r, recipient, body, attachments, set, mode.channel)
 		// A stream has never printed the line that says how to wait for an
 		// answer, and this is not the change that starts.
@@ -389,12 +470,22 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 	if err != nil {
 		return sentJSON{}, newThread, err
 	}
-	relayID, err := c.Post(ctx(), env, mode.channel)
+	relayID, err := postOrForward(c, env, mode)
 	if err != nil {
-		// The channel hints first: their 404 begins "no such channel" and
-		// must not be read as a mailbox that is not there.
-		err = channelHint(err, s, id, c, r, recipient, mode.channel)
-		return sentJSON{}, newThread, transportErr(notRegisteredHint(storageFullHint(err, recipient), s, recipient, r))
+		if len(mode.path) == 0 {
+			// The channel hints first: their 404 begins "no such channel" and
+			// must not be read as a mailbox that is not there.
+			err = channelHint(err, s, id, c, r, recipient, mode.channel)
+			return sentJSON{}, newThread, transportErr(notRegisteredHint(storageFullHint(err, recipient), s, recipient, r))
+		}
+		// None of those hints is about the relay this was posted to. A
+		// channel belongs to the recipient and is checked at the last hop;
+		// whether the recipient is registered, and whose disk is full, are
+		// the last hop's too. The first hop's own refusals — it forwards
+		// nothing, it does not know that neighbour, its queue is full —
+		// say what they are, and anything further down comes back later as
+		// a failed row rather than as an answer to this request.
+		return sentJSON{}, newThread, transportErr(err)
 	}
 
 	// Keep our own copy so threads can be reconstructed later.
@@ -406,6 +497,11 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 		Inner:      inner,
 		SenderName: recipient.Name,
 		Channel:    mode.channel,
+		// The address it went by, so that the record says where a message
+		// went and not only to whom. The id beside it is the first hop's
+		// row and not a mailbox's message, which is what an undeliverable
+		// coming back will name.
+		Path: store.JoinAddress(mode.path),
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: message sent but the local copy failed: %v\n", err)
 	}
@@ -421,7 +517,67 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 		Channel:   mode.channel,
 	}
 	out.Kind = "envelope"
+	out.Path = store.JoinAddress(mode.path)
 	return out, newThread, nil
+}
+
+// postOrForward sends one envelope the way its address says: into the
+// recipient's mailbox on this relay, or onto the first hop's forward route
+// with the rest of the address for it to carry.
+//
+// The answer is an id either way, and they are different kinds of id — a
+// message in a mailbox, or a row in a queue — which is why the record keeps
+// the path beside it.
+func postOrForward(c *client.Client, env *envelope.Envelope, mode sendMode) (int64, error) {
+	if len(mode.path) == 0 {
+		return c.Post(ctx(), env, mode.channel)
+	}
+	// The channel goes on the envelope here, as Post puts it on there: it
+	// is the one field outside the seal, and SealFor deliberately leaves it
+	// to whoever posts, since the relay that reads it is the one being
+	// posted to. On a path that relay is the last hop, and these bytes are
+	// what every hop stores and passes on unchanged — so a channel not set
+	// here is a channel no hop ever sees, and the last one would file the
+	// message under default while the sealed copy inside said otherwise,
+	// which is what the recipient quarantines as misfiled.
+	outer := *env
+	outer.Ch = mode.channel
+	raw, err := json.Marshal(&outer)
+	if err != nil {
+		return 0, err
+	}
+	// Via is empty and always present: the hops so far are the relays'
+	// to write, and a sender that wrote one would be forging a return
+	// path, which the route refuses by name.
+	id, err := c.Forward(ctx(), &relayapi.ForwardRequest{
+		Envelope: raw,
+		Path:     mode.path,
+		Via:      []string{},
+	})
+	// A 409 says the relay is already holding this envelope, which is not a
+	// failure: the message is queued, once, and the id is the row it is in.
+	// Reading it as a failure would tell somebody their message did not go
+	// when it did, and have them send it again so the relay held two.
+	//
+	// Nothing in `auu send` walks this today, and the comment should not
+	// pretend otherwise: each send seals afresh, so the ciphertext and its
+	// hash are new, and the client retries only what a relay answered 503
+	// or 429 to — never a request whose answer was lost. What meets it is
+	// the relay's own worker, retrying bytes it has stored after an attempt
+	// was cut off. This is that contract honoured at the one other caller
+	// of the route, so that a retry added here later is right by
+	// construction rather than by somebody remembering.
+	//
+	// The status alone decides, as the worker decides: a 409 to the poster
+	// of the row carries that row's id and no sentence, the sentence being
+	// what somebody who is not its poster gets. A zero id is therefore
+	// honest rather than a case to refuse — the relay has the message
+	// either way, which is what the sender needs to know.
+	var he *client.HTTPError
+	if errors.As(err, &he) && he.Status == http.StatusConflict {
+		return he.ForwardID, nil
+	}
+	return id, err
 }
 
 // printSent says what went out, as a person reads it or as --json gives it.

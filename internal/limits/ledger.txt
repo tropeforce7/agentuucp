@@ -375,6 +375,7 @@ internal/store/damagedbox.go DamagedRecord int RelayID int64 = >= 0 shown by Tes
 internal/store/damagedbox.go recordPath string binPath[:len(binPath) - len(".bin")] = local: binPath ends in ".bin" from DamagedPath
 internal/store/leftbehind.go (*Store).LeftBehind int strconv.ParseInt(text) = > 0 shown by TestLimitLeftBehindIDs
 internal/store/relay.go relayNameBase string base[:room] = local: len(base) > room by the check before, and base is ASCII by construction
+internal/store/relay.go SplitAddress string parts[:len(parts) - 1] = local: strings.Split answers at least one element, so the last index is in range and the cut is that element dropped
 internal/store/store.go (*Store).Find string d[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/store/store.go (*Store).FindThread string t[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/store/store.go (*Store).RemoveByID.struct int RelayID int64 = > 0 shown by TestLimitRemoveByIDRelayFields

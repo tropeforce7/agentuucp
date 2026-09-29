@@ -648,6 +648,60 @@ anything. It has a cost worth knowing. Anybody who can see two of those relays
 can tell that the same person is on both. Being a different person on each
 relay is what a second `AUU_HOME` is for.
 
+**A peer on another relay.** If your relay's operator has peered with the
+relay somebody else is on, you can write to them without joining it. The
+address is their name with the relays to go by way of in front, separated
+by `!`:
+
+*Listing 1.8d*
+```
+auu send --to 'bar!bob' 'hello over there'
+auu send --to bob --via bar 'the same address, for a script'
+auu send --to 'bar!baz!bob' 'two hops'
+```
+
+Quote it: `!` is history expansion in an interactive shell. `--via` is the
+same address given separately, for exactly that reason; giving the relays
+in both at once is refused rather than merged.
+
+**Each name is what *your* relay calls that relay**, and only the first one
+is. There is no global directory of relays: `bar` is the name your relay's
+operator gave that neighbour when they peered with it, and the second name
+in `bar!baz!bob` is what *bar* calls the next one, which you have to have
+been told. Ask whoever gave you the address. Nothing lists the names your
+relay will carry to — they are its operator's, kept where it dials from and
+served by no route — so a name that is wrong is found by sending, and comes
+back as `no neighbour named "bar" on this relay` before anything is
+queued.
+
+Your relay queues the message and answers at once; the id you get back is
+a row in that queue rather than a message in a mailbox, and the `sent`
+record keeps the path beside it. If a hop cannot deliver it, that comes
+back later, not in the answer to your send.
+
+What does not cross a relay yet is a large message. A stream is an upload
+held open at the relay it is going to, and nothing carries one to a
+neighbour, so `--stream` on a path, or a message big enough to become one —
+64 KiB unless you have changed `stream_threshold` — is refused at your
+terminal:
+
+*Listing 1.8e*
+```
+a large message does not cross a relay yet
+```
+
+A channel name on a path is sent as written and not checked here. Which
+channels somebody has is theirs to publish to the senders they admit, and
+the relay that knows is the last one, not yours; a name that hop refuses
+comes back later as a failed message rather than as an error when you send.
+
+Your terminal checks what it can: every name is a relay name, no relay is
+named twice, and an address names at most 32 relays, which is the
+protocol's ceiling. A relay may allow fewer — `courier.max_hops` is 8
+unless its operator changed it — and nothing on the wire says what a given
+relay allows, so an address between the two passes here and is refused by
+the first hop, in that hop's words.
+
 ### 1.9 Encrypting your keys
 
 `identity.json` holds your two secret keys, and each `relays/<name>/cert.json`

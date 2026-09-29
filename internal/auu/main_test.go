@@ -67,8 +67,13 @@ func startRelayOnDisk(t *testing.T, cfg relay.Config) (*httptest.Server, *relay.
 		cfg.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	cfg.Streams = true
-	srv := httptest.NewServer(relay.NewServer(st, cfg))
-	t.Cleanup(srv.Close)
+	handler := relay.NewServer(st, cfg)
+	srv := httptest.NewServer(handler)
+	// Both, and the handler after the listener: a relay with a courier home
+	// starts a worker per neighbour, and those stop with the handler and not
+	// with the socket. Closing the listener first means nothing new arrives
+	// while the workers are being stopped.
+	t.Cleanup(func() { srv.Close(); handler.Close() })
 	return srv, st, filepath.Join(dir, "messages")
 }
 

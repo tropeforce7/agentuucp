@@ -100,6 +100,25 @@ auu send --to COLLEAGUE --subject 'SUBJECT' --attach path/to/File.java --json 't
 The `--json` output contains `id` and `thread`. Keep the `thread` value: it is
 how you collect the reply.
 
+A colleague on a relay yours peers with is addressed with the relays to go
+by way of in front of their name, separated by `!`:
+
+```
+auu send --to 'bar!COLLEAGUE' --subject 'SUBJECT' --json 'the question'
+```
+
+Each name is what *your* relay calls the next one; there is no global
+directory and nothing lists the names your relay will carry to, so the
+address comes from the user or from whoever gave it to them, and never from
+you. Quote it, or use `--to COLLEAGUE --via bar`, since `!` is history
+expansion in a shell. The `id` is then a row in your relay's queue rather than a
+message in a mailbox, and `path` says where it went; `thread` is unchanged
+and is still how you collect the reply. Two refusals are the user's: `a
+large message does not cross a relay yet`, which means the attachments must
+go another way or the colleague must be on a relay you share, and anything
+naming a relay — `no neighbour named "x" on this relay` — which means the
+address is wrong and is not yours to guess at.
+
 A colleague may have defined channels — named sub-mailboxes with a
 description each, such as `bug reports` or `cfp`. When you do not know
 theirs, list them first and pick the one whose description fits the

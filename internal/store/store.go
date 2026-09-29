@@ -688,6 +688,17 @@ type Stored struct {
 	// Channel is the channel the message was sent to, or filed under on
 	// receipt; empty is default.
 	Channel string `json:"channel,omitempty"`
+	// Path is the address a sent message went by: the relays between this
+	// machine's relay and the recipient's, nearest first, joined by "!".
+	// Empty — the value the key is left out for — is a recipient on the
+	// relay it was posted to, which is every message sent before relays
+	// could forward.
+	//
+	// It is the sender's copy of where their mail went, and it is what
+	// makes RelayID legible: with a path that id is a row in the first
+	// hop's queue rather than a message in a mailbox, and it is the number
+	// an undeliverable coming back will name.
+	Path string `json:"path,omitempty"`
 }
 
 // Box names a spool directory.
