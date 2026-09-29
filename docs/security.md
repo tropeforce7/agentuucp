@@ -227,6 +227,21 @@ mint a certificate for any fingerprint. That still gets them nothing without
 that identity's signing key, because every request needs both. What it would
 not buy them is any message, any identity key, or any token.
 
+**The second key, and only if the relay peers with another.** A relay that
+forwards mail to a neighbouring relay does it by being a user of that
+neighbour: it has an identity of its own, the courier, in a home the relay's
+user owns, and posts there as any client would. That identity is the second
+signing key a relay holds and the second deliberate exception to the same
+rule. A relay with no `courier` block holds neither it nor a home, which is
+every relay until an operator peers one. What a stolen copy of the courier's
+key buys is the ability to post at that relay's neighbours as that relay,
+which the neighbours' own budgets bound and which their operators end by
+removing one line from their couriers file. It buys no message and nobody's
+identity: the courier carries sealed envelopes and cannot open one, as the
+relay it belongs to cannot. The file is protected the way the bundle is, by
+the host — the relay's user alone, 0600, under the unit's hardening — and
+`docs/relay.md` section 1.10 says how the peering is set up.
+
 The relay also learns how many machines an identity uses and what each one
 calls itself. That is operational data it needs in order to revoke one of them.
 It is not who talks to whom, and `access_log: "minimal"` is unaffected.

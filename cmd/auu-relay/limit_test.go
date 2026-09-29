@@ -283,7 +283,8 @@ func TestLimitDurationSettings(t *testing.T) {
 
 // TestLimitConfigPathsResolveAgainstTheirFile: a relative path in the
 // relay's settings file — db, messages_dir, admin.authorized_file,
-// tls.cert_file, tls.key_file, tls.bundle — is resolved against the
+// courier.home, courier.authorized_file, tls.cert_file, tls.key_file,
+// tls.bundle — is resolved against the
 // file's own directory, never the working directory a supervisor started
 // the relay in; an absolute one and an empty one are left as they are,
 // and a flag keeps the working directory as a path typed at a shell does.
@@ -292,12 +293,18 @@ func TestLimitConfigPathsResolveAgainstTheirFile(t *testing.T) {
 	elsewhere := t.TempDir()
 	t.Chdir(elsewhere)
 	file := filepath.Join(fileDir, "relay.json")
-	if err := os.WriteFile(file, []byte(`{"tls": {"mode": "off"}, "db": "relay.db", "messages_dir": "bodies", "admin": {"authorized_file": "admins"}}`), 0o600); err != nil {
+	if err := os.WriteFile(file, []byte(`{"tls": {"mode": "off"}, "db": "relay.db", "messages_dir": "bodies", "admin": {"authorized_file": "admins"}, "courier": {"home": "courier", "authorized_file": "couriers"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// The administrators' file is looked for where the setting resolves
 	// to: beside the settings, not in the working directory.
 	if err := os.WriteFile(filepath.Join(fileDir, "admins"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// And so is the couriers file, which is read at validation for the same
+	// reason: a typo in it is a relay that does not start. An empty one is
+	// a relay that accepts from nobody yet, which is valid.
+	if err := os.WriteFile(filepath.Join(fileDir, "couriers"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := resolveBare(t, file)
@@ -308,6 +315,8 @@ func TestLimitConfigPathsResolveAgainstTheirFile(t *testing.T) {
 		{"db", cfg.DB, filepath.Join(fileDir, "relay.db")},
 		{"messages_dir", cfg.MessagesDir, filepath.Join(fileDir, "bodies")},
 		{"admin.authorized_file", cfg.Admin.AuthorizedFile, filepath.Join(fileDir, "admins")},
+		{"courier.home", cfg.Courier.Home, filepath.Join(fileDir, "courier")},
+		{"courier.authorized_file", cfg.Courier.AuthorizedFile, filepath.Join(fileDir, "couriers")},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s resolved to %q, want %q", tc.name, tc.got, tc.want)

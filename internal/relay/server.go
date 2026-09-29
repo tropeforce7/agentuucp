@@ -76,6 +76,14 @@ type Config struct {
 	// inject one so they need not sleep; request freshness and nonce expiry
 	// always use the real clock, because those are agreements with a client.
 	Now func() time.Time
+	// Courier is this relay's side of its peerings with other relays: the
+	// identity it posts to a neighbour as, the neighbours it can dial, and
+	// the neighbours it accepts forwarded mail from. Nil is a relay that
+	// forwards nothing and accepts nothing forwarded, which is the zero
+	// value and what every relay was until this existed: the caller builds
+	// one with NewCourier, so that a configuration which cannot work is a
+	// relay that does not start.
+	Courier *Courier
 }
 
 // Server is the relay's HTTP surface.
@@ -93,7 +101,10 @@ type Server struct {
 	inflight chan struct{}
 	minimal  bool
 	admins   *adminSet
-	started  time.Time
+	// courier is nil on a relay that neither forwards nor accepts forwarded
+	// mail, which is every relay that has not been given a courier block.
+	courier *Courier
+	started time.Time
 	// notify wakes a listing held open for a mailbox when a row arrives in
 	// it, or a directory it watches is replaced; holds counts the listings
 	// held, against the caps; maxWait is the longest hold, relayapi.MaxWait
@@ -159,6 +170,7 @@ func NewServer(store *Store, cfg Config) *Server {
 		lim:     newLimiters(cfg.Limits, cfg.Now),
 		minimal: cfg.AccessLog == AccessLogMinimal,
 		admins:  newAdminSet(cfg.AdminFile, cfg.Admins, cfg.Logger),
+		courier: cfg.Courier,
 		started: time.Now(),
 		notify:  &notifier{},
 		holds:   newHolds(cfg.Limits.MaxWaiting),

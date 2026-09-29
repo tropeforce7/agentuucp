@@ -84,7 +84,32 @@ type Config struct {
 	Admin       AdminConfig       `json:"admin"`
 	Limits      LimitsConfig      `json:"limits"`
 	AccessLog   string            `json:"access_log"`
+	// Courier is how this relay peers with other relays. The zero value is
+	// a relay that forwards nothing and accepts nothing forwarded, which
+	// every relay was before this existed.
+	Courier CourierConfig `json:"courier"`
 }
+
+// CourierConfig says how this relay reaches its neighbouring relays and which
+// of them it accepts forwarded mail from. Each half is independent: a relay
+// may dial neighbours it accepts nothing from, and accept from neighbours it
+// cannot dial, which is one-way peering and a thing an operator may want.
+type CourierConfig struct {
+	// Home is the auu home this relay dials its neighbours from, owned by
+	// the user the relay runs as: an ordinary home, made with 'auu init'
+	// without a passphrase and filled with 'auu enrol --name NAME TOKEN'
+	// once per neighbour. The name given to a relay there is the name a
+	// sender writes in a bang path. Empty means this relay dials nobody.
+	Home string `json:"home"`
+	// AuthorizedFile holds export lines, one per neighbouring relay this
+	// one accepts forwarded mail from, in the format the administrators
+	// file uses, each line's name being this relay's name for that
+	// neighbour. Empty means this relay accepts no forwarded mail.
+	AuthorizedFile string `json:"authorized_file"`
+}
+
+// set reports whether either key was given.
+func (c CourierConfig) set() bool { return c.Home != "" || c.AuthorizedFile != "" }
 
 // ClientCertsConfig turns on mutual TLS: the relay issues a certificate to
 // each machine at enrolment and requires one on every mailbox route.
@@ -318,6 +343,34 @@ var removedKeys = map[string]string{
 	"limits.trusted_proxies": "reverse-proxy support was removed: the relay terminates TLS itself, on its own port, and reads no X-Forwarded-For. Remove this key and set tls.bundle or tls.bundle_credential.",
 }
 
+// checkEmptyCourier refuses a courier block that asks for nothing.
+//
+// A relay with no courier block is the ordinary case: it forwards nothing and
+// accepts nothing forwarded, as every relay did before any of this existed.
+// But an operator who wrote "courier": {} meant something by it and has got
+// nothing, and after the strict decode the two are one thing — an absent key
+// and an empty object both leave the zero value — so the raw bytes are where
+// the difference still exists.
+func checkEmptyCourier(raw []byte) error {
+	var probe struct {
+		Courier *map[string]json.RawMessage `json:"courier"`
+	}
+	// The keys are counted rather than decoded into CourierConfig, because a
+	// block holding one key this build does not know would decode to the
+	// same zero value as an empty one, and a typo must be reported as a
+	// typo by the strict decode below rather than as a block that asks for
+	// nothing. Malformed JSON is that decode's to report too.
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil
+	}
+	if probe.Courier != nil && len(*probe.Courier) == 0 {
+		return errors.New("courier is set to an empty block, so this relay would forward nothing " +
+			"and accept nothing forwarded: set courier.home to dial neighbours, " +
+			"courier.authorized_file to accept forwarded mail from them, or remove the block")
+	}
+	return nil
+}
+
 // checkRemovedKeys reports a setting that used to exist, by name.
 func checkRemovedKeys(raw []byte) error {
 	var probe map[string]json.RawMessage
@@ -365,6 +418,13 @@ func Load(path string) (Config, string, error) {
 	if err := checkRemovedKeys(raw); err != nil {
 		return cfg, "", fmt.Errorf("%s: %w", path, err)
 	}
+	// A courier block with nothing in it is checked here rather than after
+	// the decode, where an empty object and an absent key are the same
+	// thing, and a relay with no block at all is the ordinary case that
+	// must not be refused.
+	if err := checkEmptyCourier(raw); err != nil {
+		return cfg, "", fmt.Errorf("%s: %w", path, err)
+	}
 
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	// A misspelled key is a silent misconfiguration otherwise, and the whole
@@ -403,7 +463,8 @@ func Load(path string) (Config, string, error) {
 // dir, the file's own directory; an absolute one and an empty one are
 // left as they are. The credential name is not a path and is not here.
 func (c *Config) resolveAgainst(dir string) {
-	for _, p := range []*string{&c.DB, &c.MessagesDir, &c.Admin.AuthorizedFile, &c.TLS.CertFile, &c.TLS.KeyFile, &c.TLS.Bundle} {
+	for _, p := range []*string{&c.DB, &c.MessagesDir, &c.Admin.AuthorizedFile, &c.TLS.CertFile, &c.TLS.KeyFile, &c.TLS.Bundle,
+		&c.Courier.Home, &c.Courier.AuthorizedFile} {
 		if *p != "" && !filepath.IsAbs(*p) {
 			*p = filepath.Join(dir, *p)
 		}
@@ -507,6 +568,10 @@ func (c *Config) Merge(fs *flag.FlagSet, f *flagValues) {
 			c.Limits.MaxKnocksWaiting = f.maxKnocksWaiting
 		case "knocks-per-hour":
 			c.Limits.KnocksPerHour = f.knocksPerHour
+		case "courier-home":
+			c.Courier.Home = f.courierHome
+		case "courier-file":
+			c.Courier.AuthorizedFile = f.courierFile
 		case "access-log":
 			c.AccessLog = f.accessLog
 		}
@@ -597,6 +662,9 @@ func (c Config) Validate() error {
 		if _, err := relay.LoadAdmins(c.Admin.AuthorizedFile); err != nil {
 			return err
 		}
+	}
+	if err := c.courierValidate(); err != nil {
+		return err
 	}
 	// Created rather than merely inspected, so a relay that cannot store mail
 	// fails at startup with the path in the message and not at the first post.
@@ -791,6 +859,28 @@ func (l LimitsConfig) Relay() relay.Limits {
 		MaxKnocksWaiting:         l.MaxKnocksWaiting,
 		KnocksPerHour:            l.KnocksPerHour,
 	}
+}
+
+// courierValidate checks what can be judged about the peering without
+// touching the courier home.
+//
+// The home is deliberately not opened here. Opening it creates the
+// directories an auu home has, and a settings file is validated by
+// --print-config and by every start, so validation that made a home would
+// make one wherever it ran. What needs the home — no identity, an encrypted
+// one, a neighbour at this relay's own URL, a line naming this relay's own
+// courier — is refused by relay.NewCourier at the start, before the listener
+// opens. What is checked here is the file, parsed now rather than at the
+// first forwarded message so that a typo in it is a relay that does not
+// start, with the line number in the sentence.
+func (c Config) courierValidate() error {
+	if c.Courier.AuthorizedFile == "" {
+		return nil
+	}
+	if _, err := relay.LoadCouriers(c.Courier.AuthorizedFile); err != nil {
+		return err
+	}
+	return nil
 }
 
 // clientCertsValidate checks the client certificate settings.

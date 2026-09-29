@@ -74,6 +74,9 @@ type flagValues struct {
 	maxInflight          int64
 	maxWaiting           int64
 	accessLog            string
+
+	courierHome string
+	courierFile string
 }
 
 func registerFlags(fs *flag.FlagSet) *flagValues {
@@ -88,6 +91,10 @@ func registerFlags(fs *flag.FlagSet) *flagValues {
 	fs.StringVar(&f.db, "db", d.DB, "path to the SQLite database")
 	fs.StringVar(&f.messagesDir, "messages-dir", "",
 		"directory holding one file per stored message (default: alongside the database)")
+	fs.StringVar(&f.courierHome, "courier-home", d.Courier.Home,
+		"auu home this relay dials neighbouring relays from (default: dial none)")
+	fs.StringVar(&f.courierFile, "courier-file", d.Courier.AuthorizedFile,
+		"export lines of the neighbouring relays this one accepts forwarded mail from (default: accept none)")
 	fs.Int64Var(&f.maxBytes, "max-bytes", d.MaxBytes, "largest accepted envelope, in bytes")
 	fs.StringVar(&f.registration, "registration", d.Registration,
 		"who may create a mailbox: open, token, or closed")
@@ -386,6 +393,22 @@ func relayConfig(cfg Config, parts *clientCertParts, log *slog.Logger) (relay.Co
 			return relay.Config{}, err
 		}
 	}
+	// The courier is built here, once, for the administrators' reason and one
+	// of its own: everything about a peering that cannot work — a home with
+	// no identity or an encrypted one, a neighbour that is this relay, a
+	// couriers file admitting this relay's own courier — is a relay that does
+	// not start, said before the listener opens, rather than a fault found by
+	// the first person whose mail it was meant to carry.
+	var courier *relay.Courier
+	if cfg.Courier.set() {
+		if courier, err = relay.NewCourier(relay.CourierConfig{
+			Home:           cfg.Courier.Home,
+			AuthorizedFile: cfg.Courier.AuthorizedFile,
+			PublicURL:      cfg.PublicURL,
+		}, log); err != nil {
+			return relay.Config{}, err
+		}
+	}
 	return relay.Config{
 		MaxBytes:       cfg.MaxBytes,
 		Registration:   cfg.Registration,
@@ -400,6 +423,7 @@ func relayConfig(cfg Config, parts *clientCertParts, log *slog.Logger) (relay.Co
 		Logger:         log,
 		Limits:         cfg.Limits.Relay(),
 		AccessLog:      cfg.AccessLog,
+		Courier:        courier,
 	}, nil
 }
 

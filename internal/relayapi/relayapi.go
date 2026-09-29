@@ -582,6 +582,18 @@ const MsgNeedSignedAllowlist = "this relay takes a signed allow list; the reques
 // than of one relay, so it is a constant and not a setting.
 const MaxAllowlist = 1000
 
+// MaxCouriers caps the neighbouring relays one relay accepts forwarded mail
+// from: the lines its couriers file may hold, refused above it at load.
+//
+// It is a protocol constant for MaxAllowlist's reason rather than a setting:
+// the relay holds the file to it today, and the route that will list the
+// couriers back to a user — so that somebody with a restricted allow list
+// can admit one by name — will be read by a client that must know the same
+// bound before it reads the answer. That route is not in the tree yet, and
+// this is a bound on both ends of it when it is. A thousand neighbours is far past any network of relays whose
+// operators know one another, which is the only kind this is for.
+const MaxCouriers = 1000
+
 // The channel caps, protocol constants for the same reason as MaxAllowlist:
 // the sender's client, the owner's and the relay all validate a directory,
 // and they must agree on the bounds. Names and descriptions are measured in

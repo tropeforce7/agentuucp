@@ -40,6 +40,8 @@ Later ones win. A flag you do not type never overrides the file.
 | `--public-url URL` | `public_url` | none |
 | `--admin-file PATH` | `admin.authorized_file` | none, no administrators |
 | `--token-max-age DURATION` | `admin.token_max_age` | `720h` |
+| `--courier-home PATH` | `courier.home` | none, this relay dials no other relay; see 1.10 |
+| `--courier-file PATH` | `courier.authorized_file` | none, this relay accepts no forwarded mail; see 1.10 |
 | `--client-certs off\|required` | `client_certs.mode` | `off`; `required` needs `registration` `token` or `closed` |
 | `--client-cert-lifetime DURATION` | `client_certs.lifetime` | `8760h`, between `1h` and `87600h` |
 | `--tls-mode off\|files` | `tls.mode` | `files`; `off` only when said, see below |
@@ -101,7 +103,8 @@ compared without regard to case, addresses as addresses.
 A path in the settings file that is not absolute is relative to the
 directory the settings file is in, not to the directory the relay was
 started from. That covers `db`, `messages_dir`, `admin.authorized_file`,
-`tls.cert_file`, `tls.key_file` and `tls.bundle`. `"db": "relay.db"` in
+`courier.home`, `courier.authorized_file`, `tls.cert_file`, `tls.key_file`
+and `tls.bundle`. `"db": "relay.db"` in
 `/etc/auu/relay.json` is `/etc/auu/relay.db` whether systemd or a shell
 started the relay. The default when the file names no `db` at all follows
 the same rule, `relay.db` and `messages` beside the settings. A path given
@@ -508,8 +511,10 @@ Everything above the line stays on that machine:
        the relay's own cert       client certificates
 ```
 
-The relay is given two signing keys and no more. What a copy of its disk buys
-an attacker is the ability to be that one relay and to issue client
+The bundle holds two signing keys and no more: this relay's own and its
+client authority's. A relay peered with another also holds the courier's
+identity, which is 1.10's and is not in the bundle. What a copy of its disk
+buys an attacker is the ability to be that one relay and to issue client
 certificates. Those certificates are useless without the identity keys they
 pair with. It never buys the ability to extend trust, to issue for another
 name, or to make an authority. The server intermediate carries **name
@@ -774,6 +779,90 @@ alone has an account on it, nothing else runs there, it is patched, and the
 unit's hardening from the kit stays in place. What an attacker on the host still
 cannot do is read a message or write one as somebody else, because the keys
 for that were never on the machine.
+
+### 1.10 Forwarding to another relay
+
+A relay can carry mail to a relay it neighbours, so that somebody on yours
+can write to somebody on theirs without either of them joining the other's.
+Nothing in this section is on by default: a relay with no `courier` block
+forwards nothing and accepts nothing forwarded, which is what every relay
+did before this existed.
+
+The arrangement is the one two administrators can set up between themselves
+in an afternoon, and it rests on nothing more than their trusting each other
+to deliver mail. It cannot rest on less, and it needs no more: a message is
+sealed for its recipient, so a relay carrying one cannot read it, forge it
+or re-address it. What relay trust covers is delivery, and that is all.
+
+**A relay forwards by being a user of its neighbour.** It has an identity of
+its own — a *courier* — enrolled on the neighbour with a token the
+neighbour's administrator issued, exactly as a person enrols. So each relay
+knows a neighbour twice, and each half is a thing that already exists:
+
+- **To dial one**, an entry in the *courier home*: an ordinary `auu` home
+  the relay's user owns, named by `courier.home`. The name you give a relay
+  there is the name senders write in an address.
+- **To accept from one**, a line in the *couriers file*, named by
+  `courier.authorized_file`: export lines in the format the administrators
+  file uses, one per neighbour, each line's name being your name for that
+  neighbour.
+
+Set the home up as the user the relay runs as, with no passphrase, since a
+relay cannot be asked for one and runs no agent:
+
+```
+sudo -u auu env AUU_HOME=/var/lib/auu/courier auu init --name relay-a
+sudo -u auu env AUU_HOME=/var/lib/auu/courier auu enrol --name bar TOKEN
+sudo -u auu env AUU_HOME=/var/lib/auu/courier auu id export
+```
+
+The user and the directory are the shipped unit's — `User=auu` and
+`StateDirectory=auu` — so the home is under the one path the unit can write
+and nothing in it changes for this.
+
+The last line prints the export line to send to the neighbour's operator,
+who puts it in their couriers file under their name for you. They send you
+theirs, and you do the same. The file is theirs to protect as the
+administrators file is: the relay refuses to start if it is writable by
+group or others, since whoever can write it decides which relays may put
+mail into this one's mailboxes.
+
+**Use one name for a neighbour in both places.** Nothing can enforce it — a
+relay cannot learn a neighbour's identity from its health answer — so the
+relay says at every start which names appear in one and not the other:
+
+```
+level=INFO msg="courier: this relay accepts mail from a neighbour it cannot dial; a reply along that name will be refused at its first hop" name=qux
+level=INFO msg="courier: this relay dials a neighbour it accepts no mail from; that neighbour's replies and its undeliverables will be refused here" name=baz
+```
+
+Neither is a refusal, because one-way peering is a thing you may want: a
+relay may accept from a neighbour it never dials, or dial one that accepts
+nothing from it. But a name in only one place is also what a typo looks
+like, and what it costs is somebody's reply, so the start says it and you
+decide which it is. A relay given a home and no file, or a file and no
+home, is one-way on purpose and is not remarked on.
+
+The relay also says at the start when its own certificate for a neighbour
+cannot be read, naming the home and what to run in it, rather than leaving
+it to be found by the first person whose mail it was meant to carry.
+
+**What the courier key is, and what a copy of it buys.** The courier's
+identity is the second signing key a relay holds, after its certificate
+authority's, and a deliberate exception to the rule that a relay holds
+none. What a stolen copy buys is the ability to post at your neighbours as
+your relay, which their own budgets bound and which their operator ends by
+removing one line from their couriers file. It buys no message, and nobody's
+identity: the courier is a postman, not a reader. Protect the file as the
+relay's bundle is protected — the relay's user alone, 0600, under the unit's
+hardening.
+
+A courier is a registered identity of the relay it posts to, so it has a
+mailbox there as any user does. Nothing writes to it and nothing reads it:
+mail for the people a relay serves goes to their own mailboxes, and a
+courier's is a side effect of enrolling. Nothing stops somebody posting to
+one — it is an ordinary mailbox — and what that costs is that neighbour's
+quota, which their operator can see and their allow list can end.
 
 ## 2. Administering a relay
 

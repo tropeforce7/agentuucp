@@ -199,7 +199,7 @@ func (s *Store) Relay(query string) (*Relay, error) {
 	}
 	if looksLikeURL(query) {
 		for _, r := range relays {
-			if sameRelayURL(r.URL, query) {
+			if SameRelayURL(r.URL, query) {
 				return r, nil
 			}
 		}
@@ -252,11 +252,18 @@ func (s *Store) RelayNames() string {
 
 func looksLikeURL(s string) bool { return strings.Contains(s, "://") }
 
-// sameRelayURL compares two relay URLs the way a person would. The port is
+// SameRelayURL compares two relay URLs the way a person would. The port is
 // part of the address — token.NormaliseRelay keeps it, and so does every
 // token audience — but a port a person left off because it is the scheme's
 // own is the same address, and typing it should not fail to match.
-func sameRelayURL(a, b string) bool {
+//
+// It is exported because a relay asks the same question of its own public
+// URL against the neighbours in its courier home, and two answers to "is
+// this the same relay" would be a hole in whichever of them is the laxer:
+// this home already refuses to add one relay twice under two spellings, so
+// a relay comparing spellings its own way would accept as a neighbour
+// something this home would have called itself.
+func SameRelayURL(a, b string) bool {
 	if token.NormaliseRelay(a) == token.NormaliseRelay(b) {
 		return true
 	}
@@ -290,7 +297,7 @@ func (s *Store) AddRelay(name, rawURL string) (*Relay, error) {
 		return nil, err
 	}
 	for _, r := range relays {
-		if sameRelayURL(r.URL, normalised) {
+		if SameRelayURL(r.URL, normalised) {
 			return nil, fmt.Errorf("%s is already here, as %q", r.URL, r.Name)
 		}
 	}

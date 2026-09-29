@@ -467,7 +467,15 @@ so that you can judge any change to it:
   unit says which two lines to add back if you put it on 443 anyway.
 - **`StateDirectory=auu`** at mode `0700`: systemd creates `/var/lib/auu`,
   owns it for the service, and makes it the only writable path. The database
-  and the message files live under it.
+  and the message files live under it, and so does the courier home if you
+  peer this relay with another: `/var/lib/auu/courier` is under the one
+  writable path already, so nothing in the unit changes for it. Make it as
+  the service's own user, since a home the relay cannot write is a relay
+  that cannot renew its certificate at a neighbour:
+  `sudo -u auu env AUU_HOME=/var/lib/auu/courier auu init --name this-relay`.
+  `docs/relay.md` section 1.10 has the rest, and the identity in it is the
+  second signing key the relay holds, so it is protected as the bundle is —
+  the service's user alone, and no backup that leaves the host.
 - **`ProtectSystem=strict`** with **`ProtectHome=true`**: the rest of the
   filesystem is read-only. `/etc/auu` is readable, which is all the relay ever
   does with it.
