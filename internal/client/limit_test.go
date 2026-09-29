@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"net/http"
@@ -129,6 +130,17 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 		{"/v1/mailbox/" + fp, listing(func(l *relayapi.ListResponse, n int64) { l.Messages[0].ID = n }), callList},
 		{"/v1/mailbox/" + bob.Fingerprint(), func(n int64) any { return relayapi.PostResponse{ID: n} },
 			func(c *Client) error { _, err := c.Post(context.Background(), env, ""); return err }},
+		{"/v1/forward", func(n int64) any { return relayapi.ForwardResponse{ID: n} },
+			func(c *Client) error {
+				raw, err := json.Marshal(env)
+				if err != nil {
+					return err
+				}
+				_, err = c.Forward(context.Background(), &relayapi.ForwardRequest{
+					Envelope: raw, Path: []string{"bar"}, Via: []string{},
+				})
+				return err
+			}},
 	}
 	seconds := []shape{
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.TokenMaxAgeSecs = n }), callStatus},

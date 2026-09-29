@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relay"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
 
@@ -260,5 +263,151 @@ func TestValidatingTheSettingsDoesNotMakeAHome(t *testing.T) {
 	_, err = relay.NewCourier(relay.CourierConfig{Home: home}, slog.Default())
 	if err == nil {
 		t.Error("a home that does not exist started")
+	}
+}
+
+// TestTheCourierDefaultsMatchTheLibrarys: operator defaults live in the
+// library and the command populates itself from them, so the two cannot drift
+// without this failing. Comparing field by field rather than with one
+// equality is deliberate: a field added to the library and forgotten here is
+// what the test is for, and the compiler does not notice one.
+func TestTheCourierDefaultsMatchTheLibrarys(t *testing.T) {
+	cfg, err := resolve(t, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := cfg.Courier.Relay()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := relay.DefaultCourierLimits()
+	if got.MaxHops != want.MaxHops ||
+		got.ForwardTTL != want.ForwardTTL ||
+		got.QueueMaxBytes != want.QueueMaxBytes ||
+		got.QueueMaxMessages != want.QueueMaxMessages ||
+		got.QueueMaxBytesPerPoster != want.QueueMaxBytesPerPoster ||
+		got.PostsPerMinute != want.PostsPerMinute ||
+		got.PostBytesPerHour != want.PostBytesPerHour ||
+		got.CarriedMaxRows != want.CarriedMaxRows {
+		t.Fatalf("the command's courier defaults have drifted from the relay's:\n got %+v\nwant %+v", got, want)
+	}
+	// A relay with no peering still has these numbers: what it would allow
+	// if it were asked is a setting, and only the two paths decide whether
+	// anybody asks.
+	if cfg.Courier.set() {
+		t.Error("the defaults alone made this relay peer with somebody")
+	}
+}
+
+// TestLimitCourierSettingRanges: every courier number an operator can set,
+// at both sides of both edges and at the type's own, with the sentence each
+// refusal gives. max_hops and forward_ttl have no honest zero and say so;
+// the rest take zero as unlimited.
+func TestLimitCourierSettingRanges(t *testing.T) {
+	t.Run("max_hops", func(t *testing.T) {
+		for _, tc := range []struct {
+			hops int64
+			ok   bool
+		}{
+			{0, false}, {-1, false}, {math.MinInt64, false},
+			{1, true}, {8, true}, {relayapi.MaxHops, true},
+			{relayapi.MaxHops + 1, false}, {math.MaxInt64, false},
+		} {
+			_, err := resolve(t, "", "--courier-max-hops", strconv.FormatInt(tc.hops, 10))
+			if tc.ok && err != nil {
+				t.Errorf("max_hops %d: %v; want it taken", tc.hops, err)
+			}
+			if !tc.ok {
+				if err == nil {
+					t.Errorf("max_hops %d was taken", tc.hops)
+				} else if !strings.Contains(err.Error(), fmt.Sprintf("between 1 and %d", relayapi.MaxHops)) {
+					t.Errorf("max_hops %d: %v; want the range in the sentence", tc.hops, err)
+				}
+			}
+		}
+	})
+	t.Run("forward_ttl", func(t *testing.T) {
+		for _, tc := range []struct {
+			ttl string
+			ok  bool
+		}{
+			{"59s", false}, {"0", false}, {"0s", false}, {"-1h", false},
+			{"1m", true}, {"72h", true}, {"720h", true},
+			{"721h", false}, {"9223372037s", false}, {"inf", false}, {"", true},
+		} {
+			args := []string{}
+			if tc.ttl != "" {
+				args = []string{"--courier-forward-ttl", tc.ttl}
+			}
+			_, err := resolve(t, "", args...)
+			if tc.ok && err != nil {
+				t.Errorf("forward_ttl %q: %v; want it taken", tc.ttl, err)
+			}
+			if !tc.ok && err == nil {
+				t.Errorf("forward_ttl %q was taken", tc.ttl)
+			}
+		}
+	})
+	t.Run("the counts and the bytes", func(t *testing.T) {
+		for _, f := range []string{
+			"--courier-queue-max-bytes", "--courier-queue-max-bytes-per-poster",
+			"--courier-posts-per-minute", "--courier-post-bytes-per-hour",
+			"--courier-carried-max-rows", "--courier-queue-max-messages",
+		} {
+			// Zero is unlimited and is taken; a negative one is refused with
+			// the sentence that says what zero means.
+			if _, err := resolve(t, "", f, "0"); err != nil {
+				t.Errorf("%s 0: %v; want unlimited", f, err)
+			}
+			_, err := resolve(t, "", f, "-1")
+			if err == nil {
+				t.Errorf("%s -1 was taken", f)
+			} else if !strings.Contains(err.Error(), "use 0 for unlimited") {
+				t.Errorf("%s -1: %v; want the sentence naming what zero means", f, err)
+			}
+			if _, err := resolve(t, "", f, strconv.FormatInt(math.MinInt64, 10)); err == nil {
+				t.Errorf("%s MinInt64 was taken", f)
+			}
+		}
+		// The one with a ceiling, at it and one over.
+		if _, err := resolve(t, "", "--courier-queue-max-messages", strconv.Itoa(maxQueueMessagesCeiling)); err != nil {
+			t.Errorf("queue_max_messages at its ceiling: %v", err)
+		}
+		_, err := resolve(t, "", "--courier-queue-max-messages", strconv.Itoa(maxQueueMessagesCeiling+1))
+		if err == nil || !strings.Contains(err.Error(), "at most") {
+			t.Errorf("queue_max_messages one over its ceiling: %v; want the refusal", err)
+		}
+		if _, err := resolve(t, "", "--courier-queue-max-messages", strconv.FormatInt(math.MaxInt64, 10)); err == nil {
+			t.Errorf("queue_max_messages MaxInt64 was taken")
+		}
+	})
+}
+
+// TestPrintedConfigCarriesTheCourierNumbers: the printed configuration is the
+// record of what the relay is doing, so every bound is in it and loads again.
+func TestPrintedConfigCarriesTheCourierNumbers(t *testing.T) {
+	cfg, err := resolve(t, "", "--courier-max-hops", "3", "--courier-forward-ttl", "5h",
+		"--courier-carried-max-rows", "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := Encode(&out, cfg.Redacted()); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"max_hops", "forward_ttl", "queue_max_bytes", "queue_max_messages",
+		"queue_max_bytes_per_poster", "posts_per_minute", "post_bytes_per_hour", "carried_max_rows"} {
+		if !strings.Contains(out.String(), key) {
+			t.Errorf("--print-config output is missing %q", key)
+		}
+	}
+	back, err := resolve(t, writeFile(t, out.String()))
+	if err != nil {
+		t.Fatalf("the printed configuration does not load again: %v", err)
+	}
+	// The duration round trips as the operator wrote it, not as Go would
+	// print it: the printed configuration is their file back again.
+	if back.Courier.MaxHops != 3 || back.Courier.ForwardTTL != "5h" || back.Courier.CarriedMaxRows != 7 {
+		t.Fatalf("the courier's numbers did not round trip: %+v", back.Courier)
 	}
 }

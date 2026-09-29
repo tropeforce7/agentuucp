@@ -248,6 +248,7 @@ func TestLimitBodyCapsPerRoute(t *testing.T) {
 		{"the post", "POST", "/v1/mailbox/" + bob.Fingerprint(), alice, 1<<20 + relayapi.FramingAllowance, ""},
 		{"the knock", "POST", "/v1/mailbox/" + bob.Fingerprint() + "/knock", alice, 1<<20 + relayapi.FramingAllowance, ""},
 		{"the stream open", "POST", "/v1/mailbox/" + bob.Fingerprint() + "/streams", alice, relayapi.FramingAllowance, ""},
+		{"the forward", "POST", "/v1/forward", alice, 1<<20 + relayapi.FramingAllowance, ""},
 		{"the registration", "POST", "/v1/register", alice, relayapi.FramingAllowance, ""},
 		{"the certificate request", "POST", "/v1/mailbox/" + me + "/certs", alice, relayapi.FramingAllowance, ""},
 	} {

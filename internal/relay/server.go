@@ -76,6 +76,11 @@ type Config struct {
 	// inject one so they need not sleep; request freshness and nonce expiry
 	// always use the real clock, because those are agreements with a client.
 	Now func() time.Time
+	// CourierLimits is what this relay's forwarding is bounded by. The zero
+	// value is unlimited where a zero is honest and refuses nothing where
+	// it is not: a relay with no Courier never reads it, and auu-relay
+	// starts from DefaultCourierLimits.
+	CourierLimits CourierLimits
 	// Courier is this relay's side of its peerings with other relays: the
 	// identity it posts to a neighbour as, the neighbours it can dial, and
 	// the neighbours it accepts forwarded mail from. Nil is a relay that
@@ -167,7 +172,7 @@ func NewServer(store *Store, cfg Config) *Server {
 		cfg:     cfg,
 		log:     cfg.Logger,
 		mux:     http.NewServeMux(),
-		lim:     newLimiters(cfg.Limits, cfg.Now),
+		lim:     newLimiters(cfg.Limits, cfg.CourierLimits, cfg.Now),
 		minimal: cfg.AccessLog == AccessLogMinimal,
 		admins:  newAdminSet(cfg.AdminFile, cfg.Admins, cfg.Logger),
 		courier: cfg.Courier,
@@ -203,6 +208,11 @@ func NewServer(store *Store, cfg Config) *Server {
 	s.route("PUT /v1/uploads/{id}", s.callerAuthed(s.handlePutStream))
 	s.route("DELETE /v1/uploads/{id}", s.callerAuthed(s.handleAbortStream))
 	s.route("GET /v1/listed", s.callerAuthed(s.handleListed))
+
+	// The forward route names no mailbox: the recipient is inside the
+	// envelope and the next hop is the first name of the path, so it is
+	// caller-authenticated with a body the signature covers.
+	s.route("POST /v1/forward", s.callerAuthedBody(s.forwardCap(), "", s.handleForward))
 
 	s.route("GET /v1/admin/status", s.adminAuthed(s.handleAdminStatus))
 	s.route("GET /v1/admin/mailboxes", s.adminAuthed(s.handleAdminMailboxes))
@@ -282,6 +292,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
 		if err := s.store.PurgeNonces(now); err != nil {
 			s.log.Warn("nonce purge failed", "err", err)
+		}
+		// The envelopes this relay remembers carrying, on the nonce purge's
+		// timer because they are the same shape of thing: a hash and an
+		// expiry, kept so that something cannot happen twice. It must run,
+		// and only here: a hash is the one thing the relay stores that
+		// nobody comes back for, so without a purge the ceiling on them is
+		// reached once and never left, and a relay at it forwards nothing
+		// ever again.
+		// By the relay's own clock and not the wall clock, because that is
+		// the clock the expiry was written with: a nonce's expiry is an
+		// agreement with a client and stays on the real one, and this is
+		// the relay's bookkeeping about itself. Two clocks for one number
+		// is a purge that cannot be driven and, where a test injects one,
+		// cannot be shown to run at all.
+		if err := s.store.PurgeCarried(s.cfg.Now()); err != nil {
+			s.log.Warn("carried purge failed", "err", err)
 		}
 		// Long-dead tokens. Anything an administrator could still act on,
 		// including one that expired yesterday, stays.

@@ -580,6 +580,73 @@ func (s *Server) callerAuthed(fn func(w http.ResponseWriter, r *http.Request, ca
 	}
 }
 
+// callerAuthedBody is callerAuthed for a route that carries a body the
+// signature must cover.
+//
+// The forward route needs both halves and no existing wrapper has them:
+// authedWithCert, which authed and authedBody are, reads a mailbox
+// fingerprint out of the path and refuses a request without one, and a
+// forward names no mailbox — the recipient is inside the envelope and the
+// next hop is in the path. callerAuthed has no fingerprint in the path and
+// signs an empty body, which is right for the upload routes whose body is
+// the payload and for the listing that has none, and wrong here: what the
+// two lists say about where an envelope goes must be under the caller's
+// signature like everything else this relay acts on.
+//
+// The order is the one order, authedWithCert's: the certificate, the header
+// parsed, the identity it names looked up, the body under this route's cap,
+// then the signature over it. Everything that can be judged without the body
+// is judged before it, so a caller the relay would refuse anyway never gets
+// to send one.
+func (s *Server) callerAuthedBody(limit int64, hint string, fn func(w http.ResponseWriter, r *http.Request, body []byte, callerFP string)) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Every refusal from here to the body closes the connection behind
+		// its answer, as authedWithCert's do and for the same reason.
+		unread(w, r)
+		cert, ok := s.clientCert(w, r)
+		if !ok {
+			return
+		}
+		auth, err := relayapi.ParseAuth(r.Header.Get(relayapi.AuthHeader))
+		if err != nil {
+			s.authFailed(w, r, errUnauthorized)
+			return
+		}
+		caller, err := s.store.Mailbox(auth.FP)
+		if err != nil {
+			s.authFailed(w, r, errUnauthorized)
+			return
+		}
+		pub, err := identity.ParseBundle(caller.Bundle)
+		if err != nil {
+			s.authFailed(w, r, errUnauthorized)
+			return
+		}
+		body, ok := s.readBody(w, r, limit, hint)
+		if !ok {
+			return
+		}
+		// The body is read: the connection may be kept after the answer.
+		w.Header().Del("Connection")
+		if err := s.checkSignature(auth, pub, r, body); err != nil {
+			s.authFailed(w, r, err)
+			return
+		}
+		verified(w, auth.FP)
+		if !s.certMatches(w, r, cert, auth.FP) {
+			return
+		}
+		if !s.chargeIdentity(w, auth.FP) {
+			return
+		}
+		if caller.Blocked {
+			s.fail(w, http.StatusForbidden, msgBlocked)
+			return
+		}
+		fn(w, r, body, auth.FP)
+	}
+}
+
 // verifyCaller is the shared tail of every authenticated route: parse, look
 // the caller up, verify, charge, and refuse a blocked identity.
 func (s *Server) verifyCaller(w http.ResponseWriter, r *http.Request, body []byte) (string, bool) {

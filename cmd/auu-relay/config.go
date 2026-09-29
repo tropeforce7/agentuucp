@@ -106,10 +106,79 @@ type CourierConfig struct {
 	// file uses, each line's name being this relay's name for that
 	// neighbour. Empty means this relay accepts no forwarded mail.
 	AuthorizedFile string `json:"authorized_file"`
+
+	// MaxHops caps the relays one address may name, the path and the hops
+	// so far together, at most relayapi.MaxHops. It has no honest zero: an
+	// address of no relays is not a policy.
+	MaxHops int64 `json:"max_hops"`
+	// ForwardTTL is how long mail waits for an unreachable neighbour before
+	// the relay gives up on it, as a Go duration. No honest zero either.
+	ForwardTTL string `json:"forward_ttl"`
+	// QueueMaxBytes caps the bytes waiting to leave across the relay.
+	QueueMaxBytes int64 `json:"queue_max_bytes"`
+	// QueueMaxMessages and QueueMaxBytesPerPoster bound one poster's share.
+	// Neither applies to a courier, which carries many people's mail.
+	QueueMaxMessages       int64 `json:"queue_max_messages"`
+	QueueMaxBytesPerPoster int64 `json:"queue_max_bytes_per_poster"`
+	// PostsPerMinute and PostBytesPerHour are a courier's budgets on the
+	// forward route, in place of a user's posts_per_minute and
+	// post_bytes_per_hour.
+	PostsPerMinute   int64 `json:"posts_per_minute"`
+	PostBytesPerHour int64 `json:"post_bytes_per_hour"`
+	// CarriedMaxRows caps the envelope hashes this relay holds, which is
+	// what makes a retry idempotent and a loop die. A hash is never
+	// evicted, so at the ceiling the relay refuses to carry anything new.
+	CarriedMaxRows int64 `json:"carried_max_rows"`
 }
 
-// set reports whether either key was given.
+// maxQueueMessagesCeiling is the most queue_max_messages may be set to, for
+// the reason max_open_uploads has a ceiling: each row is a file and a
+// reservation the relay holds for one poster.
+const maxQueueMessagesCeiling = 100_000
+
+// The bounds on forward_ttl. A minute is the least that is not a refusal to
+// queue at all, and thirty days the most that is not a queue nobody empties.
+const (
+	minForwardTTL = time.Minute
+	maxForwardTTL = 720 * time.Hour
+)
+
+// set reports whether this relay peers with anybody: a home to dial from, a
+// file to accept from, or both. The numbers below are bounds on a peering and
+// not a peering, so a block of nothing but numbers is a relay that still
+// forwards nothing, which checkCourierNumbersAlone refuses at the file.
 func (c CourierConfig) set() bool { return c.Home != "" || c.AuthorizedFile != "" }
+
+// ParsedForwardTTL is ForwardTTL as a duration.
+func (c CourierConfig) ParsedForwardTTL() (time.Duration, error) {
+	if c.ForwardTTL == "" {
+		return relay.DefaultCourierLimits().ForwardTTL, nil
+	}
+	d, err := time.ParseDuration(c.ForwardTTL)
+	if err != nil {
+		return 0, fmt.Errorf("courier.forward_ttl %q: %w", c.ForwardTTL, err)
+	}
+	return d, nil
+}
+
+// Courier converts the configured peering into the bounds the relay
+// enforces.
+func (c CourierConfig) Relay() (relay.CourierLimits, error) {
+	ttl, err := c.ParsedForwardTTL()
+	if err != nil {
+		return relay.CourierLimits{}, err
+	}
+	return relay.CourierLimits{
+		MaxHops:                c.MaxHops,
+		ForwardTTL:             ttl,
+		QueueMaxBytes:          c.QueueMaxBytes,
+		QueueMaxMessages:       c.QueueMaxMessages,
+		QueueMaxBytesPerPoster: c.QueueMaxBytesPerPoster,
+		PostsPerMinute:         c.PostsPerMinute,
+		PostBytesPerHour:       c.PostBytesPerHour,
+		CarriedMaxRows:         c.CarriedMaxRows,
+	}, nil
+}
 
 // ClientCertsConfig turns on mutual TLS: the relay issues a certificate to
 // each machine at enrolment and requires one on every mailbox route.
@@ -291,6 +360,7 @@ func (c Config) bundleSource() string {
 // drift apart about what "default" means.
 func Defaults() Config {
 	d := relay.DefaultLimits()
+	c := relay.DefaultCourierLimits()
 	return Config{
 		Listen:         ":8080",
 		DB:             "relay.db",
@@ -299,6 +369,20 @@ func Defaults() Config {
 		Streams:        true,
 		MaxStreamBytes: defaultMaxStreamBytes,
 		Admin:          AdminConfig{TokenMaxAge: defaultTokenMaxAge.String()},
+		// The peering's bounds default whether or not this relay peers with
+		// anybody, as the limits do: what a relay would allow if it were
+		// asked is a setting, and nothing reads them until there is a
+		// courier. Only the two paths decide whether there is one.
+		Courier: CourierConfig{
+			MaxHops:                c.MaxHops,
+			ForwardTTL:             c.ForwardTTL.String(),
+			QueueMaxBytes:          c.QueueMaxBytes,
+			QueueMaxMessages:       c.QueueMaxMessages,
+			QueueMaxBytesPerPoster: c.QueueMaxBytesPerPoster,
+			PostsPerMinute:         c.PostsPerMinute,
+			PostBytesPerHour:       c.PostBytesPerHour,
+			CarriedMaxRows:         c.CarriedMaxRows,
+		},
 		ClientCerts: ClientCertsConfig{
 			Mode:     relayapi.ClientCertsOff,
 			Lifetime: defaultCertLifetime.String(),
@@ -423,6 +507,9 @@ func Load(path string) (Config, string, error) {
 	// thing, and a relay with no block at all is the ordinary case that
 	// must not be refused.
 	if err := checkEmptyCourier(raw); err != nil {
+		return cfg, "", fmt.Errorf("%s: %w", path, err)
+	}
+	if err := checkCourierNumbersAlone(raw); err != nil {
 		return cfg, "", fmt.Errorf("%s: %w", path, err)
 	}
 
@@ -572,6 +659,22 @@ func (c *Config) Merge(fs *flag.FlagSet, f *flagValues) {
 			c.Courier.Home = f.courierHome
 		case "courier-file":
 			c.Courier.AuthorizedFile = f.courierFile
+		case "courier-max-hops":
+			c.Courier.MaxHops = f.courierMaxHops
+		case "courier-forward-ttl":
+			c.Courier.ForwardTTL = f.courierForwardTTL
+		case "courier-queue-max-bytes":
+			c.Courier.QueueMaxBytes = f.courierQueueMaxBytes
+		case "courier-queue-max-messages":
+			c.Courier.QueueMaxMessages = f.courierQueueMaxMessages
+		case "courier-queue-max-bytes-per-poster":
+			c.Courier.QueueMaxBytesPerPoster = f.courierQueueMaxBytesPerPoster
+		case "courier-posts-per-minute":
+			c.Courier.PostsPerMinute = f.courierPostsPerMinute
+		case "courier-post-bytes-per-hour":
+			c.Courier.PostBytesPerHour = f.courierPostBytesPerHour
+		case "courier-carried-max-rows":
+			c.Courier.CarriedMaxRows = f.courierCarriedMaxRows
 		case "access-log":
 			c.AccessLog = f.accessLog
 		}
@@ -874,13 +977,76 @@ func (l LimitsConfig) Relay() relay.Limits {
 // first forwarded message so that a typo in it is a relay that does not
 // start, with the line number in the sentence.
 func (c Config) courierValidate() error {
-	if c.Courier.AuthorizedFile == "" {
-		return nil
+	for _, f := range []struct {
+		name  string
+		value int64
+	}{
+		{"courier.queue_max_bytes", c.Courier.QueueMaxBytes},
+		{"courier.queue_max_messages", c.Courier.QueueMaxMessages},
+		{"courier.queue_max_bytes_per_poster", c.Courier.QueueMaxBytesPerPoster},
+		{"courier.posts_per_minute", c.Courier.PostsPerMinute},
+		{"courier.post_bytes_per_hour", c.Courier.PostBytesPerHour},
+		{"courier.carried_max_rows", c.Courier.CarriedMaxRows},
+	} {
+		if f.value < 0 {
+			return fmt.Errorf("%s must not be negative, got %d (use 0 for unlimited)", f.name, f.value)
+		}
 	}
-	if _, err := relay.LoadCouriers(c.Courier.AuthorizedFile); err != nil {
+	if c.Courier.QueueMaxMessages > maxQueueMessagesCeiling {
+		return fmt.Errorf("courier.queue_max_messages must be at most %d, got %d (use 0 for unlimited)",
+			maxQueueMessagesCeiling, c.Courier.QueueMaxMessages)
+	}
+	// max_hops and forward_ttl have no honest zero: an address of no relays
+	// is not an address, and a queue that gives up at once is a relay that
+	// forwards nothing while saying it forwards.
+	if c.Courier.MaxHops < 1 || c.Courier.MaxHops > relayapi.MaxHops {
+		return fmt.Errorf("courier.max_hops must be between 1 and %d, got %d: it is the relays one "+
+			"address may name, and every client holds an address to the same ceiling",
+			relayapi.MaxHops, c.Courier.MaxHops)
+	}
+	ttl, err := c.Courier.ParsedForwardTTL()
+	if err != nil {
 		return err
 	}
+	if ttl < minForwardTTL || ttl > maxForwardTTL {
+		return fmt.Errorf("courier.forward_ttl must be between %s and %s, got %s: it is how long mail "+
+			"waits for a neighbour that is not answering", minForwardTTL, maxForwardTTL, ttl)
+	}
+	if c.Courier.AuthorizedFile != "" {
+		if _, err := relay.LoadCouriers(c.Courier.AuthorizedFile); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// courierNumbersWithoutAPeering refuses a courier block that bounds a peering
+// this relay does not have.
+//
+// The numbers are bounds and not a peering: with neither home nor file the
+// relay forwards nothing and accepts nothing, so an operator who set
+// max_hops and nothing else has written a line that does nothing, which is
+// the misconfiguration an empty block is and is caught the same way — in the
+// raw bytes, because after the decode a block of numbers and the defaults
+// are the same values.
+func checkCourierNumbersAlone(raw []byte) error {
+	var probe struct {
+		Courier *map[string]json.RawMessage `json:"courier"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil
+	}
+	if probe.Courier == nil || len(*probe.Courier) == 0 {
+		return nil
+	}
+	for _, key := range []string{"home", "authorized_file"} {
+		if _, ok := (*probe.Courier)[key]; ok {
+			return nil
+		}
+	}
+	return errors.New("courier sets bounds on a peering this relay does not have: " +
+		"the numbers under courier bound forwarding, and courier.home or " +
+		"courier.authorized_file is what makes this relay forward at all")
 }
 
 // clientCertsValidate checks the client certificate settings.

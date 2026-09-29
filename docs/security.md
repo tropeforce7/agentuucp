@@ -47,7 +47,7 @@ follows says only that the owner is finished with it, whether that is a
 second later or a month. What it costs is room, which the per-mailbox
 limits bound.
 
-Two rows are exceptions, and both are worth stating. While a stream is being
+Three rows are exceptions, and each is worth stating. While a stream is being
 uploaded, the relay holds a row naming the *sender* as well as the recipient.
 It has to, because only the sender may append to their own upload and the
 reservation must be charged to somebody. That row lives for the length of one
@@ -62,9 +62,25 @@ from one key replace the first, so the waiting cap counts knockers rather
 than knocks and no single identity can fill a mailbox's share of it. Nothing
 survives that row either: no counter, no log line and no other table keeps
 it, and an owner who would rather the relay held no such thing pushes a card
-that says no knocks, which closes the door and stores nothing. Those two
-rows are the whole of what the relay writes down about who is sending
-something.
+that says no knocks, which closes the door and stores nothing.
+
+The third is mail this relay has taken to carry to a neighbouring relay,
+which only a relay peered with another ever holds. A relay that forwards
+cannot seal a bounce and should not be given the ability to, so mail that
+cannot be delivered has to be somebody's for anyone to be told about it:
+the row names whoever posted it. While it waits it names the recipient too;
+the moment the neighbour takes the envelope both the file and the
+recipient go. What is left is the poster, this relay's own name for the
+neighbour, and the address: the relays the message came through and the
+ones it has still to go to, by the names each relay knows them by. That
+last is relay-granularity routing — not who wrote to whom, since the
+recipient is gone and the sender was never there, but which relays
+carried it — and it stays as long as the row does. In
+an ordinary hour that is seconds. When a neighbour is unreachable it is as
+long as the relay keeps trying, which `courier.forward_ttl` sets and which
+is three days by default. A relay with no `courier` block — every relay
+until its operator peers one — holds none of this. Those three rows are
+the whole of what the relay writes down about who is sending something.
 
 While an upload's row lives, the reservation counts against the recipient's quotas
 and the relay's as though the stream were already queued. That holds for an

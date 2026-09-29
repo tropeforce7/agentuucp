@@ -298,6 +298,12 @@ func TestMailboxRoutesRefuseWithoutACertificate(t *testing.T) {
 		{"open stream", "POST", "/v1/mailbox/" + fp + "/streams", relayapi.OpenStreamRequest{}},
 		{"keys", "GET", "/v1/keys/" + fp, nil},
 		{"certs", "GET", "/v1/mailbox/" + fp + "/certs", nil},
+		// The forward route carries mail too, and it is the one route
+		// whose wrapper is neither of the two this table was written for:
+		// it names no mailbox in its path and its body is signed, so the
+		// certificate check is its own copy of the same order and is
+		// proved here with the rest.
+		{"forward", "POST", "/v1/forward", relayapi.ForwardRequest{Path: []string{"bar"}, Via: []string{}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			status, body, _ := h.send(alice, tc.method, tc.path, tc.payload, nil)

@@ -256,6 +256,12 @@ internal/relay/filestore.go (*Store).sweep os.Remove(filepath.Join(s.tmpDir(), e
 internal/relay/filestore.go (*Store).writeTemp os.OpenFile(path) = local
 internal/relay/filestore.go (*Store).writeTemp os.Remove(path) = local
 internal/relay/filestore.go fsyncDir regular.Dir(path) = network: fingerprint through place's mailbox directory (the least trusted of the callers' paths), identity.ValidFingerprint at the authed wrapper shown by TestLimitNothingTheNetworkNamesIsAPath
+internal/relay/outbound.go (*Store).Enqueue os.Remove(tmp) = local
+internal/relay/outbound.go (*Store).OutboundBody os.ReadFile(s.outboundPath(id)) = local
+internal/relay/outbound.go (*Store).placeOutbound os.MkdirAll(dir) = local
+internal/relay/outbound.go (*Store).placeOutbound os.Rename(s.outboundPath(id)) = local
+internal/relay/outbound.go (*Store).placeOutbound os.Rename(tmp) = local
+internal/relay/outbound.go (*Store).removeOutbound os.Remove(s.outboundPath(id)) = local
 internal/relay/store.go (*Store).Put os.Remove(tmp) = local
 internal/relay/store.go OpenStore sql.Open(dbPath) = operator: db in the relay's settings file, resolved against the file's directory shown by TestLimitConfigPathsResolveAgainstTheirFile
 internal/relay/streamstore.go (*Store).OpenMessage regular.Open(s.messagePath(toFP, id)) = network: fingerprint in the URL, identity.ValidFingerprint at the authed wrapper and the admin handlers shown by TestLimitNothingTheNetworkNamesIsAPath

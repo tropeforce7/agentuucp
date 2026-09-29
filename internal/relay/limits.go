@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/ratelimit"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 // Limits is the relay's rate limit and quota policy.
@@ -90,6 +91,104 @@ func DefaultLimits() Limits {
 	}
 }
 
+// CourierLimits is what a relay's forwarding is bounded by: how far an
+// address may reach, how long the relay keeps trying, how much it will hold
+// for whom, and what a courier may spend.
+//
+// Zero is unlimited for every field that has an honest zero, as everywhere
+// else. MaxHops and ForwardTTL have none — an address of no relays and a
+// queue that gives up at once are not policies anybody wants — and
+// auu-relay refuses a zero for either.
+type CourierLimits struct {
+	// MaxHops caps the relays one address may name, the path and the hops
+	// so far together, at most relayapi.MaxHops.
+	MaxHops int64
+	// ForwardTTL is how long a row waits before the relay gives up on it.
+	ForwardTTL time.Duration
+	// QueueMaxBytes caps the bytes waiting to leave across the relay.
+	QueueMaxBytes int64
+	// QueueMaxMessages caps the rows waiting for one poster, and
+	// QueueMaxBytesPerPoster their bytes. Neither applies to a courier: a
+	// courier carries many people's mail, so one poster's share would
+	// refuse a neighbour's queue for being busy, and the relay-wide bound
+	// and the couriers file are what answer that instead.
+	QueueMaxMessages       int64
+	QueueMaxBytesPerPoster int64
+	// PostsPerMinute and PostBytesPerHour are a courier's budgets, in
+	// place of a user's on the forward route, keyed by the verified
+	// fingerprint as every per-identity limit is.
+	PostsPerMinute   int64
+	PostBytesPerHour int64
+	// CarriedMaxRows caps the envelope hashes this relay holds. A hash is
+	// never evicted to make room, since the table is what makes a retry
+	// idempotent and a loop die, so at the ceiling the relay refuses to
+	// carry anything new until the oldest expire.
+	CarriedMaxRows int64
+}
+
+// DefaultCourierLimits is the policy a relay peered with another should
+// start with. Every number here is a guess to be corrected by running two
+// relays, and the container suite is where that happens.
+func DefaultCourierLimits() CourierLimits {
+	return CourierLimits{
+		MaxHops:                8,
+		ForwardTTL:             72 * time.Hour,
+		QueueMaxBytes:          1 << 30,
+		QueueMaxMessages:       100,
+		QueueMaxBytesPerPoster: 256 << 20,
+		PostsPerMinute:         600,
+		// Unlimited by default: a courier carries many people's mail, and
+		// the relay-wide queue cap and the couriers file are the bounds
+		// that suit that. A relay whose neighbour floods it removes one
+		// line.
+		PostBytesPerHour: 0,
+		CarriedMaxRows:   1_000_000,
+	}
+}
+
+// Quotas extracts what the queue and the carried table are bounded by.
+func (c CourierLimits) Quotas() CourierQuotas {
+	return CourierQuotas{
+		QueueMaxBytes:          c.QueueMaxBytes,
+		QueueMaxMessages:       c.QueueMaxMessages,
+		QueueMaxBytesPerPoster: c.QueueMaxBytesPerPoster,
+		CarriedMaxRows:         c.CarriedMaxRows,
+	}
+}
+
+// CourierQuotasFor is a courier's own quotas: the relay-wide bounds alone,
+// for the reason on QueueMaxMessages.
+func (c CourierLimits) CourierQuotasFor() CourierQuotas {
+	return CourierQuotas{
+		QueueMaxBytes:  c.QueueMaxBytes,
+		CarriedMaxRows: c.CarriedMaxRows,
+	}
+}
+
+// CarriedWindow is how long a hash is kept for an envelope with hops still
+// ahead of it: the life it can have in the network from here, which is the
+// hops it has left plus this one, each of which may keep it for ForwardTTL.
+//
+// Sizing it by the whole network's worst case instead — MaxHops times
+// ForwardTTL — would keep every hash for weeks at the defaults and years at
+// the ceilings, and hold the poster's fingerprint on a handed row for just
+// as long. An envelope cannot outlive the hops that are left to carry it.
+func (c CourierLimits) CarriedWindow(pathLeft int) time.Duration {
+	// The ceiling is clamped both ways, as the route clamps it: a zero or a
+	// nonsense MaxHops is the zero value of this struct, which an embedder
+	// can hand over and auu-relay never does, and a window of zero would
+	// mean every hash was purgeable the moment it was written — the loop
+	// defence off, silently, because a setting was unset.
+	hops := c.MaxHops
+	if hops <= 0 || hops > relayapi.MaxHops {
+		hops = relayapi.MaxHops
+	}
+	if left := int64(pathLeft) + 1; left < hops {
+		hops = left
+	}
+	return time.Duration(hops) * c.ForwardTTL
+}
+
 // Quotas extracts the storage limits the store enforces.
 func (l Limits) Quotas() Quotas {
 	return Quotas{
@@ -114,8 +213,13 @@ const (
 // Names for the limits, used in both the error text and the access log so an
 // operator reading a user's complaint knows which knob to turn.
 const (
-	limitRequests        = "requests"
-	limitPosts           = "posts"
+	limitRequests = "requests"
+	limitPosts    = "posts"
+	// limitCourierPosts is a courier's own pair on the forward route, so
+	// that the limit= field on a refusal says which bound was reached and
+	// an operator is not left reading a user's name for a neighbour's
+	// rate.
+	limitCourierPosts    = "courier_posts"
 	limitPostBytes       = "post bytes"
 	limitUnauthenticated = "unauthenticated"
 	limitRegistrations   = "registrations"
@@ -155,16 +259,25 @@ type limiters struct {
 	knocks          *ratelimit.Limiter // keyed by verified fingerprint
 	unauthenticated *ratelimit.Limiter // keyed by source address
 	registrations   *ratelimit.Limiter // keyed by source address
+	// A courier's budgets on the forward route, in place of a user's
+	// posts and postBytes, keyed by the verified fingerprint as those
+	// are. They are a different pair because a courier carries many
+	// people's mail: held to one person's rate, a neighbour's whole queue
+	// would be refused for being busy.
+	courierPosts     *ratelimit.Limiter
+	courierPostBytes *ratelimit.Limiter
 }
 
-func newLimiters(l Limits, now func() time.Time) limiters {
+func newLimiters(l Limits, c CourierLimits, now func() time.Time) limiters {
 	return limiters{
-		requests:        ratelimit.New(l.RequestsPerMinute, time.Minute, time.Minute, now),
-		posts:           ratelimit.New(l.PostsPerMinute, time.Minute, time.Minute, now),
-		postBytes:       ratelimit.New(l.PostBytesPerHour, time.Hour, time.Hour, now),
-		knocks:          ratelimit.New(l.KnocksPerHour, time.Hour, time.Hour, now),
-		unauthenticated: ratelimit.New(l.UnauthenticatedPerMinute, time.Minute, time.Minute, now),
-		registrations:   ratelimit.New(l.RegistrationsPerHour, time.Hour, time.Hour, now),
+		courierPosts:     ratelimit.New(c.PostsPerMinute, time.Minute, time.Minute, now),
+		courierPostBytes: ratelimit.New(c.PostBytesPerHour, time.Hour, time.Hour, now),
+		requests:         ratelimit.New(l.RequestsPerMinute, time.Minute, time.Minute, now),
+		posts:            ratelimit.New(l.PostsPerMinute, time.Minute, time.Minute, now),
+		postBytes:        ratelimit.New(l.PostBytesPerHour, time.Hour, time.Hour, now),
+		knocks:           ratelimit.New(l.KnocksPerHour, time.Hour, time.Hour, now),
+		unauthenticated:  ratelimit.New(l.UnauthenticatedPerMinute, time.Minute, time.Minute, now),
+		registrations:    ratelimit.New(l.RegistrationsPerHour, time.Hour, time.Hour, now),
 	}
 }
 

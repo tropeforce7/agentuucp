@@ -615,9 +615,17 @@ second knock from one key replace the first — which is what makes
 identity cannot fill a mailbox's share of it. Both go with the row: an
 upload's when it completes or is abandoned, a knock's when the owner's
 fetch acknowledges it, when it is replaced, or when the mailbox goes. An
-owner who wants neither kept pushes a card that says no knocks. Adding a
-third such column means answering the same question: what does it buy, and
-what takes it away again.
+owner who wants neither kept pushes a card that says no knocks. A third
+was added when a relay learned to carry mail to a neighbouring relay, and
+it was added by answering the same question: the outbound row names
+whoever posted the envelope, because a relay cannot seal a bounce and
+should not gain the ability to, so mail that cannot be delivered has to be
+somebody's for anybody to be told about it; what it buys the poster is a
+listing that says where their mail is, and what takes it away is the
+neighbour taking the envelope — the file and the recipient go at that
+moment, the poster's name outlasting them only until the window a report
+could arrive in has passed. A relay with no courier configuration holds
+none of it. Adding a fourth means answering the question again.
 
 **A service's record of what it has done is a file it writes, and nothing
 else.** `auu serve` decides what to answer from `serve/ledger.json` alone.
@@ -812,19 +820,30 @@ stays false and nobody downstream mistakes it for the end of a stream.
 
 **`ccx` in a constant is not a leftover: it is on the wire.** The binaries are
 `auu`, `auu-relay`, `auu-admin` and `auu-ca`, and the project is AgentUUCP,
-but sixteen constants deliberately still say `ccx` — the eleven `ccx-*-v1`
-domain strings (`ccx-allow-v1`, `ccx-card-v1`, `ccx-channels-v1`,
-`ccx-chunk-v1`, `ccx-envelope-v1`, `ccx-http-v1`, `ccx-id-v1`,
-`ccx-sig-v1`, `ccx-stream-sig-v1`, `ccx-stream-v1`, `ccx-token-v1`: seven
-under a signature, three in an HPKE `info` or a chunk's additional data,
-one under the fingerprint hash), the `ccx1` and `ccx2` export-line
+but seventeen constants deliberately still say `ccx` — the twelve `ccx-*-v1`
+strings (`ccx-allow-v1`, `ccx-card-v1`, `ccx-carried-v1`,
+`ccx-channels-v1`, `ccx-chunk-v1`, `ccx-envelope-v1`, `ccx-http-v1`,
+`ccx-id-v1`, `ccx-sig-v1`, `ccx-stream-sig-v1`, `ccx-stream-v1`,
+`ccx-token-v1`: seven under a signature, three in an HPKE `info` or a
+chunk's additional data, one under the fingerprint hash, and one over an
+envelope a relay is carrying), the `ccx1` and `ccx2` export-line
 prefixes, the `ccxt1` (read) and `ccxt2` (written) token prefixes, and the
 `X-CCX-Auth` header. Recount with `grep -rn '"ccx' --include='*.go'
-internal cmd | grep -v _test` when you add one; run on 2026-09-22 when
-the card's domain went in, it answered seventeen lines: the fifteen
+internal cmd | grep -v _test` when you add one; run on 2026-09-29 when the
+carried table's domain went in, it answered eighteen lines: the sixteen
 lower-case constants, the agent's second spelling of the request domain,
 and one comment quoting the export prefix, with the header, in upper
-case, the sixteenth constant the grep does not match. Every one
+case, the seventeenth constant the grep does not match.
+
+`ccx-carried-v1` is the one of the twelve that is not on any wire.
+A relay's carried table is its own — no two relays compare hashes, and
+nothing about one ever leaves the process that made it — so what the
+domain buys is not agreement between ends but separation from every other
+hash this tree makes, which is the same reason each signed thing has one.
+Renaming it would cost a relay the memory of what it has already carried,
+once, and nothing else; it is in this list because a future reader
+grepping for `ccx` should find it with an answer beside it rather than a
+question. Every one
 of them is either inside a signature, inside an HPKE `info` string, or in a
 format two machines have already agreed on. Renaming any of them invalidates every
 identity, message and token in existence and silently breaks compatibility with

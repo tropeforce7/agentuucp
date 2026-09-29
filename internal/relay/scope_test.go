@@ -39,8 +39,13 @@ func TestTheClassifierAgreesWithTheRelay(t *testing.T) {
 		"POST /v1/mailbox/{fp}/certs":    agent.ScopeReceive, // renewal: this identity's own certificate, on the live one, no token
 
 		// Everything that originates.
-		"POST /v1/register":                        agent.ScopeSend,
-		"POST /v1/mailbox/{fp}":                    agent.ScopeSend,
+		"POST /v1/register":     agent.ScopeSend,
+		"POST /v1/mailbox/{fp}": agent.ScopeSend,
+		// Forwarding originates: a person's client posts an envelope they
+		// sealed, and a relay's courier posts one it is carrying. Send by
+		// being absent from the agent's receive set, which is how
+		// everything that originates is send.
+		"POST /v1/forward":                         agent.ScopeSend,
 		"POST /v1/mailbox/{fp}/knock":              agent.ScopeSend,
 		"POST /v1/mailbox/{fp}/streams":            agent.ScopeSend,
 		"PUT /v1/uploads/{id}":                     agent.ScopeSend,

@@ -98,8 +98,16 @@ cmd/auu-ca/main.go cmdShow.relayOut int Retired int = output
 cmd/auu-ca/main.go cmdShow.struct int MLDSA int = output
 cmd/auu-relay/config.go (ClientCertsConfig).ParsedLifetime int time.ParseDuration(c.Lifetime) = [1h, 87600h] shown by TestLimitDurationSettings
 cmd/auu-relay/config.go (Config).TokenMaxAge int time.ParseDuration(c.Admin.TokenMaxAge) = > 0s shown by TestLimitDurationSettings
+cmd/auu-relay/config.go (CourierConfig).ParsedForwardTTL int time.ParseDuration(c.ForwardTTL) = [1m, 720h] shown by TestLimitCourierSettingRanges
 cmd/auu-relay/config.go Config int MaxBytes int64 = [1, 1073741824] shown by TestLimitMaxBytesBoundaries
 cmd/auu-relay/config.go Config int MaxStreamBytes int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/config.go CourierConfig int CarriedMaxRows int64 = 0 or >= 0 shown by TestLimitCourierSettingRanges
+cmd/auu-relay/config.go CourierConfig int MaxHops int64 = [1, 32] shown by TestLimitCourierSettingRanges
+cmd/auu-relay/config.go CourierConfig int PostBytesPerHour int64 = 0 or >= 0 shown by TestLimitCourierSettingRanges
+cmd/auu-relay/config.go CourierConfig int PostsPerMinute int64 = 0 or >= 0 shown by TestLimitCourierSettingRanges
+cmd/auu-relay/config.go CourierConfig int QueueMaxBytes int64 = 0 or >= 0 shown by TestLimitCourierSettingRanges
+cmd/auu-relay/config.go CourierConfig int QueueMaxBytesPerPoster int64 = 0 or >= 0 shown by TestLimitCourierSettingRanges
+cmd/auu-relay/config.go CourierConfig int QueueMaxMessages int64 = 0 or [1, 100000] shown by TestLimitCourierSettingRanges
 cmd/auu-relay/config.go LimitsConfig int KnockMaxBytes int64 = 0 or [1, 1073741824] shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int KnocksPerHour int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MailboxMaxBytes int64 = >= 0 shown by TestLimitRelaySettings
@@ -116,6 +124,13 @@ cmd/auu-relay/config.go LimitsConfig int RelayMaxBytes int64 = >= 0 shown by Tes
 cmd/auu-relay/config.go LimitsConfig int RequestsPerMinute int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int UnauthenticatedPerMinute int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/main.go logClientCerts string parts.loaded.AnchorSPKI[:16] = local: equal to SPKI of the anchor, checked at load
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierCarriedMaxRows) = 0 or >= 0 shown by TestLimitCourierSettingRanges
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierMaxHops) = [1, 32] shown by TestLimitCourierSettingRanges
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierPostBytesPerHour) = 0 or >= 0 shown by TestLimitCourierSettingRanges
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierPostsPerMinute) = 0 or >= 0 shown by TestLimitCourierSettingRanges
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierQueueMaxBytes) = 0 or >= 0 shown by TestLimitCourierSettingRanges
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierQueueMaxBytesPerPoster) = 0 or >= 0 shown by TestLimitCourierSettingRanges
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierQueueMaxMessages) = 0 or [1, 100000] shown by TestLimitCourierSettingRanges
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.knockMaxBytes) = 0 or [1, 1073741824] shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.knocksPerHour) = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.limitPostBytes) = >= 0 shown by TestLimitRelaySettings
@@ -313,15 +328,16 @@ internal/relayapi/relayapi.go AdminStatusResponse int QueuedBytes int64 = >= 0 s
 internal/relayapi/relayapi.go AdminStatusResponse int QueuedMessages int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go AdminStatusResponse int TokenMaxAgeSecs int64 = [0, 3153600000] shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go ChannelsResponse int Queued map[string]int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go ForwardResponse int ID int64 = > 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go HealthResponse int MLDSA int = one of 0, 44, 65, 87 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go HealthResponse int MaxBytes int64 = [1, 1073741824] shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go LimitsView int KnockMaxBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go LimitsView int KnocksPerHour int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int MailboxMaxBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int MailboxMaxMessages int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int MaxInflight int64 = >= 0 shown by TestLimitRelayAnswerIntegers
-internal/relayapi/relayapi.go LimitsView int MaxMailboxes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
-internal/relayapi/relayapi.go LimitsView int KnockMaxBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
-internal/relayapi/relayapi.go LimitsView int KnocksPerHour int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int MaxKnocksWaiting int64 = >= 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go LimitsView int MaxMailboxes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int MaxOpenUploads int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int MaxWaiting int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int PostBytesPerHour int64 = >= 0 shown by TestLimitRelayAnswerIntegers

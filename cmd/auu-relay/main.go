@@ -77,6 +77,15 @@ type flagValues struct {
 
 	courierHome string
 	courierFile string
+
+	courierMaxHops                int64
+	courierForwardTTL             string
+	courierQueueMaxBytes          int64
+	courierQueueMaxMessages       int64
+	courierQueueMaxBytesPerPoster int64
+	courierPostsPerMinute         int64
+	courierPostBytesPerHour       int64
+	courierCarriedMaxRows         int64
 }
 
 func registerFlags(fs *flag.FlagSet) *flagValues {
@@ -95,6 +104,22 @@ func registerFlags(fs *flag.FlagSet) *flagValues {
 		"auu home this relay dials neighbouring relays from (default: dial none)")
 	fs.StringVar(&f.courierFile, "courier-file", d.Courier.AuthorizedFile,
 		"export lines of the neighbouring relays this one accepts forwarded mail from (default: accept none)")
+	fs.Int64Var(&f.courierMaxHops, "courier-max-hops", d.Courier.MaxHops,
+		"relays one address may name, the path and the hops so far together")
+	fs.StringVar(&f.courierForwardTTL, "courier-forward-ttl", d.Courier.ForwardTTL,
+		"how long mail waits for a neighbour that is not answering")
+	fs.Int64Var(&f.courierQueueMaxBytes, "courier-queue-max-bytes", d.Courier.QueueMaxBytes,
+		"bytes of mail waiting to leave this relay, across every neighbour; 0 is unlimited")
+	fs.Int64Var(&f.courierQueueMaxMessages, "courier-queue-max-messages", d.Courier.QueueMaxMessages,
+		"messages waiting to leave for one poster; 0 is unlimited")
+	fs.Int64Var(&f.courierQueueMaxBytesPerPoster, "courier-queue-max-bytes-per-poster", d.Courier.QueueMaxBytesPerPoster,
+		"bytes waiting to leave for one poster; 0 is unlimited")
+	fs.Int64Var(&f.courierPostsPerMinute, "courier-posts-per-minute", d.Courier.PostsPerMinute,
+		"forwards one neighbouring relay may post a minute; 0 is unlimited")
+	fs.Int64Var(&f.courierPostBytesPerHour, "courier-post-bytes-per-hour", d.Courier.PostBytesPerHour,
+		"bytes one neighbouring relay may forward an hour; 0 is unlimited")
+	fs.Int64Var(&f.courierCarriedMaxRows, "courier-carried-max-rows", d.Courier.CarriedMaxRows,
+		"envelopes this relay remembers carrying, which is what stops a loop; 0 is unlimited")
 	fs.Int64Var(&f.maxBytes, "max-bytes", d.MaxBytes, "largest accepted envelope, in bytes")
 	fs.StringVar(&f.registration, "registration", d.Registration,
 		"who may create a mailbox: open, token, or closed")
@@ -399,6 +424,10 @@ func relayConfig(cfg Config, parts *clientCertParts, log *slog.Logger) (relay.Co
 	// couriers file admitting this relay's own courier — is a relay that does
 	// not start, said before the listener opens, rather than a fault found by
 	// the first person whose mail it was meant to carry.
+	courierLimits, err := cfg.Courier.Relay()
+	if err != nil {
+		return relay.Config{}, err
+	}
 	var courier *relay.Courier
 	if cfg.Courier.set() {
 		if courier, err = relay.NewCourier(relay.CourierConfig{
@@ -424,6 +453,7 @@ func relayConfig(cfg Config, parts *clientCertParts, log *slog.Logger) (relay.Co
 		Limits:         cfg.Limits.Relay(),
 		AccessLog:      cfg.AccessLog,
 		Courier:        courier,
+		CourierLimits:  courierLimits,
 	}, nil
 }
 

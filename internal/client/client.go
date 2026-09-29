@@ -258,6 +258,15 @@ type HTTPError struct {
 	// RetryAfter is how long the relay asked to be left alone for, from the
 	// Retry-After header. Zero when it did not say.
 	RetryAfter time.Duration
+	// ForwardID is the id a relay sent with a 409 on the forward route,
+	// which is the row it already holds for the caller's own envelope, or
+	// zero. It is on the error and not returned beside it because the 409
+	// is a refusal to every other caller and a fact to this one: an
+	// envelope already carried has been taken, and the id is what an
+	// undeliverable coming back for it will name. A relay sends it only to
+	// the poster of the row it holds, so zero means there is no row of
+	// this caller's to name.
+	ForwardID int64
 }
 
 // httpError is the one place an HTTPError is made from a relay's answer.
@@ -270,8 +279,18 @@ type HTTPError struct {
 func httpError(resp *http.Response, body []byte) *HTTPError {
 	var e relayapi.ErrorResponse
 	_ = json.Unmarshal(body, &e)
+	// A 409 on the forward route carries the id of the row the relay
+	// already holds. It is read here rather than by the caller because this
+	// is the one place an answer becomes an error, and a caller cannot
+	// reach the body afterwards. Any other answer has no such field and
+	// leaves it zero.
+	var fwd relayapi.ForwardResponse
+	if resp.StatusCode == http.StatusConflict {
+		_ = json.Unmarshal(body, &fwd)
+	}
 	return &HTTPError{
 		Status:     resp.StatusCode,
+		ForwardID:  fwd.ID,
 		Message:    identity.PrintableText(e.Error),
 		RetryAfter: retryAfter(resp.Header),
 	}
@@ -809,6 +828,35 @@ func (c *Client) Post(ctx context.Context, env *envelope.Envelope, channel strin
 		return 0, err
 	}
 	if err := c.checkID("the post answer", resp.ID); err != nil {
+		return 0, err
+	}
+	return resp.ID, nil
+}
+
+// Forward hands a sealed envelope to a relay for it to carry on towards a
+// relay that is not this one.
+//
+// It is what a sender's client calls with a path a person wrote, and what a
+// relay's own courier calls to pass an envelope to its neighbour; the request
+// is the same either way, and which of the two the caller is is decided by
+// the relay from the fingerprint that signed it, never by anything in the
+// body. The envelope goes verbatim: these bytes are what every hop stores and
+// forwards, so nothing here re-marshals it.
+//
+// A 409 means the relay has taken this envelope already — a retry whose
+// answer was lost, or a loop ending there — and is not a failure: the caller
+// reads it as handed over, and the id the relay held for it, when it sends
+// one, is on the error as ForwardID.
+func (c *Client) Forward(ctx context.Context, req *relayapi.ForwardRequest) (int64, error) {
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return 0, err
+	}
+	var resp relayapi.ForwardResponse
+	if err := c.do(ctx, "POST", "/v1/forward", raw, &resp, nil); err != nil {
+		return 0, err
+	}
+	if err := c.checkID("the forward answer", resp.ID); err != nil {
 		return 0, err
 	}
 	return resp.ID, nil

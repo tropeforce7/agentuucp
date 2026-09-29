@@ -73,6 +73,29 @@ func (f *faultLog) noteCard(fp string) {
 	}
 }
 
+// noteCarriedAgain says that a neighbour has handed this relay an envelope
+// it already holds.
+//
+// A retry after a lost answer is one, and so is a loop: a neighbour that
+// sends the same envelope back from another direction is the thing an
+// operator wants to know about, and the two cannot be told apart from here.
+// It is keyed by this relay's own name for that neighbour — never by
+// anything a sender chose, which would be a limit keyed on a string the
+// sender picked — so a burst from one neighbour is one line a minute and two
+// neighbours are two, and it names no mailbox and no fingerprint.
+func (f *faultLog) noteCarriedAgain(neighbour string) {
+	if f == nil || f.log == nil {
+		return
+	}
+	key := "carried:" + neighbour
+	if !f.due(key) {
+		return
+	}
+	f.log.Warn("a neighbour handed over an envelope this relay already carried; "+
+		"a retry whose answer was lost, or a loop, and either way it goes no further",
+		"neighbour", neighbour)
+}
+
 // noteDirectory logs that a mailbox's channel directory does not verify,
 // so every post to the mailbox is refused, default included, unless that
 // was logged for the mailbox inside the last minute; keyed apart from the

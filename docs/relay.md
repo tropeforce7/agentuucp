@@ -42,6 +42,14 @@ Later ones win. A flag you do not type never overrides the file.
 | `--token-max-age DURATION` | `admin.token_max_age` | `720h` |
 | `--courier-home PATH` | `courier.home` | none, this relay dials no other relay; see 1.10 |
 | `--courier-file PATH` | `courier.authorized_file` | none, this relay accepts no forwarded mail; see 1.10 |
+| `--courier-max-hops N` | `courier.max_hops` | 8, between 1 and 32 |
+| `--courier-forward-ttl DURATION` | `courier.forward_ttl` | `72h`, between `1m` and `720h` |
+| `--courier-queue-max-bytes N` | `courier.queue_max_bytes` | 1 GiB, 0 is unlimited |
+| `--courier-queue-max-messages N` | `courier.queue_max_messages` | 100 per poster, at most 100000, 0 is unlimited |
+| `--courier-queue-max-bytes-per-poster N` | `courier.queue_max_bytes_per_poster` | 256 MiB, 0 is unlimited |
+| `--courier-posts-per-minute N` | `courier.posts_per_minute` | 600, a neighbour's own rate, 0 is unlimited |
+| `--courier-post-bytes-per-hour N` | `courier.post_bytes_per_hour` | 0, unlimited; see 1.10 |
+| `--courier-carried-max-rows N` | `courier.carried_max_rows` | 1000000, 0 is unlimited |
 | `--client-certs off\|required` | `client_certs.mode` | `off`; `required` needs `registration` `token` or `closed` |
 | `--client-cert-lifetime DURATION` | `client_certs.lifetime` | `8760h`, between `1h` and `87600h` |
 | `--tls-mode off\|files` | `tls.mode` | `files`; `off` only when said, see below |
@@ -281,7 +289,7 @@ switch the lot off.
 | `max_mailboxes` | mailboxes on the relay | unlimited |
 | `mailbox_max_messages` | messages queued for one recipient | 1000 |
 | `mailbox_max_bytes` | queued bytes for one recipient | 1 GiB |
-| `relay_max_bytes` | queued bytes across the whole relay | unlimited |
+| `relay_max_bytes` | queued bytes in the mailboxes across the whole relay; mail waiting to go to a neighbouring relay is a second pool, under `courier.queue_max_bytes` | unlimited |
 | `max_open_uploads` | uploads one sender may have open at once, across every mailbox it sends to; each is a file and a reservation the relay holds for that sender, so 0, unlimited like the rest, lets one sender hold as many as it likes; at most 1000 | 4 |
 | `max_inflight` | requests being handled at once | 256 |
 | `max_waiting` | listings held open at once for watchers; over it the next is answered at once rather than held, and each held listing keeps an in-flight slot, so keep this well under `max_inflight` | 64 |
@@ -856,6 +864,49 @@ removing one line from their couriers file. It buys no message, and nobody's
 identity: the courier is a postman, not a reader. Protect the file as the
 relay's bundle is protected — the relay's user alone, 0600, under the unit's
 hardening.
+
+**Close registration before you peer.** The forward route is open to every
+identity with a mailbox on this relay — it has to be, since forwarding is
+something your own users do — so on a relay with `registration: open` a
+stranger can make a mailbox in one request and post mail through it. It
+reaches your neighbour under *your* relay's courier identity, spends the
+budget your neighbour gave you, and fills the queue you are holding for
+them. Nothing of it is delivered, because the recipient's allow list runs
+at the relay that delivers; but the remedy your neighbour has is to stop
+accepting from you. Set `registration` to `token` or `closed` on a relay
+that peers with another.
+
+**What the relay holds, and for how long.** Mail this relay has taken for a
+neighbour waits in a queue: one row and one file per envelope, under
+`courier.queue_max_bytes` across the relay and
+`courier.queue_max_messages` and `courier.queue_max_bytes_per_poster` for
+each person posting. Over any of them the relay answers `507` and the
+sender tries again later; the queue empties itself as the neighbour takes
+what is waiting, so there is nobody to tell. A neighbour's own posting is
+bounded by `courier.posts_per_minute` and `courier.post_bytes_per_hour`
+rather than by a user's rates, because a courier carries many people's
+mail: held to one person's rate, a busy neighbour's whole queue would be
+refused. The bytes are unlimited by default for the same reason, and what
+bounds a neighbour that floods you is the relay-wide queue and one line
+removed from your couriers file.
+
+`courier.forward_ttl` is how long the relay keeps trying a neighbour that
+is not answering — three days by default — after which the mail is failed
+and the person who sent it is told. `courier.max_hops` is how many relays
+one address may name, counting the path still ahead and the hops already
+taken together; it is at most 32, which every client holds an address to
+as well, so an address that this relay would refuse is one a sender is
+told about before anything is sealed.
+
+The relay also remembers the envelopes it has carried, by a hash of the
+recipient and the ciphertext, so that it never carries or delivers one
+twice: a retry whose answer was lost is idempotent, and mail going round
+in a circle stops at the first relay it comes back to. A hash is kept for
+as long as the envelope could still be alive in the network ahead of it,
+and `courier.carried_max_rows` bounds how many there are. At that ceiling
+the relay refuses to take anything new rather than forgetting one, since
+forgetting is what the table exists to prevent; the refusal names the
+setting.
 
 A courier is a registered identity of the relay it posts to, so it has a
 mailbox there as any user does. Nothing writes to it and nothing reads it:

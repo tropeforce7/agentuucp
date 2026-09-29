@@ -182,6 +182,36 @@ type (
 	PostResponse struct {
 		ID int64 `json:"id"`
 	}
+	// ForwardRequest carries a sealed envelope to a relay that is not the
+	// recipient's, for it to pass on.
+	//
+	// The envelope is the sender's, byte for byte, from the first hop to
+	// the last: it is what every hop stores and forwards, and nothing on
+	// any hop can read, forge or re-address it. What the hops need beside
+	// it is where it still has to go and where it has been, and those are
+	// fields of the request rather than of the envelope, so that the
+	// envelope is one thing everywhere and a relay rewrites nothing.
+	//
+	// Path is what remains: its first name is a neighbour of the relay
+	// receiving the request, and the rest is that neighbour's business.
+	// Via is the hops so far, each name written by the relay that wrote
+	// it, which is what makes the reversed list a return path when every
+	// name is relative to the relay reading it. Both are always sent, so
+	// a courier's empty Via is [] and not an absent field; a user sends a
+	// Path of at least one name and no Via, since a user writing one
+	// would be forging a return path.
+	ForwardRequest struct {
+		Envelope json.RawMessage `json:"envelope"`
+		Path     []string        `json:"path"`
+		Via      []string        `json:"via"`
+	}
+	// ForwardResponse is the id of the row the relay queued, which the
+	// poster reads back in its own queue listing. A 409 from the poster of
+	// the row that already holds this envelope carries it too, so that a
+	// retry after a lost answer learns the id its first attempt was given.
+	ForwardResponse struct {
+		ID int64 `json:"id"`
+	}
 	// StoredMessage carries an envelope back verbatim. It stays opaque here so
 	// the relay never has to understand a payload it cannot read.
 	StoredMessage struct {
@@ -594,6 +624,21 @@ const MaxAllowlist = 1000
 // operators know one another, which is the only kind this is for.
 const MaxCouriers = 1000
 
+// MaxHops caps the relays one address may name: the names in a path and the
+// hops already taken, counted together.
+//
+// It is the ceiling on courier.max_hops rather than the setting, which an
+// operator may set lower; a relay refuses a higher one at the start, naming
+// this. Like MaxAllowlist it is a property of the protocol and not of one
+// relay: a sender's client holds an address to it before anything is sealed,
+// every hop holds the two lists to it, and a client reading a message holds
+// the return path it came by to it, so all three must agree. Thirty-two is
+// far past any chain of relays whose operators know one another, and the
+// number matters because the two lists and the carried window are sized from
+// it: the window an envelope can be alive in the network is max_hops times
+// forward_ttl.
+const MaxHops = 32
+
 // The channel caps, protocol constants for the same reason as MaxAllowlist:
 // the sender's client, the owner's and the relay all validate a directory,
 // and they must agree on the bounds. Names and descriptions are measured in
@@ -780,12 +825,60 @@ type (
 	}
 )
 
-// The two 507 messages. They are constants because the client tells them apart
-// to decide who it should be advising: the recipient, or the operator.
+// The 507 messages. They are constants because the client tells them apart
+// to decide who it should be advising: the recipient, the operator of the
+// relay it posted to, or nobody, since a queue that is full empties itself.
 const (
 	MsgMailboxFull = "recipient's mailbox is full"
 	MsgRelayFull   = "relay storage is full"
+	// MsgQueueFull is the 507 for mail this relay would have to carry to a
+	// neighbour and has no room to hold. It is not the recipient's mailbox
+	// and not this relay's storage: it is the queue between them, which
+	// drains by itself as the neighbour takes what is waiting, so the
+	// advice is to send it again later and to tell nobody.
+	MsgQueueFull = "this relay's forwarding queue is full"
+	// MsgCarriedFull is the 507 for a relay holding as many envelope
+	// hashes as its carried_max_rows allows. The table is what makes a
+	// retry idempotent and a loop die, so a row is never evicted to make
+	// room for another: the relay refuses to carry anything new until the
+	// oldest hashes expire, and says which setting it is.
+	MsgCarriedFull = "this relay is already carrying as many messages as carried_max_rows allows"
 )
+
+// MsgAlreadyCarried is the 409 for an envelope this relay has already taken.
+//
+// It is the answer to a retry after a lost answer and to a loop arriving
+// back where it started, and a courier reads it as the envelope having been
+// handed over, because in both cases it has. Nothing is stored and no
+// mailbox is charged.
+const MsgAlreadyCarried = "already carried"
+
+// MsgNoNeighbour is the phrase in the 404 for a path whose first name is not
+// a relay this one can dial: the sentence names the name. A sender reads it
+// as the address being wrong at that hop rather than as the recipient being
+// unknown, and it is the only discovery of a relay's neighbours there is.
+const MsgNoNeighbour = "no neighbour named"
+
+// MsgForwardsNothing is the 403 for a forward request to a relay with no
+// courier configuration at all, which is every relay until its operator
+// peers it with another.
+const MsgForwardsNothing = "this relay forwards nothing"
+
+// MsgViaIsACouriers is the 400 for a user sending via, which would be a
+// sender writing their own return path.
+const MsgViaIsACouriers = "via is a courier's to write"
+
+// MsgPathNamesARelay is the 400 for a user sending an empty path: a
+// recipient on this relay takes a post to their mailbox, and a path is for
+// one who is not.
+const MsgPathNamesARelay = "a path names at least one relay; a recipient on this relay takes a post to their mailbox"
+
+// MsgAddressRepeats is the phrase in the 400 for an address naming one relay
+// twice, across the path and the hops so far together: the sentence names
+// the name. With relative names this is conservative — two different hosts
+// may share a name at different hops — and that is the right trade, since
+// the sender cannot tell the two cases apart either.
+const MsgAddressRepeats = "every relay in an address is named once"
 
 // MsgChannelClosed is the phrase in the 403 for a post to a channel outside
 // its period: the sentence is `channel "cfp" is not open: opens

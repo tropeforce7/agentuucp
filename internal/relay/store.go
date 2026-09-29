@@ -63,7 +63,7 @@ var (
 // database at another version is one nobody runs, and a path that
 // migrated it would be a path nobody tests. The refusal says to delete the
 // database and its message directory; the next start recreates both.
-const schemaVersion = 11
+const schemaVersion = 12
 
 // SchemaVersion is schemaVersion for the version line and the container
 // suite.
@@ -223,7 +223,14 @@ CREATE INDEX IF NOT EXISTS cards_listed ON cards(listed, fp);`
 	size     INTEGER NOT NULL,
 	kind     TEXT NOT NULL DEFAULT 'envelope',
 	channel  TEXT NOT NULL DEFAULT 'default',
-	knocker  TEXT NOT NULL DEFAULT ''
+	knocker  TEXT NOT NULL DEFAULT '',
+	-- via is the relays a message came through, in the order it came, each
+	-- name the one written by the relay that wrote it, joined by '!' as a
+	-- name cannot hold one. Empty for mail posted straight into this
+	-- mailbox, which is all of it until a relay delivers what it carried;
+	-- the column is here because the schema is one text and one version,
+	-- and what writes it is the delivery two commits from this one.
+	via      TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS messages_to ON messages(to_fp, id);
 CREATE INDEX IF NOT EXISTS messages_knocker ON messages(to_fp, kind, knocker);`
@@ -247,15 +254,83 @@ CREATE INDEX IF NOT EXISTS messages_knocker ON messages(to_fp, kind, knocker);`
 CREATE INDEX IF NOT EXISTS uploads_expires ON uploads(expires);
 CREATE INDEX IF NOT EXISTS uploads_from_fp ON uploads(from_fp);`
 
+	// outbound is mail this relay has taken and has still to hand to a
+	// neighbour. It is the third row that names a sender, after an
+	// upload's and a knock's, and it is here for the reason those are:
+	// mail that cannot be delivered has to be somebody's to be told
+	// about, and a relay cannot seal a bounce and should not gain the
+	// ability to. What it buys the poster is a listing that says where
+	// their mail is; what takes it away is the neighbour taking the
+	// envelope, or the relay giving up.
+	//
+	// The row's life has three parts. Waiting, from the post until the
+	// neighbour takes it or gives_up passes. Handed, with the envelope's
+	// file deleted and to_fp blanked at once, the row kept for the
+	// carried window so that an undeliverable coming back days later
+	// finds it. Final, with a code and a sentence, kept a day so the
+	// poster can read what happened. In a normal hour the row names the
+	// poster and the recipient for seconds and the poster alone after
+	// that; in an outage the first part is days, which the security
+	// document says as plainly as it says the knock's row.
+	//
+	// hash is the envelope's, so a report coming back can be matched to
+	// the row without the envelope's bytes being kept; their_id is the id
+	// the neighbour answered with, which is the one number both sides
+	// hold. The index is by neighbour and next_try, which is what makes a
+	// worker's next row a lookup and not a scan, and by poster for the
+	// owner's own queue listing.
+	outboundTable = `CREATE TABLE IF NOT EXISTS outbound (
+	id        INTEGER PRIMARY KEY AUTOINCREMENT,
+	poster_fp TEXT NOT NULL,
+	neighbour TEXT NOT NULL,
+	path      TEXT NOT NULL DEFAULT '',
+	via       TEXT NOT NULL DEFAULT '',
+	to_fp     TEXT NOT NULL DEFAULT '',
+	hash      TEXT NOT NULL,
+	size      INTEGER NOT NULL,
+	kind      TEXT NOT NULL DEFAULT 'envelope',
+	received  INTEGER NOT NULL,
+	state     TEXT NOT NULL DEFAULT 'waiting',
+	tries     INTEGER NOT NULL DEFAULT 0,
+	last_try  INTEGER NOT NULL DEFAULT 0,
+	next_try  INTEGER NOT NULL DEFAULT 0,
+	gives_up  INTEGER NOT NULL,
+	their_id  INTEGER NOT NULL DEFAULT 0,
+	code      TEXT NOT NULL DEFAULT '',
+	said      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS outbound_work ON outbound(neighbour, state, next_try);
+CREATE INDEX IF NOT EXISTS outbound_poster ON outbound(poster_fp, id);
+CREATE INDEX IF NOT EXISTS outbound_handed ON outbound(neighbour, their_id);`
+
+	// carried is every envelope this relay has taken, by hash, so that it
+	// never carries or delivers one twice: a retry after a lost answer is
+	// idempotent, and a loop of any construction dies at the first relay
+	// it comes back to.
+	//
+	// The hash is over the envelope's recipient and its ciphertext, not
+	// over the bytes of the request that brought it, so that a hop
+	// re-spacing the JSON cannot make one envelope look like two. Nothing
+	// on the row says whose the envelope was or where it was going: it is
+	// a hash and an expiry, which is the nonce table's shape, and it is
+	// purged on the nonce table's timer.
+	carriedTable = `CREATE TABLE IF NOT EXISTS carried (
+	hash    TEXT PRIMARY KEY,
+	expires INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS carried_expires ON carried(expires);`
+
 	noncesTable = `CREATE TABLE IF NOT EXISTS nonces (
 	nonce   TEXT PRIMARY KEY,
 	expires INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS nonces_expires ON nonces(expires);`
 	statsTable = `CREATE TABLE IF NOT EXISTS relay_stats (
-	id              INTEGER PRIMARY KEY CHECK (id = 1),
-	queued_messages INTEGER NOT NULL,
-	queued_bytes    INTEGER NOT NULL
+	id                INTEGER PRIMARY KEY CHECK (id = 1),
+	queued_messages   INTEGER NOT NULL,
+	queued_bytes      INTEGER NOT NULL,
+	outbound_messages INTEGER NOT NULL DEFAULT 0,
+	outbound_bytes    INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO relay_stats (id, queued_messages, queued_bytes) VALUES (1, 0, 0);`
 
@@ -346,7 +421,7 @@ CREATE INDEX IF NOT EXISTS certs_fp ON certs(fp, not_after);`
 const schema = mailboxesTable + "\n" + messagesTable + "\n" +
 	noncesTable + "\n" + statsTable + "\n" + tokensTable + "\n" + blocksTable + "\n" +
 	uploadsTable + "\n" + certsTable + "\n" + directoriesTable + "\n" + channelsTable + "\n" +
-	allowlistsTable + "\n" + cardsTable
+	allowlistsTable + "\n" + cardsTable + "\n" + outboundTable + "\n" + carriedTable
 
 // OpenStore opens or creates the relay database at dbPath, with message bodies
 // under messagesDir.
@@ -490,8 +565,15 @@ func hasTables(db *sql.DB) (bool, error) {
 	return n > 0, nil
 }
 
-// reconcile recomputes the queued counters from the messages table, which is
-// the only authority. It reports how many mailboxes disagreed.
+// reconcile recomputes the queued counters from the rows they count, which
+// are the only authority: the messages table for a mailbox's and the
+// relay's, and the waiting rows of the outbound queue for the queue's. It
+// reports how many mailboxes disagreed.
+//
+// The queue's counters are reconciled here from the moment the table exists,
+// not when the worker that drains it arrives: a counter is wrong the same way
+// whether it was a crash between two statements or somebody editing the
+// database, and a queue whose bytes read high refuses mail nobody sent.
 func (s *Store) reconcile() (int, error) {
 	var wrong int
 	err := s.db.QueryRow(`
@@ -516,8 +598,10 @@ func (s *Store) reconcile() (int, error) {
 	if _, err := tx.Exec(`
 		UPDATE relay_stats SET
 			queued_messages = (SELECT COUNT(*) FROM messages),
-			queued_bytes = (SELECT COALESCE(SUM(size), 0) FROM messages)
-		WHERE id = 1`); err != nil {
+			queued_bytes = (SELECT COALESCE(SUM(size), 0) FROM messages),
+			outbound_messages = (SELECT COUNT(*) FROM outbound WHERE state = ?),
+			outbound_bytes = (SELECT COALESCE(SUM(size), 0) FROM outbound WHERE state = ?)
+		WHERE id = 1`, OutWaiting, OutWaiting); err != nil {
 		return 0, fmt.Errorf("relay: reconciling relay counters: %w", err)
 	}
 	return wrong, tx.Commit()
