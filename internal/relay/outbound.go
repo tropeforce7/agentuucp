@@ -252,11 +252,18 @@ func (s *Store) PurgeCarried(now time.Time) error {
 // CourierQuotas is what the queue and the carried table are bounded by.
 // Zero is unlimited for every field, as everywhere else.
 type CourierQuotas struct {
-	QueueMaxBytes             int64
-	QueueMaxMessages          int64
-	QueueMaxMessagesPerPoster int64
-	QueueMaxBytesPerPoster    int64
-	CarriedMaxRows            int64
+	QueueMaxBytes    int64
+	QueueMaxMessages int64
+	// QueueMaxRowsPerPoster is how many rows one poster may have waiting.
+	// It is one field and one comparison for two settings, because a
+	// courier is a poster like any other here and only the number differs:
+	// CourierLimits.Quotas fills it from queue_max_messages_per_poster and
+	// CourierQuotasFor from queue_max_messages_per_courier, so the rule is
+	// in one place and which number it holds is decided where a caller is
+	// already known to be one or the other.
+	QueueMaxRowsPerPoster  int64
+	QueueMaxBytesPerPoster int64
+	CarriedMaxRows         int64
 }
 
 // roomInQueue answers whether there is room for one more row, by
@@ -265,10 +272,11 @@ type CourierQuotas struct {
 // between them, and this is the one place the question is asked.
 //
 // The relay-wide bounds are over every row waiting; the per-poster bounds
-// are over the rows this poster has waiting. A courier is held to the
-// relay-wide pair and to neither per-poster one: a courier carries many
-// people's mail, so one poster's share would refuse a busy neighbour's whole
-// queue, which the couriers file is the answer to instead. It is held to the
+// are over the rows this poster has waiting, whatever they are addressed to.
+// A courier is held to the relay-wide pair, to a row bound of its own —
+// larger than a person's because a courier carries many people's mail — and
+// to no per-poster byte bound at all, since a busy neighbour's whole queue
+// should not be refused for one person's worth of bytes. It is held to the
 // relay-wide rows as well as the bytes because bytes do not bound rows —
 // ten million hundred-byte envelopes are a gigabyte and ten million files.
 func roomInQueue(tx *sql.Tx, posterFP string, size int64, q CourierQuotas) error {
@@ -295,14 +303,14 @@ func roomInQueue(tx *sql.Tx, posterFP string, size int64, q CourierQuotas) error
 	if q.QueueMaxMessages > 0 && allMessages >= q.QueueMaxMessages {
 		return ErrQueueFull
 	}
-	if q.QueueMaxMessagesPerPoster > 0 || q.QueueMaxBytesPerPoster > 0 {
+	if q.QueueMaxRowsPerPoster > 0 || q.QueueMaxBytesPerPoster > 0 {
 		var mine, mineBytes int64
 		if err := tx.QueryRow(
 			`SELECT COUNT(*), COALESCE(SUM(size), 0) FROM outbound WHERE poster_fp = ? AND state = ?`,
 			posterFP, OutWaiting).Scan(&mine, &mineBytes); err != nil {
 			return err
 		}
-		if q.QueueMaxMessagesPerPoster > 0 && mine >= q.QueueMaxMessagesPerPoster {
+		if q.QueueMaxRowsPerPoster > 0 && mine >= q.QueueMaxRowsPerPoster {
 			return ErrQueueFull
 		}
 		if q.QueueMaxBytesPerPoster > 0 && size > q.QueueMaxBytesPerPoster-mineBytes {

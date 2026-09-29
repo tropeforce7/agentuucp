@@ -126,6 +126,11 @@ type CourierConfig struct {
 	// for one person's share.
 	QueueMaxMessagesPerPoster int64 `json:"queue_max_messages_per_poster"`
 	QueueMaxBytesPerPoster    int64 `json:"queue_max_bytes_per_poster"`
+	// QueueMaxMessagesPerCourier is a neighbour's own share of the rows,
+	// in place of the per-poster count: larger, because a courier carries
+	// many people's mail, and there at all because the relay-wide pair
+	// bounds every neighbour together and not one of them.
+	QueueMaxMessagesPerCourier int64 `json:"queue_max_messages_per_courier"`
 	// PostsPerMinute and PostBytesPerHour are a courier's budgets on the
 	// forward route, in place of a user's posts_per_minute and
 	// post_bytes_per_hour.
@@ -136,6 +141,13 @@ type CourierConfig struct {
 	// evicted, so at the ceiling the relay refuses to carry anything new.
 	CarriedMaxRows int64 `json:"carried_max_rows"`
 }
+
+// maxQueuePerCourierCeiling is the most queue_max_messages_per_courier may
+// be set to. It is the relay-wide count's ceiling ten times over, because a
+// neighbour's share is meant to be larger than a person's and the relay-wide
+// bound is what stops the sum of them; a number above this is a setting that
+// bounds nothing, since the relay-wide count would always be reached first.
+const maxQueuePerCourierCeiling = 1_000_000
 
 // maxQueueMessagesCeiling is the most queue_max_messages may be set to, for
 // the reason max_open_uploads has a ceiling: each row is a file and a
@@ -175,15 +187,16 @@ func (c CourierConfig) Relay() (relay.CourierLimits, error) {
 		return relay.CourierLimits{}, err
 	}
 	return relay.CourierLimits{
-		MaxHops:                   c.MaxHops,
-		ForwardTTL:                ttl,
-		QueueMaxBytes:             c.QueueMaxBytes,
-		QueueMaxMessages:          c.QueueMaxMessages,
-		QueueMaxMessagesPerPoster: c.QueueMaxMessagesPerPoster,
-		QueueMaxBytesPerPoster:    c.QueueMaxBytesPerPoster,
-		PostsPerMinute:            c.PostsPerMinute,
-		PostBytesPerHour:          c.PostBytesPerHour,
-		CarriedMaxRows:            c.CarriedMaxRows,
+		MaxHops:                    c.MaxHops,
+		ForwardTTL:                 ttl,
+		QueueMaxBytes:              c.QueueMaxBytes,
+		QueueMaxMessages:           c.QueueMaxMessages,
+		QueueMaxMessagesPerPoster:  c.QueueMaxMessagesPerPoster,
+		QueueMaxBytesPerPoster:     c.QueueMaxBytesPerPoster,
+		QueueMaxMessagesPerCourier: c.QueueMaxMessagesPerCourier,
+		PostsPerMinute:             c.PostsPerMinute,
+		PostBytesPerHour:           c.PostBytesPerHour,
+		CarriedMaxRows:             c.CarriedMaxRows,
 	}, nil
 }
 
@@ -381,15 +394,16 @@ func Defaults() Config {
 		// asked is a setting, and nothing reads them until there is a
 		// courier. Only the two paths decide whether there is one.
 		Courier: CourierConfig{
-			MaxHops:                   c.MaxHops,
-			ForwardTTL:                c.ForwardTTL.String(),
-			QueueMaxBytes:             c.QueueMaxBytes,
-			QueueMaxMessages:          c.QueueMaxMessages,
-			QueueMaxMessagesPerPoster: c.QueueMaxMessagesPerPoster,
-			QueueMaxBytesPerPoster:    c.QueueMaxBytesPerPoster,
-			PostsPerMinute:            c.PostsPerMinute,
-			PostBytesPerHour:          c.PostBytesPerHour,
-			CarriedMaxRows:            c.CarriedMaxRows,
+			MaxHops:                    c.MaxHops,
+			ForwardTTL:                 c.ForwardTTL.String(),
+			QueueMaxBytes:              c.QueueMaxBytes,
+			QueueMaxMessages:           c.QueueMaxMessages,
+			QueueMaxMessagesPerPoster:  c.QueueMaxMessagesPerPoster,
+			QueueMaxBytesPerPoster:     c.QueueMaxBytesPerPoster,
+			QueueMaxMessagesPerCourier: c.QueueMaxMessagesPerCourier,
+			PostsPerMinute:             c.PostsPerMinute,
+			PostBytesPerHour:           c.PostBytesPerHour,
+			CarriedMaxRows:             c.CarriedMaxRows,
 		},
 		ClientCerts: ClientCertsConfig{
 			Mode:     relayapi.ClientCertsOff,
@@ -677,6 +691,8 @@ func (c *Config) Merge(fs *flag.FlagSet, f *flagValues) {
 			c.Courier.QueueMaxMessages = f.courierQueueMaxMessages
 		case "courier-queue-max-messages-per-poster":
 			c.Courier.QueueMaxMessagesPerPoster = f.courierQueueMaxMessagesPerPoster
+		case "courier-queue-max-messages-per-courier":
+			c.Courier.QueueMaxMessagesPerCourier = f.courierQueueMaxMessagesPerCourier
 		case "courier-queue-max-bytes-per-poster":
 			c.Courier.QueueMaxBytesPerPoster = f.courierQueueMaxBytesPerPoster
 		case "courier-posts-per-minute":
@@ -1013,6 +1029,7 @@ func (c Config) courierValidate() error {
 		{"courier.queue_max_bytes", c.Courier.QueueMaxBytes},
 		{"courier.queue_max_messages", c.Courier.QueueMaxMessages},
 		{"courier.queue_max_messages_per_poster", c.Courier.QueueMaxMessagesPerPoster},
+		{"courier.queue_max_messages_per_courier", c.Courier.QueueMaxMessagesPerCourier},
 		{"courier.queue_max_bytes_per_poster", c.Courier.QueueMaxBytesPerPoster},
 		{"courier.posts_per_minute", c.Courier.PostsPerMinute},
 		{"courier.post_bytes_per_hour", c.Courier.PostBytesPerHour},
@@ -1033,6 +1050,13 @@ func (c Config) courierValidate() error {
 			return fmt.Errorf("%s must be at most %d, got %d (use 0 for unlimited)",
 				f.name, maxQueueMessagesCeiling, f.value)
 		}
+	}
+	// A neighbour's share has a ceiling of its own, and a larger one: the
+	// two above bound what one person may have waiting, and this bounds
+	// what one relay may, which is many people's mail.
+	if c.Courier.QueueMaxMessagesPerCourier > maxQueuePerCourierCeiling {
+		return fmt.Errorf("courier.queue_max_messages_per_courier must be at most %d, got %d "+
+			"(use 0 for unlimited)", maxQueuePerCourierCeiling, c.Courier.QueueMaxMessagesPerCourier)
 	}
 	// max_hops and forward_ttl have no honest zero: an address of no relays
 	// is not an address, and a queue that gives up at once is a relay that

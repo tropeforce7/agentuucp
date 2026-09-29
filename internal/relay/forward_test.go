@@ -1213,9 +1213,8 @@ func TestTheCarriedPurgeRuns(t *testing.T) {
 	}
 }
 
-// TestTheRelayWideRowBoundHoldsACourier: a courier is exempt from the two
-// per-poster bounds and from neither relay-wide one, and the rows are the one
-// that matters for a courier.
+// TestTheRelayWideRowBoundHoldsACourier: a courier is held to both
+// relay-wide bounds, and the rows are the one that matters for a courier.
 //
 // Bytes do not bound rows. The smallest envelope this relay takes is about a
 // hundred bytes, so a gigabyte of them — the relay-wide byte default — is ten
@@ -1254,5 +1253,163 @@ func TestTheRelayWideRowBoundHoldsACourier(t *testing.T) {
 	user := h.user(t, "alice")
 	if status, _, _ := h.forward(user, request(sealedFor(to, "u0"), []string{"bar"}, nil)); status != 507 {
 		t.Errorf("a user at the relay's row bound: status %d, want 507", status)
+	}
+}
+
+// TestOneNeighboursShareOfTheQueue: a courier has a row bound of its own,
+// beside the relay-wide pair and in place of the per-poster count.
+//
+// The relay-wide bound is what stands between every neighbour together and
+// the queue; without this one, a single neighbour that has stopped draining —
+// its own next hop down, its operator away — reaches that bound by itself and
+// every other neighbour's mail is refused on its account. So the bound is per
+// courier and the number is larger than a person's, since a courier carries
+// many people's mail.
+func TestOneNeighboursShareOfTheQueue(t *testing.T) {
+	alpha := neighbourID(t, "alpha")
+	beta := neighbourID(t, "beta")
+	limits := DefaultCourierLimits()
+	limits.QueueMaxMessagesPerCourier = 2
+	// The relay-wide bounds well clear, so what refuses is this one.
+	limits.QueueMaxMessages = 100
+	h := peered(t, []string{"bar"}, []*identity.Identity{alpha, beta}, &limits)
+	h.enroll(alpha, beta)
+	to := h.fpOf(t, "bob")
+
+	for i := range 2 {
+		status, _, body := h.forward(alpha, request(sealedFor(to, fmt.Sprintf("a%d", i)), []string{"bar"}, nil))
+		if status != 201 {
+			t.Fatalf("%d: status %d: %s", i, status, body)
+		}
+	}
+	status, _, body := h.forward(alpha, request(sealedFor(to, "one too many"), []string{"bar"}, nil))
+	if status != 507 {
+		t.Fatalf("at a neighbour's own row bound: status %d: %s", status, body)
+	}
+	if got := errorText(t, body); got != relayapi.MsgQueueFull {
+		t.Errorf("%q; want exactly %q, which is what a client matches", got, relayapi.MsgQueueFull)
+	}
+
+	// The other neighbour is unaffected, which is the whole of what the
+	// bound is for: one relay's backlog is not every relay's.
+	if status, _, body := h.forward(beta, request(sealedFor(to, "b0"), []string{"bar"}, nil)); status != 201 {
+		t.Fatalf("the second neighbour: status %d: %s; one neighbour's share is not the other's",
+			status, body)
+	}
+	if n := h.outboundRows(t); n != 3 {
+		t.Errorf("%d rows, want alpha's 2 and beta's 1", n)
+	}
+}
+
+// TestACouriersShareIsItsOwnNumberAndNotAPosters: the two settings are two
+// numbers in one comparison, and a courier is held to its own.
+//
+// One field carries the effective bound, so the rule is in one place; which
+// number it holds is decided where the caller is already known to be a
+// courier or a user. A test that set both to the same number would pass
+// whichever one the code read.
+func TestACouriersShareIsItsOwnNumberAndNotAPosters(t *testing.T) {
+	courier := neighbourID(t, "alpha")
+	limits := DefaultCourierLimits()
+	limits.QueueMaxMessagesPerCourier = 3
+	limits.QueueMaxMessagesPerPoster = 1
+	limits.QueueMaxMessages = 100
+	h := peered(t, []string{"bar"}, []*identity.Identity{courier}, &limits)
+	h.enroll(courier)
+	to := h.fpOf(t, "bob")
+
+	// A user is held to one, the poster's number.
+	user := h.user(t, "alice")
+	if status, _, body := h.forward(user, request(sealedFor(to, "u0"), []string{"bar"}, nil)); status != 201 {
+		t.Fatalf("the user's first: status %d: %s", status, body)
+	}
+	if status, _, _ := h.forward(user, request(sealedFor(to, "u1"), []string{"bar"}, nil)); status != 507 {
+		t.Errorf("a user's second at per_poster 1: status %d, want 507", status)
+	}
+	// The courier is held to three, its own number, and the poster's one
+	// does not touch it.
+	for i := range 3 {
+		if status, _, body := h.forward(courier,
+			request(sealedFor(to, fmt.Sprintf("c%d", i)), []string{"bar"}, nil)); status != 201 {
+			t.Fatalf("the courier's %d at per_courier 3: status %d: %s; a courier is not held to "+
+				"the poster's count", i, status, body)
+		}
+	}
+	if status, _, _ := h.forward(courier, request(sealedFor(to, "c3"), []string{"bar"}, nil)); status != 507 {
+		t.Errorf("the courier's fourth at per_courier 3: status %d, want 507", status)
+	}
+}
+
+// TestACouriersBytesAreNotBoundedPerPoster: the per-poster byte bound still
+// does not apply to a courier, which is the half of ruling 21 that this
+// setting does not change.
+func TestACouriersBytesAreNotBoundedPerPoster(t *testing.T) {
+	courier := neighbourID(t, "alpha")
+	limits := DefaultCourierLimits()
+	limits.QueueMaxBytesPerPoster = 1
+	limits.QueueMaxMessagesPerCourier = 10
+	h := peered(t, []string{"bar"}, []*identity.Identity{courier}, &limits)
+	h.enroll(courier)
+	to := h.fpOf(t, "bob")
+
+	if status, _, body := h.forward(courier, request(sealedFor(to, "plenty of bytes"), []string{"bar"}, nil)); status != 201 {
+		t.Fatalf("a courier at a one-byte per-poster bound: status %d: %s; that bound is not a "+
+			"courier's, since one person's worth of bytes would refuse a busy neighbour's queue",
+			status, body)
+	}
+	// A user meets it, so the bound is on and the test is not vacuous.
+	user := h.user(t, "alice")
+	if status, _, _ := h.forward(user, request(sealedFor(to, "u0"), []string{"bar"}, nil)); status != 507 {
+		t.Errorf("a user at a one-byte per-poster bound: status %d, want 507", status)
+	}
+}
+
+// TestThePerPosterBoundIsAnsweredFromAnIndex: the count of one poster's
+// waiting rows is asked inside the transaction that takes every forward, so
+// it must not cost the queue's depth.
+//
+// Before the index that covers it, no index carried both poster_fp and
+// state — the poster's own leads on poster_fp and id — so the planner
+// reached for the purge's, on state alone, and visited every waiting row in
+// the table to count one poster's. On the store's single connection, inside
+// a write transaction already open, at a courier's six hundred posts a
+// minute and a queue that may hold a hundred thousand rows, that is the
+// relay's one writer spending its minute on counting.
+//
+// The claim is about the plan, so the test reads the plan the relay's own
+// schema gives, and a row count on the day somebody runs it decides nothing.
+func TestThePerPosterBoundIsAnsweredFromAnIndex(t *testing.T) {
+	h := peered(t, []string{"bar"}, nil, nil)
+	rows, err := h.store.db.Query(`EXPLAIN QUERY PLAN
+		SELECT COUNT(*), COALESCE(SUM(size), 0) FROM outbound WHERE poster_fp = ? AND state = ?`,
+		"whoever", OutWaiting)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan strings.Builder
+	for rows.Next() {
+		var id, parent, notused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &notused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(detail + "\n")
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	got := plan.String()
+	if !strings.Contains(got, "outbound_share") {
+		t.Errorf("the per-poster count does not use its own index:\n%s", got)
+	}
+	// Covering, so the bytes come from the index too and no row is read
+	// for a question asked on every forward.
+	if !strings.Contains(got, "COVERING INDEX") {
+		t.Errorf("the per-poster count reads rows to answer:\n%s", got)
+	}
+	if strings.Contains(got, "SCAN outbound") {
+		t.Errorf("the per-poster count scans the table, inside the transaction that takes a "+
+			"forward and on the store's one connection:\n%s", got)
 	}
 }

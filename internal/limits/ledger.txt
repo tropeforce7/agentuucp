@@ -108,6 +108,7 @@ cmd/auu-relay/config.go CourierConfig int PostsPerMinute int64 = 0 or >= 0 shown
 cmd/auu-relay/config.go CourierConfig int QueueMaxBytes int64 = 0 or >= 0 shown by TestLimitCourierSettingRanges
 cmd/auu-relay/config.go CourierConfig int QueueMaxBytesPerPoster int64 = 0 or >= 0 shown by TestLimitCourierSettingRanges
 cmd/auu-relay/config.go CourierConfig int QueueMaxMessages int64 = 0 or [1, 100000] shown by TestLimitCourierSettingRanges
+cmd/auu-relay/config.go CourierConfig int QueueMaxMessagesPerCourier int64 = 0 or [1, 1000000] shown by TestLimitCourierSettingRanges
 cmd/auu-relay/config.go CourierConfig int QueueMaxMessagesPerPoster int64 = 0 or [1, 100000] shown by TestLimitCourierSettingRanges
 cmd/auu-relay/config.go LimitsConfig int KnockMaxBytes int64 = 0 or [1, 1073741824] shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int KnocksPerHour int64 = >= 0 shown by TestLimitRelaySettings
@@ -132,6 +133,7 @@ cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierPostsPerMinute) = 
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierQueueMaxBytes) = 0 or >= 0 shown by TestLimitCourierSettingRanges
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierQueueMaxBytesPerPoster) = 0 or >= 0 shown by TestLimitCourierSettingRanges
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierQueueMaxMessages) = 0 or [1, 100000] shown by TestLimitCourierSettingRanges
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierQueueMaxMessagesPerCourier) = 0 or [1, 1000000] shown by TestLimitCourierSettingRanges
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierQueueMaxMessagesPerPoster) = 0 or [1, 100000] shown by TestLimitCourierSettingRanges
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.knockMaxBytes) = 0 or [1, 1073741824] shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.knocksPerHour) = >= 0 shown by TestLimitRelaySettings

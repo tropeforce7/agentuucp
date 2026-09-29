@@ -110,8 +110,8 @@ type CourierLimits struct {
 	// QueueMaxMessages caps the rows waiting to leave across the relay, as
 	// QueueMaxBytes caps their bytes.
 	//
-	// A courier is exempt from the two per-poster bounds below and not from
-	// this one, which is what it is for. The bytes alone do not bound a
+	// A courier is held to this one, to a row bound of its own below, and
+	// to neither per-poster byte bound. The bytes alone do not bound a
 	// courier in any useful way: the smallest envelope is about a hundred
 	// of them, so a gigabyte is ten million rows, and ten million rows is
 	// ten million files. A relay carrying for a neighbour that is down
@@ -120,10 +120,29 @@ type CourierLimits struct {
 	// QueueMaxMessagesPerPoster caps the rows waiting for one poster, and
 	// QueueMaxBytesPerPoster their bytes. Neither applies to a courier: a
 	// courier carries many people's mail, so one poster's share would
-	// refuse a neighbour's queue for being busy, and the relay-wide bounds
-	// and the couriers file are what answer that instead.
+	// refuse a neighbour's queue for being busy.
 	QueueMaxMessagesPerPoster int64
 	QueueMaxBytesPerPoster    int64
+	// QueueMaxMessagesPerCourier is one posting courier's share of the
+	// rows: its per-poster bound, larger than a person's for the reason a
+	// person's does not apply to it.
+	//
+	// The relay-wide pair above is what stands between every poster
+	// together and the queue; this is what stands between one courier and
+	// the rest. Without it a single peer whose mail is not moving on —
+	// because what it sends through here is bound for somewhere that is
+	// down, or because it is posting faster than this relay can hand over —
+	// reaches the relay-wide bound by itself, and every other poster's
+	// mail is refused on its account.
+	//
+	// It is counted over that courier's waiting rows whatever they are
+	// addressed to, as every per-poster bound here is, so it is a share of
+	// the queue and not a share per destination: a courier with its whole
+	// share stuck for one unreachable neighbour is refused for a reachable
+	// one too. That is the bound doing what it says — this peer has as much
+	// of the queue as it may — and the remedy is the neighbour's own, to
+	// stop posting what it cannot get delivered.
+	QueueMaxMessagesPerCourier int64
 	// PostsPerMinute and PostBytesPerHour are a courier's budgets, in
 	// place of a user's on the forward route, keyed by the verified
 	// fingerprint as every per-identity limit is.
@@ -152,7 +171,15 @@ func DefaultCourierLimits() CourierLimits {
 		QueueMaxMessages:          100_000,
 		QueueMaxMessagesPerPoster: 100,
 		QueueMaxBytesPerPoster:    256 << 20,
-		PostsPerMinute:            600,
+		// A hundred times one person's share: a courier carries many
+		// people's mail, and a relay holding for a peer whose mail is not
+		// moving should be holding rather more of it than any one of its
+		// own users would have waiting. A tenth of the relay-wide count, so
+		// that one courier cannot reach that alone and it takes all ten of
+		// a well-peered relay's neighbours, each full, to reach it exactly
+		// between them.
+		QueueMaxMessagesPerCourier: 10_000,
+		PostsPerMinute:             600,
 		// Unlimited by default: a courier carries many people's mail, and
 		// the relay-wide queue cap and the couriers file are the bounds
 		// that suit that. A relay whose neighbour floods it removes one
@@ -165,27 +192,34 @@ func DefaultCourierLimits() CourierLimits {
 // Quotas extracts what the queue and the carried table are bounded by.
 func (c CourierLimits) Quotas() CourierQuotas {
 	return CourierQuotas{
-		QueueMaxBytes:             c.QueueMaxBytes,
-		QueueMaxMessages:          c.QueueMaxMessages,
-		QueueMaxMessagesPerPoster: c.QueueMaxMessagesPerPoster,
-		QueueMaxBytesPerPoster:    c.QueueMaxBytesPerPoster,
-		CarriedMaxRows:            c.CarriedMaxRows,
+		QueueMaxBytes:          c.QueueMaxBytes,
+		QueueMaxMessages:       c.QueueMaxMessages,
+		QueueMaxRowsPerPoster:  c.QueueMaxMessagesPerPoster,
+		QueueMaxBytesPerPoster: c.QueueMaxBytesPerPoster,
+		CarriedMaxRows:         c.CarriedMaxRows,
 	}
 }
 
 // CourierQuotasFor is a courier's own quotas: the relay-wide bounds, both of
-// them, and neither per-poster one.
+// them, its own share of the rows, and no per-poster byte bound.
 //
-// Both, rather than the bytes alone, because bytes do not bound rows: the
-// smallest envelope this relay will take is about a hundred bytes, so a
-// gigabyte of them is ten million rows and ten million files, put there by
-// one neighbour. A relay that has filled up should say so while it still has
-// somewhere to write the saying.
+// Both relay-wide bounds rather than the bytes alone, because bytes do not
+// bound rows: the smallest envelope this relay will take is about a hundred
+// bytes, so a gigabyte of them is ten million rows and ten million files,
+// put there by one neighbour. A relay that has filled up should say so while
+// it still has somewhere to write the saying.
+//
+// And its own row bound beside them, because the relay-wide pair bounds
+// every poster together and not any one of them: one courier whose mail is
+// not moving on would reach the relay-wide bound alone and every other
+// poster's mail would be refused on its account. It goes in the same field
+// a user's share goes in, so the comparison is the one comparison.
 func (c CourierLimits) CourierQuotasFor() CourierQuotas {
 	return CourierQuotas{
-		QueueMaxBytes:    c.QueueMaxBytes,
-		QueueMaxMessages: c.QueueMaxMessages,
-		CarriedMaxRows:   c.CarriedMaxRows,
+		QueueMaxBytes:         c.QueueMaxBytes,
+		QueueMaxMessages:      c.QueueMaxMessages,
+		QueueMaxRowsPerPoster: c.QueueMaxMessagesPerCourier,
+		CarriedMaxRows:        c.CarriedMaxRows,
 	}
 }
 

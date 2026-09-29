@@ -47,6 +47,7 @@ Later ones win. A flag you do not type never overrides the file.
 | `--courier-queue-max-bytes N` | `courier.queue_max_bytes` | 1 GiB, 0 is unlimited |
 | `--courier-queue-max-messages N` | `courier.queue_max_messages` | 100000 across the relay, at most 100000, 0 is unlimited |
 | `--courier-queue-max-messages-per-poster N` | `courier.queue_max_messages_per_poster` | 100, at most 100000, 0 is unlimited |
+| `--courier-queue-max-messages-per-courier N` | `courier.queue_max_messages_per_courier` | 10000 for one neighbour, in place of the per-poster count, at most 1000000, 0 is unlimited |
 | `--courier-queue-max-bytes-per-poster N` | `courier.queue_max_bytes_per_poster` | 256 MiB, 0 is unlimited |
 | `--courier-posts-per-minute N` | `courier.posts_per_minute` | 600, a neighbour's own rate, 0 is unlimited |
 | `--courier-post-bytes-per-hour N` | `courier.post_bytes_per_hour` | 0, unlimited; see 1.10 |
@@ -902,14 +903,29 @@ million rows and ten million files, and a relay that fills up should say
 so while it still has somewhere to write the saying. Over any of them the
 relay answers `507` and the sender tries again later; the queue empties
 itself as the neighbour takes what is waiting, so there is nobody to tell.
-A neighbour is held to the relay-wide pair and to neither per-poster
-bound, because a courier carries many people's mail and one person's share
-would refuse a busy neighbour's whole queue. Its own posting is bounded by
+
+A neighbour is held to the relay-wide pair, to
+`courier.queue_max_messages_per_courier` in place of the per-poster count,
+and to no per-poster byte bound at all: a courier carries many people's
+mail, so one person's share of the bytes would refuse a busy neighbour's
+whole queue. Its own share of the rows is ten thousand by default, a
+hundred times a person's. It is there because the relay-wide pair bounds
+every poster together and not any one of them — one peer whose mail is not
+moving on, because what it sends through you is bound for somewhere that is
+down, would reach the relay-wide count by itself and everybody else's mail
+would be refused on its account. Like every per-poster bound here it counts
+that poster's waiting rows whatever they are addressed to, so it is a share
+of your queue and not a share per destination: a neighbour with its whole
+share stuck for one unreachable relay is refused for a reachable one too,
+and the remedy is theirs, to stop sending what they cannot get delivered.
+
+Its own posting is bounded by
 `courier.posts_per_minute` and `courier.post_bytes_per_hour` rather than by
 a user's rates, for the same reason, and the bytes there are unlimited by
 default. So what stands between one neighbour and the whole of your queue
-is the relay-wide pair, and, for a neighbour that floods you anyway, one
-line removed from your couriers file.
+is `courier.queue_max_messages_per_courier`, with the relay-wide pair
+behind it, and, for a neighbour that floods you anyway, one line removed
+from your couriers file.
 
 **How the queue empties.** One worker per neighbour, woken when mail for it
 arrives and by its own timer, takes the oldest first and posts each to that

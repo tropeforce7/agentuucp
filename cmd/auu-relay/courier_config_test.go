@@ -287,6 +287,7 @@ func TestTheCourierDefaultsMatchTheLibrarys(t *testing.T) {
 		got.QueueMaxMessages != want.QueueMaxMessages ||
 		got.QueueMaxMessagesPerPoster != want.QueueMaxMessagesPerPoster ||
 		got.QueueMaxBytesPerPoster != want.QueueMaxBytesPerPoster ||
+		got.QueueMaxMessagesPerCourier != want.QueueMaxMessagesPerCourier ||
 		got.PostsPerMinute != want.PostsPerMinute ||
 		got.PostBytesPerHour != want.PostBytesPerHour ||
 		got.CarriedMaxRows != want.CarriedMaxRows {
@@ -355,6 +356,7 @@ func TestLimitCourierSettingRanges(t *testing.T) {
 			"--courier-posts-per-minute", "--courier-post-bytes-per-hour",
 			"--courier-carried-max-rows", "--courier-queue-max-messages",
 			"--courier-queue-max-messages-per-poster",
+			"--courier-queue-max-messages-per-courier",
 		} {
 			// Zero is unlimited and is taken; a negative one is refused with
 			// the sentence that says what zero means.
@@ -371,13 +373,23 @@ func TestLimitCourierSettingRanges(t *testing.T) {
 				t.Errorf("%s MinInt64 was taken", f)
 			}
 		}
-		// The two with a ceiling, at it and one over. They are a count of
-		// rows and of files the relay holds, which is why each has one.
-		for _, f := range []string{"--courier-queue-max-messages", "--courier-queue-max-messages-per-poster"} {
-			if _, err := resolve(t, "", f, strconv.Itoa(maxQueueMessagesCeiling)); err != nil {
+		// The three with a ceiling, each at it and one over. They are
+		// counts of rows and of files the relay holds, which is why each
+		// has one, and a neighbour's is larger than a person's, which is
+		// why it is not the same number.
+		for _, tc := range []struct {
+			flag    string
+			ceiling int
+		}{
+			{"--courier-queue-max-messages", maxQueueMessagesCeiling},
+			{"--courier-queue-max-messages-per-poster", maxQueueMessagesCeiling},
+			{"--courier-queue-max-messages-per-courier", maxQueuePerCourierCeiling},
+		} {
+			f := tc.flag
+			if _, err := resolve(t, "", f, strconv.Itoa(tc.ceiling)); err != nil {
 				t.Errorf("%s at its ceiling: %v", f, err)
 			}
-			_, err := resolve(t, "", f, strconv.Itoa(maxQueueMessagesCeiling+1))
+			_, err := resolve(t, "", f, strconv.Itoa(tc.ceiling+1))
 			if err == nil || !strings.Contains(err.Error(), "at most") {
 				t.Errorf("%s one over its ceiling: %v; want the refusal", f, err)
 			}
@@ -401,7 +413,8 @@ func TestPrintedConfigCarriesTheCourierNumbers(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, key := range []string{"max_hops", "forward_ttl", "queue_max_bytes", "queue_max_messages",
-		"queue_max_messages_per_poster", "queue_max_bytes_per_poster", "posts_per_minute",
+		"queue_max_messages_per_poster", "queue_max_messages_per_courier",
+		"queue_max_bytes_per_poster", "posts_per_minute",
 		"post_bytes_per_hour", "carried_max_rows"} {
 		if !strings.Contains(out.String(), key) {
 			t.Errorf("--print-config output is missing %q", key)
@@ -450,5 +463,75 @@ func TestOpenRegistrationBesideACourierHomeIsRefused(t *testing.T) {
 	// nothing leaves this relay on a stranger's account.
 	if _, err := resolve(t, "", "--courier-file", couriersFile(t, "bar")); err != nil {
 		t.Errorf("open registration beside a couriers file: %v; that is not the pair", err)
+	}
+}
+
+// TestACourierBlockWithoutTheNewKeyKeepsItsDefault: a settings file written
+// before a setting existed gets that setting's default and not its zero.
+//
+// Zero means unlimited for every bound here, so the difference is the whole
+// difference: an operator who upgrades and restarts would otherwise find the
+// bound they never asked to turn off silently off. The file is read into the
+// defaults rather than into an empty struct, which is what makes that true,
+// and this holds it there — the key can be added to the file later, and a
+// value in the file still wins.
+func TestACourierBlockWithoutTheNewKeyKeepsItsDefault(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "relay.json")
+	// A couriers file beside it, since a courier block naming one is
+	// validated against the file on disk.
+	if err := os.WriteFile(filepath.Join(dir, "couriers"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A courier block as an operator would have written it before this
+	// setting existed: the other queue bounds set, this one absent.
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"tls": {"mode": "off"}, "registration": "closed", "courier": {
+		"authorized_file": "couriers",
+		"queue_max_messages": 500,
+		"queue_max_messages_per_poster": 7,
+		"queue_max_bytes_per_poster": 1024
+	}}`)
+	cfg, err := resolve(t, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits, err := cfg.Courier.Relay()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := relay.DefaultCourierLimits().QueueMaxMessagesPerCourier
+	if limits.QueueMaxMessagesPerCourier != want {
+		t.Errorf("a file that predates the setting gives %d; want the default %d, since zero is "+
+			"unlimited and an operator who upgrades did not ask to turn a bound off",
+			limits.QueueMaxMessagesPerCourier, want)
+	}
+	// The keys the file does set are the file's, so this is not the
+	// defaults winning over everything.
+	if limits.QueueMaxMessagesPerPoster != 7 || limits.QueueMaxMessages != 500 {
+		t.Errorf("the file's own values were not read: per poster %d, relay-wide %d",
+			limits.QueueMaxMessagesPerPoster, limits.QueueMaxMessages)
+	}
+
+	// And when the file does set it, the file wins — including at zero,
+	// which is an operator turning it off on purpose.
+	write(`{"tls": {"mode": "off"}, "registration": "closed", "courier": {
+		"authorized_file": "couriers", "queue_max_messages_per_courier": 0
+	}}`)
+	cfg, err = resolve(t, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if limits, err = cfg.Courier.Relay(); err != nil {
+		t.Fatal(err)
+	}
+	if limits.QueueMaxMessagesPerCourier != 0 {
+		t.Errorf("an explicit 0 gives %d; unlimited is a value an operator may choose",
+			limits.QueueMaxMessagesPerCourier)
 	}
 }
