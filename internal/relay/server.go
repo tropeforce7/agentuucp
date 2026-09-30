@@ -221,6 +221,7 @@ func NewServer(store *Store, cfg Config) *Server {
 	s.route("GET "+trustAnchorPath, s.handleTrustAnchor)
 	s.route("PUT /v1/mailbox/{fp}/allow", s.authedBody(relayapi.MaxDocumentBytes, hintCompact, s.handleSetAllow))
 	s.route("GET /v1/mailbox/{fp}/allow", s.authed(s.handleGetAllow))
+	s.route("GET /v1/mailbox/{fp}/queue", s.authed(s.handleQueue))
 	s.route("PUT /v1/mailbox/{fp}/channels", s.authedBody(relayapi.MaxDocumentBytes, hintCompact, s.handleSetChannels))
 	s.route("GET /v1/mailbox/{fp}/channels", s.authed(s.handleGetChannels))
 	s.route("PUT /v1/mailbox/{fp}/card", s.authedBody(relayapi.FramingAllowance, hintCompact, s.handleSetCard))
@@ -1187,7 +1188,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 	if !ok {
 		return
 	}
-	id, err := s.store.Put(fp, channel, relayapi.KindEnvelope, "", body, s.cfg.Limits.Quotas())
+	id, err := s.store.Put(fp, channel, relayapi.KindEnvelope, "", body, s.cfg.Limits.Quotas(), Forwarded{})
 	switch {
 	case errors.Is(err, ErrMailboxFull):
 		// Not the sender's fault and not something they can retry around: the

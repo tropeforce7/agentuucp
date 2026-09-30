@@ -10,6 +10,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/clientca"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/token"
 )
 
@@ -193,6 +194,108 @@ func (c *Client) checkCard(r *relayapi.CardResponse) error {
 // of which the relay always sends and is refused by name when absent. A
 // page asked for as stubs carries no envelope: a row with one is a relay
 // that ignored the parameter, refused by name.
+
+// queueStates are the words a queued row's state may be. The relay writes
+// them and nothing else does, so a fourth is a relay saying something this
+// client has no meaning for, and printing it to a person would be printing a
+// relay's word as though it were this program's.
+var queueStates = []string{"waiting", "handed", "final"}
+
+// maxCodeBytes bounds a queue row's code. Every code this tree writes is a
+// short word; the bound is what stops a relay sending a paragraph.
+const maxCodeBytes = 32
+
+// validCode reports whether a code is the shape every code is: lower-case
+// letters and the hyphen that joins them, and no longer than a word.
+func validCode(code string) bool {
+	if len(code) > maxCodeBytes {
+		return false
+	}
+	for _, r := range code {
+		if (r < 'a' || r > 'z') && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// splitOn is a joined path's names, and nothing for the empty string: the
+// last hop has nothing left to travel, which is a value and not an absence.
+func splitOn(joined string) []string {
+	if joined == "" {
+		return nil
+	}
+	return strings.Split(joined, "!")
+}
+
+// checkQueue holds a poster's own queue to its shape before any of it is
+// printed. Every field is always present, so what is checked is what each one
+// may be and not whether it is there.
+func (c *Client) checkQueue(q *relayapi.QueueResponse) error {
+	const answer = "the queue"
+	if len(q.Queued) > relayapi.MaxQueueLimit {
+		return c.malformed(answer, "queued", fmt.Sprintf("at most %d rows", relayapi.MaxQueueLimit))
+	}
+	for i := range q.Queued {
+		row := &q.Queued[i]
+		if row.ID <= 0 {
+			return c.malformed(answer, "id", wantID)
+		}
+		if err := c.counts(answer, count{"tries", row.Tries}); err != nil {
+			return err
+		}
+		if !oneOf(row.State, queueStates) {
+			return c.malformed(answer, "state", wantOneOf(queueStates))
+		}
+		// The code is a word a relay chose and this program prints beside
+		// its own text, so it is held to the shape of a word: the
+		// characters a code uses and a bound. It is not held to a closed
+		// set, because the set grows with the route that reports an
+		// undeliverable and a client that refused a newer relay's code
+		// would refuse the answer whole; what it is held to is enough that
+		// nothing in it can be mistaken for this program's own line, and
+		// it is escaped again where it is printed.
+		if row.Code != "" && !validCode(row.Code) {
+			return c.malformed(answer, "code", "a word of letters and '-', at most 32 of them")
+		}
+		if err := identity.ValidName(row.Neighbour); err != nil {
+			return c.malformed(answer, "neighbour", "a relay name")
+		}
+		// The row's own address, the hop it goes to next and what is left
+		// after it, under the one rule: a queue a relay answers is held to
+		// what a relay would have accepted.
+		if err := checkVia(store.JoinAddress(append([]string{row.Neighbour}, splitOn(row.Path)...))); err != nil {
+			return c.malformed(answer, "path", err.Error())
+		}
+	}
+	return nil
+}
+
+// checkVia holds an address a relay sent to the rule both ends run,
+// store.CheckAddress: every name a relay name, no relay named twice, and at
+// most relayapi.MaxHops of them. The empty string is an address of no relays,
+// which is mail that came no distance.
+//
+// It is the relay's own function and not a second copy of it, which is the
+// point. Ruling 4 puts the rule over the whole address — what is left to
+// travel and the hops so far together — and every relay runs it after
+// appending its own name for the hop that handed the message over. So an
+// address that reaches a client having broken the rule can only have come
+// through a relay that did not run it, and a repeated name is that rather
+// than a coincidence: the rule already refuses the honest case where two hops
+// would name two relays alike, which is the conservative trade ruling 4 chose
+// because a sender cannot tell those two cases apart either.
+//
+// Held here because these names go into the record this machine keeps and
+// come back out as the path of a reply, so a name that is not a name would be
+// a name this machine later sends.
+func checkVia(via string) error {
+	if via == "" {
+		return nil
+	}
+	return store.CheckAddress(nil, strings.Split(via, "!"), relayapi.MaxHops)
+}
+
 func (c *Client) checkListing(page *relayapi.ListResponse, stubs bool) error {
 	const answer = "the listing"
 	if err := c.counts(answer, count{"queued", page.Queued}); err != nil {
@@ -220,6 +323,9 @@ func (c *Client) checkListing(page *relayapi.ListResponse, stubs bool) error {
 		}
 		if err := channels.ValidName(m.Channel); err != nil {
 			return c.malformed(answer, "channel", wantChannelName)
+		}
+		if err := checkVia(m.Via); err != nil {
+			return c.malformed(answer, "via", err.Error())
 		}
 		if stubs && len(m.Envelope) != 0 {
 			return c.malformed(answer, "envelope", "absent: a stubs listing carries no envelope")

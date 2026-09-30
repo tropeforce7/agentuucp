@@ -658,6 +658,42 @@ With keys already swapped, in person or over something you both trust:
 10. The question and its files are handed to their agent, marked as untrusted
     input.
 
+**When they are on another relay**, and yours carries to theirs, steps 3 and
+4 become a queue and a second hop. Your agent runs `auu send --to
+'bar!bob'`, where `bar` is what *your* relay's operator calls theirs.
+
+3. `auu` sends `POST /v1/forward` to your relay, with the sealed envelope and
+   the rest of the address.
+4. Your relay answers `201` with the id of a row in its queue. It has taken
+   the message and not delivered it: one row and one file, naming you as the
+   poster, because mail that cannot be delivered has to be somebody's for
+   anyone to be told about it.
+5. Its worker dials `bar` as a user of it — a relay forwards by having an
+   identity there, its courier — and posts the same envelope, byte for byte,
+   to `bar`'s own forward route with what is left of the address.
+6. `bar` has nothing left to travel, so it delivers into Bob's mailbox, with
+   the hops the message came by written beside the row. Whether Bob accepts
+   it is his allow list's answer about *your relay's courier*, not about
+   you: `bar` cannot read the envelope, so the only sender it can prove is
+   the relay that handed it over. Admitting a courier admits everybody
+   behind that relay, and it is the one place a list means something coarser
+   than the fingerprints in it.
+7. Your relay's row is now `handed`. Its file and Bob's fingerprint go at
+   once; the poster, your relay's name for `bar`, and the address stay while
+   something could still come back about it. `auu queue` is what you read,
+   and `auu inbox` says one line while anything is waiting.
+
+Bob's listing then carries `via`, the relays it came through, and his reply
+goes back along that address reversed, without his asking. That reversal
+rests on a convention: the names in `via` are each hop's own for the hop
+before it, out of its couriers file, while a reply's address is resolved
+against the courier home a relay dials from. An operator is meant to use one
+name in both, and a relay says at its start which names appear in one and
+not the other, but nothing can enforce it and one-way peering is a thing an
+operator may want. So where the convention holds the reply routes, and where
+it does not the first hop refuses it and `auu` says so, offering `--via` and
+`--relay` as the ways to answer anyway.
+
 The `DELETE` at step 9 is the interesting one. The message leaves the relay
 only after it is safely on local disk. Crash anywhere in between and you fetch
 it twice, never zero times. It happens at the fetch only for a channel you
@@ -676,7 +712,13 @@ set by hand or copied from a machine that had fetched further. Then `auu
 inbox` says so, with the count, the cursor file to delete and the `auu inbox
 --relay NAME` to run after. It exits 5 without acknowledging or writing
 anything. Each message listed says which channel it is under (`channel`),
-always, `default` included, held to the channel name rule as it is read.
+always, `default` included, held to the channel name rule as it is read. It
+says how it came, too: `via`, the relays it crossed before the one holding
+it, nearest the sender first and joined by `!`, always present and empty for
+mail posted to that relay directly. A client holds those names to the same
+address rule every relay ran — a relay name each, none named twice, at most
+32 of them — and refuses a row that breaks it by name, since an address that
+reached a client having broken it came through a relay that did not run it.
 It says its kind too (`envelope`, `stream` or `knock`). The listing says the state
 of the owner's allow list (`allow`), of their card (`card`) and of their
 channel directory (`directory`) on every answer — the same three words for

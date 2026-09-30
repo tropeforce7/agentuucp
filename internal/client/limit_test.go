@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -56,6 +57,17 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 		}
 	}
 	callStatus := func(c *Client) error { _, err := c.AdminStatus(context.Background()); return err }
+	// One queue row as a function of one integer: the rest of it is a row
+	// the shape check would pass, so the integer is the only thing under
+	// test.
+	queue := func(set func(q *relayapi.QueuedMessage, n int64)) func(int64) any {
+		return func(n int64) any {
+			row := relayapi.QueuedMessage{ID: 1, Neighbour: "bar", State: "waiting", Tries: 0}
+			set(&row, n)
+			return relayapi.QueueResponse{Queued: []relayapi.QueuedMessage{row}}
+		}
+	}
+	callQueue := func(c *Client) error { _, err := c.Queue(context.Background()); return err }
 	mailbox := func(set func(m *relayapi.MailboxRecord, n int64)) func(int64) any {
 		return func(n int64) any {
 			m := relayapi.MailboxRecord{FP: fp, Name: "alice", Allow: relayapi.AllowSigned}
@@ -125,9 +137,11 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 		{"/v1/mailbox/" + fp + "/channels", func(n int64) any {
 			return relayapi.ChannelsResponse{Document: []byte("{}"), Signature: []byte("s"), Queued: map[string]int64{"default": n}}
 		}, func(c *Client) error { _, err := c.Directory(context.Background(), fp); return err }},
+		{"/v1/mailbox/" + fp + "/queue", queue(func(q *relayapi.QueuedMessage, n int64) { q.Tries = n }), callQueue},
 	}
 	ids := []shape{
 		{"/v1/mailbox/" + fp, listing(func(l *relayapi.ListResponse, n int64) { l.Messages[0].ID = n }), callList},
+		{"/v1/mailbox/" + fp + "/queue", queue(func(q *relayapi.QueuedMessage, n int64) { q.ID = n }), callQueue},
 		{"/v1/mailbox/" + bob.Fingerprint(), func(n int64) any { return relayapi.PostResponse{ID: n} },
 			func(c *Client) error { _, err := c.Post(context.Background(), env, ""); return err }},
 		{"/v1/forward", func(n int64) any { return relayapi.ForwardResponse{ID: n} },
@@ -429,4 +443,196 @@ func TestLimitAConflictsForwardIDIsHeldToItsShape(t *testing.T) {
 	if got := httpError(resp, []byte(`{"id":7}`)).ForwardID; got != 0 {
 		t.Errorf("a 400 carried ForwardID %d, want 0", got)
 	}
+}
+
+// TestLimitAQueueRowIsHeldToItsShape: the queue's strings, beside the
+// integers the table above holds.
+//
+// A row's neighbour and path are relay names an operator gave, and they are
+// printed to a person and go nowhere else — but a name that is not a name is
+// a relay putting its own text on somebody's terminal, and the path is the
+// same shape as an address, so both are held to the rule that makes a name
+// one. The state is one of three words for the same reason: a fourth is a
+// relay saying something this client has no meaning for.
+func TestLimitAQueueRowIsHeldToItsShape(t *testing.T) {
+	alice, err := identity.Generate("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := alice.Fingerprint()
+	good := relayapi.QueuedMessage{ID: 1, Neighbour: "bar", Path: "baz", State: "waiting"}
+
+	for _, tc := range []struct {
+		name  string
+		row   relayapi.QueuedMessage
+		field string
+	}{
+		{"a neighbour that is not a name", with(good, func(q *relayapi.QueuedMessage) { q.Neighbour = "b ar" }), "neighbour"},
+		{"a neighbour of two bytes", with(good, func(q *relayapi.QueuedMessage) { q.Neighbour = "b!" }), "neighbour"},
+		{"no neighbour at all", with(good, func(q *relayapi.QueuedMessage) { q.Neighbour = "" }), "neighbour"},
+		{"a path name that is not a name", with(good, func(q *relayapi.QueuedMessage) { q.Path = "baz!b ar" }), "path"},
+		{"a path of more than max_hops", with(good, func(q *relayapi.QueuedMessage) {
+			q.Path = strings.TrimSuffix(strings.Repeat("r!", relayapi.MaxHops+1), "!")
+		}), "path"},
+		{"a state this client has no meaning for", with(good, func(q *relayapi.QueuedMessage) { q.State = "posted" }), "state"},
+		// The code is a word a relay chose that this program prints beside
+		// its own text, so it is held to the shape of a word. Without that
+		// a relay can clear the screen and write lines that look like the
+		// tool's own, or add a line to a piped transcript.
+		{"a code with an escape in it", with(good, func(q *relayapi.QueuedMessage) {
+			q.Code = "\x1b[2J\x1b[H\rgave-up"
+		}), "code"},
+		{"a code with a newline in it", with(good, func(q *relayapi.QueuedMessage) {
+			q.Code = "gave-up\n  forged line from the relay"
+		}), "code"},
+		{"a code that is a paragraph", with(good, func(q *relayapi.QueuedMessage) {
+			q.Code = strings.Repeat("a", 33)
+		}), "code"},
+		{"no state at all", with(good, func(q *relayapi.QueuedMessage) { q.State = "" }), "state"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := fakeRelay(t, map[string]any{"/v1/mailbox/" + fp + "/queue": relayapi.QueueResponse{
+				Queued: []relayapi.QueuedMessage{tc.row},
+			}})
+			c, err := New(srv.URL, alice, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = c.Queue(context.Background())
+			if err == nil {
+				t.Fatal("accepted")
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("%v; want the field named", err)
+			}
+			if !strings.Contains(err.Error(), "the queue") {
+				t.Errorf("%v; want the answer named", err)
+			}
+		})
+	}
+	// A page over the route's own limit is refused as a page, not read
+	// short: a relay answering more rows than it says it will is a relay
+	// this client has stopped agreeing with.
+	rows := make([]relayapi.QueuedMessage, relayapi.MaxQueueLimit+1)
+	for i := range rows {
+		rows[i] = relayapi.QueuedMessage{ID: int64(i + 1), Neighbour: "bar", State: "waiting"}
+	}
+	srv := fakeRelay(t, map[string]any{"/v1/mailbox/" + fp + "/queue": relayapi.QueueResponse{Queued: rows}})
+	c, err := New(srv.URL, alice, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Queue(context.Background()); err == nil ||
+		!strings.Contains(err.Error(), "queued") {
+		t.Errorf("a page of %d rows: %v", len(rows), err)
+	}
+	// And a good row is taken, so none of the above passes by refusing
+	// everything.
+	srv = fakeRelay(t, map[string]any{"/v1/mailbox/" + fp + "/queue": relayapi.QueueResponse{
+		Queued: []relayapi.QueuedMessage{good},
+	}})
+	if c, err = New(srv.URL, alice, nil); err != nil {
+		t.Fatal(err)
+	}
+	if queued, err := c.Queue(context.Background()); err != nil || len(queued) != 1 {
+		t.Fatalf("a row that is right: %d rows, %v", len(queued), err)
+	}
+}
+
+// with is a copy of a row with one field changed.
+func with(row relayapi.QueuedMessage, set func(*relayapi.QueuedMessage)) relayapi.QueuedMessage {
+	set(&row)
+	return row
+}
+
+// TestLimitAViaIsHeldToTheAddressRule: what a relay says about where a
+// message has been is held to the rule every relay ran on the way.
+//
+// The rule is store.CheckAddress, the relay's own, not a copy: ruling 4 puts
+// it over the whole address and every hop runs it after appending its own
+// name, so a via that breaks it reached this client through a relay that did
+// not run it. A repeated name is that rather than a coincidence — the rule
+// refuses the honest case too, which is the trade ruling 4 chose.
+func TestLimitAViaIsHeldToTheAddressRule(t *testing.T) {
+	alice, err := identity.Generate("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := identity.Generate("bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, _, err := envelope.Seal(alice, bob.Public(), message.Body{
+		Type: message.TypeNote, Thread: strings.Repeat("a", 32), Text: "hi",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := alice.Fingerprint()
+	row := func(via string) any {
+		return relayapi.ListResponse{
+			Messages: []relayapi.StoredMessage{{
+				ID: 1, Received: time.Now().UTC(), Kind: relayapi.KindEnvelope,
+				Channel: "default", Via: via, Envelope: raw,
+			}},
+			Allow: "none", Card: "none", Directory: "none",
+		}
+	}
+	for _, tc := range []struct{ name, via string }{
+		{"nothing, which is mail that came no distance", ""},
+		{"one hop", "alpha"},
+		{"several", "alpha!beta!gamma"},
+		{"at the ceiling", joinNames(relayapi.MaxHops)},
+	} {
+		t.Run("taken: "+tc.name, func(t *testing.T) {
+			srv := fakeRelay(t, map[string]any{"/v1/mailbox/" + fp: row(tc.via)})
+			c, err := New(srv.URL, alice, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.List(context.Background(), 0, 10); err != nil {
+				t.Errorf("via %q: %v", tc.via, err)
+			}
+		})
+	}
+	for _, tc := range []struct{ name, via string }{
+		{"a name that is not one", "alpha!b ta"},
+		{"an empty name between two", "alpha!!gamma"},
+		{"the reserved word", "self"},
+		{"a name of 65 bytes", strings.Repeat("r", identity.MaxNameBytes+1)},
+		{"one relay named twice", "alpha!alpha"},
+		{"named twice, folded", "alpha!Alpha"},
+		{"one over max_hops", joinNames(relayapi.MaxHops + 1)},
+	} {
+		t.Run("refused: "+tc.name, func(t *testing.T) {
+			srv := fakeRelay(t, map[string]any{"/v1/mailbox/" + fp: row(tc.via)})
+			c, err := New(srv.URL, alice, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = c.List(context.Background(), 0, 10)
+			if err == nil {
+				t.Fatalf("via %q was taken", tc.via)
+			}
+			if !errors.Is(err, ErrMalformedAnswer) {
+				t.Errorf("via %q: %v; want ErrMalformedAnswer", tc.via, err)
+			}
+			if !strings.Contains(err.Error(), "via") || !strings.Contains(err.Error(), "the listing") {
+				t.Errorf("via %q: %v; want the field and the answer named", tc.via, err)
+			}
+		})
+	}
+}
+
+// joinNames is n distinct relay names joined by "!", for the hop-count cases.
+func joinNames(n int) string {
+	names := make([]string, n)
+	for i := range names {
+		names[i] = fmt.Sprintf("r%d", i)
+	}
+	return strings.Join(names, "!")
 }

@@ -845,12 +845,15 @@ func (s *Store) Exists(fp string) (bool, error) {
 // since a knock that nets to zero must not be refused by a mailbox at
 // its message quota.
 //
+// f is what a delivery at the last hop carries beside the envelope and a
+// message posted here does not: see Forwarded.
+//
 // The body is written to a temporary file and fsynced, then the row is
 // inserted and the file renamed into place, all before the transaction
 // commits. That ordering is what makes the invariant hold: after a commit
 // there is always a file, and every crash leaves at most an unreferenced file
 // for the sweep, never a row promising a message that is not there.
-func (s *Store) Put(toFP, channel, kind, knocker string, raw []byte, q Quotas) (int64, error) {
+func (s *Store) Put(toFP, channel, kind, knocker string, raw []byte, q Quotas, f Forwarded) (int64, error) {
 	if (kind == relayapi.KindKnock) != (knocker != "") {
 		return 0, fmt.Errorf("relay: a %s row carries knocker %q: a knock names its knocker and nothing else does",
 			kind, knocker)
@@ -869,6 +872,17 @@ func (s *Store) Put(toFP, channel, kind, knocker string, raw []byte, q Quotas) (
 	}
 	defer tx.Rollback()
 
+	// The hash goes in before anything is stored, exactly as it does when
+	// an envelope is queued for a neighbour rather than delivered: the
+	// carried table is what makes a relay never carry *or deliver* one
+	// twice, and a delivery that wrote the message and then the hash would
+	// deliver twice on a crash between the two. Inside this transaction,
+	// so the two decide together.
+	if f.Hash != "" {
+		if err := noteCarried(tx, f.Hash, f.Quotas, f.Expires); err != nil {
+			return 0, err
+		}
+	}
 	// The knocker's earlier knock goes first, so the room and the cap are
 	// judged on what is left.
 	replaced, err := replaceKnock(tx, toFP, kind, knocker)
@@ -886,8 +900,9 @@ func (s *Store) Put(toFP, channel, kind, knocker string, raw []byte, q Quotas) (
 		}
 	}
 
-	res, err := tx.Exec(`INSERT INTO messages (to_fp, received, size, kind, channel, knocker) VALUES (?, ?, ?, ?, ?, ?)`,
-		toFP, time.Now().UTC().Format(time.RFC3339), size, kind, channel, knocker)
+	res, err := tx.Exec(`INSERT INTO messages (to_fp, received, size, kind, channel, knocker, via)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		toFP, time.Now().UTC().Format(time.RFC3339), size, kind, channel, knocker, f.Via)
 	if err != nil {
 		return 0, err
 	}
@@ -979,12 +994,36 @@ func roomForKnock(tx *sql.Tx, toFP string, q Quotas) error {
 // Row is one stored message. Envelope is nil for a stream, which the client
 // fetches separately. Channel is the name it was posted under, which every
 // row carries.
+// Forwarded is what a message that arrived from a neighbour carries beyond
+// the envelope itself. The zero value is a message posted to this relay
+// directly, which is every message on a relay that peers with nobody.
+type Forwarded struct {
+	// Via is the relays it came through, nearest the sender first, joined
+	// by "!". It is written down because the person who receives it is the
+	// only one who can judge it: a relay cannot say whether mail that came
+	// a long way is welcome, and a reply goes back the way it came.
+	Via string
+	// Hash, Expires and Quotas are the carried-table entry written in the
+	// same transaction as the message. Without it a delivery is not
+	// idempotent: a neighbour whose answer was lost retries, and the same
+	// envelope arrives in the mailbox twice. Hash empty writes nothing,
+	// which is what a message posted here wants.
+	Hash    string
+	Expires time.Time
+	Quotas  CourierQuotas
+}
+
 type Row struct {
 	ID       int64
 	Received time.Time
 	Size     int64
 	Kind     string
 	Channel  string
+	// Via is the relays this message came through, nearest the sender
+	// first, joined by "!"; empty for mail posted here, which is every
+	// message on a relay that peers with nobody. Always answered, because
+	// its emptiness is a fact about the message and not an absence.
+	Via      string
 	Envelope []byte
 }
 
@@ -1061,7 +1100,7 @@ func (s *Store) ListingWithin(toFP string, after int64, limit int, stubs bool, b
 		return l, err
 	}
 	rows, err := tx.Query(
-		`SELECT id, received, size, kind, channel FROM messages WHERE to_fp = ? AND id > ? ORDER BY id LIMIT ?`,
+		`SELECT id, received, size, kind, channel, via FROM messages WHERE to_fp = ? AND id > ? ORDER BY id LIMIT ?`,
 		toFP, after, limit)
 	if err != nil {
 		return l, err
@@ -1072,12 +1111,13 @@ func (s *Store) ListingWithin(toFP string, after int64, limit int, stubs bool, b
 		size     int64
 		kind     string
 		channel  string
+		via      string
 	}
 	var listed []stub
 	for rows.Next() {
 		var st stub
 		var received string
-		if err := rows.Scan(&st.id, &received, &st.size, &st.kind, &st.channel); err != nil {
+		if err := rows.Scan(&st.id, &received, &st.size, &st.kind, &st.channel, &st.via); err != nil {
 			rows.Close()
 			return l, err
 		}
@@ -1095,7 +1135,8 @@ func (s *Store) ListingWithin(toFP string, after int64, limit int, stubs bool, b
 	out := make([]Row, 0, len(listed))
 	var inline int64
 	for _, st := range listed {
-		row := Row{ID: st.id, Received: st.received, Size: st.size, Kind: st.kind, Channel: st.channel}
+		row := Row{ID: st.id, Received: st.received, Size: st.size, Kind: st.kind,
+			Channel: st.channel, Via: st.via}
 		// A stream is fetched from its own endpoint: it may be larger than
 		// memory, which is the whole reason it is a stream.
 		if !stubs && st.kind != relayapi.KindStream {

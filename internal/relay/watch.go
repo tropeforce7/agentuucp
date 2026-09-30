@@ -229,7 +229,8 @@ func (s *Server) look(fp string, after int64, limit int, stubs bool, peers map[s
 	}
 	for _, row := range listing.Rows {
 		msg := relayapi.StoredMessage{
-			ID: row.ID, Received: row.Received, Kind: row.Kind, Size: row.Size, Channel: row.Channel,
+			ID: row.ID, Received: row.Received, Kind: row.Kind, Size: row.Size,
+			Channel: row.Channel, Via: row.Via,
 		}
 		if row.Envelope != nil {
 			msg.Envelope = json.RawMessage(row.Envelope)

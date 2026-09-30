@@ -374,6 +374,47 @@ func (s *Store) removeOutbound(id int64) error {
 	return nil
 }
 
+// OutboundFor is the rows this poster has in the queue, at most limit of
+// them: what is still waiting first, then what failed, then what was handed
+// over, and oldest first within each.
+//
+// Every state, not the waiting ones alone: somebody asking what became of
+// their mail wants the one that failed most of all, and a handed row is how
+// they see that it went. But the order cannot be the id alone, and that is
+// the whole reason this clause is here. A handed row is kept for as long as
+// something could still come back about it — the carried window, three days
+// at the defaults — while nothing bounds how many a poster accumulates the
+// way the queue's own count bounds waiting ones. So an active sender's page
+// fills with rows about mail that arrived, and the one stuck behind a dead
+// neighbour or refused by the last hop is pushed off the end: invisible to
+// the listing, uncounted by the line the inbox prints, and gone at its own
+// gives_up without anybody being told. The rows that need an answer come
+// first, and a handed row is what fills the room that is left.
+//
+// The index that serves it is outbound_poster, on the poster and the id, so
+// a poster reads their own rows and not the table; the ordering is over that
+// page and not over the table.
+func (s *Store) OutboundFor(posterFP string, limit int) ([]*Outbound, error) {
+	rows, err := s.db.Query(`SELECT id, poster_fp, neighbour, path, via, to_fp, hash, size, kind,
+		received, state, tries, last_try, next_try, gives_up, their_id, code, said
+		FROM outbound WHERE poster_fp = ?
+		ORDER BY CASE state WHEN ? THEN 0 WHEN ? THEN 1 ELSE 2 END, id
+		LIMIT ?`, posterFP, OutWaiting, OutFinal, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*Outbound
+	for rows.Next() {
+		o, err := scanOutboundRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
 // OutboundIDFor is the id of the row this poster holds for an envelope, or
 // zero when they hold none.
 //
@@ -423,17 +464,32 @@ func (s *Store) NextOutbound(neighbour string, now time.Time) (*Outbound, error)
 	return o, err
 }
 
-// scanOutbound reads one row.
-func scanOutbound(row *sql.Row) (*Outbound, error) {
+// scanOutbound reads one row, and scanOutboundRows one of many. The two
+// exist because database/sql's Row and Rows share no interface for Scan and
+// the column list must be written once; whichever is passed, the same
+// columns in the same order make the same Outbound.
+func scanOutbound(row *sql.Row) (*Outbound, error) { return outboundFrom(row.Scan) }
+
+func scanOutboundRows(rows *sql.Rows) (*Outbound, error) { return outboundFrom(rows.Scan) }
+
+func outboundFrom(scan func(...any) error) (*Outbound, error) {
 	var o Outbound
 	var received, lastTry, nextTry, givesUp int64
-	if err := row.Scan(&o.ID, &o.PosterFP, &o.Neighbour, &o.Path, &o.Via, &o.ToFP, &o.Hash,
+	if err := scan(&o.ID, &o.PosterFP, &o.Neighbour, &o.Path, &o.Via, &o.ToFP, &o.Hash,
 		&o.Size, &o.Kind, &received, &o.State, &o.Tries, &lastTry, &nextTry, &givesUp,
 		&o.TheirID, &o.Code, &o.Said); err != nil {
 		return nil, err
 	}
 	o.Received = time.Unix(received, 0).UTC()
-	o.LastTry = time.Unix(lastTry, 0).UTC()
+	// A row never offered has no last try, and the column says so with a
+	// zero. That reads back as the zero time and not as a date in 1970:
+	// the difference is what a person is shown, and "never" is the truth
+	// where a date half a century ago is a number nobody wrote. received,
+	// next_try and gives_up are set at the insert and are never zero, so
+	// only this one can mean "not yet".
+	if lastTry != 0 {
+		o.LastTry = time.Unix(lastTry, 0).UTC()
+	}
 	o.NextTry = time.Unix(nextTry, 0).UTC()
 	o.GivesUp = time.Unix(givesUp, 0).UTC()
 	return &o, nil

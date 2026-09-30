@@ -83,6 +83,7 @@ var receiveRoutes = []struct {
 	{"GET", "/v1/mailbox/*/*/blob"},   // a stream's payload
 	{"GET", "/v1/mailbox/*/allow"},    // the owner's own allow list
 	{"GET", "/v1/mailbox/*/card"},     // the owner's own card
+	{"GET", "/v1/mailbox/*/queue"},    // the owner's own forwarding queue
 	{"GET", "/v1/listed"},             // the cards whose owners chose to be listed
 	{"GET", "/v1/mailbox/*/channels"}, // a directory
 	{"GET", "/v1/mailbox/*/certs"},    // this identity's certificates

@@ -688,6 +688,15 @@ type Stored struct {
 	// Channel is the channel the message was sent to, or filed under on
 	// receipt; empty is default.
 	Channel string `json:"channel,omitempty"`
+	// Via is the relays a received message came through before the one it
+	// arrived at, nearest the sender first, joined by "!". Empty — the
+	// value the key is left out for — is mail posted to that relay
+	// directly, which is every message on a relay that peers with nobody.
+	//
+	// It is the recipient's own record of where their mail has been, since
+	// a relay cannot judge that for them, and it is what a reply is sent
+	// back along: reversed, it is the path from here to whoever wrote.
+	Via string `json:"via,omitempty"`
 	// Path is the address a sent message went by: the relays between this
 	// machine's relay and the recipient's, nearest first, joined by "!".
 	// Empty — the value the key is left out for — is a recipient on the

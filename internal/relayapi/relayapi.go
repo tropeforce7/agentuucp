@@ -225,9 +225,53 @@ type (
 		// present, as queued is; a client holds it to the channel name
 		// rule and refuses a row without it by name.
 		Channel string `json:"channel"`
+		// Via is the relays this message came through before it reached
+		// the one holding it, nearest the sender first, joined by "!".
+		// Always present: empty is a message posted to this relay
+		// directly, which is every message on a relay that peers with
+		// nobody, and that is a fact about the message rather than an
+		// absence. A client holds each name to the relay-name rule and
+		// the count to MaxHops, and refuses a row that breaks either by
+		// name, since these names go into a record and come back out as
+		// the path of a reply.
+		Via string `json:"via"`
 		// Envelope is inline for an envelope and omitted for a stream, which
 		// is fetched from its own endpoint.
 		Envelope json.RawMessage `json:"envelope,omitempty"`
+	}
+	// QueuedMessage is one row of the queue a relay holds for a poster:
+	// mail they addressed to somebody on another relay, which this relay has
+	// taken and has still to hand over. Every field is always present, so a
+	// reader never has to tell an absent one from a zero.
+	QueuedMessage struct {
+		ID int64 `json:"id"`
+		// Neighbour is this relay's own name for the relay the message is
+		// going to next, and Path what is left of the address after it,
+		// joined by "!" and empty at the last hop. Both are relay names.
+		Neighbour string `json:"neighbour"`
+		Path      string `json:"path"`
+		// State is waiting, handed or final.
+		State string `json:"state"`
+		// Tries is how many times this relay has offered it, LastTry when
+		// it last did, NextTry when it will again, GivesUp when it stops.
+		// LastTry is the zero time on a row never offered, which is a
+		// value and not an absence — and not a date in 1970, which is what
+		// a column's zero would read as if nothing said otherwise. The
+		// other two are set when the row is written and are always times.
+		Tries   int64     `json:"tries"`
+		LastTry time.Time `json:"last_try"`
+		NextTry time.Time `json:"next_try"`
+		GivesUp time.Time `json:"gives_up"`
+		// Code and Said are why a final row will not be delivered: one of
+		// the Code* words, and the sentence the hop that refused gave,
+		// with its name in front. Both empty while a row is waiting.
+		Code string `json:"code"`
+		Said string `json:"said"`
+	}
+	// QueueResponse is a poster's own queue, oldest first, at most
+	// MaxQueueLimit rows.
+	QueueResponse struct {
+		Queued []QueuedMessage `json:"queued"`
 	}
 	ListResponse struct {
 		Messages []StoredMessage `json:"messages"`
@@ -623,6 +667,13 @@ const MaxAllowlist = 1000
 // this is a bound on both ends of it when it is. A thousand neighbours is far past any network of relays whose
 // operators know one another, which is the only kind this is for.
 const MaxCouriers = 1000
+
+// MaxQueueLimit is the most rows the queue route answers with. It is the
+// listing's own limit, and for the listing's reason: a page a client cannot
+// hold is a page nobody can act on. A poster over it reads their oldest
+// rows, which are the ones that have been waiting longest and the ones a
+// person asks about.
+const MaxQueueLimit = 200
 
 // MaxHops caps the relays one address may name: the names in a path and the
 // hops already taken, counted together.

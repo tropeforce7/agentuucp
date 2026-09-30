@@ -388,7 +388,32 @@ auu read MESSAGE-ID          # read one
 auu extract MESSAGE-ID       # save its attachments
 auu rm MESSAGE-ID            # remove it from the relay and from here
 auu reply MESSAGE-ID 'It is missing. Open an issue against home-java.'
+auu queue                    # mail a relay is still carrying onward
 ```
+
+**Mail that came by another relay** says so. `auu read` prints a `via` line
+naming the relays it crossed, nearest the sender first, and `auu reply` goes
+back along that address reversed without being told — so answering somebody
+on another relay is the same command as answering anybody. A message posted
+to your own relay has no `via` and no line, which is most mail.
+
+The reversal can fail, and it is worth knowing why. Each name in `via` is
+what that hop calls the hop before it; a reply's address is resolved against
+the list of relays a relay *dials*. Operators are meant to use one name in
+both places and a relay complains at its start when they do not, but nothing
+can enforce it and a one-way peering is legitimate. Where the two disagree
+the first hop refuses your reply, naming a relay you never typed, and `auu`
+says the message cannot go back the way it came and offers `--via NAME` or
+`--relay NAME` to answer anyway.
+
+**What is still on its way out** is `auu queue`: mail you addressed to
+somebody on another relay which your relay has taken and not yet handed over.
+Each row says which neighbour it is going to, what is left of the address,
+how many times it has been tried, when it will be tried again and when your
+relay gives up. A row that failed keeps the sentence the hop that refused
+gave, with that hop's name in front, which is how you learn that `bar` has no
+such mailbox rather than guessing. `auu inbox` prints one line while anything
+is waiting and says nothing when nothing is.
 
 `auu extract` writes each attachment under `--out` (the working directory
 by default) as a new file, and never depends on the sender for the name.
@@ -676,8 +701,13 @@ queued.
 
 Your relay queues the message and answers at once; the id you get back is
 a row in that queue rather than a message in a mailbox, and the `sent`
-record keeps the path beside it. If a hop cannot deliver it, that comes
-back later, not in the answer to your send.
+record keeps the path beside it. `auu queue` is what shows that row
+afterwards, and `auu inbox` says one line while it is waiting. If a hop
+cannot deliver it, that comes back later, not in the answer to your send.
+
+At the other end they see a `via` line on `auu read` and can answer with
+`auu reply`, which goes back the way it came; [1.5](#15-receive) says what
+that rests on and how they answer when it cannot.
 
 What does not cross a relay yet is a large message. A stream is an upload
 held open at the relay it is going to, and nothing carries one to a

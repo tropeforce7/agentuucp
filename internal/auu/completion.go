@@ -90,6 +90,7 @@ var subcommands = []subcommand{
 	{name: "reply", describe: "reply to a message, or to a thread"},
 	{name: "inbox", describe: "fetch and list mail"},
 	{name: "read", describe: "read a message"},
+	{name: "queue", describe: "your mail still waiting to leave a relay"},
 	{name: "extract", describe: "save a message's attachments"},
 	{name: "rm", describe: "remove a message from the relay and from here"},
 	{name: "wait", describe: "wait for a reply on a thread"},

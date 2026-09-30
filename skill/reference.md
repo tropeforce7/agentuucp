@@ -90,6 +90,7 @@ auu inbox [--json] [--no-fetch] [--channel NAME]   # fetch from every relay, the
 auu read MESSAGE-ID [--json]
 auu extract MESSAGE-ID [--out DIR]                 # save a message's attachments
 auu rm MESSAGE-ID... [--local-only | --remote-only] [--json]
+auu queue [--relay NAME] [--json]                  # your mail a relay is still carrying onward
 auu wait --thread THREAD-ID [--timeout 10m] [--interval 20s] [--json]
 auu watch [--event message|directory]... [--channel NAME]... [--peer NAME]...
           [--timeout 10m] [--interval 20s] [--fetch] [--json]
@@ -323,14 +324,29 @@ the same fetch counts, `queued` (what that relay still holds), `allow`
 `broken`), `card` (the state of your card there, the same three words),
 `directory` (the state of your channel directory there, the same three
 words again; `broken` means posts to your named channels are refused
-until the user runs `auu channel push`) and `error` (when
+until the user runs `auu channel push`), `outbound` (when that relay
+forwards and holds anything of yours: the queue's own rows, as `auu queue
+--json` gives them without `relay`, which the entry around them already
+names) and `error` (when
 set); and `messages`, each `id`, `thread`, `in_reply_to` (when set),
 `type`, `subject`, `from`, `from_name`, `time`, `received`, `read`, `box`,
 `thread_subject` (only where the whole message is printed: the subject the
 thread was opened with, which is `subject` unless the message was given one
 of its own), `text` (only where the whole message is printed), `attachments` of `name`,
-`media`, `size`, `sha256`, `channel`, `on_relay` (when set) and
+`media`, `size`, `sha256`, `channel`, `via` (when the message came through
+another relay: the relays it crossed, nearest the sender first, joined by
+`!`), `on_relay` (when set) and
 `payload_on_relay` (when set).
+
+`auu queue --json`: a list, each `id` (a row in that relay's queue, not a
+message in a mailbox), `neighbour` (the relay it goes to next, by your
+relay's name for it), `path` (what is left of the address after that, when
+any), `state` (`waiting`, `handed` or `final`), `tries`, `last_try` (absent
+on a row not yet offered), `next_try`, `gives_up`, `code` and `said` (both
+on a `final` row: why it will not be delivered, and the sentence the hop
+that refused gave with its name in front) and `relay` (which of your relays
+holds it). A relay that forwards nothing is skipped with a warning on
+stderr, since there is nowhere on it for anything to wait.
 
 `auu read --json` and `auu quarantine ls --json` print that same message
 shape: `read` one message with `text` and `thread_subject`, `quarantine ls`

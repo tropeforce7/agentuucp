@@ -109,12 +109,7 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, body []by
 	}
 
 	if len(req.Path) == 0 {
-		// Delivery into a mailbox here is the next commit's. Nothing
-		// between this commit and that one is released, so the sentence is
-		// the honest one for the state the tree is in rather than a
-		// promise: a courier that meets it has done nothing wrong and its
-		// row stays waiting.
-		s.fail(w, http.StatusNotImplemented, "delivery to a mailbox on this relay is not implemented yet")
+		s.deliver(w, r, env, req.Envelope, JoinPath(via), hash, callerFP, courierName, isCourier)
 		return
 	}
 
@@ -175,6 +170,154 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, body []by
 	// request waits on the queue and the queue waits on no request.
 	s.wake(neighbour.Name)
 	s.writeJSON(w, http.StatusCreated, relayapi.ForwardResponse{ID: id})
+}
+
+// deliver puts a forwarded envelope into a mailbox on this relay, which is
+// the end of its journey: the path is spent, so the recipient is here.
+//
+// The order is the post route's order, and for the post route's reasons —
+// the mailbox exists, it is not blocked, it is not a courier's, the sender
+// is admitted, the channel is one the owner published — with one thing
+// different at the sender. The sender the allow list is asked about is the
+// courier that posted, not whoever sealed the envelope: a relay cannot read
+// the envelope, so it cannot know who wrote it, and the identity it can
+// prove is the neighbour that handed it over. So a recipient with a
+// restricted list admits a relay rather than a person, and admits everybody
+// behind that relay with it, which the security document says in those
+// words because it is the one place a list means something coarser than the
+// fingerprints in it.
+//
+// The answer goes back to the courier on this request: a delivery is done
+// when it is done, and the neighbour holding the row wants to know that it
+// may let go of it.
+func (s *Server) deliver(w http.ResponseWriter, r *http.Request, env *envelope.Envelope,
+	raw []byte, via, hash, callerFP, courierName string, isCourier bool) {
+
+	fp := env.To
+	// The operator's own cap on a message, which the post route refuses at
+	// and this must too: the forward route's body cap is max_bytes plus the
+	// framing a request costs, so without this a neighbour's courier could
+	// place a message that much over the setting into a mailbox here, and
+	// an operator's number would mean one thing for their own users and
+	// another for everybody reached through a peer.
+	if int64(len(raw)) > s.cfg.MaxBytes {
+		s.fail(w, http.StatusRequestEntityTooLarge, "envelope too large")
+		return
+	}
+	exists, blocked, err := s.store.MailboxState(fp)
+	if err != nil {
+		s.storageFault(w, r, err)
+		return
+	}
+	if !exists {
+		s.fail(w, http.StatusNotFound, "no such mailbox")
+		return
+	}
+	if blocked {
+		s.fail(w, http.StatusForbidden, "recipient is blocked on this relay")
+		return
+	}
+	// A courier's mailbox refuses every sender, as it does on every other
+	// route that carries something into one, and in the same words. A
+	// neighbour forwarding mail to another neighbour's courier is a loop
+	// somebody built by hand; it ends here and says nothing about who this
+	// relay peers with.
+	if s.isCourierMailbox(fp) {
+		s.fail(w, http.StatusForbidden, msgNotAllowed)
+		return
+	}
+	allowed, err := s.store.MayPost(fp, callerFP)
+	if err != nil {
+		s.storageFault(w, r, err)
+		return
+	}
+	if !allowed {
+		s.fail(w, http.StatusForbidden, msgNotAllowed)
+		return
+	}
+	channel, ok := s.channelForPost(w, fp, env.Ch)
+	if !ok {
+		return
+	}
+	id, err := s.store.Put(fp, channel, relayapi.KindEnvelope, "", raw, s.cfg.Limits.Quotas(),
+		Forwarded{
+			Via:     via,
+			Hash:    hash,
+			Expires: s.cfg.Now().Add(s.cfg.CourierLimits.CarriedWindow(0)),
+			Quotas:  s.cfg.CourierLimits.Quotas(),
+		})
+	switch {
+	case errors.Is(err, ErrCarried):
+		// The same envelope arriving twice, which the cheap check above
+		// catches in the ordinary case; this is the one that decides,
+		// inside the transaction, and is what makes a delivery idempotent
+		// for a neighbour whose answer was lost.
+		s.alreadyCarried(w, callerFP, hash, courierName, isCourier)
+		return
+	case errors.Is(err, ErrCarriedFull):
+		s.fail(w, http.StatusInsufficientStorage, relayapi.MsgCarriedFull)
+		return
+	case errors.Is(err, ErrMailboxFull):
+		// The recipient has to collect their mail, which is neither the
+		// courier's doing nor something it can retry around; its row waits
+		// and its own forward_ttl ends it if nobody does.
+		setLimit(w, limitMailboxFull)
+		s.fail(w, http.StatusInsufficientStorage, relayapi.MsgMailboxFull)
+		return
+	case errors.Is(err, ErrRelayFull):
+		setLimit(w, limitRelayFull)
+		s.fail(w, http.StatusInsufficientStorage, relayapi.MsgRelayFull)
+		return
+	case errors.Is(err, ErrNoMailbox):
+		s.fail(w, http.StatusNotFound, "no such mailbox")
+		return
+	case err != nil:
+		s.storageFault(w, r, err)
+		return
+	}
+	// After the store has the row, so a listing woken by this finds it.
+	s.notify.Wake(mailKey(fp))
+	s.writeJSON(w, http.StatusCreated, relayapi.ForwardResponse{ID: id})
+}
+
+// handleQueue answers the caller their own rows in this relay's forwarding
+// queue: the mail they addressed to somebody on another relay and this relay
+// has still to hand over, or has handed over, or has given up on.
+//
+// It is the owner's own, by the fingerprint the signature proved, and a
+// mailbox that is not the caller's is refused as it is on every other route
+// that reads a mailbox's private state. The rows name a poster and nobody
+// else — a recipient is blanked the moment a neighbour takes the envelope —
+// so there is nothing here that is anybody's but the caller's.
+//
+// A relay that forwards nothing has no such queue and says so, in the same
+// sentence the forward route gives, because the answer to "what is waiting"
+// on such a relay is not an empty list but that there is nowhere for
+// anything to wait.
+func (s *Server) handleQueue(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {
+	fp := r.PathValue("fp")
+	if fp != callerFP {
+		s.fail(w, http.StatusForbidden, "not your mailbox")
+		return
+	}
+	if s.courier == nil {
+		s.fail(w, http.StatusForbidden, relayapi.MsgForwardsNothing)
+		return
+	}
+	rows, err := s.store.OutboundFor(callerFP, relayapi.MaxQueueLimit)
+	if err != nil {
+		s.storageFault(w, r, err)
+		return
+	}
+	out := relayapi.QueueResponse{Queued: make([]relayapi.QueuedMessage, 0, len(rows))}
+	for _, o := range rows {
+		out.Queued = append(out.Queued, relayapi.QueuedMessage{
+			ID: o.ID, Neighbour: o.Neighbour, Path: o.Path, State: o.State,
+			Tries: o.Tries, LastTry: o.LastTry, NextTry: o.NextTry, GivesUp: o.GivesUp,
+			Code: o.Code, Said: o.Said,
+		})
+	}
+	s.writeJSON(w, http.StatusOK, out)
 }
 
 // chargeForward spends the caller's budgets for one forward: a courier's

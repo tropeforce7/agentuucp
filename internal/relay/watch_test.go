@@ -786,6 +786,7 @@ func TestAListingWithoutWaitIsUnchanged(t *testing.T) {
 		Kind     string          `json:"kind"`
 		Size     int64           `json:"size,omitempty"`
 		Channel  string          `json:"channel"`
+		Via      string          `json:"via"`
 		Envelope json.RawMessage `json:"envelope,omitempty"`
 	}
 	want, err := json.Marshal(struct {
@@ -797,7 +798,8 @@ func TestAListingWithoutWaitIsUnchanged(t *testing.T) {
 	}{
 		Messages: []listedMessage{{
 			ID: row.Rows[0].ID, Received: row.Rows[0].Received, Kind: row.Rows[0].Kind,
-			Size: row.Rows[0].Size, Channel: row.Rows[0].Channel, Envelope: json.RawMessage(row.Rows[0].Envelope),
+			Size: row.Rows[0].Size, Channel: row.Rows[0].Channel, Via: row.Rows[0].Via,
+			Envelope: json.RawMessage(row.Rows[0].Envelope),
 		}},
 		Queued:    1,
 		Allow:     "none",

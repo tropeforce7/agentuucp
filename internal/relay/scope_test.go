@@ -32,11 +32,15 @@ func TestTheClassifierAgreesWithTheRelay(t *testing.T) {
 		"GET /v1/mailbox/{fp}/{id}/blob": agent.ScopeReceive,
 		"GET /v1/mailbox/{fp}/allow":     agent.ScopeReceive,
 		"GET /v1/mailbox/{fp}/card":      agent.ScopeReceive,
-		"GET /v1/listed":                 agent.ScopeReceive,
-		"GET /v1/mailbox/{fp}/channels":  agent.ScopeReceive,
-		"GET /v1/mailbox/{fp}/certs":     agent.ScopeReceive,
-		"DELETE /v1/mailbox/{fp}/{id}":   agent.ScopeReceive,
-		"POST /v1/mailbox/{fp}/certs":    agent.ScopeReceive, // renewal: this identity's own certificate, on the live one, no token
+		// The owner's own view of what this relay is still carrying for
+		// them: it reads and originates nothing, so a machine unlocked
+		// only to receive can ask it.
+		"GET /v1/mailbox/{fp}/queue":    agent.ScopeReceive,
+		"GET /v1/listed":                agent.ScopeReceive,
+		"GET /v1/mailbox/{fp}/channels": agent.ScopeReceive,
+		"GET /v1/mailbox/{fp}/certs":    agent.ScopeReceive,
+		"DELETE /v1/mailbox/{fp}/{id}":  agent.ScopeReceive,
+		"POST /v1/mailbox/{fp}/certs":   agent.ScopeReceive, // renewal: this identity's own certificate, on the live one, no token
 
 		// Everything that originates.
 		"POST /v1/register":     agent.ScopeSend,

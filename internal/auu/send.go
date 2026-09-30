@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -175,6 +176,9 @@ func cmdSend(args []string) error {
 
 func cmdReply(args []string) error {
 	fs := newFlagSet("reply")
+	to := fs.String("to", "", "override the address: 'bar!bob', for a reply that cannot go back "+
+		"the way the message came")
+	via := fs.String("via", "", "override the relays to reply by way of, nearest first")
 	bodyFile := fs.String("body-file", "", "read the message text from this file")
 	subject := fs.String("subject", "", "override the subject (default: keep the original)")
 	asJSON := fs.Bool("json", false, "machine readable output")
@@ -242,6 +246,10 @@ func cmdReply(args []string) error {
 	if err != nil {
 		return err
 	}
+	path, err := replyPath(s, original, recipient, *to, *via)
+	if err != nil {
+		return err
+	}
 	if viaThread && !*asJSON {
 		who := "you"
 		if box != store.Sent {
@@ -291,11 +299,105 @@ func cmdReply(args []string) error {
 	// A reply goes to the sender's default unless --channel says otherwise:
 	// a channel is the receiver's sorting, not a thread.
 	err = sealAndSend(s, id, r, recipient, body, attach,
-		sendMode{stream: *forceStream, inline: *forceInline, channel: *channel}, *asJSON)
+		sendMode{stream: *forceStream, inline: *forceInline, channel: *channel, path: path,
+			reply: *to == "" && *via == ""}, *asJSON)
 	if err != nil && compose {
 		return draftKept(s, err)
 	}
 	return err
+}
+
+// replyPath is the address a reply takes: back the way the message came, or
+// the one the person gave instead.
+//
+// The default is the record's via reversed, which is the way it came read
+// backwards. That it routes at all rests on a convention: the names in via
+// are what each hop calls the hop before, out of its couriers file, and a
+// path is resolved against a relay's courier home — the side it dials. An
+// operator is meant to use one name in both, and a relay says at its start
+// which names appear in one and not the other, but nothing can enforce it
+// and one-way peering is a thing an operator may want. So the reversal is
+// right where the convention holds and unroutable where it does not, and
+// what a person meets in the second case is the first hop's own refusal,
+// which sayReplyRefused turns into a sentence about this reply.
+//
+// A bang path in --to, or --via, is how somebody answers anyway. Either
+// replaces the whole path. When --to names a peer as well, it has to be the
+// one being replied to: a reply that went to somebody else while keeping the
+// thread would be a surprise nobody asked for, and saying so costs one
+// comparison.
+func replyPath(s *store.Store, original *store.Stored, recipient *identity.Public,
+	to, via string) ([]string, error) {
+
+	switch {
+	case to == "" && via == "":
+		return sameWayAgain(original), nil
+	case to == "":
+		// The relays alone, which is what a reply usually wants: who it
+		// goes to is the message's and not the person's to restate. So the
+		// address rule runs here rather than through address, which is
+		// send's and requires a recipient at the end.
+		path := strings.Split(via, "!")
+		if err := store.CheckAddress(path, nil, relayapi.MaxHops); err != nil {
+			return nil, usageErrf("%v", err)
+		}
+		return path, nil
+	}
+	path, peer, err := address(to, via)
+	if err != nil {
+		return nil, err
+	}
+	if peer != "" {
+		named, err := s.Resolve(peer)
+		if err != nil {
+			return nil, usageErrf("%v", err)
+		}
+		if named.Fingerprint() != recipient.Fingerprint() {
+			return nil, usageErrf("--to %q names %s, and this is a reply to %s: pass the relays "+
+				"alone, as --via %q, or send a new message",
+				to, peerLabel(named), peerLabel(recipient), store.JoinAddress(path))
+		}
+	}
+	return path, nil
+}
+
+// sameWayAgain is the address a reply or a follow-up takes when nobody has
+// given one: whichever way the message being answered travelled.
+//
+// The two boxes hold that differently and neither can be read as the other.
+// A received message keeps Via, the hops it came by, nearest its sender
+// first — reversed, that is the way back. A message this machine sent keeps
+// Path, the address it went by, already pointing away from here: it is the
+// way onward, and reversing it would send a follow-up back through the
+// relays in the wrong order.
+//
+// Both are reached in ordinary use. `auu reply` takes a thread as well as a
+// message id, and the latest message on a thread you started and nobody has
+// answered yet is your own — so a follow-up on a cross-relay thread comes
+// here with a Sent record. Reading only Via would have dropped the address
+// and posted it into a mailbox on this machine's own relay, which either
+// succeeds in the wrong place or fails saying the recipient is not
+// registered, about somebody who has been answering all day.
+func sameWayAgain(m *store.Stored) []string {
+	if m.Via != "" {
+		return reversePath(m.Via)
+	}
+	// A sent record's own address, as it was sent: the hops from here.
+	if m.Path != "" {
+		return strings.Split(m.Path, "!")
+	}
+	return nil
+}
+
+// reversePath is a via read backwards: the hops a message came by, nearest
+// the sender first, are the hops a reply takes, nearest this machine first.
+func reversePath(via string) []string {
+	if via == "" {
+		return nil
+	}
+	names := strings.Split(via, "!")
+	slices.Reverse(names)
+	return names
 }
 
 // sendMode is what the flags say, before the size is consulted: the two
@@ -346,6 +448,10 @@ type sendMode struct {
 	// most of them. A path sends to the first hop's forward route instead
 	// of the recipient's mailbox.
 	path []string
+	// reply says this path was worked out from the record rather than typed,
+	// so that a refusal of it is explained as a reply's and not handed back
+	// as though the person had written the address.
+	reply bool
 }
 
 // sealAndSend is the common tail of send and reply: the message sent, and
@@ -485,7 +591,7 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 		// nothing, it does not know that neighbour, its queue is full —
 		// say what they are, and anything further down comes back later as
 		// a failed row rather than as an answer to this request.
-		return sentJSON{}, newThread, transportErr(err)
+		return sentJSON{}, newThread, transportErr(replyCannotGoBack(err, mode))
 	}
 
 	// Keep our own copy so threads can be reconstructed later.
@@ -519,6 +625,35 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 	out.Kind = "envelope"
 	out.Path = store.JoinAddress(mode.path)
 	return out, newThread, nil
+}
+
+// replyCannotGoBack turns the first hop's refusal of an address nobody typed
+// into a sentence about the reply it refused.
+//
+// A reply's path is the way the message came, read backwards, and that rests
+// on a convention nothing enforces: the names it is built from are what each
+// hop calls the hop before, out of its couriers file, while a path is
+// resolved against the courier home a relay dials from. Where an operator
+// used one name in both, the reversal routes. Where they did not, or where
+// the peering only goes one way, the first hop answers that it knows no such
+// neighbour — naming a relay the person never typed, about a name they had no
+// way to get right, for a message they are answering rather than addressing.
+//
+// So the sentence says what happened and what to do, and only for a reply:
+// somebody who typed a bang path and got this wants the refusal as it came.
+func replyCannotGoBack(err error, mode sendMode) error {
+	if !mode.reply || len(mode.path) == 0 {
+		return err
+	}
+	var he *client.HTTPError
+	if !errors.As(err, &he) || !strings.Contains(he.Message, relayapi.MsgNoNeighbour) {
+		return err
+	}
+	return fmt.Errorf("%w\n\nthat message came by %s, and this relay cannot send back the way it "+
+		"came: the relays in an address are each relay's own names for its neighbours, and these "+
+		"are the names the hops used coming this way. Answer by an address you have been given, as "+
+		"--via NAME[!NAME], or on another relay you share with them, as --relay NAME",
+		err, store.JoinAddress(mode.path))
 }
 
 // postOrForward sends one envelope the way its address says: into the

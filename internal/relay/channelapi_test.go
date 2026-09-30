@@ -227,7 +227,7 @@ func TestADirectoryIsReadByWhoMayPost(t *testing.T) {
 		t.Fatalf("push: %d %s", status, body)
 	}
 	for _, ch := range []string{"bug reports", "bug reports", "gone"} {
-		if _, err := h.store.Put(fp, ch, relayapi.KindEnvelope, "", sealed(t, alice, bob.Public(), "x"), Quotas{}); err != nil {
+		if _, err := h.store.Put(fp, ch, relayapi.KindEnvelope, "", sealed(t, alice, bob.Public(), "x"), Quotas{}, Forwarded{}); err != nil {
 			t.Fatal(err)
 		}
 	}

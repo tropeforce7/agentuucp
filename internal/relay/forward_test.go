@@ -627,25 +627,169 @@ func TestACourierSpendsItsOwnBudget(t *testing.T) {
 	}
 }
 
-// TestDeliveryHereIsNotImplementedYet: a courier with an empty path is asking
-// this relay to put the envelope in a mailbox, which the commit after this one
-// does. The answer says so plainly rather than pretending, and nothing is
-// stored — including no hash, so that the same envelope is taken when
-// delivery exists.
-func TestDeliveryHereIsNotImplementedYet(t *testing.T) {
+// Delivery at the last hop. A courier with an empty path is asking this
+// relay to put the envelope into a mailbox here, which is where a journey
+// ends. The order is the post route's, and for the post route's reasons; the
+// one thing that differs is which sender the allow list is asked about.
+
+// stored is what a mailbox on this relay holds, oldest first.
+func (h *harness) stored(t *testing.T, fp string) []Row {
+	t.Helper()
+	rows, err := h.store.List(fp, 0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
+// TestAnEnvelopeArrivesInAMailboxHere: the whole of delivery, with what it
+// leaves behind.
+func TestAnEnvelopeArrivesInAMailboxHere(t *testing.T) {
 	courier := neighbourID(t, "alpha")
 	h := peered(t, []string{"bar"}, []*identity.Identity{courier}, nil)
 	h.enroll(courier)
-	status, _, body := h.forward(courier, request(sealedFor(h.fpOf(t, "bob"), "ct"), nil, nil))
-	if status != 501 {
+	bob := h.user(t, "bob")
+	to := bob.Fingerprint()
+
+	status, answer, body := h.forward(courier, request(sealedFor(to, "for bob"), nil, []string{"one", "two"}))
+	if status != 201 {
 		t.Fatalf("status %d: %s", status, body)
 	}
-	if n := h.carriedRows(t); n != 0 {
-		t.Errorf("%d hashes remembered for an envelope nothing took", n)
+	if answer.ID == 0 {
+		t.Error("no id: the answer names the message in the mailbox, which is what the neighbour " +
+			"holding the row wants to know it may let go of")
 	}
+
+	// In the mailbox, with the hops it came by. This relay's own name for
+	// the courier goes on the end, as it does on a forward, so what is
+	// stored is the whole way it came and not what the sender wrote.
+	msgs := h.stored(t, to)
+	if len(msgs) != 1 {
+		t.Fatalf("%d messages in the mailbox, want 1", len(msgs))
+	}
+	if msgs[0].Via != "one!two!alpha" {
+		t.Errorf("via %q; want the hops so far with this relay's name for the courier on the end",
+			msgs[0].Via)
+	}
+	if msgs[0].ID != answer.ID {
+		t.Errorf("the answer names %d and the mailbox holds %d", answer.ID, msgs[0].ID)
+	}
+	// Nothing was queued: the journey ended here.
 	if n := h.outboundRows(t); n != 0 {
-		t.Errorf("%d rows queued", n)
+		t.Errorf("%d rows queued for an envelope that was delivered", n)
 	}
+	// And the hash is remembered, so the same envelope arriving again is
+	// refused rather than delivered twice.
+	if n := h.carriedRows(t); n != 1 {
+		t.Errorf("%d hashes after a delivery, want 1", n)
+	}
+	status, _, body = h.forward(courier, request(sealedFor(to, "for bob"), nil, []string{"one", "two"}))
+	if status != 409 {
+		t.Fatalf("the same envelope again: status %d: %s", status, body)
+	}
+	if msgs := h.stored(t, to); len(msgs) != 1 {
+		t.Errorf("%d messages after the repeat, want the one", len(msgs))
+	}
+}
+
+// TestTheAllowListIsAskedAboutTheCourier: a relay cannot read an envelope,
+// so it cannot know who wrote it; the identity it can prove is the neighbour
+// that handed it over, and that is the sender the recipient's list is asked
+// about.
+//
+// So a recipient with a restricted list admits a relay rather than a person,
+// and admits everybody behind that relay with it. That is the one place a
+// list means something coarser than the fingerprints in it, and the security
+// document says so.
+func TestTheAllowListIsAskedAboutTheCourier(t *testing.T) {
+	courier := neighbourID(t, "alpha")
+	h := peered(t, []string{"bar"}, []*identity.Identity{courier}, nil)
+	h.enroll(courier)
+	bob := h.user(t, "bob")
+	to := bob.Fingerprint()
+	stranger := h.user(t, "stranger")
+
+	// A list that names somebody else: the courier is not on it, so nothing
+	// it carries arrives, whoever sealed it.
+	if status, body, _ := h.pushAllow(bob, bob, time.Now(), stranger.Fingerprint()); status != 204 {
+		t.Fatalf("pushing a list: %d %s", status, body)
+	}
+	status, _, body := h.forward(courier, request(sealedFor(to, "refused"), nil, nil))
+	if status != 403 {
+		t.Fatalf("status %d: %s", status, body)
+	}
+	if got := errorText(t, body); got != msgNotAllowed {
+		t.Errorf("%q; want %q", got, msgNotAllowed)
+	}
+	if msgs := h.stored(t, to); len(msgs) != 0 {
+		t.Errorf("%d messages stored for a refused sender", len(msgs))
+	}
+
+	// The same list with the courier on it: delivered.
+	if status, body, _ := h.pushAllow(bob, bob, time.Now().Add(time.Minute),
+		stranger.Fingerprint(), courier.Fingerprint()); status != 204 {
+		t.Fatalf("pushing the second list: %d %s", status, body)
+	}
+	if status, _, body := h.forward(courier, request(sealedFor(to, "admitted"), nil, nil)); status != 201 {
+		t.Fatalf("with the courier admitted: status %d: %s", status, body)
+	}
+	if msgs := h.stored(t, to); len(msgs) != 1 {
+		t.Errorf("%d messages after admitting the courier, want 1", len(msgs))
+	}
+}
+
+// TestWhatDeliveryRefusesAndInWhatOrder: the post route's order, for the post
+// route's reasons, so that a courier learns nothing about a mailbox here that
+// a sender posting directly could not learn.
+func TestWhatDeliveryRefusesAndInWhatOrder(t *testing.T) {
+	courier := neighbourID(t, "alpha")
+	h := peered(t, []string{"bar"}, []*identity.Identity{courier}, nil)
+	h.enroll(courier)
+
+	t.Run("no mailbox here", func(t *testing.T) {
+		status, _, body := h.forward(courier, request(sealedFor(h.fpOf(t, "nobody"), "x"), nil, nil))
+		if status != 404 || errorText(t, body) != "no such mailbox" {
+			t.Fatalf("status %d: %s", status, body)
+		}
+	})
+	t.Run("a blocked recipient", func(t *testing.T) {
+		blocked := h.user(t, "blocked")
+		if err := h.store.SetBlock(blocked.Fingerprint(), "test", h.fpOf(t, "admin"), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		status, _, body := h.forward(courier, request(sealedFor(blocked.Fingerprint(), "x"), nil, nil))
+		if status != 403 || errorText(t, body) != "recipient is blocked on this relay" {
+			t.Fatalf("status %d: %s", status, body)
+		}
+	})
+	t.Run("a courier's own mailbox", func(t *testing.T) {
+		// A neighbour forwarding to another neighbour's courier is a loop
+		// somebody built by hand. It ends here, in the words every refused
+		// sender gets, so the answer says nothing about who this relay
+		// peers with.
+		status, _, body := h.forward(courier, request(sealedFor(courier.Fingerprint(), "x"), nil, nil))
+		if status != 403 || errorText(t, body) != msgNotAllowed {
+			t.Fatalf("status %d: %s", status, body)
+		}
+	})
+	t.Run("a channel the owner has not published", func(t *testing.T) {
+		carol := h.user(t, "carol")
+		env := sealedFor(carol.Fingerprint(), "x")
+		env.Ch = "work"
+		status, _, body := h.forward(courier, request(env, nil, nil))
+		if status != 404 {
+			t.Fatalf("status %d: %s", status, body)
+		}
+		if got := errorText(t, body); !strings.Contains(got, "no such channel") {
+			t.Errorf("%q; want the channel's own refusal", got)
+		}
+	})
+	t.Run("the default channel, which every mailbox has", func(t *testing.T) {
+		dave := h.user(t, "dave")
+		if status, _, body := h.forward(courier, request(sealedFor(dave.Fingerprint(), "x"), nil, nil)); status != 201 {
+			t.Fatalf("status %d: %s", status, body)
+		}
+	})
 }
 
 // TestARowAndItsFileArriveTogether: the file is placed before the commit, so
@@ -1411,5 +1555,302 @@ func TestThePerPosterBoundIsAnsweredFromAnIndex(t *testing.T) {
 	if strings.Contains(got, "SCAN outbound") {
 		t.Errorf("the per-poster count scans the table, inside the transaction that takes a "+
 			"forward and on the store's one connection:\n%s", got)
+	}
+}
+
+// TestTheListingSaysHowMailCameAndSaysItAlways: the row a recipient reads
+// carries the hops, and carries the empty string for mail that came no
+// distance.
+//
+// Always, because its emptiness is a fact about the message: a reader that
+// had to tell an absent field from an empty one would be guessing, and the
+// one thing this field decides — where a reply goes — has no safe default.
+func TestTheListingSaysHowMailCameAndSaysItAlways(t *testing.T) {
+	courier := neighbourID(t, "alpha")
+	h := peered(t, []string{"bar"}, []*identity.Identity{courier}, nil)
+	h.enroll(courier)
+	bob := h.user(t, "bob")
+	alice := h.user(t, "alice")
+
+	// One posted here, one forwarded in.
+	if status, body := h.do(alice, "POST", "/v1/mailbox/"+bob.Fingerprint(),
+		sealed(t, alice, bob.Public(), "direct"), nil); status != 200 {
+		t.Fatalf("a direct post: %d %s", status, body)
+	}
+	if status, _, body := h.forward(courier,
+		request(sealedFor(bob.Fingerprint(), "forwarded"), nil, []string{"one", "two"})); status != 201 {
+		t.Fatalf("a forward: %d %s", status, body)
+	}
+
+	status, body := h.do(bob, "GET", "/v1/mailbox/"+bob.Fingerprint(), nil, nil)
+	if status != 200 {
+		t.Fatalf("the listing: %d %s", status, body)
+	}
+	var page relayapi.ListResponse
+	if err := json.Unmarshal(body, &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Messages) != 2 {
+		t.Fatalf("%d rows, want 2", len(page.Messages))
+	}
+	if page.Messages[0].Via != "" {
+		t.Errorf("the direct message says via %q, want nothing", page.Messages[0].Via)
+	}
+	if page.Messages[1].Via != "one!two!alpha" {
+		t.Errorf("the forwarded message says via %q", page.Messages[1].Via)
+	}
+	// The key is there on both, which is what "always" means: a reader
+	// cannot tell an absent one from an empty one after a decode, so the
+	// relay writes it and the wire shows it.
+	if !strings.Contains(string(body), `"via":""`) {
+		t.Errorf("the direct row omits the key:\n%s", firstRow(string(body)))
+	}
+}
+
+// firstRow is enough of a listing's bytes to read in a failure.
+func firstRow(body string) string {
+	if i := strings.Index(body, `"envelope"`); i > 0 {
+		return body[:i]
+	}
+	return body
+}
+
+// TestAPosterReadsTheirOwnQueueAndNobodyElses: the queue route is the
+// owner's own view of what this relay is still carrying for them.
+func TestAPosterReadsTheirOwnQueueAndNobodyElses(t *testing.T) {
+	h := peered(t, []string{"bar"}, nil, nil)
+	alice := h.user(t, "alice")
+	bob := h.user(t, "bob")
+	to := h.fpOf(t, "carol")
+
+	// Alice queues two, Bob one.
+	for i := range 2 {
+		if status, _, body := h.forward(alice,
+			request(sealedFor(to, fmt.Sprintf("a%d", i)), []string{"bar"}, nil)); status != 201 {
+			t.Fatalf("alice's %d: %d %s", i, status, body)
+		}
+	}
+	if status, _, body := h.forward(bob, request(sealedFor(to, "b0"), []string{"bar"}, nil)); status != 201 {
+		t.Fatalf("bob's: %d %s", status, body)
+	}
+
+	queued := h.queueOf(t, alice)
+	if len(queued) != 2 {
+		t.Fatalf("alice reads %d rows, want her own 2", len(queued))
+	}
+	for _, q := range queued {
+		if q.Neighbour != "bar" || q.State != OutWaiting || q.ID == 0 {
+			t.Errorf("row %+v", q)
+		}
+		// Every field is answered, so a reader never tells absent from
+		// zero. A row not yet tried has no last try, which is the zero
+		// time and a value.
+		if !q.LastTry.IsZero() || q.Tries != 0 {
+			t.Errorf("a row never tried says %d tries at %s", q.Tries, q.LastTry)
+		}
+		if q.GivesUp.IsZero() {
+			t.Error("a waiting row has no gives_up, which is when its poster stops hoping")
+		}
+	}
+	if b := h.queueOf(t, bob); len(b) != 1 || b[0].ID == queued[0].ID {
+		t.Errorf("bob reads %d rows; a poster reads their own and nobody else's", len(b))
+	}
+
+	// Somebody else's mailbox is refused, as on every route that reads a
+	// mailbox's private state.
+	status, body := h.do(alice, "GET", "/v1/mailbox/"+bob.Fingerprint()+"/queue", nil, nil)
+	if status != 403 || errorText(t, body) != "not your mailbox" {
+		t.Fatalf("alice reading bob's queue: %d %s", status, body)
+	}
+}
+
+// TestTheQueueRouteAnswersAtMostItsLimit: a page a client cannot hold is a
+// page nobody can act on, so the route answers the oldest rows and no more.
+func TestTheQueueRouteAnswersAtMostItsLimit(t *testing.T) {
+	limits := DefaultCourierLimits()
+	// One poster's share of the queue is a hundred rows, which is less than
+	// a page: the bound under test here is the route's, so the queue's is
+	// turned off rather than worked around.
+	limits.QueueMaxMessagesPerPoster = 0
+	h := peered(t, []string{"bar"}, nil, &limits)
+	alice := h.user(t, "alice")
+	to := h.fpOf(t, "carol")
+	// Through the store rather than the route: what is under test is the
+	// page the route answers, and a couple of hundred posts would spend a
+	// user's rate limit on setting the scene.
+	now := h.clock.Now()
+	for i := range relayapi.MaxQueueLimit + 5 {
+		env := sealedFor(to, fmt.Sprintf("m%d", i))
+		raw, err := json.Marshal(env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		row := &Outbound{
+			PosterFP: alice.Fingerprint(), Neighbour: "bar", ToFP: to,
+			Hash: CarriedHash(env), Kind: relayapi.KindEnvelope,
+			Received: now, GivesUp: now.Add(time.Hour),
+		}
+		if _, err := h.store.Enqueue(row, raw, limits.Quotas(), now.Add(time.Hour)); err != nil {
+			t.Fatalf("%d: %v", i, err)
+		}
+	}
+	queued := h.queueOf(t, alice)
+	if len(queued) != relayapi.MaxQueueLimit {
+		t.Fatalf("%d rows, want %d", len(queued), relayapi.MaxQueueLimit)
+	}
+	// The oldest, which are the ones that have waited longest and the ones
+	// somebody asks about.
+	if queued[0].ID != 1 {
+		t.Errorf("the page starts at %d, want the oldest", queued[0].ID)
+	}
+}
+
+// TestARelayThatForwardsNothingHasNoQueue: the answer is that there is
+// nowhere for anything to wait, not that nothing is waiting.
+func TestARelayThatForwardsNothingHasNoQueue(t *testing.T) {
+	h := newHarness(t, Config{Limits: DefaultLimits()})
+	alice := h.user(t, "alice")
+	status, body := h.do(alice, "GET", "/v1/mailbox/"+alice.Fingerprint()+"/queue", nil, nil)
+	if status != 403 || errorText(t, body) != relayapi.MsgForwardsNothing {
+		t.Fatalf("%d %s", status, body)
+	}
+}
+
+// queueOf reads a poster's own queue through the route.
+func (h *harness) queueOf(t *testing.T, id *identity.Identity) []relayapi.QueuedMessage {
+	t.Helper()
+	status, body := h.do(id, "GET", "/v1/mailbox/"+id.Fingerprint()+"/queue", nil, nil)
+	if status != 200 {
+		t.Fatalf("the queue: %d %s", status, body)
+	}
+	var out relayapi.QueueResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out.Queued
+}
+
+// TestAQueuePageShowsWhatNeedsAnAnswerFirst: a handed row must not push a
+// stuck one off the end of the page.
+//
+// A handed row is kept for as long as something could come back about it —
+// three days at the defaults — and nothing bounds how many of them a poster
+// has, where the queue's own count bounds the waiting ones. So an active
+// sender's page is mostly rows about mail that arrived, and ordering by id
+// alone would hide the one message that needs them to do something: absent
+// from the listing, uncounted by the inbox's line, and gone at its own
+// gives_up with nobody told.
+func TestAQueuePageShowsWhatNeedsAnAnswerFirst(t *testing.T) {
+	limits := DefaultCourierLimits()
+	limits.QueueMaxMessagesPerPoster = 0
+	h := peered(t, []string{"bar"}, nil, &limits)
+	alice := h.user(t, "alice")
+	to := h.fpOf(t, "carol")
+	now := h.clock.Now()
+	enqueue := func(ct string) int64 {
+		t.Helper()
+		env := sealedFor(to, ct)
+		raw, err := json.Marshal(env)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := h.store.Enqueue(&Outbound{
+			PosterFP: alice.Fingerprint(), Neighbour: "bar", ToFP: to,
+			Hash: CarriedHash(env), Kind: relayapi.KindEnvelope,
+			Received: now, GivesUp: now.Add(time.Hour),
+		}, raw, limits.Quotas(), now.Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	// A page full of mail that arrived, and then the two rows that matter.
+	for i := range relayapi.MaxQueueLimit {
+		if err := h.store.Handed(enqueue(fmt.Sprintf("gone%d", i)), int64(i+1), now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stuck := enqueue("still going")
+	refused := enqueue("refused")
+	if err := h.store.Failed(refused, relayapi.CodeRefused, "bar: no such mailbox", now); err != nil {
+		t.Fatal(err)
+	}
+
+	queued := h.queueOf(t, alice)
+	if len(queued) != relayapi.MaxQueueLimit {
+		t.Fatalf("%d rows, want a full page", len(queued))
+	}
+	var sawStuck, sawRefused bool
+	for _, q := range queued {
+		switch q.ID {
+		case stuck:
+			sawStuck = true
+		case refused:
+			sawRefused = true
+		}
+	}
+	if !sawStuck {
+		t.Error("the row still waiting is not on the page: its poster is never told it is stuck")
+	}
+	if !sawRefused {
+		t.Error("the row that failed is not on the page: its poster is never told why")
+	}
+	// And in that order: what needs an answer, then what failed, then the
+	// rest.
+	if queued[0].ID != stuck {
+		t.Errorf("the page starts at %d, want the waiting row %d", queued[0].ID, stuck)
+	}
+	if queued[1].ID != refused {
+		t.Errorf("the second row is %d, want the failed one %d", queued[1].ID, refused)
+	}
+	if queued[2].State != OutHanded {
+		t.Errorf("the third row is %q, want the handed rows after", queued[2].State)
+	}
+}
+
+// TestADeliveryIsHeldToTheOperatorsMaxBytes: the cap an operator set means
+// the same thing for mail that arrived through a neighbour as for mail posted
+// here.
+//
+// The forward route's body cap is max_bytes plus the framing a request costs,
+// so without this check a neighbour's courier could place a message that much
+// over the setting into a local mailbox — and an operator's number would mean
+// one thing for their own users and another for everybody reached through a
+// peer.
+func TestADeliveryIsHeldToTheOperatorsMaxBytes(t *testing.T) {
+	courier := neighbourID(t, "alpha")
+	c, err := NewCourier(CourierConfig{
+		Home:           courierHome(t, map[string]string{"bar": "http://127.0.0.1:1"}),
+		AuthorizedFile: couriersFile(t, courier), PublicURL: "https://mine.example",
+	}, slogDiscard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const maxBytes = 4096
+	h := newHarness(t, Config{Courier: c, CourierLimits: DefaultCourierLimits(),
+		Limits: DefaultLimits(), MaxBytes: maxBytes})
+	quiet(t, h)
+	h.enroll(courier)
+	bob := h.user(t, "bob")
+
+	// An envelope over the setting and under the route's own body cap.
+	big := sealedFor(bob.Fingerprint(), strings.Repeat("x", 6000))
+	status, _, body := h.forward(courier, request(big, nil, nil))
+	if status != 413 {
+		t.Fatalf("a delivery of %d bytes under max_bytes %d: status %d: %s",
+			len(big.CT), maxBytes, status, body)
+	}
+	if got := errorText(t, body); got != "envelope too large" {
+		t.Errorf("%q; want the post route's own sentence", got)
+	}
+	if msgs := h.stored(t, bob.Fingerprint()); len(msgs) != 0 {
+		t.Errorf("%d messages stored over the operator's cap", len(msgs))
+	}
+	// And the same route takes one under it, so the refusal is the size and
+	// not the route.
+	if status, _, body := h.forward(courier,
+		request(sealedFor(bob.Fingerprint(), "small"), nil, nil)); status != 201 {
+		t.Fatalf("a delivery under max_bytes: status %d: %s", status, body)
 	}
 }

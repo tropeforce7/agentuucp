@@ -898,7 +898,7 @@ func TestPutRefusesAKnockerOnTheWrongKind(t *testing.T) {
 		{"an envelope with one", relayapi.KindEnvelope, alice.Fingerprint()},
 		{"a stream with one", relayapi.KindStream, alice.Fingerprint()},
 	} {
-		_, err := h.store.Put(fp, "default", tc.kind, tc.knocker, raw, Quotas{})
+		_, err := h.store.Put(fp, "default", tc.kind, tc.knocker, raw, Quotas{}, Forwarded{})
 		if err == nil || !strings.Contains(err.Error(), "a knock names its knocker and nothing else does") {
 			t.Errorf("%s: %v; want the invariant's refusal", tc.name, err)
 		}
@@ -907,10 +907,10 @@ func TestPutRefusesAKnockerOnTheWrongKind(t *testing.T) {
 		t.Fatalf("%d messages stored by a refused Put", n)
 	}
 	// And the two right ways round are taken.
-	if _, err := h.store.Put(fp, "default", relayapi.KindEnvelope, "", raw, Quotas{}); err != nil {
+	if _, err := h.store.Put(fp, "default", relayapi.KindEnvelope, "", raw, Quotas{}, Forwarded{}); err != nil {
 		t.Fatalf("an envelope with no knocker: %v", err)
 	}
-	if _, err := h.store.Put(fp, "default", relayapi.KindKnock, alice.Fingerprint(), raw, Quotas{}); err != nil {
+	if _, err := h.store.Put(fp, "default", relayapi.KindKnock, alice.Fingerprint(), raw, Quotas{}, Forwarded{}); err != nil {
 		t.Fatalf("a knock with its knocker: %v", err)
 	}
 	h.assertCountersAgree()

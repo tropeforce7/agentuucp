@@ -88,6 +88,7 @@ Usage:
   auu channel pull                    # take the directory a relay holds, from another machine
 
   auu send --to NAME|self [--subject S] [--channel NAME] [--attach FILE]... [TEXT | --body-file F | - | --edit]
+  auu send --to 'bar!bob' TEXT        # somebody on a relay yours peers with; --via bar is the same
   auu reply MESSAGE-ID|THREAD-ID [--channel NAME] [--attach FILE]... [TEXT | --body-file F | - | --edit]
   auu send --resume
 
@@ -95,6 +96,7 @@ Usage:
   auu read MESSAGE-ID [--json]
   auu extract MESSAGE-ID [--out DIR]
   auu rm MESSAGE-ID... [--local-only | --remote-only] [--json]
+  auu queue [--relay NAME] [--json]   # your mail a relay is still carrying to another relay
   auu wait --thread THREAD-ID [--timeout 10m] [--interval 20s] [--json]
   auu watch [--event message|directory]... [--channel NAME]... [--peer NAME]...
             [--timeout 10m] [--interval 20s] [--fetch] [--json]   # return when something arrives
@@ -123,8 +125,8 @@ Usage:
 
 Every command that talks to a relay takes --relay NAME. Without it the relay
 is AUU_RELAY, and then the default from 'auu relay default'. Commands that
-read your mail or set your policy — inbox, wait, watch, allow, channel — cover
-every relay you are on unless --relay narrows them.
+read your mail or set your policy — inbox, wait, watch, allow, channel, queue —
+cover every relay you are on unless --relay narrows them.
 
 Run 'auu COMMAND -h' for the flags of one command.
 `
@@ -313,6 +315,8 @@ func dispatch(args []string) error {
 		return cmdExtract(rest)
 	case "rm":
 		return cmdRm(rest)
+	case "queue":
+		return cmdQueue(rest)
 	case "wait":
 		return cmdWait(rest)
 	case "watch":

@@ -872,6 +872,24 @@ func (c *Client) Forward(ctx context.Context, req *relayapi.ForwardRequest) (int
 	return resp.ID, nil
 }
 
+// Queue is the caller's own rows in this relay's forwarding queue: mail they
+// addressed to somebody on another relay which this relay has taken and has
+// still to hand over, has handed over, or has given up on.
+//
+// A relay that forwards nothing answers 403 with MsgForwardsNothing, which
+// the caller reads as "there is nowhere for anything to wait here" rather
+// than as an empty queue.
+func (c *Client) Queue(ctx context.Context) ([]relayapi.QueuedMessage, error) {
+	var resp relayapi.QueueResponse
+	if err := c.do(ctx, "GET", "/v1/mailbox/"+c.id.Fingerprint()+"/queue", nil, &resp, nil); err != nil {
+		return nil, err
+	}
+	if err := c.checkQueue(&resp); err != nil {
+		return nil, err
+	}
+	return resp.Queued, nil
+}
+
 // Knock posts a sealed knock to the knock route of a mailbox whose owner
 // has said, on their signed card, that they take them. It is the one post
 // that goes to somebody who has not admitted the sender, so it has a
@@ -926,6 +944,11 @@ type Message struct {
 	// Channel is the name the relay listed the message under, always
 	// said: a listing whose row names none is refused before it is read.
 	Channel string
+	// Via is the relays this message came through before the one holding
+	// it, nearest the sender first, joined by "!"; empty for mail posted
+	// to that relay directly. Held to relay names and a hop count before
+	// it is read, since it becomes the path of a reply.
+	Via string
 }
 
 // IsStream reports whether this message must be fetched as a stream.
@@ -1050,7 +1073,8 @@ func (c *Client) ListWait(ctx context.Context, req ListRequest) (Listing, error)
 	}
 	out := make([]Message, 0, len(resp.Messages))
 	for _, m := range resp.Messages {
-		msg := Message{ID: m.ID, Received: m.Received, Kind: m.Kind, Size: m.Size, Channel: m.Channel}
+		msg := Message{ID: m.ID, Received: m.Received, Kind: m.Kind, Size: m.Size,
+			Channel: m.Channel, Via: m.Via}
 		if m.Kind != relayapi.KindStream {
 			msg.Raw = []byte(m.Envelope)
 			var env envelope.Envelope

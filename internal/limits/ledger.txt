@@ -221,6 +221,8 @@ internal/auu/outbox.go pending int Bytes int64 = >= 0 shown by TestLimitPendingR
 internal/auu/prompt.go promptName string fp[:16] = local: fp is Fingerprint of a parsed bundle at every caller, 64 hex characters
 internal/auu/outbox.go pending int ChunkSize int = [4096, 16777216] shown by TestLimitPendingRecordIntegers
 internal/auu/outbox.go pending int Chunks int64 = >= 0 shown by TestLimitPendingRecordIntegers
+internal/auu/queue.go queuedJSON int ID int64 = output
+internal/auu/queue.go queuedJSON int Tries int64 = output
 internal/auu/relay.go relayAdd string (*anchor)[:16] = local: ValidFingerprint at relayAdd shown by TestLimitAnchorArgsOneShort
 internal/auu/relay.go relayFlags string r.Anchor[:8] = local: ValidFingerprint at readRelay shown by TestLimitRelayRecordHashes
 internal/auu/relay.go relayRemove string r.TrustAnchorSPKI[:16] = local: ValidFingerprint at readRelay shown by TestLimitRelayRecordHashes
@@ -363,6 +365,8 @@ internal/relayapi/relayapi.go OpenStreamResponse int ResumeThreshold int64 = >= 
 internal/relayapi/relayapi.go OpenStreamResponse int ResumeWindow int64 = [0, 3153600000] shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go ParseAuth int strconv.ParseInt(fields[2]) = open shown by TestLimitAuthTimestamp
 internal/relayapi/relayapi.go PostResponse int ID int64 = > 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go QueuedMessage int ID int64 = > 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go QueuedMessage int Tries int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go PutStreamResponse int ID int64 = > 0 shown by TestLimitUploadOffsetAnswer
 internal/relayapi/relayapi.go StoredMessage int ID int64 = > 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go StoredMessage int Size int64 = >= 0 shown by TestLimitRelayAnswerIntegers

@@ -92,6 +92,11 @@ type relayFetch struct {
 	// finished: with a channel set to keep, the mail read and left there,
 	// which 'auu rm' is what removes.
 	Queued int64 `json:"queued"`
+	// Outbound is this identity's own rows in that relay's forwarding
+	// queue, when it forwards at all: mail on its way to another relay.
+	// Absent on a relay that forwards nothing, which answers the route
+	// with a refusal rather than an empty list.
+	Outbound []relayapi.QueuedMessage `json:"outbound,omitempty"`
 	// Allow is the state of this identity's allow list on the relay, as
 	// the relay said it: signed, none or broken. Card is the same for the
 	// card, and Directory for the channel directory.
@@ -323,6 +328,11 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 				SenderName: s.PeerName(sender.Fingerprint()),
 				Channel:    channel,
 				OnRelay:    keep,
+				// Where it has been, which only the person receiving it
+				// can judge, and which a reply goes back along. The
+				// client held these names to the relay-name rule before
+				// this listing was read.
+				Via: m.Via,
 			}
 			if err := s.Save(box, stored); err != nil {
 				return res, said, fmt.Errorf("saving message locally: %w", err)
@@ -375,6 +385,12 @@ type messageJSON struct {
 	// Channel is the channel the message is filed under, default when the
 	// sender named none.
 	Channel string `json:"channel"`
+	// Via is the relays the message came through before the one it arrived
+	// at, nearest the sender first and joined by "!". Absent for mail
+	// posted to that relay directly, which is most mail; a reader that
+	// wants to know whether a message crossed a relay asks whether this is
+	// there.
+	Via string `json:"via,omitempty"`
 	// ClaimedName is the name a knock's sender called themselves, their
 	// own claim and never a label: present on a knock alone, and set
 	// beside from_name, which is what this machine calls them, empty
@@ -401,6 +417,7 @@ func toJSON(box store.Box, m *store.Stored, includeText bool) messageJSON {
 		Box:         string(box),
 		Attachments: make([]attachmentJSON, 0, len(m.Inner.Body.Attachments)),
 		Channel:     channelName(m.Channel),
+		Via:         m.Via,
 		ClaimedName: m.Inner.Body.Name,
 
 		OnRelay:        m.OnRelay,
@@ -452,6 +469,16 @@ func fetchEvery(s *store.Store, id *identity.Identity, relays []*store.Relay, na
 			// on, whatever the home thought before. An empty mailbox writes
 			// no cursor of its own, so say it here.
 			err = s.MarkRegistered(r)
+		}
+		if err == nil {
+			// What this identity still has on its way out through that
+			// relay. Deliberately not part of the fetch's error: a relay
+			// that forwards nothing refuses the route, and most relays
+			// forward nothing, so a failure here is silence and never a
+			// reason for the inbox to fail.
+			if queued, qerr := c.Queue(ctx()); qerr == nil {
+				report.Outbound = queued
+			}
 		}
 		if err != nil {
 			// A damaged file is not a relay that could not be reached: it
@@ -570,6 +597,15 @@ func cmdInbox(args []string) error {
 	for _, rep := range reports {
 		if rep.Queued > 0 {
 			fmt.Printf("%s: %d message(s) on the relay; %s rm removes them\n", rep.Relay, rep.Queued, prog)
+		}
+	}
+	// What is still on its way out, per relay: mail this machine addressed
+	// to somebody on another relay and this one has not handed over. It is
+	// the other half of "what is my mail doing" and the only party who
+	// knows is the relay holding it.
+	for _, rep := range reports {
+		if line := queueLine(rep); line != "" {
+			fmt.Println(line)
 		}
 	}
 	// What each relay said about this identity's allow list and card
@@ -742,6 +778,18 @@ func printMessage(s *store.Store, box store.Box, m *store.Stored) {
 		fmt.Printf("%-9s%s\n", "  "+m.Inner.Body.Type+":", orNone(identity.PrintableText(m.Inner.Body.Subject)))
 	}
 	fmt.Printf("channel: %s\n", identity.PrintableText(channelName(m.Channel)))
+	// The relays it came through, nearest the sender first, for a message
+	// that crossed any: it is where this mail has been, which nobody but
+	// the person reading it can judge, and it is the way a reply goes back.
+	// Left out for mail that came no distance, which is most mail and where
+	// a line saying "none" would be noise.
+	//
+	// Escaped, as every string from a relay that reaches a terminal is. The
+	// names were held to the relay-name rule before the listing was read,
+	// and this is the last line under that rule rather than the rule.
+	if m.Via != "" {
+		fmt.Printf("via:     %s\n", identity.PrintableText(m.Via))
+	}
 	// Where it is besides here: kept on the relay until 'auu rm' removes
 	// it, or acknowledged away when it was fetched.
 	if m.RelayID != 0 {
