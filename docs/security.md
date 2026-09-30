@@ -860,10 +860,19 @@ a branch for an older peer. The wire has one version, this one, and a peer
 from before it is refused by name at the first exchange. **Nothing on this
 machine is from before** either. A file a version from before a rule wrote
 is refused by name with a sentence saying what to do, never migrated and
-never read under the old rule. A relay's database at another schema
-version, a home's `config.json` of the shape from before it could know
-more than one relay, a record with no relay name, and an `auu-ca` key file
-that is not encrypted are each refused so.
+never read under the old rule. A relay's database from before schema 11,
+a home's `config.json` of the shape from before it could know more than
+one relay, a record with no relay name, and an `auu-ca` key file that is
+not encrypted are each refused so. The relay's database is the one file
+carried forward, from schema 11 on, since a relay was running on it when
+the schema next changed: a step per version, each what that version
+added and nothing else, after a copy of the database is kept beside it
+for the way back. That copy is a snapshot of every row the database held
+at the upgrade, the mailboxes, certificates and tokens among them, and
+nothing the relay does afterwards reaches it: a mailbox deregistered, a
+token spent or revoked, a row deleted under `secure_delete`, each is still
+in the copy. It is mode 0600 beside the database, and it is the operator's
+to remove once the new release has run as they want.
 
 Two routes carry a mailbox's channel directory, the signed list of named
 sub-mailboxes an owner defines. The owner pushes it with `PUT

@@ -466,6 +466,18 @@ func (h *harness) assertCountersAgree() {
 		h.t.Fatalf("relay counters say %d messages / %d bytes, table says %d / %d",
 			usage.Messages, usage.Bytes, realN, realB)
 	}
+	var storedQN, storedQB, realQN, realQB int64
+	if err := h.store.db.QueryRow(`
+		SELECT outbound_messages, outbound_bytes,
+			(SELECT COUNT(*) FROM outbound WHERE state = ?),
+			(SELECT COALESCE(SUM(size), 0) FROM outbound WHERE state = ?)
+		FROM relay_stats WHERE id = 1`, OutWaiting, OutWaiting).Scan(&storedQN, &storedQB, &realQN, &realQB); err != nil {
+		h.t.Fatal(err)
+	}
+	if storedQN != realQN || storedQB != realQB {
+		h.t.Fatalf("queue counters say %d messages / %d bytes, waiting rows say %d / %d",
+			storedQN, storedQB, realQN, realQB)
+	}
 }
 
 func TestRegistrationCap(t *testing.T) {
@@ -579,15 +591,16 @@ func TestEveryLimitAtZeroIsUnlimited(t *testing.T) {
 	}
 }
 
-// A database at any version but this build's is refused, never migrated:
-// nothing on this machine is from before. The sentence names the file,
-// the version found, the version written, the message directory, which
-// goes with the file since a new database beside old mail is the lost
-// database the next start refuses over, and what the deletion costs.
-// Version 0 with tables in it is a database from before the version was
-// recorded, refused the same way; version 0 with none is a new file.
-func TestADatabaseAtAnotherVersionIsRefusedNotMigrated(t *testing.T) {
-	for version := 0; version < schemaVersion; version++ {
+// A database from before the first kept version is refused, never
+// carried forward: the sentence names the file, the version found, the
+// version written, the floor, the message directory, which goes with the
+// file since a new database beside old mail is the lost database the next
+// start refuses over, and what the deletion costs. Version 0 with tables
+// in it is a database from before the version was recorded, refused the
+// same way; version 0 with none is a new file. A refusal writes nothing:
+// the version reads back as found and no copy stands beside the file.
+func TestADatabaseFromBeforeTheFloorIsRefusedNotMigrated(t *testing.T) {
+	for version := 0; version < firstKeptVersion; version++ {
 		t.Run(strconv.Itoa(version), func(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "old.db")
@@ -605,9 +618,10 @@ func TestADatabaseAtAnotherVersionIsRefusedNotMigrated(t *testing.T) {
 			if err == nil {
 				t.Fatalf("a version %d database was opened", version)
 			}
-			want := fmt.Sprintf("relay: %s is schema version %d, but this relay writes version %d and migrates nothing: "+
+			want := fmt.Sprintf("relay: %s is schema version %d, but this relay writes version %d and carries forward "+
+				"only a database from schema %d on: "+
 				"delete it and the message directory beside it, %s, and the relay recreates both at the next start; "+
-				"every machine enrolled on it enrols again", path, version, schemaVersion, messages)
+				"every machine enrolled on it enrols again", path, version, schemaVersion, firstKeptVersion, messages)
 			if err.Error() != want {
 				t.Fatalf("error %q\nwant  %q", err, want)
 			}
@@ -615,6 +629,9 @@ func TestADatabaseAtAnotherVersionIsRefusedNotMigrated(t *testing.T) {
 			db := openVersion(t, path)
 			if db != version {
 				t.Fatalf("the refusal left the database at version %d, want %d", db, version)
+			}
+			if copies, _ := filepath.Glob(path + ".before-schema-*"); len(copies) != 0 {
+				t.Fatalf("the refusal kept a copy: %v", copies)
 			}
 		})
 	}

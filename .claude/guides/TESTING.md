@@ -612,14 +612,15 @@ handler that answers otherwise, for that test.
 **Nothing on this machine is from before, and every refusal of a file
 from before has a test that makes the file in its old form.** A file a
 version from before a rule wrote is refused by name, never migrated (the
-rule in DEVELOPMENT.md), and the test for each refusal writes the file as
-that version wrote it — the key absent from the JSON, the old key
-present, the plain `PRIVATE KEY` block, the database at the old
-`user_version` — asserts the sentence whole, with the file and the fix
-in it, and asserts that the refusal left the file as it found it, since
-a refusal that wrote something is a migration in disguise.
-`TestADatabaseAtAnotherVersionIsRefusedNotMigrated` walks versions 0 to 7
-and reads the version back; `TestAHomeFromBeforeIsRefusedByNameAndNotMoved`
+rule in DEVELOPMENT.md; the relay's database from its first kept version
+on is the one exception, under Storage below), and the test for each
+refusal writes the file as that version wrote it — the key absent from
+the JSON, the old key present, the plain `PRIVATE KEY` block, the
+database at the old `user_version` — asserts the sentence whole, with the
+file and the fix in it, and asserts that the refusal left the file as it
+found it, since a refusal that wrote something is a migration in disguise.
+`TestADatabaseFromBeforeTheFloorIsRefusedNotMigrated` walks versions 0 to
+10, reads the version back and finds no copy beside the file; `TestAHomeFromBeforeIsRefusedByNameAndNotMoved`
 plants each of the four old config keys and each of the three loose
 files and snapshots the home; `TestLimitStoredRecordShapes` leaves the
 relay out of a record, and `TestLimitPendingRecordShapes` out of an
@@ -1143,18 +1144,28 @@ says what it proves, and the ledger row points at it.
 
 ## Storage
 
-**A database at any version but this build's is refused, and the test
-plants every one.** `TestADatabaseAtAnotherVersionIsRefusedNotMigrated`
-opens a fresh store, writes each `user_version` from 0 to one under
-`schemaVersion` with the store's own handle, closes it, opens it again,
-and asserts the sentence whole — the file, the version found, the version
-written, the message directory beside it, and what the deletion costs —
-and then reads the version back through a raw handle to show the refusal
-wrote nothing. `TestNewerDatabaseIsRefused` is the version above. The two
-rules that stood here before, the old schema written out by hand and
-`sqlite_master` compared between a fresh database and a migrated one, went
-with the migrations: there is one schema, and a change to it is a new
-version at which every database from before is refused.
+**A database has three answers, and each has its test.** Below the floor,
+`TestADatabaseFromBeforeTheFloorIsRefusedNotMigrated` opens a fresh store,
+writes each `user_version` from 0 to one under `firstKeptVersion` with
+the store's own handle, closes it, opens it again, and asserts the
+sentence whole — the file, the version found, the version written, the
+floor, the message directory beside it, and what the deletion costs —
+then reads the version back through a raw handle and looks for a copy
+beside the file, to show the refusal wrote nothing. Above this build's,
+`TestNewerDatabaseIsRefused`. From the floor up,
+`TestADatabaseAtEachKeptVersionIsCarriedForward` builds each kept version
+from its `schemahistory` text, the old DDL pasted from git and never
+derived, plants rows written by today's store and copied in over the old
+file's own columns, and after the open asserts the version, the copy (its
+mode, its version, its rows), every row through the store's own readers,
+the sweep, the counters, and then the shape: `PRAGMA table_info`,
+`index_list` and `index_info` equal, row for row, to a fresh database's,
+both ways round. That comparison is what holds the steps to the schema
+constant, and it is the rule that went with the first migrations and came
+back with the second. A version written in more than one shape — 12, with
+three indexes on outbound or five — runs in each. A step that fails, and a
+copy that cannot be made, each have a test asserting the sentence and the
+database left at the version found.
 
 **Corrupt the counters and reopen.** Set `queued_messages` to nonsense
 directly, close, `OpenStore` again, assert `Reconciled()` is non-zero and the
@@ -1173,9 +1184,11 @@ proves the enforcement's. The same test then edits one byte of the
 signature and replaces the mailbox's bundle, and asserts the owner's own
 request fails too, since that is what the model says an attacker buys.
 
-**Refuse the databases you must refuse.** Version zero with tables present, and
-any version above the current one, each with the specified message. Both are
-tested; keep them passing when you bump the version.
+**Refuse the databases you must refuse.** Version zero with tables present,
+any version below the first kept one, and any version above the current
+one, each with the specified message. All three are tested; keep them
+passing when you bump the version, and give the new version its step, its
+`schemahistory` text and its row in the carried-forward test.
 
 ## Logs and privacy
 

@@ -363,8 +363,9 @@ files a version from before a rule wrote: there are no users, so a file
 from before is not supported, and every tolerance for one is a path
 nobody tests. A file from before a rule is refused by name with a
 sentence saying what to do — re-create it, delete it — never migrated
-and never read under the old rule. The relay's database is at
-`schemaVersion` or refused, with no migration (see "Storage"); a home's
+and never read under the old rule. The relay's database is the one
+exception, and it has a floor: from schema 11 it is carried forward, and
+from before 11 refused (see "Storage"); a home's
 `config.json` of the shape from before a home could know more than one
 relay, and a relay's file loose in the home's root, are refused at
 `Open`, and `Config` is a strict decode that refuses a key it does not
@@ -631,26 +632,63 @@ table on a hot path. `OpenStore` reconciles the counters from the messages
 table every time and reports how many were wrong, so a crash between two
 statements self-heals; that reconciliation is a backstop, not the mechanism.
 
-**A database is at `schemaVersion` or is refused; there is no migration.**
-`PRAGMA user_version` is the contract. A version above this build's is
-refused as written by a newer release; any other — below it, or zero with
-tables in it, which is a database from before the version was recorded —
-is refused with the sentence naming the file and the message directory
-beside it and saying to delete both, since a new database beside old mail
-is the lost database the next start refuses over. The schema is one text,
-one `const` per table, and a change to any of them is a new version at
-which every database from before is refused. Migrations were dropped when
-the wire's rule reached the files: every released version is retracted,
-so a database at an older version is one nobody runs, and each migration
-was a path nobody tested. The failure that taught it was found before the
-migrations went: the plan that took the schema from 6 to 7 wrote
-`preMigrations[7]`, and code that followed the plan would have refused to
-open a version 6 database, wanting a migration from 6 that was not there;
-a pre-migration's idempotence, its `CREATE TABLE IF NOT EXISTS` from the
-shared constant, the old DDL written out as a literal so the test built
-the right past — each was a rule about code that only a database from
-before exercised. A test plants each version from 0 to 7 and asserts the
-sentence and that the file was left as found.
+**A database from the first kept version on is carried forward, a step
+per version; below it, or above this build's, it is refused.** `PRAGMA
+user_version` is the contract, and it has three answers. A version above
+this build's is refused as written by a newer release. A version from
+`firstKeptVersion` (11) up to `schemaVersion` is carried forward: a copy
+of the database is kept beside it first, created empty, exclusive and 0600
+and then filled by `VACUUM INTO` with the path bound, and without the copy
+nothing moves; a copy already at that path is refused, never replaced,
+since the plan's first thought, that one there was left by an attempt
+that did not finish, was wrong for an operator who went back to the
+release before and came forward again; then one step per version, each
+the DDL that version added, frozen as a literal, run in its own
+transaction with the version written inside it, so a database is always at
+some whole version and a failed step leaves it at the one before. Any
+other version — below the floor, or zero with tables in it, which is a
+database from before the version was recorded — is refused with the
+sentence naming the file and the message directory beside it and saying to
+delete both, since a new database beside old mail is the lost database the
+next start refuses over. The rule turned twice, and both turns are worth
+keeping. Migrations were dropped when the wire's rule reached the files:
+every released version was retracted, so a database at an older version
+was one nobody ran, and each migration was a path nobody tested. The
+failure that taught it was found before the migrations went: the plan that
+took the schema from 6 to 7 wrote `preMigrations[7]`, and code that
+followed the plan would have refused to open a version 6 database, wanting
+a migration from 6 that was not there; a pre-migration's idempotence, its
+`CREATE TABLE IF NOT EXISTS` from the shared constant, each was a rule
+about code that only a database from before exercised. They came back,
+with a floor, when a relay was running from before: the production relay
+was at 11 when the branch above it wrote 12 and then 13, and deleting its
+database would have made every enrolled machine enrol again. What the
+first set of migrations got wrong is what the second is built against. A
+step is never the shared table constant, since the constant is today's
+table: a step to 12 that ran `carriedTable` would have created the column
+13 adds, and the step to 13 would have failed on a duplicate. The old
+schema a test builds from is pasted from git into
+`internal/relay/schemahistory`, never derived from the tree, since a text
+derived from today's tables builds today's database and calls it an old
+one. And the steps are held to the constant by comparison, not by sharing
+a string: a database carried from each kept version has, table for table
+and index for index, the shape of a fresh one, so a step that drifts and a
+constant changed without a step fail the same test. Raising the floor is
+one number and the steps below it removed.
+
+**An index or a column added to a table constant is a schema change, and
+a schema change is a new version with a step.** The table constants say
+`CREATE … IF NOT EXISTS`, which reads as though a file that exists would
+pick up whatever the constant gains; it never does, since a file that
+exists is never created again. `outbound_purge` went into the outbound
+constant at e8ca901 and `outbound_share` at 766a345, both while the schema
+stayed 12, so a version 12 file had three, four or five indexes on that
+table by the build that made it, and nothing said which. The step to 13
+carries the one tolerance in the steps for it, `IF NOT EXISTS` on those two
+indexes, with the commits named beside it. A change to any table
+constant bumps `schemaVersion`, adds its step and its `schemahistory`
+text, and the carried-forward test is what fails when one of the three is
+forgotten.
 
 **A row that does not verify says nothing about when the owner issued
 it.** A signed document replaces a row that does not verify — its

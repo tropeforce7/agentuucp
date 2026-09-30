@@ -201,12 +201,39 @@ will not repair is a database that knows no mailbox at all beside a directory
 that holds mail, since repairing that would mean removing every message. The
 database was lost. The relay refuses to start, saying so, and naming the
 two remedies, restoring `relay.db` from a backup or moving the message
-directory aside to start empty. The database is at this version's schema
-or is refused, never migrated. One from before v0.11.0 is deleted, with
-the message directory beside it. The relay recreates both at the next
-start, after which every machine enrolled on it enrols again. The refusal
-says so, naming both paths. One from a newer release is refused too,
-naming the version it found and the one this relay understands.
+directory aside to start empty.
+
+A database at this version's schema is opened as it is. One from schema
+11 on, the first kept version, is carried forward: before anything
+changes, the relay copies it to the same path with `.before-schema-N`
+appended, `N` the version it found, mode 0600, and then takes it one
+version at a time, each step and its version number committed together,
+so a database is always at some whole version. The journal says so at
+the start, naming both versions and the copy. The copy is the way back
+to the release before, with that release's binary, and it is yours to
+remove once this release has run as you want; the relay never removes
+it, and never replaces one: anything already at that path, a copy from an
+upgrade you went back from among others, stops the start with nothing
+changed until you move it aside or remove it. Going back costs every
+message that arrived after the upgrade, since the copy has no row for it
+and the release before removes a file no row claims; a way back that must
+keep them starts from a backup of the message directory taken at the same
+time. It also puts every row back as it was at the upgrade, and so undoes
+everything an administrator or a user changed on the relay since: a
+mailbox removed since is back with its certificates, a certificate or a
+token revoked since is live again, a token spent since has its uses back, a
+block added since is gone, and each allow list, card and directory is the
+one held at the upgrade, or none. Make those changes again after going
+back. A copy that cannot be made stops the start, naming its path and the
+cause, with nothing changed, and a step that fails stops it naming the
+step, the version the database is still at and the copy. A database named
+in the settings as a `file:` URI is not carried forward; name it by its
+path. A database from
+before schema 11 is refused, never read: delete it and the message
+directory beside it, and the relay recreates both at the next start,
+after which every machine enrolled on it enrols again. The refusal says
+so, naming both paths. One from a newer release is refused too, naming
+the version it found and the one this relay understands.
 
 ### 1.2 Large messages
 

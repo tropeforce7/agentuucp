@@ -57,12 +57,14 @@ var (
 	ErrTokenWrongUse = errors.New("relay: token does not authorise this")
 )
 
-// schemaVersion is the one shape this build reads and writes. A database is
-// at it or is refused: there is no migration, since nothing on this
-// machine is from before — every released version is retracted, so a
-// database at another version is one nobody runs, and a path that
-// migrated it would be a path nobody tests. The refusal says to delete the
-// database and its message directory; the next start recreates both.
+// schemaVersion is the one shape this build writes. A database at it is
+// opened; one from firstKeptVersion up to it is carried forward a step
+// per version (migrate.go), after a copy of it is kept beside it; one
+// below the floor is refused with the sentence saying to delete it and
+// its message directory, which the next start recreates; and one above it
+// is refused as written by a newer release. A change to any table
+// constant, a column or an index, is a new version with a step: a file
+// that exists never runs the constant again.
 const schemaVersion = 13
 
 // SchemaVersion is schemaVersion for the version line and the container
@@ -80,6 +82,7 @@ type Store struct {
 
 	reconciled int
 	swept      SweepResult
+	carried    CarriedForward
 
 	// uploads serialises the operations on one upload in progress: an
 	// append, a completion and an abort each hold the upload's own lock
@@ -146,7 +149,9 @@ PRAGMA secure_delete = ON;
 
 // The tables, one constant each. Together they are the whole schema, and
 // the one text a database is created from; a change to any of them is a
-// new schemaVersion, at which every database from before is refused.
+// new schemaVersion and a step to it in migrate.go, since a database that
+// exists is never created again and the IF NOT EXISTS below never runs on
+// it.
 const (
 	mailboxesTable = `CREATE TABLE IF NOT EXISTS mailboxes (
 	fp              TEXT PRIMARY KEY,
@@ -450,10 +455,11 @@ const schema = mailboxesTable + "\n" + messagesTable + "\n" +
 // OpenStore opens or creates the relay database at dbPath, with message bodies
 // under messagesDir.
 //
-// It creates a new database at schemaVersion, refuses one at any other
-// version, reconciles the directory against the table, and reconciles the
-// queued-message counters against the rows. A crash in the middle of
-// anything leaves work for the next start rather than a wrong answer.
+// It creates a new database at schemaVersion, carries one from a kept
+// version forward, refuses any other, reconciles the directory against the
+// table, and reconciles the queued-message counters against the rows. A
+// crash in the middle of anything leaves work for the next start rather
+// than a wrong answer.
 func OpenStore(dbPath, messagesDir string) (*Store, error) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -522,16 +528,21 @@ func (s *Store) refuseLostDatabase(dbPath string) error {
 		dbPath, s.dir, held, boxes, dbPath)
 }
 
-// prepareSchema creates the schema in an empty file, or refuses a file that
-// is not at schemaVersion.
+// prepareSchema creates the schema in an empty file, carries a file from a
+// kept version forward, or refuses it.
 //
 // A version above this build's was written by a newer release, and the
-// sentence says so. Any other version — one below it, or zero with tables
-// in it, which is a database from before the version was recorded — is a
-// database from before this version, and there is no reading it: the
-// sentence names the file and the message directory and says to delete
-// both, since a message directory left beside a new database is the lost
-// database refuseLostDatabase refuses to start over.
+// sentence says so. A version from firstKeptVersion up is carried forward
+// (carryForward). Any other — one below the floor, or zero with tables in
+// it, which is a database from before the version was recorded — is a
+// database this relay cannot read: the sentence names the file and the
+// message directory and says to delete both, since a message directory
+// left beside a new database is the lost database refuseLostDatabase
+// refuses to start over.
+//
+// A new file gets its schema and its version in one transaction, so a crash
+// between the two cannot leave a file with tables at version zero, which
+// every later start would refuse.
 func (s *Store) prepareSchema(dbPath string) error {
 	db := s.db
 	version, err := readVersion(db)
@@ -545,22 +556,39 @@ func (s *Store) prepareSchema(dbPath string) error {
 	if version == schemaVersion {
 		return nil
 	}
+	if version >= firstKeptVersion {
+		return s.carryForward(dbPath, version)
+	}
 	if version == 0 {
 		populated, err := hasTables(db)
 		if err != nil {
 			return err
 		}
 		if !populated {
-			// A new file: create everything at once and claim the version.
-			if _, err := db.Exec(schema); err != nil {
-				return fmt.Errorf("relay: schema: %w", err)
-			}
-			return setVersion(db, schemaVersion)
+			return s.create()
 		}
 	}
-	return fmt.Errorf("relay: %s is schema version %d, but this relay writes version %d and migrates nothing: "+
+	return fmt.Errorf("relay: %s is schema version %d, but this relay writes version %d and carries forward "+
+		"only a database from schema %d on: "+
 		"delete it and the message directory beside it, %s, and the relay recreates both at the next start; "+
-		"every machine enrolled on it enrols again", dbPath, version, schemaVersion, s.dir)
+		"every machine enrolled on it enrols again", dbPath, version, schemaVersion, firstKeptVersion, s.dir)
+}
+
+// create makes the whole schema in an empty file and claims the version,
+// in one transaction.
+func (s *Store) create() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(schema); err != nil {
+		return fmt.Errorf("relay: schema: %w", err)
+	}
+	if err := setVersionTx(tx, schemaVersion); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func readVersion(db *sql.DB) (int, error) {
@@ -569,13 +597,6 @@ func readVersion(db *sql.DB) (int, error) {
 		return 0, fmt.Errorf("relay: reading schema version: %w", err)
 	}
 	return version, nil
-}
-
-func setVersion(db *sql.DB, v int) error {
-	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", v)); err != nil {
-		return fmt.Errorf("relay: recording schema version: %w", err)
-	}
-	return nil
 }
 
 // hasTables reports whether the file holds any table at all, which is what

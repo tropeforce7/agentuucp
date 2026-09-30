@@ -160,9 +160,20 @@ keeps working, and nobody re-enrols. Do the same, without waiting, if the
 user thinks the relay has been compromised.
 
 **Upgrading** is the same: a new kit and `update`, which takes a backup of
-the database first. The relay's database is at this version's schema or is
-refused, never migrated: a database from before v0.11.0 is deleted, with
-the message directory beside it, and the relay recreates both at the next
+the database first. A database from schema 11 on is carried forward at
+the first start of the new relay, which keeps a copy beside it first,
+`relay.db.before-schema-N`, and says so in the journal naming both
+versions and the copy; the copy is the way back with the previous
+release, at the cost of any mail that arrived after the upgrade and of
+every change made on the relay since, since it puts every row back as it
+was: a mailbox removed since returns with its certificates, and every
+revocation, block, spent token and pushed document since is undone and
+must be made again; and the
+user's to remove once the new one has run as they want. The relay never
+writes over a copy: one already at that path stops the start until it is
+moved aside or removed.
+A database from before schema 11 is refused: it is deleted, with the
+message directory beside it, and the relay recreates both at the next
 start, after which every machine enrolled on the relay enrols again. The
 refusal in the journal says exactly that, naming both paths, and `update`
 stops at it.

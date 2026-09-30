@@ -46,7 +46,7 @@ var handles = map[string]bool{"db": true, "tx": true, "conn": true}
 // no placeholder, and the number formatted is the schema version the
 // store itself owns, never a value from the wire.
 var allowed = map[string]string{
-	`internal/relay/store.go setVersion db.Exec(fmt.Sprintf("PRAGMA user_version = %d", v))`: "PRAGMA takes no placeholder; v is the store's own schema version",
+	`internal/relay/migrate.go setVersionTx tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", v))`: "PRAGMA takes no placeholder; v is the store's own schema version",
 }
 
 // TestEveryQueryIsAConstant is the rule against the tree as it stands.

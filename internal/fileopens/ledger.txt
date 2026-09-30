@@ -256,6 +256,8 @@ internal/relay/filestore.go (*Store).sweep os.Remove(filepath.Join(s.tmpDir(), e
 internal/relay/filestore.go (*Store).writeTemp os.OpenFile(path) = local
 internal/relay/filestore.go (*Store).writeTemp os.Remove(path) = local
 internal/relay/filestore.go fsyncDir regular.Dir(path) = network: fingerprint through place's mailbox directory (the least trusted of the callers' paths), identity.ValidFingerprint at the authed wrapper shown by TestLimitNothingTheNetworkNamesIsAPath
+internal/relay/migrate.go (*Store).keepCopy os.OpenFile(path) = operator: db in the relay's settings file, resolved against the file's directory, with the program's suffix .before-schema-N appended to it shown by TestLimitConfigPathsResolveAgainstTheirFile
+internal/relay/migrate.go (*Store).keepCopy os.Remove(path) = operator: db in the relay's settings file, resolved against the file's directory, with the program's suffix .before-schema-N appended to it, and only ever the file this call created exclusively a moment before shown by TestLimitConfigPathsResolveAgainstTheirFile
 internal/relay/outbound.go (*Store).Enqueue os.Remove(tmp) = local
 internal/relay/outbound.go (*Store).OutboundBody os.ReadFile(s.outboundPath(id)) = local
 internal/relay/outbound.go (*Store).placeOutbound os.MkdirAll(dir) = local

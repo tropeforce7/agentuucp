@@ -667,14 +667,36 @@ install -o root -g root -m 0755 auu-relay /usr/local/bin/auu-relay
 systemctl restart auu-relay
 ```
 
-Either way the relay's database is at this version's schema or is refused,
-never migrated: nothing on this machine is from before. A database from
-before v0.11.0 is deleted, with the message directory beside it, and the
-relay recreates both at the next start; every machine enrolled on the
-relay enrols again. The refusal in the journal says exactly that, naming
-both paths, and `update` stops at it with the backup lines, since the
-relay did not start. Take the backup below before an upgrade all the same
-— `update` takes one of the database itself, but not of the message
+Either way the relay carries its database forward at the first start of
+the new binary, when it is from schema 11 on. It first copies the
+database beside itself, as `relay.db.before-schema-N` with `N` the version
+it found, mode 0600 and owned as the database is, and then takes it to
+this version's schema one step at a time; the journal says so, naming both
+versions and the copy. The copy is how you go back: stop the relay, put
+the previous binary back, move the copy over `relay.db`, and start it.
+Going back loses every message that arrived after the upgrade: the copy
+has no row for it, and the previous release's start removes a file no row
+claims. If you may need to go back without losing them, back up the
+message directory with the database before the upgrade, as the section
+below asks, and restore both together. Going back also puts every row back
+as it was at the upgrade, and so undoes every change made on the relay
+since: a mailbox you removed since is back with its certificates, a
+certificate or a token you revoked since is live again, a token spent
+since has its uses back, a block you added is gone, and each user's allow
+list, card and directory is the one the relay held at the upgrade, or
+none. Remove, revoke and block again after going back. Remove the copy yourself once the
+new release has run as you want; the relay never does, and it never
+writes over one either: a file already at the copy's path, such as the
+copy from an upgrade you went back from, stops the start, naming it, until
+you move it aside or remove it. A copy that cannot be made, or a step that
+fails, stops the start with nothing lost, naming the path, the cause and
+the version the database is still at. A database from before schema 11 is refused
+rather than read: it is deleted, with the message directory beside it,
+and the relay recreates both at the next start; every machine enrolled on
+the relay enrols again. The refusal in the journal says exactly that,
+naming both paths, and `update` stops at it with the backup lines, since
+the relay did not start. Take the backup below before an upgrade all the
+same — `update` takes one of the database itself, but not of the message
 files, which an update does not touch.
 
 `broken` in any of the three document columns of `auu-admin mailboxes ls`

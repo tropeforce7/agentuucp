@@ -257,6 +257,11 @@ func run(cfg Config, log *slog.Logger) error {
 	if err := store.PurgeNonces(time.Now()); err != nil {
 		log.Warn("initial nonce purge failed", "err", err)
 	}
+	if c := store.CarriedForward(); c.From != 0 {
+		log.Info("the database was carried forward to this relay's schema; the copy beside it is the way back "+
+			"to the release before and is yours to remove once this one has run as you want",
+			"from", c.From, "to", c.To, "copy", c.Copy)
+	}
 	if n := store.Reconciled(); n > 0 {
 		log.Warn("queued message counters did not match the stored messages and have been recomputed",
 			"mailboxes", n)
