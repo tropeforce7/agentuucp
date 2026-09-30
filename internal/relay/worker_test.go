@@ -87,9 +87,10 @@ func TestAnEnvelopeCrossesToTheNeighbour(t *testing.T) {
 	_ = sent
 }
 
-// TestARetryAfterALostAnswerIsHandedOver: the neighbour answers 409 for an
-// envelope it already has, which is what a retry whose answer was lost looks
-// like from here, and the row is handed rather than tried for ever.
+// TestARetryAfterALostAnswerIsHandedOver: the neighbour answers 409 with the
+// id of the row it already holds for this relay, which is what a retry whose
+// answer was lost looks like from here, and the row is handed rather than
+// tried for ever.
 func TestARetryAfterALostAnswerIsHandedOver(t *testing.T) {
 	b := peered(t, []string{"onward"}, nil, nil)
 	// A calls B "bar"; B calls A "alpha". A name is relative to the relay
@@ -102,8 +103,40 @@ func TestARetryAfterALostAnswerIsHandedOver(t *testing.T) {
 	if status != 201 {
 		t.Fatalf("status %d: %s", status, body)
 	}
-	// B is given the same envelope by somebody else first, so A's attempt
-	// meets the 409 a lost answer would have left behind.
+	// B has already taken it from A's own courier, and A never heard: the
+	// state a lost 201 leaves, made by posting what A's worker would post.
+	status, theirs, body := b.forward(a.courier, request(env, []string{"onward"}, nil))
+	if status != 201 {
+		t.Fatalf("the attempt whose answer was lost: status %d: %s", status, body)
+	}
+
+	worker(t, a.h).drainOnce(t, "bar")
+	row := a.h.outbound(t, answer.ID)
+	if row.State != OutHanded {
+		t.Errorf("A's row is %q after a 409 naming its row, want %q", row.State, OutHanded)
+	}
+	if row.TheirID != theirs.ID {
+		t.Errorf("A recorded their id %d, want %d: it is what a report coming back will name",
+			row.TheirID, theirs.ID)
+	}
+}
+
+// TestAnEnvelopeSomebodyElseBroughtIsRefused: the same envelope reaching the
+// neighbour first from another courier is a 409 with no row of this relay's
+// to name, which is what a loop coming back looks like, and the row ends as
+// refused rather than handed (ruling 44). Handed, the sender would read that
+// the message had been taken, for good, about a message nobody will deliver
+// on this relay's account.
+func TestAnEnvelopeSomebodyElseBroughtIsRefused(t *testing.T) {
+	b := peered(t, []string{"onward"}, nil, nil)
+	a := peer(t, b, "bar", "alpha", DefaultCourierLimits())
+	sender := a.h.user(t, "alice")
+	env := sealedFor(a.h.fpOf(t, "bob"), "ct")
+
+	status, answer, body := a.h.forward(sender, request(env, []string{"bar", "onward"}, nil))
+	if status != 201 {
+		t.Fatalf("status %d: %s", status, body)
+	}
 	other := neighbourID(t, "beta")
 	b.enroll(other)
 	writeCouriers(t, b.server.courier.couriers.path, a.courier, other)
@@ -112,8 +145,71 @@ func TestARetryAfterALostAnswerIsHandedOver(t *testing.T) {
 	}
 
 	worker(t, a.h).drainOnce(t, "bar")
-	if row := a.h.outbound(t, answer.ID); row.State != OutHanded {
-		t.Errorf("A's row is %q after a 409, want %q: a neighbour that already has it has it", row.State, OutHanded)
+	row := a.h.outbound(t, answer.ID)
+	if row.State != OutFinal || row.Code != relayapi.CodeRefused {
+		t.Fatalf("A's row is %q/%q after a bare 409, want final/refused", row.State, row.Code)
+	}
+	if want := "bar: " + relayapi.MsgAlreadyCarried; row.Said != want {
+		t.Errorf("A's row says %q, want %q", row.Said, want)
+	}
+}
+
+// TestALostAnswerThenAFailureStillReachesTheSender: ruling 45 across three
+// relays with nothing faked between them but the lost answer.
+//
+// B hands alice's message to C and the 201 is lost. C's row then ends, and
+// C's report of it comes back to a B that never heard the id it names, so B
+// cannot take it. B's row is still waiting, so B tries again; C answers 409
+// with the id, the code and the sentence; and B's row ends as C's did and the
+// news goes on back to A. Read as a plain hand-over, which is what the id
+// alone would say, alice would be told her message was handed on, for good.
+func TestALostAnswerThenAFailureStillReachesTheSender(t *testing.T) {
+	for _, code := range []string{relayapi.CodeRefused, relayapi.CodeGaveUp} {
+		t.Run(code, func(t *testing.T) {
+			c := newChain(t)
+			alice := c.a.user(t, "alice")
+			// C forwards onward to a relay the test never reaches; the row
+			// there is ended by hand, standing in for whatever ended it.
+			addNeighbour(t, c.c.server.courier, "far", "https://127.0.0.1:1")
+			env := sealedFor(c.a.fpOf(t, "bob"), "lost answer")
+
+			status, answer, body := c.a.forward(alice, request(env, []string{"bar", "baz", "far"}, nil))
+			if status != 201 {
+				t.Fatalf("alice posting: %d %s", status, body)
+			}
+			c.handOn(t, c.a, "bar")
+			bRow := c.b.onlyOutbound(t, OutWaiting)
+
+			// B's attempt reaches C and its answer is lost: C holds a row
+			// posted by B's courier, and B's row is still waiting.
+			status, cAnswer, body := c.c.forward(c.bCourier, request(env, []string{"far"}, []string{"alpha"}))
+			if status != 201 {
+				t.Fatalf("B's attempt whose answer was lost: %d %s", status, body)
+			}
+			if err := c.c.store.Failed(cAnswer.ID, code, "far: it went wrong there", time.Now()); err != nil {
+				t.Fatal(err)
+			}
+
+			// B tries again, and is told how C's row ended.
+			c.handOn(t, c.b, "baz")
+			bFinal := c.b.outbound(t, bRow.ID)
+			if bFinal.State != OutFinal || bFinal.Code != code {
+				t.Fatalf("B's row is %q/%q, want final/%s: the 409 said how it ended", bFinal.State, bFinal.Code, code)
+			}
+			if want := "baz: far: it went wrong there"; bFinal.Said != want {
+				t.Errorf("B's row says %q, want %q", bFinal.Said, want)
+			}
+
+			// And the news goes on back: B's row was posted by A's courier.
+			c.handOn(t, c.b, "alpha")
+			aFinal := c.a.outbound(t, answer.ID)
+			if aFinal.State != OutFinal || aFinal.Code != code {
+				t.Fatalf("A's row is %q/%q, want final/%s", aFinal.State, aFinal.Code, code)
+			}
+			if want := "bar: baz: far: it went wrong there"; aFinal.Said != want {
+				t.Errorf("A's row says %q, want %q", aFinal.Said, want)
+			}
+		})
 	}
 }
 
@@ -170,9 +266,21 @@ func TestWhatEachAnswerDoesToARow(t *testing.T) {
 		said    string
 	}{
 		{"taken", func() (int64, error) { return 77, nil }, OutHanded, "", false, ""},
-		{"already carried", func() (int64, error) {
-			return 0, &client.HTTPError{Status: http.StatusConflict, Message: relayapi.MsgAlreadyCarried}
+		// The three 409s, rulings 44 and 45. With an id: a retry after a
+		// lost answer, taken. With an id and a code: a retry to a row that
+		// has ended there, ending this one the same way. Bare: a loop
+		// coming back, refused — the case that was read as taken and
+		// told the sender so for good.
+		{"already carried, and it is ours", func() (int64, error) {
+			return 0, &client.HTTPError{Status: http.StatusConflict, ForwardID: 5}
 		}, OutHanded, "", false, ""},
+		{"already carried, and ours has ended", func() (int64, error) {
+			return 0, &client.HTTPError{Status: http.StatusConflict, ForwardID: 5,
+				ForwardCode: relayapi.CodeGaveUp, ForwardSaid: "baz: tried for three days"}
+		}, OutFinal, relayapi.CodeGaveUp, false, "bar: baz: tried for three days"},
+		{"already carried, and not ours", func() (int64, error) {
+			return 0, &client.HTTPError{Status: http.StatusConflict, Message: relayapi.MsgAlreadyCarried}
+		}, OutFinal, relayapi.CodeRefused, false, "bar: " + relayapi.MsgAlreadyCarried},
 		{"a request it will not take", func() (int64, error) {
 			return 0, &client.HTTPError{Status: http.StatusBadRequest, Message: "address repeats \"bar\""}
 		}, OutFinal, relayapi.CodeRefused, false, "address repeats"},

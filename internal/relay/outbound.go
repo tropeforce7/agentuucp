@@ -516,25 +516,54 @@ func (s *Store) HandedTo(neighbour string, theirID int64) (row *Outbound, found 
 	return row, found, nil
 }
 
-// OutboundIDFor is the id of the row this poster holds for an envelope, or
-// zero when they hold none.
+// CarriedAnswer is what a relay tells a caller whose envelope it has already
+// carried: the caller's own row for it, with its state and, for a final row,
+// the code and the sentence it ended with; failing that, the id of the
+// message the envelope became if this relay delivered it; failing both,
+// nothing, and the 409 goes back bare.
 //
-// It answers the 409 for a retry after a lost answer: the poster learns the
-// id its first attempt was given, which is what an undeliverable coming back
-// will name. It is keyed by the poster as well as the hash on purpose — a
-// second caller posting the same envelope has no business learning another
-// poster's row id — and the index that serves it is outbound_poster.
-func (s *Store) OutboundIDFor(posterFP, hash string) (int64, error) {
-	var id int64
-	err := s.db.QueryRow(`SELECT id FROM outbound WHERE poster_fp = ? AND hash = ? ORDER BY id DESC LIMIT 1`,
-		posterFP, hash).Scan(&id)
+// The three are the three causes of a repeat, and the neighbour that sent it
+// has to tell them apart (rulings 44 and 45). A retry after a lost answer
+// finds the caller's own row, and is handed if the row is waiting or handed
+// and refused with the row's own words if it is final — the report of that
+// failure having been refused at the caller, which had no id to match it to.
+// A retry after a lost answer to a delivery finds the delivered id and is
+// handed. A loop coming back finds neither, since the envelope was never the
+// caller's here, and is refused.
+//
+// The row is keyed by the poster as well as the hash on purpose — a second
+// caller posting the same envelope has no business learning another poster's
+// row id, or how it ended — and the index that serves it is outbound_poster.
+type CarriedAnswer struct {
+	ID   int64
+	Code string
+	Said string
+}
+
+// CarriedAnswerFor looks up what CarriedAnswer says for this caller and
+// envelope.
+func (s *Store) CarriedAnswerFor(posterFP, hash string) (CarriedAnswer, error) {
+	var a CarriedAnswer
+	var state string
+	err := s.db.QueryRow(`SELECT id, state, code, said FROM outbound WHERE poster_fp = ? AND hash = ?
+		ORDER BY id DESC LIMIT 1`, posterFP, hash).Scan(&a.ID, &state, &a.Code, &a.Said)
+	switch {
+	case err == nil:
+		if state != OutFinal {
+			a.Code, a.Said = "", ""
+		}
+		return a, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return CarriedAnswer{}, err
+	}
+	err = s.db.QueryRow(`SELECT delivered FROM carried WHERE hash = ?`, hash).Scan(&a.ID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, nil
+		return CarriedAnswer{}, nil
 	}
 	if err != nil {
-		return 0, err
+		return CarriedAnswer{}, err
 	}
-	return id, nil
+	return a, nil
 }
 
 // JoinPath and SplitPath are how a list of relay names travels in a column:
@@ -601,10 +630,10 @@ func outboundFrom(scan func(...any) error) (*Outbound, error) {
 // neighbour until the carried window is out.
 //
 // theirID is the id the neighbour answered with, which is the one number
-// both sides hold and what an undeliverable coming back will name. A 409
-// from a neighbour carries one only when this relay is the poster of the row
-// it already holds, so zero here is honest and means no report can be
-// matched to this row.
+// both sides hold and what an undeliverable coming back will name. From a
+// 409 it is the row the neighbour holds for this relay's courier, or the
+// message the envelope became there; a bare 409 is a refusal and never
+// reaches here.
 func (s *Store) Handed(id, theirID int64, now time.Time) error {
 	tx, err := s.db.Begin()
 	if err != nil {

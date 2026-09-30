@@ -141,9 +141,9 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, body []by
 	id, err := s.store.Enqueue(row, req.Envelope, quotas, expires)
 	switch {
 	case errors.Is(err, ErrCarried):
-		// A retry after a lost answer, or a loop dying. The id goes back
-		// only to the poster of the row that holds it: a second courier
-		// posting the same envelope learns nothing about another's row.
+		// A retry after a lost answer, or a loop dying. A row's id and how
+		// it ended go back only to its poster: a second courier posting the
+		// same envelope learns nothing about another's row.
 		s.alreadyCarried(w, callerFP, hash, courierName, isCourier)
 		return
 	case errors.Is(err, ErrCarriedFull):
@@ -597,28 +597,25 @@ func (s *Server) chargeForward(w http.ResponseWriter, callerFP string, size int6
 }
 
 // alreadyCarried answers a 409 for an envelope this relay has taken before,
-// carrying the row's id when the caller is that row's own poster.
-//
-// The id is what an undeliverable coming back will name, so a retry whose
-// first answer was lost needs it; a caller who is not the poster of the row
-// has no business learning another poster's row id, and gets the bare
-// refusal. Either way nothing is stored and no mailbox is charged.
+// with what Store.CarriedAnswerFor finds: the caller's own row's id, and for
+// an ended row its code and sentence; or the id of the message it became; or
+// nothing. The caller reads the first and third as taken, the second as its
+// own row ending the same way, and a bare 409 as refused (rulings 44 and 45).
+// Nothing is stored and no mailbox is charged.
 func (s *Server) alreadyCarried(w http.ResponseWriter, callerFP, hash, courierName string, isCourier bool) {
 	if isCourier {
 		s.store.faults.noteCarriedAgain(courierName)
 	}
-	id, err := s.store.OutboundIDFor(callerFP, hash)
-	if err != nil {
-		// The refusal stands whatever the lookup did: the envelope is
-		// carried, which is what the caller needs to know.
+	answer, err := s.store.CarriedAnswerFor(callerFP, hash)
+	if err != nil || answer.ID == 0 {
+		// Bare: nothing of the caller's here and nothing delivered, which
+		// is a loop coming back, and the caller reads it as refused. On a
+		// lookup that failed the refusal stands too, the envelope being
+		// carried whatever the lookup did.
 		s.fail(w, http.StatusConflict, relayapi.MsgAlreadyCarried)
 		return
 	}
-	if id == 0 {
-		s.fail(w, http.StatusConflict, relayapi.MsgAlreadyCarried)
-		return
-	}
-	s.writeJSON(w, http.StatusConflict, relayapi.ForwardResponse{ID: id})
+	s.writeJSON(w, http.StatusConflict, relayapi.ForwardResponse{ID: answer.ID, Code: answer.Code, Said: answer.Said})
 }
 
 // checkAddress holds the two lists to their rules and the address rule to

@@ -63,7 +63,7 @@ var (
 // database at another version is one nobody runs, and a path that
 // migrated it would be a path nobody tests. The refusal says to delete the
 // database and its message directory; the next start recreates both.
-const schemaVersion = 12
+const schemaVersion = 13
 
 // SchemaVersion is schemaVersion for the version line and the container
 // suite.
@@ -327,9 +327,20 @@ CREATE INDEX IF NOT EXISTS outbound_share ON outbound(poster_fp, state, size);`
 	// on the row says whose the envelope was or where it was going: it is
 	// a hash and an expiry, which is the nonce table's shape, and it is
 	// purged on the nonce table's timer.
+	//
+	// delivered is the one thing more, and it is the id of the message an
+	// envelope became when this relay was its last hop, or zero. It is what
+	// tells the two honest causes of a repeat apart for the neighbour that
+	// sent it: a retry after a lost answer to a delivery is answered with
+	// this id and read as handed, where a loop coming back finds no row and
+	// no id and is read as refused (ruling 44). It lives here rather than
+	// being looked up in messages because the message can be read and
+	// removed, or expire, while the hash is still being kept, and a retry
+	// then would be a delivered message reported as refused.
 	carriedTable = `CREATE TABLE IF NOT EXISTS carried (
-	hash    TEXT PRIMARY KEY,
-	expires INTEGER NOT NULL
+	hash      TEXT PRIMARY KEY,
+	expires   INTEGER NOT NULL,
+	delivered INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS carried_expires ON carried(expires);`
 
@@ -909,6 +920,14 @@ func (s *Store) Put(toFP, channel, kind, knocker string, raw []byte, q Quotas, f
 	id, err := res.LastInsertId()
 	if err != nil {
 		return 0, err
+	}
+	// The hash names the message it became, in the same transaction, so a
+	// retry of this delivery is answered with the id the first attempt
+	// was.
+	if f.Hash != "" {
+		if _, err := tx.Exec(`UPDATE carried SET delivered = ? WHERE hash = ?`, id, f.Hash); err != nil {
+			return 0, err
+		}
 	}
 	if err := adjustCounters(tx, toFP, 1, size); err != nil {
 		return 0, err

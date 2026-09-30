@@ -504,10 +504,7 @@ func f04(t *testing.T) {
 	//
 	// On a single edge a loop always names its turning relay twice, so it always
 	// dies this way. The carried table is reached only by a cycle whose names
-	// never repeat, round the triangle under relative names, and that send found
-	// a defect: the relay whose envelope came back recorded the refusal as a
-	// hand-over, so the message was lost and its sender told it had gone. Ruling
-	// 44 fixes that, and the triangle's send lands with the fix in commit 6a.
+	// never repeat, which is the second send below.
 	//
 	// Addressed to bob, who is alice's peer and lives on relay A: --to resolves a
 	// recipient through the sender's peer list, and a message cannot be sealed to
@@ -516,7 +513,28 @@ func f04(t *testing.T) {
 	waitForQueueState(t, alice, "every relay in an address is named once")
 	expectSays(t, alice.auu("queue"), 0,
 		`refused: bee: address repeats "ay": every relay in an address is named once`)
-	verdict(t, "ok", "A loop on one edge was refused by the address rule at the first relay that saw it name a relay twice.")
+
+	// A loop round the triangle: A to B to C and back to A. Under relative
+	// names nothing repeats — A reads the via as ay!arb and adds cee, its own
+	// name for C — so the address rule passes it, and A meets it in the
+	// carried table, since A queued it in the first place. That is the only
+	// honest loop that reaches the table.
+	//
+	// This send found ruling 44's defect. A answers C with a bare 409, having
+	// no row of C's for the envelope and no message it became, and C read
+	// every 409 as a hand-over: the message was lost and alice was told it had
+	// been handed on, for good. A bare 409 is a refusal now, and the news
+	// unwinds two hops like any other.
+	mA := logMarkOf(relay)
+	expectCode(t, alice.auu("send", "--to", "bee!see!alpha!bob", "--subject", "a triangle loop", "round and back"), 0)
+	waitForQueueState(t, alice, "already carried")
+	expectSays(t, alice.auu("queue"), 0, "refused: bee: see: alpha: already carried")
+	// A says so in its own log, naming C by its own name for it: the
+	// carried-again warning's own end and the name together, since any line
+	// of A's about C would carry the name alone.
+	waitRelayLogOf(t, relay, mA, `either way it goes no further" neighbour=cee`, 30*time.Second)
+	verdict(t, "ok", "A loop on one edge was refused by the address rule at the first relay that saw it name a relay twice, "+
+		"and a loop round the triangle was refused as already carried where it began, with the news back to the sender.")
 }
 
 func f05(t *testing.T) {

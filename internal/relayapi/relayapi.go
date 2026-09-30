@@ -243,11 +243,21 @@ type (
 		Via      []string        `json:"via"`
 	}
 	// ForwardResponse is the id of the row the relay queued, which the
-	// poster reads back in its own queue listing. A 409 from the poster of
-	// the row that already holds this envelope carries it too, so that a
-	// retry after a lost answer learns the id its first attempt was given.
+	// poster reads back in its own queue listing. A 409 carries an id too
+	// when the repeat is a retry after a lost answer: the caller's own row
+	// for the envelope, or the message it became where this relay was the
+	// last hop, so that the retry learns the id its first attempt was
+	// given. A loop coming back has neither and is answered bare.
 	ForwardResponse struct {
 		ID int64 `json:"id"`
+		// Code and Said are present only on a 409, and only when the id
+		// is the caller's own row and that row has ended: the code it
+		// ended with and the sentence, which the caller could not have
+		// learned otherwise, since the report of it came back to a relay
+		// that never heard the id it would have matched. Absent, a 409
+		// with an id is a message taken and a bare 409 is one refused.
+		Code string `json:"code,omitempty"`
+		Said string `json:"said,omitempty"`
 	}
 	// StoredMessage carries an envelope back verbatim. It stays opaque here so
 	// the relay never has to understand a payload it cannot read.

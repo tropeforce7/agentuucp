@@ -1057,6 +1057,25 @@ the relay refuses to take anything new rather than forgetting one, since
 forgetting is what the table exists to prevent; the refusal names the
 setting.
 
+A neighbour offered an envelope this relay already holds answers `409`, and
+what the relay behind makes of it depends on what comes with it, because a
+repeat has more than one cause and they end differently:
+
+- **The id of the relay's own row for it**, when the repeat is a retry whose
+  first answer was lost. The row is handed, as the lost answer would have made
+  it.
+- **The id, a code and a sentence**, when that row has since ended there. Its
+  report came back to a relay that never heard the id it names, and could not
+  take it; this answer is how the news arrives instead. The row ends the same
+  way and the report goes on back, so the sender reads the far relay's reason.
+- **The id of the message it became**, when the neighbour was the last hop and
+  delivered it. Handed. The id is kept with the hash rather than looked up in
+  the mailbox, so it survives the recipient reading and removing the message.
+- **Nothing**, when none of those is so: the envelope was never this caller's
+  there, which is mail that has gone round in a circle and come back to where
+  it started. The row ends as refused, and the sender reads
+  `refused: …: already carried` with each hop named in front.
+
 A courier is a registered identity of the relay it posts to, so it has a
 mailbox there as any user does. Nothing writes to it and nothing reads it:
 mail for the people a relay serves goes to their own mailboxes, and a

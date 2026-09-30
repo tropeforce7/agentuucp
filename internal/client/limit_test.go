@@ -445,6 +445,41 @@ func TestLimitAConflictsForwardIDIsHeldToItsShape(t *testing.T) {
 	}
 }
 
+// TestLimitAConflictsCodeIsHeldToItsSet: the code a relay sends with a 409
+// for an ended row decides that this relay ends its own row the same way, so
+// it is one of the two a report may carry or it is dropped, and the sentence
+// with it, leaving the id alone — which is the plain hand-over it would have
+// been read as before the code existed. A code comes only with an id: without
+// one there is no row of the caller's for it to be about. And the sentence
+// goes through the same escaping as every other sentence from a relay.
+func TestLimitAConflictsCodeIsHeldToItsSet(t *testing.T) {
+	for _, tc := range []struct {
+		body       string
+		id         int64
+		code, said string
+	}{
+		{`{"id":7,"code":"refused","said":"baz: no"}`, 7, "refused", "baz: no"},
+		{`{"id":7,"code":"gave-up","said":"baz: three days"}`, 7, "gave-up", "baz: three days"},
+		{`{"id":7,"code":"delivered","said":"baz: yes"}`, 7, "", ""},
+		{`{"id":7,"code":"Refused","said":"baz: no"}`, 7, "", ""},
+		{`{"id":7,"code":"","said":"baz: no"}`, 7, "", ""},
+		{`{"id":0,"code":"refused","said":"baz: no"}`, 0, "", ""},
+		{`{"id":-1,"code":"refused","said":"baz: no"}`, 0, "", ""},
+		{`{"id":7,"code":"refused","said":"baz: \u001b[2J"}`, 7, "refused", `baz: \x1b[2J`},
+	} {
+		resp := &http.Response{StatusCode: http.StatusConflict}
+		e := httpError(resp, []byte(tc.body))
+		if e.ForwardID != tc.id || e.ForwardCode != tc.code || e.ForwardSaid != tc.said {
+			t.Errorf("%s: %d %q %q, want %d %q %q", tc.body, e.ForwardID, e.ForwardCode, e.ForwardSaid,
+				tc.id, tc.code, tc.said)
+		}
+	}
+	resp := &http.Response{StatusCode: http.StatusBadRequest}
+	if e := httpError(resp, []byte(`{"id":7,"code":"refused","said":"x"}`)); e.ForwardCode != "" || e.ForwardSaid != "" {
+		t.Errorf("a 400 carried code %q said %q", e.ForwardCode, e.ForwardSaid)
+	}
+}
+
 // TestLimitAQueueRowIsHeldToItsShape: the queue's strings, beside the
 // integers the table above holds.
 //

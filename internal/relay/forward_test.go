@@ -683,12 +683,87 @@ func TestAnEnvelopeArrivesInAMailboxHere(t *testing.T) {
 	if n := h.carriedRows(t); n != 1 {
 		t.Errorf("%d hashes after a delivery, want 1", n)
 	}
-	status, _, body = h.forward(courier, request(sealedFor(to, "for bob"), nil, []string{"one", "two"}))
+	status, again, body := h.forward(courier, request(sealedFor(to, "for bob"), nil, []string{"one", "two"}))
 	if status != 409 {
 		t.Fatalf("the same envelope again: status %d: %s", status, body)
 	}
 	if msgs := h.stored(t, to); len(msgs) != 1 {
 		t.Errorf("%d messages after the repeat, want the one", len(msgs))
+	}
+	// The repeat is a retry after a lost answer, and learns the id of the
+	// message it became, which the neighbour reads as taken (ruling 44).
+	if again.ID != answer.ID {
+		t.Errorf("the repeat was told id %d, want the delivered message's, %d", again.ID, answer.ID)
+	}
+}
+
+// TestADeliveryRetryIsAnsweredAfterTheMessageIsGone: the delivered id lives on
+// the carried row and not in the mailbox, because bob can read and remove his
+// mail while the hash is still kept. Looked up in messages instead, the retry
+// of a delivery bob had already removed would come back bare, which is the
+// answer a loop gets, and the sender of a delivered message would be told it
+// was refused.
+func TestADeliveryRetryIsAnsweredAfterTheMessageIsGone(t *testing.T) {
+	courier := neighbourID(t, "alpha")
+	h := peered(t, []string{"bar"}, []*identity.Identity{courier}, nil)
+	h.enroll(courier)
+	bob := h.user(t, "bob")
+	to := bob.Fingerprint()
+	req := request(sealedFor(to, "read and removed"), nil, []string{"one"})
+
+	status, answer, body := h.forward(courier, req)
+	if status != 201 {
+		t.Fatalf("status %d: %s", status, body)
+	}
+	if removed, err := h.store.Delete(to, answer.ID); err != nil || !removed {
+		t.Fatalf("removing bob's message: %v %v", removed, err)
+	}
+	status, again, body := h.forward(courier, req)
+	if status != 409 {
+		t.Fatalf("the retry: status %d: %s", status, body)
+	}
+	if again.ID != answer.ID {
+		t.Errorf("the retry was told id %d, want %d: a delivered message is taken whatever bob did with it since",
+			again.ID, answer.ID)
+	}
+	if again.Code != "" || again.Said != "" {
+		t.Errorf("a delivery's retry carried code %q said %q; only an ended row has either", again.Code, again.Said)
+	}
+}
+
+// TestAnEndedRowIsAnsweredWithHowItEnded: ruling 45 at the route. A retry
+// from the poster of a row that has ended here learns the code and the
+// sentence beside the id; a retry to a row still waiting learns the id alone;
+// and another caller learns neither.
+func TestAnEndedRowIsAnsweredWithHowItEnded(t *testing.T) {
+	first := neighbourID(t, "alpha")
+	second := neighbourID(t, "beta")
+	h := peered(t, []string{"bar"}, []*identity.Identity{first, second}, nil)
+	h.enroll(first, second)
+	req := request(sealedFor(h.fpOf(t, "bob"), "ended here"), []string{"bar"}, nil)
+
+	status, answer, body := h.forward(first, req)
+	if status != 201 {
+		t.Fatalf("status %d: %s", status, body)
+	}
+	status, waiting, _ := h.forward(first, req)
+	if status != 409 || waiting.ID != answer.ID || waiting.Code != "" || waiting.Said != "" {
+		t.Errorf("a retry to a waiting row: %d %+v, want 409 with the id alone", status, waiting)
+	}
+
+	if err := h.store.Failed(answer.ID, relayapi.CodeGaveUp, "bar: tried for three days", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	status, ended, body := h.forward(first, req)
+	if status != 409 {
+		t.Fatalf("a retry to an ended row: status %d: %s", status, body)
+	}
+	if ended.ID != answer.ID || ended.Code != relayapi.CodeGaveUp || ended.Said != "bar: tried for three days" {
+		t.Errorf("a retry to an ended row was told %+v; want its id, its code and its sentence", ended)
+	}
+	status, other, _ := h.forward(second, req)
+	if status != 409 || other.ID != 0 || other.Code != "" || other.Said != "" {
+		t.Errorf("another courier was told %d %+v; how a row ended is its poster's", status, other)
 	}
 }
 

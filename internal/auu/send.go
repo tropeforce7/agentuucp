@@ -703,11 +703,13 @@ func postOrForward(c *client.Client, env *envelope.Envelope, mode sendMode) (int
 	// of the route, so that a retry added here later is right by
 	// construction rather than by somebody remembering.
 	//
-	// The status alone decides, as the worker decides: a 409 to the poster
-	// of the row carries that row's id and no sentence, the sentence being
-	// what somebody who is not its poster gets. A zero id is therefore
-	// honest rather than a case to refuse — the relay has the message
-	// either way, which is what the sender needs to know.
+	// This end reads every 409 as placed, which is not what a relay's worker
+	// does with one (ruling 45), and the difference is deliberate. The
+	// worker is a hop holding a row it must end one way or another; here
+	// the relay being asked is the sender's own, and a row of theirs there
+	// is in their own queue listing, where how it ended is printed with its
+	// code. A 409 with no id would be the sender's own relay holding the
+	// same ciphertext from somebody else, which a fresh seal rules out.
 	var he *client.HTTPError
 	if errors.As(err, &he) && he.Status == http.StatusConflict {
 		return he.ForwardID, nil

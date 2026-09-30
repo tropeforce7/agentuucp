@@ -213,7 +213,7 @@ func (w *workers) wake(neighbour string) {
 // Stop ends every worker and waits for them. An attempt in flight is
 // abandoned rather than waited out: the neighbour may have taken the
 // envelope, and the row stays waiting, which the carried table makes safe —
-// the retry after the restart is answered 409 and read as handed.
+// the retry after the restart is answered 409 with the id and read as handed.
 func (w *workers) Stop() {
 	if w == nil {
 		return
@@ -512,14 +512,34 @@ func (w *workers) classify(r *store.Relay, row *Outbound, err error) (attemptOut
 	}
 	switch he.Status {
 	case http.StatusConflict:
-		// Already carried. The neighbour has it, whether from a retry whose
-		// answer was lost or from a loop dying there; either way it goes no
-		// further from here. Their id is unknown unless they sent it, which
-		// they do only for a row this relay posted.
-		if err := w.store.Handed(row.ID, he.ForwardID, w.now()); err != nil {
-			w.log.Error("courier: recording a handed message failed", "id", row.ID, "err", err)
+		// Already carried, which has three causes and three answers
+		// (rulings 44 and 45), and reading all three as a hand-over is the
+		// defect this used to be: a loop dying at the neighbour was
+		// recorded as handed, and its sender told so for good.
+		switch {
+		case he.ForwardID != 0 && he.ForwardCode != "":
+			// A retry after a lost answer, to a row that has since ended
+			// there. Its report came back and was refused here, this relay
+			// never having heard the id to match it to, so this answer is
+			// the only way the news arrives: the row ends as that one did,
+			// and the news goes on back.
+			w.fail(row, he.ForwardCode, said(r.Name, he.ForwardSaid))
+			return attemptFailed, 0
+		case he.ForwardID != 0:
+			// A retry after a lost answer, to a row still going there or
+			// to a message delivered there: taken, and the id is what a
+			// report coming back will name.
+			if err := w.store.Handed(row.ID, he.ForwardID, w.now()); err != nil {
+				w.log.Error("courier: recording a handed message failed", "id", row.ID, "err", err)
+			}
+			return attemptHanded, 0
+		default:
+			// Bare: nothing of this relay's there and nothing delivered,
+			// which is a loop coming back. The message is not going to
+			// arrive, and the sender is told so.
+			w.fail(row, relayapi.CodeRefused, said(r.Name, he.Message))
+			return attemptFailed, 0
 		}
-		return attemptHanded, 0
 	case http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusRequestEntityTooLarge:
 		w.fail(row, relayapi.CodeRefused, said(r.Name, he.Message))
 		return attemptFailed, 0

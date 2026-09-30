@@ -306,6 +306,15 @@ the recipient to say so, which is a message and not a relay's business.
 `docs/relay.md` says what keeps the silent case rare and what an operator sees
 when it happens.
 
+One case that used to be silent is not. A relay whose answer to a hand-over is
+lost cannot match the report that comes back for it, and so refuses it; but its
+row is still waiting, so it tries again, and the neighbour's `409` now carries
+how that row ended, which is how the news gets through. After the neighbour has
+purged its ended row, a day later, a retry meets the bare refusal instead and
+reads `refused: …: already carried`, which is true about the outcome and silent
+about its cause; the sender's own relay had every retry before then, at least
+one an hour, to learn the code.
+
 One boundary of the couriers route rests on a setting, and it is the same setting
 the rest of this document's disclosures rest on. The route answers a relay's
 registered identities, which is how it avoids being the oracle a silent courier

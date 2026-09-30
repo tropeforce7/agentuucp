@@ -419,8 +419,13 @@ further along, which tells the one behind it and so on back to you. Beside it is
 the sentence the relay that actually failed gave, with each hop's name in front
 of it as the news came back: `bar: baz: no such mailbox` is `baz` refusing it, reported to you
 through `bar`, each named as the relay in front of it names it. So you learn
-which relay along the way said no and what it said, rather than guessing. A
-very long chain eventually fills the sentence, and then it is the front that
+which relay along the way said no and what it said, rather than guessing. One
+sentence means the address itself was the trouble: `already carried` is a
+relay that had this message already, because the path you gave led back to a
+relay it had passed through, and it was stopped there rather than delivered.
+Rarely it is instead a relay that failed the message a day or more before your
+relay asked again, and has forgotten why.
+A very long chain eventually fills the sentence, and then it is the front that
 is dropped, marked with `…`, because the reason it failed is worth more than
 the list of names — and the first name you lose is the one on the line above
 it anyway. `auu inbox` prints one line while anything
