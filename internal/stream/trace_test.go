@@ -241,6 +241,21 @@ func TestValidateHoldsTheManifestBodyToTheMessageRules(t *testing.T) {
 	if err := buildWith(Body{Type: "knock", Thread: good.Thread, Text: "hello"}); err == nil || !strings.Contains(err.Error(), "a knock is one envelope, never a stream") {
 		t.Errorf("a knock manifest: %v; want the sentence", err)
 	}
+	// A vouch and a vouch question likewise: a manifest's body has no field
+	// for the document or the fingerprint, so either type there is that
+	// type with nothing in it. Refused at the sender's build and, crafted
+	// past it as a stranger's client would, where the manifest is read.
+	for _, typ := range []string{"vouch", "vouch-ask"} {
+		want := "a " + typ + " message is one envelope, never a stream"
+		if err := buildWith(Body{Type: typ, Thread: good.Thread, Text: "hello"}); !errors.Is(err, ErrForm) || !strings.Contains(err.Error(), want) {
+			t.Errorf("a %s manifest at the build: %v; want %q", typ, err, want)
+		}
+		_, crafted := build(t, from, to, MinChunkSize, map[string][]byte{"a.bin": []byte("hello")})
+		crafted.Body.Type = typ
+		if err := crafted.Validate(); !errors.Is(err, ErrForm) || !strings.Contains(err.Error(), want) {
+			t.Errorf("a %s manifest crafted past the build: %v; want %q", typ, err, want)
+		}
+	}
 	// An attachment's media type, which an envelope's Open refuses empty
 	// and the sender never writes empty: crafted past BuildManifest, as a
 	// stranger's client would, and refused where the manifest is read, so

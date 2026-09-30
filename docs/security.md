@@ -572,7 +572,7 @@ here has one, and a relay request is decided by its method and path
 against the relay's route table. A plain `auu unlock` is receive scope.
 The agent opens mail, signs the transport, and signs what lists, fetches,
 watches and acknowledges. It refuses to sign a message, a stream's
-manifest, a channel directory, an allow list, a card, a token, or any
+manifest, a channel directory, an allow list, a card, a vouch, a token, or any
 request that
 posts, uploads, registers, pushes or administers, a knock among them: a
 knock is a message and its route originates, so an agent unlocked to
@@ -955,6 +955,22 @@ anyone, carries the relay's registration mode as `registration`, one of
 and a client prints it wherever it shows a name it found there, since a
 relay that lies about its mode is admitting anybody, which is the case
 the word warns of.
+
+A vouch never reaches a relay as itself. It is one peer's word that it
+holds another, signed under its own domain, `ccx-vouch-v1`: the document
+is `v`, `voucher`, `subject`, `bundle` (the subject's, whose fingerprint
+must be `subject`), `name` (the voucher's label for the subject, under the
+export line's rule) and `issued`, every field always written, unknown
+fields and trailing bytes refused, the voucher never the subject, and at
+most 2,048 bytes — a vouch at every maximum is 1,958 as `auu` writes it —
+held before the signature as a card is. It travels only inside a sealed
+message: a message of type `vouch` carries one as `vouch`, the document
+and the signature as signed; a message of type `vouch-ask` names the
+fingerprint it asks about as `about`; and a knock may carry up to four as
+`vouches`. Each field is refused by name on any other type, at the open
+and when a stored record is read back, and neither type is ever a stream.
+An issue time more than five minutes ahead of the reader's clock is
+refused, as a message's is. What the relay sees is an ordinary post.
 
 A message posted to a channel names it in the clear, as `ch` on the outer
 envelope at step 3 and `channel` on the request that opens a stream. The

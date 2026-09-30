@@ -622,6 +622,17 @@ const (
 // over its hold, which the second reader of the listing found.
 const MaxCardBytes = 512
 
+// MaxVouchBytes caps a vouch's document, the bytes the voucher signed. A
+// vouch at every maximum as this client marshals it — two fingerprints, a
+// bundle of the one suite this build registers (1,248 bytes, 1,664 in
+// base64), a name of 64 bytes and issued to the nanosecond in a zone with
+// an offset — is 1,958 bytes, and 1,983 indented by two spaces; the cap
+// leaves room above both. TestLimitAVouchAtEveryMaximumFits measures them
+// against the encoder, so a bigger bundle or a new field is a failing test
+// and a new number here. It is held before the signature is checked, as a
+// card's is.
+const MaxVouchBytes = 2048
+
 // MaxListedBytes is the most the client holds of one page of the card
 // listing: MaxListedLimit entries as this client marshals them, each a
 // bundle, a card and a signature in base64 inside the entry's JSON, with

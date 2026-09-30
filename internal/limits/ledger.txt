@@ -416,6 +416,7 @@ internal/token/token.go Claims int NotAfter int64 = > 0 shown by TestLimitClaims
 internal/token/token.go Claims int NotBefore int64 = > 0 shown by TestLimitClaimsIntegers
 internal/token/token.go Claims int Uses int = [1, 1000] shown by TestLimitClaimsIntegers
 internal/token/token.go short string s[:16] = local: len(s) > 16 by the check before
+internal/vouch/vouch.go Document int V int = [1, 1] shown by TestLimitVouchV
 
 # Caps: readers bounded and header blocks capped, the HTTP layer's bounds
 # of PLAN-HTTP.

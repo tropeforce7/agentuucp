@@ -275,6 +275,13 @@ func (m *Manifest) Validate() error {
 	if m.Body.Type == message.TypeKnock {
 		return fmt.Errorf("%w: a knock is one envelope, never a stream", ErrForm)
 	}
+	// A vouch and a vouch question are one envelope for the same reason:
+	// a manifest's body has no field for the document or the fingerprint
+	// asked about, so one that says either type is that type with nothing
+	// in it, by another door.
+	if m.Body.Type == message.TypeVouch || m.Body.Type == message.TypeVouchAsk {
+		return fmt.Errorf("%w: a %s message is one envelope, never a stream", ErrForm, m.Body.Type)
+	}
 	if err := message.ValidText(m.Body.Text); err != nil {
 		return fmt.Errorf("%w: %v", ErrForm, err)
 	}

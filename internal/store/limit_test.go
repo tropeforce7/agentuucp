@@ -235,6 +235,9 @@ func TestLimitStoredRecordShapes(t *testing.T) {
 		{"name of two lines", func(m *Stored) { m.Inner.Body.Attachments[0].Name = "a\nb" }, "name is more than one line"},
 		{"name with a NUL", func(m *Stored) { m.Inner.Body.Attachments[0].Name = "a\x00b" }, "name contains a null byte"},
 		{"media empty", func(m *Stored) { m.Inner.Body.Attachments[0].Media = "" }, "empty media type"},
+		{"a vouch on another type", func(m *Stored) { m.Inner.Body.Vouch = &message.Carried{} }, "vouch is a vouch message's alone"},
+		{"an about on another type", func(m *Stored) { m.Inner.Body.About = strings.Repeat("a", 64) }, "about is a vouch question's alone"},
+		{"vouches on another type", func(m *Stored) { m.Inner.Body.Vouches = []message.Carried{{}} }, "vouches are a knock's alone"},
 	} {
 		err := write(t, tc.mutate)
 		if err == nil || !strings.Contains(err.Error(), tc.says) {

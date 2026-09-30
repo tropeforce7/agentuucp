@@ -14,6 +14,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/vouch"
 )
 
 // Message types.
@@ -30,7 +31,20 @@ const (
 	// of at most MaxKnockText bytes, since it is printed in a listing
 	// beside a stranger's name before anyone has decided to read it.
 	TypeKnock = "knock"
+	// TypeVouch carries one vouch: the sender's word that they hold a
+	// peer under a name, for the receiver to take or not. Its subject is
+	// the receiver when the vouch is theirs to keep, and anybody else's
+	// when it is an introduction. It answers nothing and carries no
+	// attachment.
+	TypeVouch = "vouch"
+	// TypeVouchAsk is the question "do you trust this key": About names
+	// the fingerprint asked about. It is answered by a vouch or by
+	// silence, never by a signed no.
+	TypeVouchAsk = "vouch-ask"
 )
+
+// MaxKnockVouches is the most vouches one knock may carry.
+const MaxKnockVouches = 4
 
 // MaxKnockText is the most bytes a knock's text may carry.
 const MaxKnockText = 512
@@ -56,6 +70,26 @@ type Body struct {
 	// default at the local-name prompt, never taken as the label. Every
 	// other type refuses it: a peer's name is the peer list's.
 	Name string `json:"name,omitempty"`
+	// Vouch is the one vouch a vouch message carries, and every other
+	// type refuses it. The document inside is held to its shape here;
+	// whether it counts is the receiver's to decide against the key it
+	// holds for the voucher, since this has no peer list.
+	Vouch *Carried `json:"vouch,omitempty"`
+	// About is the fingerprint a vouch question asks about, on that type
+	// alone.
+	About string `json:"about,omitempty"`
+	// Vouches are the vouches a knock carries, at most MaxKnockVouches,
+	// on a knock alone: the knocker's choice of who they say will speak
+	// for them.
+	Vouches []Carried `json:"vouches,omitempty"`
+}
+
+// Carried is a signed document as it travels inside a message: the bytes
+// the signer signed and the signature, both as received, so that the
+// receiver verifies exactly what was signed.
+type Carried struct {
+	Document  []byte `json:"document"`
+	Signature []byte `json:"signature"`
 }
 
 // Attachment is a whole file, carried inline. There is no chunking: a message
@@ -71,7 +105,7 @@ type Attachment struct {
 // ValidType reports whether t is a known message type.
 func ValidType(t string) bool {
 	switch t {
-	case TypeAsk, TypeReply, TypeNote, TypeAck, TypeKnock:
+	case TypeAsk, TypeReply, TypeNote, TypeAck, TypeKnock, TypeVouch, TypeVouchAsk:
 		return true
 	}
 	return false
@@ -108,6 +142,74 @@ func (b *Body) validKnock() error {
 	}
 	if strings.ContainsAny(b.Text, "\n\t\r") {
 		return errors.New("message: a knock's text is one line, without a tab")
+	}
+	return nil
+}
+
+// validVouch is the rule each vouch field is held to: Vouch on a vouch
+// message alone, About on a vouch question alone, Vouches on a knock
+// alone, each refused by name elsewhere; and each type's own rule. A
+// carried document is held to its shape, which is vouch.Parse, and not
+// verified, since verifying needs the voucher's key and that is the
+// receiver's to hold. It runs beside validKnock, at Validate on both ends
+// and at Load.
+func (b *Body) validVouch() error {
+	if b.Type != TypeVouch && b.Vouch != nil {
+		return errors.New("message: vouch is a vouch message's alone")
+	}
+	if b.Type != TypeVouchAsk && b.About != "" {
+		return errors.New("message: about is a vouch question's alone")
+	}
+	if b.Type != TypeKnock && len(b.Vouches) != 0 {
+		return errors.New("message: vouches are a knock's alone")
+	}
+	switch b.Type {
+	case TypeVouch:
+		if b.Vouch == nil {
+			return errors.New("message: a vouch message carries the vouch")
+		}
+		if err := b.answersNothing("a vouch message"); err != nil {
+			return err
+		}
+		return validCarried("the vouch it carries", *b.Vouch)
+	case TypeVouchAsk:
+		if !identity.ValidFingerprint(b.About) {
+			return errors.New("message: a vouch question's about is not a fingerprint")
+		}
+		return b.answersNothing("a vouch question")
+	case TypeKnock:
+		if len(b.Vouches) > MaxKnockVouches {
+			return fmt.Errorf("message: a knock carries %d vouches; at most %d", len(b.Vouches), MaxKnockVouches)
+		}
+		for i, c := range b.Vouches {
+			if err := validCarried(fmt.Sprintf("vouch %d", i+1), c); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// answersNothing is what the two vouch types share with a knock: each
+// opens a thread and carries no file.
+func (b *Body) answersNothing(what string) error {
+	if b.InReplyTo != "" {
+		return fmt.Errorf("message: %s opens a thread and answers nothing", what)
+	}
+	if len(b.Attachments) != 0 {
+		return fmt.Errorf("message: %s carries no attachment", what)
+	}
+	return nil
+}
+
+// validCarried holds a carried document to its shape and requires a
+// signature beside it.
+func validCarried(what string, c Carried) error {
+	if len(c.Signature) == 0 {
+		return fmt.Errorf("message: %s has no signature", what)
+	}
+	if _, err := vouch.Parse(c.Document); err != nil {
+		return fmt.Errorf("message: %s: %v", what, err)
 	}
 	return nil
 }
@@ -344,6 +446,9 @@ func (b *Body) ValidShape() error {
 	if err := b.validKnock(); err != nil {
 		return err
 	}
+	if err := b.validVouch(); err != nil {
+		return err
+	}
 	for i := range b.Attachments {
 		a := &b.Attachments[i]
 		// The name to what any text is held to, as at Open: the write
@@ -403,6 +508,9 @@ func (b *Body) Validate() error {
 		return err
 	}
 	if err := b.validKnock(); err != nil {
+		return err
+	}
+	if err := b.validVouch(); err != nil {
 		return err
 	}
 	for i := range b.Attachments {
