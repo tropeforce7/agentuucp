@@ -61,6 +61,7 @@ reports`, is snapshotted for the matrix.
 | S      | a channel answered by a program: `auu serve` with a shell script for the handler, a follow-up, a side copy's patch, two threads, a stranger, a failing handler, mail from while it was down, the long run, the hooks, the key-holding proxy with the handler given a token and never the key, and the same proxy as an account of its own that the expert cannot read the key of |
 | A      | the signed allow list: a push, a stranger refused, the relay's database edited to admit the stranger and every post refused until the owner pushes again |
 | P      | the card, the listing and the knock: a card pushed and found in the listing, the database edited to change a listed name and to blank a signature, a stranger's knock past the allow list and the trust that follows it, and the operator's three knock settings each met |
+| F      | mail across peered relays, on `relay`, `relay-b` and `relay-c` with `dave` at the far end: a message across two relays and the reply back along the way it came, the middle relay stopped and its queue drained when it returns, a forward carrying a return path refused by a relay that no longer admits its courier, a loop, and an undeliverable unwinding two hops |
 
 Each family restores every machine from the snapshot before it starts, and
 each row undoes its own fault, so a row runs alone:
@@ -68,6 +69,23 @@ each row undoes its own fault, so a row runs alone:
     AUU_E2E_KEEP=1 make e2e                  # once, to leave the stack up
     cd docker/testing
     go test -tags e2e -run 'TestMatrix/K/K13' -v .
+
+A kept stack is good for re-running the matrix and not the cycle. The cycle is
+the deployment guide from nothing — its first step creates the operator's
+authority, and refuses to create a second one in a home that already has one —
+so running it again needs `docker compose down -v` first.
+
+Family F starts `relay-b` and `relay-c` with nothing: no settings and no bundle,
+waiting for one as the unit would. A relay can be left in the one state the
+harness cannot restore from, a credential under `/run` and no settings — the
+entrypoint, seeing a credential, skips its wait and runs a relay that exits at
+once for want of a config. `/run` is in neither of the volumes the snapshot
+tars, and every recovery the harness has needs the container running, so it
+cannot put that right itself. A new container has a fresh `/run`:
+
+    docker compose rm -sf relay-b && docker compose up -d relay-b
+
+The harness says which container is not up when this happens.
 
 Rows are written as things a person did, with the reason they would have,
 and every assertion is the exact sentence the code prints today. Where the

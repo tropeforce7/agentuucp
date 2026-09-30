@@ -41,12 +41,16 @@ func TestMatrix(t *testing.T) {
 		{"S", "a channel answered by a program", serveRows},
 		{"A", "the signed allow list", allowRows},
 		{"P", "the card, the listing and the knock", cardRows},
+		{"F", "mail across peered relays", forwardRows},
 	}
 	for _, f := range families {
 		f := f
 		t.Run(f.name, func(t *testing.T) {
 			restore(t)
 			loadState(t)
+			if setup := familySetup[f.name]; setup != nil {
+				setup(t)
+			}
 			for _, row := range f.rows {
 				row := row
 				t.Run(row.id+"_"+row.slug, func(t *testing.T) {
@@ -56,6 +60,22 @@ func TestMatrix(t *testing.T) {
 			}
 		})
 	}
+}
+
+// familySetup is what a family needs doing once, after the restore and before
+// its rows, when the cycle does not leave that state behind.
+//
+// A lookup rather than a field on the table above, so the eleven families that
+// need nothing keep their three-value literals and this file's diff is one
+// entry. Family F needs three relays peered, which is two bundles and a dozen
+// commands; per row it would be that many times over for no gain.
+//
+// A row still runs alone. With -run 'TestMatrix/F/F03' the family's own body
+// executes — restore, loadState, this — and only the row subtests are filtered,
+// so the state a row needs is there whether the whole family runs or one row
+// does.
+var familySetup = map[string]func(*testing.T){
+	"F": peerTheRelays,
 }
 
 // loadState reads from the machines what the cycle recorded in memory, so

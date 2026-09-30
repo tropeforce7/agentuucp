@@ -33,6 +33,7 @@ RUN useradd --system --home-dir /var/lib/auu --no-create-home \
  && useradd --create-home --uid 1000 --shell /bin/bash you \
  && useradd --create-home --uid 1001 --shell /bin/bash alice \
  && useradd --create-home --uid 1002 --shell /bin/bash bob \
+ && useradd --create-home --uid 1003 --shell /bin/bash dave \
  && useradd --system --home-dir /nonexistent --no-create-home \
       --shell /usr/sbin/nologin --user-group auu-proxy \
  && install -d -m 0755 /etc/auu /etc/auu/delivered

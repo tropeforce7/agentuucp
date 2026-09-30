@@ -18,9 +18,13 @@ var state struct {
 	bundles            []string // host copies of every bundle issued, in order
 	aliceFP, bobFP     string
 	aliceLine, bobLine string
-	thread             string
-	aliceSerial        string
-	cycleFailed        bool
+	// dave is family F's far end, on relay-c, and is set by that family's
+	// setup rather than by the cycle: the cycle is the deployment guide's own
+	// narrative, which is one relay.
+	daveFP, daveLine string
+	thread           string
+	aliceSerial      string
+	cycleFailed      bool
 }
 
 const (

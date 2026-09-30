@@ -885,7 +885,25 @@ authority's, and a deliberate exception to the rule that a relay holds
 none. What a stolen copy buys is the ability to post at your neighbours as
 your relay, which their own budgets bound and which their operator ends by
 removing one line from their couriers file. It buys no message, and nobody's
-identity: the courier is a postman, not a reader. Protect the file as the
+identity: the courier is a postman, not a reader.
+
+That line ends less than it may sound, and the difference matters to whoever
+removes it. It ends the key's standing *as a courier* there: the return paths it
+could write under your relay's name, and the courier budgets it drew on. It does
+not end its mailbox. A courier is an ordinary enrolled user of the relay it
+forwards to, and the forward route is open to every registered identity — a
+non-courier is refused only for writing a return path it has no right to. So the
+key stays an identity able to post, and to forward its own mail as any user
+does, under a user's budgets rather than a courier's. What ends that is what
+ends it for any user: the neighbour's administrator blocks the identity,
+
+```
+auu-admin blocks add FINGERPRINT --reason "stolen courier key"
+```
+
+which refuses it at every authenticated route. A neighbour told of a stolen key
+should do both: remove the line so the key can no longer speak for your relay,
+and block it so it can no longer speak at all. Protect the file as the
 relay's bundle is protected — the relay's user alone, 0600, under the unit's
 hardening.
 

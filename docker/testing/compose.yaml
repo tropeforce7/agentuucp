@@ -1,10 +1,24 @@
-# The four machines of the container suite. See README.md in this directory
-# and reviews/PLAN-CONTAINERS.md.
+# The machines of the container suite. See README.md in this directory and
+# reviews/PLAN-CONTAINERS.md.
 #
 # relay is reachable from the others as relay.example.com, so the deployment
 # guide's commands run as written. Nothing is published to the host: the
 # driver reaches each machine only with docker compose exec and cp, the
 # container form of ssh and scp.
+#
+# relay-b and relay-c exist for family F, which is about mail crossing from one
+# relay to another. Three are needed and not two: an undeliverable that unwinds
+# needs a hop in the middle, since with two relays the sender's own relay is the
+# one that meets the refusal and nothing has to travel. They are named rather
+# than numbered because that family is about relay names being local — each
+# operator calls a neighbour whatever they chose, and the courier homes in the
+# fixture deliberately use different names in each direction — so a numbered
+# relay2 would invite the reading that the numbers mean something everywhere.
+#
+# dave lives on relay-c and is who mail crosses to. bob holding two relays in
+# one home would be a smaller change and the wrong one: that is
+# PLAN-MULTIRELAY's subject, one identity on several relays, where this is two
+# operators peering.
 name: auu-e2e
 
 services:
@@ -27,6 +41,34 @@ services:
     volumes:
       - relay-state:/var/lib/auu
       - relay-etc:/etc/auu
+      - snap:/snap
+
+  relay-b:
+    image: auu-e2e
+    pull_policy: never
+    init: true
+    entrypoint: ["/usr/local/bin/entrypoint-relay.sh"]
+    restart: "no"
+    networks:
+      default:
+        aliases: [relay-b.example.com]
+    volumes:
+      - relay-b-state:/var/lib/auu
+      - relay-b-etc:/etc/auu
+      - snap:/snap
+
+  relay-c:
+    image: auu-e2e
+    pull_policy: never
+    init: true
+    entrypoint: ["/usr/local/bin/entrypoint-relay.sh"]
+    restart: "no"
+    networks:
+      default:
+        aliases: [relay-c.example.com]
+    volumes:
+      - relay-c-state:/var/lib/auu
+      - relay-c-etc:/etc/auu
       - snap:/snap
 
   operator:
@@ -56,10 +98,24 @@ services:
       - bob-home:/home/bob
       - snap:/snap
 
+  dave:
+    image: auu-e2e
+    pull_policy: never
+    init: true
+    entrypoint: ["/usr/local/bin/entrypoint-user.sh"]
+    volumes:
+      - dave-home:/home/dave
+      - snap:/snap
+
 volumes:
   relay-state:
   relay-etc:
+  relay-b-state:
+  relay-b-etc:
+  relay-c-state:
+  relay-c-etc:
   operator-home:
   alice-home:
   bob-home:
+  dave-home:
   snap:

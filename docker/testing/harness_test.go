@@ -27,7 +27,11 @@ const (
 	project     = "auu-e2e"
 	relayURL    = "https://relay.example.com:9443"
 	relayName   = "relay.example.com"
-	outDir      = "out"
+	// Family F's two further relays. Their URLs are built from these on the
+	// machine values, so a name appears once.
+	relayBName = "relay-b.example.com"
+	relayCName = "relay-c.example.com"
+	outDir     = "out"
 )
 
 var (
@@ -38,7 +42,7 @@ var (
 	slow = os.Getenv("AUU_E2E_SLOW") == "1"
 )
 
-// machine is one of the four containers, spoken to as one user of it.
+// machine is one container, spoken to as one user of it.
 type machine struct {
 	service string
 	user    string
@@ -47,15 +51,35 @@ type machine struct {
 	caHome  string // AUU_CA_HOME, the operator only
 	dir     string // HOME, when it is not /home/<user>
 	id      string // container id, resolved once
+	// alias and url are set on a relay only: the name the others reach it by
+	// and the URL a client adds. They are fields rather than constants
+	// because family F has three relays, and they are read only through the
+	// Of helpers below.
+	alias string
+	url   string
 }
 
 var (
-	relay    = &machine{service: "relay", user: "root"}
+	relay    = &machine{service: "relay", user: "root", alias: relayName, url: relayURL}
 	relayAuu = &machine{service: "relay", user: "auu", dir: "/var/lib/auu"}
-	operator = &machine{service: "operator", user: "you", uid: 1000, home: "/home/you/.auu", caHome: "/home/you/.auu-ca"}
-	alice    = &machine{service: "alice", user: "alice", uid: 1001, home: "/home/alice/.auu"}
-	bob      = &machine{service: "bob", user: "bob", uid: 1002, home: "/home/bob/.auu"}
-	machines = []*machine{relay, operator, alice, bob}
+	// The two relays family F peers with the first. Named and not numbered,
+	// because that family is about a relay name being local to the operator
+	// who chose it.
+	relayB    = &machine{service: "relay-b", user: "root", alias: relayBName, url: "https://" + relayBName + ":9443"}
+	relayBAuu = &machine{service: "relay-b", user: "auu", dir: "/var/lib/auu"}
+	relayC    = &machine{service: "relay-c", user: "root", alias: relayCName, url: "https://" + relayCName + ":9443"}
+	relayCAuu = &machine{service: "relay-c", user: "auu", dir: "/var/lib/auu"}
+	operator  = &machine{service: "operator", user: "you", uid: 1000, home: "/home/you/.auu", caHome: "/home/you/.auu-ca"}
+	alice     = &machine{service: "alice", user: "alice", uid: 1001, home: "/home/alice/.auu"}
+	bob       = &machine{service: "bob", user: "bob", uid: 1002, home: "/home/bob/.auu"}
+	// dave is on relay-c, which is where mail that crosses two relays lands.
+	dave     = &machine{service: "dave", user: "dave", uid: 1003, home: "/home/dave/.auu"}
+	machines = []*machine{relay, relayB, relayC, operator, alice, bob, dave}
+	// relays is every relay machine, for the snapshot and the restore: a row
+	// that mutates relay-b must leave nothing behind for the next family.
+	relays = []*machine{relay, relayB, relayC}
+	// userMachines is every machine with a person's home in it.
+	userMachines = []*machine{operator, alice, bob, dave}
 
 	// workDir holds what the tests keep across steps: bundles as issued,
 	// so a rotation can be rolled back.
@@ -271,18 +295,33 @@ func fetch(t *testing.T, from *machine, src string) string {
 // exact where a timestamp is a clock's opinion.
 type mark int
 
-func relayLog() string {
-	cmd := exec.Command("docker", "logs", relay.id)
+// Every helper here has an Of form taking the relay it is about, and the
+// original keeps its name and signature and delegates to the first relay.
+//
+// That is deliberate and the alternative was costed: parameterising the
+// originals would have edited 150 references to relay, 60 to relayName and 30
+// to relayRestart across thirteen files — every matrix family, including those
+// about vandalised messages, keys, channels, watching and expiry, none of which
+// will ever have a second relay. Nine delegating functions is the smaller
+// change and leaves those families untouched.
+func relayLog() string { return relayLogOf(relay) }
+
+func relayLogOf(r *machine) string {
+	cmd := exec.Command("docker", "logs", r.id)
 	var b bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &b, &b
 	cmd.Run()
 	return b.String()
 }
 
-func logMark() mark { return mark(strings.Count(relayLog(), "\n")) }
+func logMark() mark { return logMarkOf(relay) }
 
-func relayLogSince(m mark) string {
-	lines := strings.Split(relayLog(), "\n")
+func logMarkOf(r *machine) mark { return mark(strings.Count(relayLogOf(r), "\n")) }
+
+func relayLogSince(m mark) string { return relayLogSinceOf(relay, m) }
+
+func relayLogSinceOf(r *machine, m mark) string {
+	lines := strings.Split(relayLogOf(r), "\n")
 	if int(m) > len(lines) {
 		return strings.Join(lines, "\n")
 	}
@@ -291,10 +330,14 @@ func relayLogSince(m mark) string {
 
 // waitRelayLog polls the log after a mark for a line containing text.
 func waitRelayLog(t *testing.T, m mark, text string, timeout time.Duration) string {
+	return waitRelayLogOf(t, relay, m, text, timeout)
+}
+
+func waitRelayLogOf(t *testing.T, r *machine, m mark, text string, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for {
-		log := relayLogSince(m)
+		log := relayLogSinceOf(r, m)
 		if strings.Contains(log, text) {
 			return log
 		}
@@ -308,30 +351,35 @@ func waitRelayLog(t *testing.T, m mark, text string, timeout time.Duration) stri
 // relayRestart restarts the relay and waits until it answers. It is the
 // operator's systemctl restart. The mark it returns is where the restart
 // begins in the log.
-func relayRestart(t *testing.T) mark {
+func relayRestart(t *testing.T) mark { return relayRestartOf(t, relay) }
+
+func relayRestartOf(t *testing.T, rl *machine) mark {
 	t.Helper()
-	m := logMark()
-	if r := compose("restart", "relay"); r.code != 0 {
-		t.Fatalf("restarting the relay: %s", r.stderr)
+	m := logMarkOf(rl)
+	if r := compose("restart", rl.service); r.code != 0 {
+		t.Fatalf("restarting %s: %s", rl.service, r.stderr)
 	}
-	waitRelayLog(t, m, "serving from an auu-ca bundle", 30*time.Second)
-	waitRelayReady(t)
+	waitRelayLogOf(t, rl, m, "serving from an auu-ca bundle", 30*time.Second)
+	waitRelayReadyOf(t, rl)
 	return m
 }
 
 // waitRelayReady waits for the listener: the log line comes a moment
 // before the socket does.
-func waitRelayReady(t *testing.T) {
+func waitRelayReady(t *testing.T) { waitRelayReadyOf(t, relay) }
+
+func waitRelayReadyOf(t *testing.T, rl *machine) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		// bash opens a TCP connection for a redirection; nothing is sent.
-		r := runHost(nil, "docker", "exec", alice.id, "bash", "-c", "exec 3<>/dev/tcp/relay.example.com/9443")
+		r := runHost(nil, "docker", "exec", alice.id, "bash", "-c",
+			"exec 3<>/dev/tcp/"+rl.alias+"/9443")
 		if r.code == 0 {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the relay never listened: %s", r.stderr)
+			t.Fatalf("%s never listened: %s", rl.service, r.stderr)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -356,26 +404,82 @@ func relayRestartFails(t *testing.T) string {
 }
 
 // relayStart starts a stopped relay and waits for it.
-func relayStart(t *testing.T) mark {
+func relayStart(t *testing.T) mark { return relayStartOf(t, relay) }
+
+// relayStartBare starts a relay and waits only for its container to be running,
+// not for it to be serving.
+//
+// A relay with no bundle delivered is a relay that comes up and waits for one,
+// which is what the unit does and what relay-b and relay-c do until family F
+// provisions them. Waiting for "serving from an auu-ca bundle" on one of those
+// is a thirty-second timeout and a failed snapshot, which is how this was
+// found: the snapshot at the end of the cycle loops over every relay, and two
+// of them have nothing yet.
+func relayStartBare(t *testing.T, rl *machine) {
 	t.Helper()
-	m := logMark()
-	if r := compose("start", "relay"); r.code != 0 {
-		t.Fatalf("starting the relay: %s", r.stderr)
+	if r := compose("start", rl.service); r.code != 0 {
+		t.Fatalf("starting %s: %s", rl.service, r.stderr)
 	}
-	waitRelayLog(t, m, "serving from an auu-ca bundle", 30*time.Second)
-	waitRelayReady(t)
+	deadline := time.Now().Add(30 * time.Second)
+	for !relayRunningOf(rl) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s never came up", rl.service)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// willServe reports whether a relay will have settings after its snapshot is
+// restored, read from the tar rather than from the relay as it stands.
+//
+// The tar is the state the untar is about to produce, and that is the state the
+// question is about: a relay family F provisioned is serving before the untar
+// and unprovisioned after it, so asking the running relay would give the wrong
+// answer in exactly the case that matters. It is read while the container is
+// still up, because that is the only time a command can be run in it.
+func willServe(rl *machine) bool {
+	return strings.Contains(rl.root("tar -tf /snap/"+rl.service+"-etc.tar").stdout, "relay.json")
+}
+
+// unprovision puts a relay back to having nothing, which the volumes alone
+// cannot do.
+//
+// The bundle becomes a credential under /run, which is neither of the two
+// volumes the snapshot tars, so emptying /etc/auu and /var/lib/auu leaves a
+// relay with a credential and no settings — and the entrypoint, seeing a
+// credential, skips its wait and execs a relay that exits at once for want of
+// a config. That looked like "relay-b never came up", which is how this was
+// found. Clearing the credential too is what makes the restored state the same
+// state a fresh container has: nothing, and a wait for a bundle.
+func unprovision(t *testing.T, rl *machine) {
+	t.Helper()
+	rl.root("rm -rf /run/credentials/auu-relay")
+}
+
+func relayStartOf(t *testing.T, rl *machine) mark {
+	t.Helper()
+	m := logMarkOf(rl)
+	if r := compose("start", rl.service); r.code != 0 {
+		t.Fatalf("starting %s: %s", rl.service, r.stderr)
+	}
+	waitRelayLogOf(t, rl, m, "serving from an auu-ca bundle", 30*time.Second)
+	waitRelayReadyOf(t, rl)
 	return m
 }
 
-func relayRunning() bool {
-	r := runHost(nil, "docker", "inspect", "-f", "{{.State.Running}}", relay.id)
+func relayRunning() bool { return relayRunningOf(relay) }
+
+func relayRunningOf(rl *machine) bool {
+	r := runHost(nil, "docker", "inspect", "-f", "{{.State.Running}}", rl.id)
 	return strings.TrimSpace(r.stdout) == "true"
 }
 
-func relayStop(t *testing.T) {
+func relayStop(t *testing.T) { relayStopOf(t, relay) }
+
+func relayStopOf(t *testing.T, rl *machine) {
 	t.Helper()
-	if r := compose("stop", "relay"); r.code != 0 {
-		t.Fatalf("stopping the relay: %s", r.stderr)
+	if r := compose("stop", rl.service); r.code != 0 {
+		t.Fatalf("stopping %s: %s", rl.service, r.stderr)
 	}
 }
 
@@ -564,30 +668,76 @@ func (m *machine) sqlFault(t *testing.T, stmt string) func() {
 // start each family from.
 func snapshot(t *testing.T) {
 	t.Helper()
-	for _, m := range []*machine{operator, alice, bob} {
+	for _, m := range userMachines {
 		m.mustRoot(t, fmt.Sprintf("tar -C /home/%s -cf /snap/%s.tar .", m.user, m.service))
 	}
-	relayStop(t)
-	relay.mustRoot(t, "tar -C /var/lib/auu -cf /snap/relay-state.tar . && tar -C /etc/auu -cf /snap/relay-etc.tar .")
-	relayStart(t)
+	// Every relay, not only the first. Family F's rows mutate relay-b — a
+	// line removed from its couriers file, an entry added to its courier
+	// home — and a row that fails before it restores must still leave nothing
+	// behind for the next family.
+	for _, rl := range relays {
+		relayStopOf(t, rl)
+		rl.mustRoot(t, fmt.Sprintf("tar -C /var/lib/auu -cf /snap/%s-state.tar . && "+
+			"tar -C /etc/auu -cf /snap/%s-etc.tar .", rl.service, rl.service))
+		if willServe(rl) {
+			relayStartOf(t, rl)
+		} else {
+			relayStartBare(t, rl)
+		}
+	}
 }
 
-func haveSnapshot() bool { return relay.exists("/snap/relay-state.tar") }
+// haveSnapshot reports whether the cycle has already run and left a snapshot
+// the matrix can start each family from.
+//
+// Every relay's tar and every user's, over the same two lists snapshot and
+// restore loop over, so a fourth relay or a fifth person changes nothing here
+// either. A snapshot is one thing or it is not one: were this to test relay A's
+// tar alone, a stack whose relay-b tar was missing would restore relay A and
+// leave relay-b as the last family left it — a row's mutation surviving into the
+// next family, which is the state the snapshot exists to prevent.
+func haveSnapshot() bool {
+	for _, rl := range relays {
+		if !rl.exists("/snap/"+rl.service+"-state.tar") ||
+			!rl.exists("/snap/"+rl.service+"-etc.tar") {
+			return false
+		}
+	}
+	for _, m := range userMachines {
+		if !m.exists("/snap/" + m.service + ".tar") {
+			return false
+		}
+	}
+	return true
+}
 
 // restore puts every machine back as the snapshot has it. Agents are
 // stopped first: one holding keys for a home that is about to be replaced
 // would be a machine no person ever has.
 func restore(t *testing.T) {
 	t.Helper()
-	for _, m := range []*machine{operator, alice, bob} {
+	for _, m := range userMachines {
 		m.root("pkill -u " + m.user + " auu; true")
 		m.mustRoot(t, fmt.Sprintf("rm -rf /home/%s/.auu* /home/%s/*; tar -C /home/%s -xf /snap/%s.tar",
 			m.user, m.user, m.user, m.service))
 	}
-	relayStop(t)
-	relay.mustRoot(t, "rm -rf /var/lib/auu/* /var/lib/auu/.[!.]* /etc/auu/*; "+
-		"tar -C /var/lib/auu -xf /snap/relay-state.tar && tar -C /etc/auu -xf /snap/relay-etc.tar")
-	relayStart(t)
+	for _, rl := range relays {
+		// Asked before the stop, because a command needs the container up, and
+		// answered from the tar, because the tar is the state about to exist.
+		serves := willServe(rl)
+		if !serves {
+			unprovision(t, rl)
+		}
+		relayStopOf(t, rl)
+		rl.mustRoot(t, fmt.Sprintf("rm -rf /var/lib/auu/* /var/lib/auu/.[!.]* /etc/auu/*; "+
+			"tar -C /var/lib/auu -xf /snap/%s-state.tar && tar -C /etc/auu -xf /snap/%s-etc.tar",
+			rl.service, rl.service))
+		if serves {
+			relayStartOf(t, rl)
+		} else {
+			relayStartBare(t, rl)
+		}
+	}
 }
 
 // --- assertions ------------------------------------------------------------
