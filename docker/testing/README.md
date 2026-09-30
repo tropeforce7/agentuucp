@@ -62,6 +62,7 @@ reports`, is snapshotted for the matrix.
 | A      | the signed allow list: a push, a stranger refused, the relay's database edited to admit the stranger and every post refused until the owner pushes again |
 | P      | the card, the listing and the knock: a card pushed and found in the listing, the database edited to change a listed name and to blank a signature, a stranger's knock past the allow list and the trust that follows it, and the operator's three knock settings each met |
 | F      | mail across peered relays, on `relay`, `relay-b` and `relay-c` with `dave` at the far end: a message across two relays and the reply back along the way it came, the middle relay stopped and its queue drained when it returns, a forward carrying a return path refused by a relay that no longer admits its courier, a loop, and an undeliverable unwinding two hops |
+| G      | a database an older release wrote: relay A stopped, its database replaced by one built from schema 11's text with one mailbox in it, owned and moded as the unit's files are, and the relay started, which keeps a copy readable by its user alone, carries the database to this schema, says so, and serves the mailbox; the snapshot is put back after |
 
 Each family restores every machine from the snapshot before it starts, and
 each row undoes its own fault, so a row runs alone:
