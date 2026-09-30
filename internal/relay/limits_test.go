@@ -788,3 +788,42 @@ func TestDefaultLimitsUnderAFlood(t *testing.T) {
 	}
 	t.Logf("100 posts at defaults: %d accepted, %d refused, Retry-After %v", accepted, refused, retries)
 }
+
+// TestTheReportingRateIsATenthOfThePostingRate: the relationship the relay
+// guide explains, held to the numbers rather than left in prose.
+//
+// This test exists because of what it would have caught. The default shipped at
+// 600, equal to the posting rate, where the plan had already settled on 60 — not
+// a mistyped number but a figure reasoned from how fast a backlog drains, by
+// somebody who never checked it against the decision. The drift test beside it
+// compares the command's defaults to the library's, so it proved the two copies
+// agreed and said nothing about whether either agreed with the specification.
+//
+// A literal assertion that the rate is 60 would only restate the code. What is
+// worth pinning is the claim the guide makes about *why*: a report costs the
+// relay being told a row of the reporting courier's own share, so the rate
+// decides how fast one neighbour may spend that share on reports, and a tenth of
+// the posting rate is the conservative choice. Change either number for a good
+// reason and this fails, which is the point — it asks whether the ratio was
+// meant to go too.
+func TestTheReportingRateIsATenthOfThePostingRate(t *testing.T) {
+	d := DefaultCourierLimits()
+	if d.PostsPerMinute != 10*d.ReportsPerMinute {
+		t.Errorf("posting is %d a minute and reporting %d; the relay guide says reporting is a "+
+			"tenth of posting, and if that is no longer meant the guide's paragraph in 1.10 "+
+			"has to change with it", d.PostsPerMinute, d.ReportsPerMinute)
+	}
+	// And the arithmetic the guide gives, which is the reason for the ratio:
+	// how long one neighbour needs to fill its whole share of the queue with
+	// reports, at this rate and at the posting rate.
+	atReporting := d.QueueMaxMessagesPerCourier / d.ReportsPerMinute
+	atPosting := d.QueueMaxMessagesPerCourier / d.PostsPerMinute
+	if atReporting < 150 || atReporting > 180 {
+		t.Errorf("a neighbour fills its share in %d minutes; the guide says nearly three hours",
+			atReporting)
+	}
+	if atPosting < 15 || atPosting > 18 {
+		t.Errorf("at the posting rate it would be %d minutes; the guide says about seventeen",
+			atPosting)
+	}
+}

@@ -185,11 +185,20 @@ func DefaultCourierLimits() CourierLimits {
 		// between them.
 		QueueMaxMessagesPerCourier: 10_000,
 		PostsPerMinute:             600,
-		// A report costs a row's state and, one hop further back, one small
-		// row: far less than an envelope, and a neighbour unwinding a long
-		// chain after an outage makes a burst of them. Ten a second is more
-		// than any honest chain and still a bound.
-		ReportsPerMinute: 600,
+		// A tenth of the posting rate, and deliberately not equal to it. A
+		// report costs the relay being told a row of the reporting courier's
+		// own share of the queue, and that share is
+		// QueueMaxMessagesPerCourier: at one a second a neighbour needs
+		// nearly three hours to fill it with reports, where at the posting
+		// rate it would need about seventeen minutes. Since what a courier
+		// can spend of the hop-behind's share is the thing that wants
+		// bounding, the conservative rate is the consistent one.
+		//
+		// Nothing is lost by the slower drain. A worker honours a 429's
+		// Retry-After, and ForwardTTL is 72 hours, so a neighbour unwinding a
+		// long backlog of undeliverables reports them over hours rather than
+		// minutes and nobody's mail is affected by the wait.
+		ReportsPerMinute: 60,
 		// Unlimited by default: a courier carries many people's mail, and
 		// the relay-wide queue cap and the couriers file are the bounds
 		// that suit that. A relay whose neighbour floods it removes one

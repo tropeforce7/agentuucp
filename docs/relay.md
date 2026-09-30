@@ -50,7 +50,7 @@ Later ones win. A flag you do not type never overrides the file.
 | `--courier-queue-max-messages-per-courier N` | `courier.queue_max_messages_per_courier` | 10000 for one neighbour, in place of the per-poster count, at most 1000000, 0 is unlimited |
 | `--courier-queue-max-bytes-per-poster N` | `courier.queue_max_bytes_per_poster` | 256 MiB, 0 is unlimited |
 | `--courier-posts-per-minute N` | `courier.posts_per_minute` | 600, a neighbour's own rate, 0 is unlimited |
-| `--courier-reports-per-minute N` | `courier.reports_per_minute` | 600, a neighbour's rate for undeliverables, beside its posting, 0 is unlimited |
+| `--courier-reports-per-minute N` | `courier.reports_per_minute` | 60, a neighbour's rate for undeliverables, a tenth of its posting rate; see 1.10, 0 is unlimited |
 | `--courier-post-bytes-per-hour N` | `courier.post_bytes_per_hour` | 0, unlimited; see 1.10 |
 | `--courier-carried-max-rows N` | `courier.carried_max_rows` | 1000000, 0 is unlimited |
 | `--client-certs off\|required` | `client_certs.mode` | `off`; `required` needs `registration` `token` or `closed` |
@@ -977,7 +977,19 @@ its neighbour name them.
 A relay can only report on a message it was actually handed, and once, so a
 neighbour cannot end mail it was not carrying. `courier.reports_per_minute`
 bounds how fast one may report at all, beside its posting rate, because an
-undeliverable is not mail arriving. A report the next hop back will not
+undeliverable is not mail arriving.
+
+It is a tenth of the posting rate rather than equal to it, and the reason is
+worth stating because the two numbers sit side by side in the table above and
+invite the opposite guess. A report costs this relay a row of the reporting
+neighbour's own share of the queue — `courier.queue_max_messages_per_courier` —
+so the question the rate answers is how fast one neighbour may spend that share
+on reports. At sixty a minute it needs nearly three hours to fill it; at the
+posting rate of six hundred it would need about seventeen minutes. Nothing is
+lost by the slower drain: a relay passing back a long backlog of undeliverables
+honours the `Retry-After` it is given, and `courier.forward_ttl` is three days
+by default, so the news travels over hours rather than minutes and nobody's mail
+is affected by the wait. A report the next hop back will not
 take — it holds no such row, or the peering only goes one way, or its queue
 is full — is a line in your log naming that neighbour, and that line is the
 only trace there will be. A report is never made for a report, so a chain ends
