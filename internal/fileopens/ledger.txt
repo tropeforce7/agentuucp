@@ -286,6 +286,9 @@ internal/store/cert.go (*Store).RemoveCertFor os.Remove(s.relayPath(r, certFile)
 internal/store/cert.go (*Store).SaveCertFor os.MkdirAll(s.relayDir(r.Name)) = operator: a relay name, ValidRelayName at AddRelay, RenameRelay and Relays shown by TestLimitRelayNameIsNotAPath
 internal/store/channels.go (*Store).Directory os.ReadFile(s.path(channelsFile)) = local
 internal/store/channelsettings.go (*Store).ChannelSettings os.ReadFile(s.path(channelSettingsFile)) = local
+internal/store/couriers.go (*Store).Couriers regular.ReadFile(path) = operator: a relay name, ValidRelayName at Couriers shown by TestLimitRelayNameIsNotAPath
+internal/store/couriers.go (*Store).SetCouriers os.MkdirAll(s.relayDir(relayName)) = operator: a relay name, ValidRelayName at SetCouriers shown by TestLimitRelayNameIsNotAPath
+internal/store/couriers.go (*Store).SetCouriers os.Remove(path) = operator: a relay name, ValidRelayName at SetCouriers shown by TestLimitRelayNameIsNotAPath
 internal/store/damagedbox.go (*Store).KeepDamaged os.MkdirAll(filepath.Dir(bin)) = network: the relay's message number under a relay name ValidRelayName checks in DamagedPath, an int64 the JSON decoder holds to a number, strconv.FormatInt at the join shown by TestLimitRelayNameIsNotAPath
 internal/store/damagedbox.go (*Store).KeepDamaged os.Remove(k.bin) = network: the relay's message number under a relay name ValidRelayName checks in DamagedPath, an int64 the JSON decoder holds to a number, strconv.FormatInt at the join shown by TestLimitRelayNameIsNotAPath
 internal/store/damagedbox.go (*Store).KeepDamaged os.Remove(recordPath(k.bin)) = network: the relay's message number under a relay name ValidRelayName checks in DamagedPath, an int64 the JSON decoder holds to a number, strconv.FormatInt at the join shown by TestLimitRelayNameIsNotAPath

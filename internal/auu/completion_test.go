@@ -40,7 +40,8 @@ func TestCompleteSubcommandsAndSecondWords(t *testing.T) {
 		got["read"] == "" || got["reply"] == "" || got["register"] == "" || got["relay"] == "" {
 		t.Errorf("prefix re: %v", got)
 	}
-	if got := completions(t, u, "relay", ""); len(got) != 6 || got["default"] == "" || got["rm"] == "" {
+	if got := completions(t, u, "relay", ""); len(got) != 7 || got["default"] == "" || got["rm"] == "" ||
+		got["couriers"] == "" {
 		t.Errorf("relay subwords: %v", got)
 	}
 	if got := completions(t, u, "peers", ""); len(got) != 4 || got["rm"] == "" {

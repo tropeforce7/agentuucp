@@ -53,7 +53,11 @@ func TestTheClassifierAgreesWithTheRelay(t *testing.T) {
 		// A report originates: a relay's courier tells a neighbour that
 		// something failed, which is a request it makes and not one it
 		// answers, so it is send by being absent from the receive set.
-		"POST /v1/forward/failed":                  agent.ScopeSend,
+		"POST /v1/forward/failed": agent.ScopeSend,
+		// A courier listing is read, not sent: a key unlocked to receive may
+		// ask which relays carry to this one, since that is what a recipient
+		// needs in order to admit them and be reachable at all.
+		"GET /v1/couriers":                         agent.ScopeReceive,
 		"POST /v1/mailbox/{fp}/knock":              agent.ScopeSend,
 		"POST /v1/mailbox/{fp}/streams":            agent.ScopeSend,
 		"PUT /v1/uploads/{id}":                     agent.ScopeSend,

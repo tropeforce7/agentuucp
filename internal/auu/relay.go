@@ -20,7 +20,7 @@ import (
 // the mail is picked up.
 func cmdRelay(args []string) error {
 	if len(args) == 0 {
-		return usageErrf("usage: %s relay add|ls|show|default|rename|rm", prog)
+		return usageErrf("usage: %s relay add|ls|show|couriers|default|rename|rm", prog)
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
@@ -34,10 +34,12 @@ func cmdRelay(args []string) error {
 		return relayDefault(rest)
 	case "rename":
 		return relayRename(rest)
+	case "couriers":
+		return relayCouriers(rest)
 	case "rm", "remove":
 		return relayRemove(rest)
 	default:
-		return usageErrf("unknown command %q; run '%s relay add|ls|show|default|rename|rm'", sub, prog)
+		return usageErrf("unknown command %q; run '%s relay add|ls|show|couriers|default|rename|rm'", sub, prog)
 	}
 }
 
@@ -429,4 +431,146 @@ func relayRemove(args []string) error {
 		fmt.Printf("it was the default; choose another with: %s relay default NAME\n", prog)
 	}
 	return nil
+}
+
+// courierJSON is what 'relay couriers --json' prints, for one relay.
+type courierJSON struct {
+	Relay    string           `json:"relay"`
+	Couriers []courierRowJSON `json:"couriers"`
+}
+
+// courierRowJSON is one neighbour, with whether this machine admits it.
+type courierRowJSON struct {
+	Name string `json:"name"`
+	FP   string `json:"fp"`
+	// Admitted says whether this machine's own couriers file for that relay
+	// lists the fingerprint, which is what decides whether mail forwarded
+	// through it reaches this identity once an allow list is pushed.
+	Admitted bool `json:"admitted"`
+	// Gone says this machine admits it and the relay no longer accepts from
+	// it: nothing can arrive through it any more, and the admission is still
+	// being signed into every list pushed from here until it is withdrawn.
+	Gone bool `json:"gone,omitempty"`
+}
+
+// relayCouriers is the relays a relay accepts forwarded mail from: the names a
+// sender writes in front of an address to reach somebody here, and the
+// fingerprints a recipient must admit to be reachable from off it.
+//
+// The names are the relay's own and mean nothing anywhere else. Two relays may
+// call the same neighbour different things, and what a neighbour calls itself
+// is published nowhere, so a name from here is good for addressing mail
+// through this relay and for nothing else. That is said in the output rather
+// than left to be discovered, because a name that looks like a hostname invites
+// the opposite assumption.
+//
+// It also says which of them this machine admits, since the list is most often
+// read in order to decide what to admit, and a listing that made the reader
+// cross-reference their own file by hand would be answering half the question.
+func relayCouriers(args []string) error {
+	fs := newFlagSet("relay couriers")
+	relay := relayFlag(fs)
+	asJSON := fs.Bool("json", false, "machine readable output")
+	positional, err := parseArgs(fs, args)
+	if err != nil {
+		return err
+	}
+	if len(positional) > 0 {
+		return usageErrf("unexpected argument %q", positional[0])
+	}
+	s, id, err := loadIdentity()
+	if err != nil {
+		return err
+	}
+	relays, err := selectedRelays(s, *relay)
+	if err != nil {
+		return err
+	}
+	var out []courierJSON
+	for _, r := range relays {
+		admitted, err := s.Couriers(r.Name)
+		if err != nil {
+			return err
+		}
+		byFP := make(map[string]bool, len(admitted))
+		for _, a := range admitted {
+			byFP[a.FP] = true
+		}
+		c, err := dial(s, id, r)
+		var list []relayapi.Courier
+		if err == nil {
+			list, err = c.Couriers(ctx())
+		}
+		if err != nil {
+			return transportErr(fmt.Errorf("%s: %w", r.Name, err))
+		}
+		one := courierJSON{Relay: r.Name, Couriers: []courierRowJSON{}}
+		listed := make(map[string]bool, len(list))
+		for _, n := range list {
+			listed[n.FP] = true
+			one.Couriers = append(one.Couriers, courierRowJSON{
+				Name: n.Name, FP: n.FP, Admitted: byFP[n.FP],
+			})
+		}
+		// And the ones this machine admits that the relay no longer lists,
+		// which printing only the intersection would hide. A neighbour that
+		// was de-peered leaves a line in this home's file: it is still signed
+		// into every allow list pushed from here, and de-peering does not
+		// unregister the courier's mailbox, so the fingerprint keeps whatever
+		// its admission granted. Somebody who cannot see it cannot withdraw
+		// it, and 'allow show' names it only as sixty-four characters, a
+		// courier not being a peer. So it is printed, marked, with the command
+		// that removes it.
+		for _, a := range admitted {
+			if !listed[a.FP] {
+				one.Couriers = append(one.Couriers, courierRowJSON{
+					Name: a.Name, FP: a.FP, Admitted: true, Gone: true,
+				})
+			}
+		}
+		out = append(out, one)
+	}
+	if *asJSON {
+		return printJSON(out)
+	}
+	for i, one := range out {
+		if i > 0 {
+			fmt.Println()
+		}
+		printCouriers(one)
+	}
+	return nil
+}
+
+// printCouriers is one relay's listing, and says three things a reader needs
+// beyond the names: that a relay with none forwards nothing, that the names are
+// that relay's own, and which of them this machine admits.
+func printCouriers(one courierJSON) {
+	if len(one.Couriers) == 0 {
+		fmt.Printf("%s: accepts no forwarded mail; nobody can address mail to you through it\n", one.Relay)
+		return
+	}
+	fmt.Printf("%s: accepts forwarded mail from %s\n", one.Relay, plural(len(one.Couriers), "relay"))
+	stale := false
+	for _, n := range one.Couriers {
+		mark := "not admitted"
+		switch {
+		case n.Gone:
+			mark = "admitted, but this relay no longer accepts from it"
+			stale = true
+		case n.Admitted:
+			mark = "admitted"
+		}
+		fmt.Printf("  %-20s %s  %s\n", identity.PrintableText(n.Name), n.FP[:16], mark)
+	}
+	if stale {
+		fmt.Printf("  a courier this relay no longer accepts from can carry nothing to you, and is still\n")
+		fmt.Printf("  named in every list pushed from here: withdraw it with '%s allow rm --courier NAME --relay %s'\n",
+			prog, one.Relay)
+	}
+	fmt.Printf("  these names are %s's own: a sender writes '%s!you' to reach you through one,\n",
+		one.Relay, identity.PrintableText(one.Couriers[0].Name))
+	fmt.Println("  and the same relay may be called something else elsewhere")
+	fmt.Printf("  admit one with '%s allow add --courier NAME --relay %s', then '%s allow push'\n",
+		prog, one.Relay, prog)
 }

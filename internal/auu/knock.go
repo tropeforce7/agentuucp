@@ -250,7 +250,7 @@ func pushAllowAfterKnock(s *store.Store, id *identity.Identity, r *store.Relay, 
 	if _, found, ferr := s.AllowPushed(r); ferr != nil || !found {
 		return false, nil
 	}
-	senders, perr := pushAllowTo(s, id, r)
+	peers, couriers, perr := pushAllowTo(s, id, r)
 	if perr != nil {
 		fmt.Fprintf(os.Stderr, "warning: the knock was sent but your allow list was not pushed to %s (%v)\n", r.Name, perr)
 		return false, &exitError{code: exitTransport, err: fmt.Errorf(
@@ -260,7 +260,7 @@ func pushAllowAfterKnock(s *store.Store, id *identity.Identity, r *store.Relay, 
 	// object on standard output and nothing else; the object says
 	// allow_pushed instead.
 	if !quiet {
-		fmt.Println(allowPushedLine(r.Name, senders))
+		fmt.Println(allowPushedLine(r.Name, peers, couriers))
 	}
 	return true, nil
 }

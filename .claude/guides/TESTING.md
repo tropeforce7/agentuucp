@@ -1090,6 +1090,27 @@ itself the finding. A row's test may be shared: one `TestLimit` over a
 struct's `Validate` can show every integer field of that struct, and one
 over a rule can show every path row that names the rule.
 
+**Two bounds on the same value in two encodings are read against each other.**
+`MaxSaid` bounds a relay's refusal sentence at 512 bytes and `MaxReportBytes`
+bounded the JSON body carrying it; the second was a kibibyte with a comment
+saying "room enough twice over", and that was false, because `encoding/json`
+escapes `<`, `>` and `&` to six bytes each and those are characters the sentence
+rule permits. A legal sentence of 512 ampersands encodes to 3,125 bytes, so the
+relay being told refused it before the shape was read, the relay passing it back
+read that as final and ended the chain, and the sender waited out `forward_ttl`
+to be told the neighbour was unreachable. The bound is now derived from the one
+it depends on with each term named, and — this is the part worth copying — every
+number in the comment is asserted against the encoder by a subtest. An
+arithmetic in a comment is a claim like any other, and the first version of that
+one was wrong in its third term as well.
+
+**A test that pins a constant pins nothing; pin the claim.** Asserting that a
+default equals its own literal restates the line above it and would be just as
+true of a wrong value written first. What is worth holding is the relationship
+the documentation explains — that the reporting rate is a tenth of the posting
+rate, with the two durations that follow from it — so that changing either number
+for a good reason fails the test and asks whether the ratio was meant to go too.
+
 **When a limit test finds something.** The change it forces is the
 smallest that makes the sentence true: a check before the arithmetic, an
 error returned where none was, a function that took an `int` refusing a
@@ -1191,6 +1212,33 @@ mailboxes broken at once are two lines an operator needs. The allow-list
 test refuses two senders inside the minute and counts one line, advances
 the harness clock two minutes, refuses again and counts two. Both halves
 matter: the first proves the limit, the second that it lifts.
+
+**A worker's clock is injected and its waiting is a function, so a test drives
+turns rather than sleeping.** The forwarding worker backs off per neighbour, up
+to an hour, and gives up after three days; a test that waited would be a test
+nobody runs. The harness stops the workers a relay starts for itself and drives
+`drain` and `attempt` from its own goroutine against an advancing fake clock, so
+a backoff, a give-up and a purge each happen where the test can see them. Two
+faults came out of making that injectable and both are the kind only this shape
+finds: taking the return out of the `select` it replaced left a loop whose only
+exit was inside the thing it called, so it spun on a cancelled context and every
+test that built a relay with a neighbour hung before its first line; and a
+neighbour's backoff written only into the set, and not onto the row, came back as
+a dial per held row after a restart.
+
+**A chain is tested with real relays and nothing between them faked.** An
+undeliverable that unwinds needs three: with two, the sender's own relay is the
+one that meets the refusal, so its row ends correctly and nothing has to travel
+— which is exactly why the one-hop defect survived a two-relay test and was found
+by a three-relay one. Each relay gets its own store, its own courier home naming
+the next by its own name for it, and its own couriers file admitting the one
+behind. Two things that shape costs: a mutual peering is a knot, since each side
+reads its neighbours' addresses at the start and neither address exists until a
+listener does, so both listeners open around a handler filled in afterwards; and
+each relay's courier must be the identity its neighbour's file admits, which is
+why the fixture takes the identity rather than generating one — a chain whose
+relays each generate their own signs as keys nobody admitted and every hand-over
+is unauthorized.
 
 ## Command-line and end-to-end
 

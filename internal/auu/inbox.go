@@ -1638,11 +1638,22 @@ func offerAllowPush(s *store.Store, m *store.Stored) error {
 	if err != nil {
 		return err
 	}
-	senders, err := pushAllowTo(s, id, r)
+	peers, couriers, err := pushAllowTo(s, id, r)
 	if err != nil {
-		return err
+		// The trust is done and the line above said so; what failed is the
+		// push, and saying which is not a nicety here. Since the push now
+		// reads that relay's couriers file, one of the ways this can fail is
+		// a file the person edited by hand for an entirely different reason,
+		// and its own sentence names the file, the line and the remedy — but
+		// only this wrapper can say that it was the push and not the trust
+		// that tripped on it. The knock's path says the same thing in the
+		// same shape.
+		fmt.Fprintf(os.Stderr, "warning: the sender is trusted but your allow list was not pushed to %s (%v)\n",
+			r.Name, err)
+		return &exitError{code: exitTransport, err: fmt.Errorf(
+			"run '%s allow push --relay %s' so they can write to you", prog, r.Name)}
 	}
-	fmt.Println(allowPushedLine(r.Name, senders))
+	fmt.Println(allowPushedLine(r.Name, peers, couriers))
 	return nil
 }
 

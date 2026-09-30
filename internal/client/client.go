@@ -890,6 +890,36 @@ func (c *Client) Queue(ctx context.Context) ([]relayapi.QueuedMessage, error) {
 	return resp.Queued, nil
 }
 
+// Couriers is every relay this one accepts forwarded mail from, this relay's
+// own name for each and the fingerprint its couriers file admits, in name
+// order.
+//
+// It is what somebody needs in order to be reachable from another relay.
+// Delivery of a forwarded message asks the recipient's allow list about the
+// courier that handed the envelope over — a relay cannot open one, so the only
+// sender it can prove is its neighbour — which means a recipient who has pushed
+// a list at all must admit these fingerprints or be unreachable from off their
+// own relay.
+//
+// The names are the relay's and mean nothing anywhere else: two relays may call
+// the same neighbour different things, and what a neighbour calls itself is
+// published nowhere. So a name from here is good for addressing mail through
+// this relay and for nothing else.
+//
+// The answer is held to MaxCouriersBytes and to the same rules the relay ran
+// over its own file: every name a relay name, every fingerprint a fingerprint,
+// no name twice, no more entries than the file could have held.
+func (c *Client) Couriers(ctx context.Context) ([]relayapi.Courier, error) {
+	var resp relayapi.CouriersResponse
+	if err := c.doWithin(ctx, "GET", "/v1/couriers", nil, &resp, nil, relayapi.MaxCouriersBytes); err != nil {
+		return nil, err
+	}
+	if err := c.checkCouriers(&resp); err != nil {
+		return nil, err
+	}
+	return resp.Couriers, nil
+}
+
 // ReportFailed tells a neighbour that a message it handed this relay cannot be
 // delivered: the first control message, sent by a relay's courier and by
 // nothing else.

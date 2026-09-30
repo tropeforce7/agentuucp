@@ -239,6 +239,9 @@ func NewServer(store *Store, cfg Config) *Server {
 	s.route("PUT /v1/uploads/{id}", s.callerAuthed(s.handlePutStream))
 	s.route("DELETE /v1/uploads/{id}", s.callerAuthed(s.handleAbortStream))
 	s.route("GET /v1/listed", s.callerAuthed(s.handleListed))
+	// Any registered identity of this relay, which is what decision 14 asks
+	// for: its own users must know these names to be reachable from off it.
+	s.route("GET /v1/couriers", s.callerAuthed(s.handleCouriers))
 
 	// The forward route names no mailbox: the recipient is inside the
 	// envelope and the next hop is the first name of the path, so it is

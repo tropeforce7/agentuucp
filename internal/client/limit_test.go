@@ -636,3 +636,110 @@ func joinNames(n int) string {
 	}
 	return strings.Join(names, "!")
 }
+
+// TestLimitACourierListingIsHeldToItsShape: the courier listing's two strings,
+// each held before anything slices or prints it.
+//
+// Both are printed to a person and the fingerprint is sliced to sixteen
+// characters for the terminal, so a short one would panic and a name that is
+// not a name is a relay putting its own text on somebody's screen. The name is
+// held to store.ValidRelayName and not the laxer identity.ValidName because
+// that is the rule the relay runs over the same name when it loads its couriers
+// file, and because this end makes a directory of it under relays/ — one name,
+// one rule, both ends, which is ruling 36.
+//
+// No name twice is here for a reason the relay cannot cover: its own file
+// refuses one fingerprint under two names and its answer is keyed by
+// fingerprint, so the case it cannot rule out is two fingerprints under one
+// name, and a name is what a person types to admit one.
+func TestLimitACourierListingIsHeldToItsShape(t *testing.T) {
+	alice, err := identity.Generate("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := strings.Repeat("a", 64)
+	other := strings.Repeat("b", 64)
+
+	for _, tc := range []struct {
+		name  string
+		list  []relayapi.Courier
+		field string
+	}{
+		{"a name that is not a name", []relayapi.Courier{{Name: "b ar", FP: full}}, "name"},
+		{"no name at all", []relayapi.Courier{{Name: "", FP: full}}, "name"},
+		{"a name with a path in it", []relayapi.Courier{{Name: "../x", FP: full}}, "name"},
+		{"a name that is a Windows device", []relayapi.Courier{{Name: "con", FP: full}}, "name"},
+		{"the reserved name", []relayapi.Courier{{Name: "self", FP: full}}, "name"},
+		{"a name with an escape in it", []relayapi.Courier{{Name: "\x1b[2Jbar", FP: full}}, "name"},
+		// The slice is [:16], so a fingerprint one character short is the
+		// value that would panic if it reached the terminal unchecked.
+		{"a fingerprint one short", []relayapi.Courier{{Name: "bar", FP: strings.Repeat("a", 63)}}, "fp"},
+		{"a fingerprint one long", []relayapi.Courier{{Name: "bar", FP: strings.Repeat("a", 65)}}, "fp"},
+		{"no fingerprint at all", []relayapi.Courier{{Name: "bar", FP: ""}}, "fp"},
+		{"upper-case hex", []relayapi.Courier{{Name: "bar", FP: strings.Repeat("A", 64)}}, "fp"},
+		{"a fingerprint that is not hex", []relayapi.Courier{{Name: "bar", FP: strings.Repeat("z", 64)}}, "fp"},
+		{"one name twice", []relayapi.Courier{{Name: "bar", FP: full}, {Name: "bar", FP: other}}, "name"},
+		// Folded, because the relay folds: its own loader refuses two
+		// neighbours whose names differ only in case, so an answer holding
+		// both is one no honest file produced, and taking it would leave the
+		// ambiguity this check exists to refuse.
+		{"two names differing only in case", []relayapi.Courier{
+			{Name: "bar", FP: full}, {Name: "Bar", FP: other},
+		}, "name"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := fakeRelay(t, map[string]any{"/v1/couriers": relayapi.CouriersResponse{Couriers: tc.list}})
+			c, err := New(srv.URL, alice, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := c.Couriers(context.Background()); err == nil {
+				t.Fatal("accepted")
+			} else {
+				if !strings.Contains(err.Error(), tc.field) {
+					t.Errorf("%v; want the field named", err)
+				}
+				if !strings.Contains(err.Error(), "the courier listing") {
+					t.Errorf("%v; want the answer named", err)
+				}
+			}
+		})
+	}
+	// An absent list is refused, since absent and empty are one value after a
+	// decode and empty is the honest one for a relay that peers with nobody.
+	srv := fakeRelay(t, map[string]any{"/v1/couriers": map[string]any{}})
+	c, err := New(srv.URL, alice, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Couriers(context.Background()); err == nil {
+		t.Error("an answer with no couriers key was accepted")
+	}
+	// More entries than the relay's own file could hold is a relay answering
+	// about something other than its file.
+	over := make([]relayapi.Courier, 0, relayapi.MaxCouriers+1)
+	for i := range relayapi.MaxCouriers + 1 {
+		over = append(over, relayapi.Courier{
+			Name: fmt.Sprintf("r%d", i), FP: strings.Repeat(string("0123456789abcdef"[i%16]), 64),
+		})
+	}
+	srv = fakeRelay(t, map[string]any{"/v1/couriers": relayapi.CouriersResponse{Couriers: over}})
+	c, err = New(srv.URL, alice, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Couriers(context.Background()); err == nil {
+		t.Errorf("%d couriers were accepted", len(over))
+	}
+	// And a listing at every bound is taken, so the checks above are refusing
+	// the shape and not the route.
+	good := []relayapi.Courier{{Name: "bar", FP: full}, {Name: "baz", FP: other}}
+	srv = fakeRelay(t, map[string]any{"/v1/couriers": relayapi.CouriersResponse{Couriers: good}})
+	c, err = New(srv.URL, alice, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.Couriers(context.Background()); err != nil || len(got) != 2 {
+		t.Errorf("a good listing: %+v %v", got, err)
+	}
+}

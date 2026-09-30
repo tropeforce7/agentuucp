@@ -306,6 +306,24 @@ the recipient to say so, which is a message and not a relay's business.
 `docs/relay.md` says what keeps the silent case rare and what an operator sees
 when it happens.
 
+One boundary of the couriers route rests on a setting, and it is the same setting
+the rest of this document's disclosures rest on. The route answers a relay's
+registered identities, which is how it avoids being the oracle a silent courier
+mailbox exists to close — but under `registration: "open"`, the default, a
+registered identity is anybody who asked. So on an open relay the accept-side
+peering joins the set that relay has already chosen to show anybody: the cards of
+users who asked to be listed, and the answers to key lookups.
+
+What is disclosed is which relays carry mail *in*, by fingerprint rather than by
+the operator's local name, and never which relays it carries *to* — an open relay
+cannot forward outward at all, since `courier.home` beside open registration
+refuses to start. Nothing about a message is disclosed and no name a sender needs
+is withheld. The remedy is `token` or `closed`, which is the remedy for the rest
+of it; withholding the list from a relay's own users is not one, since a
+recipient who cannot read it cannot admit a courier and cannot be reached from
+off their relay. `docs/relay.md` section 1.9 says this where an operator chooses
+the setting.
+
 A report is never made for a report: a report the next hop back will not take
 is a line in this relay's log and nothing further, so a chain ends rather than
 echoing. And a report is never a message — no seal, no mailbox, no file, no
@@ -449,6 +467,46 @@ asks, at a terminal, and never without a person. The name on a card is
 the owner's claim, offered at the prompt as the local name and never
 taken as one until the person accepts it. A relay that lies about its
 mode is admitting anybody, which is the case the sentence warns of.
+
+**A courier is admitted to a mailbox and never to the peer list.** Forwarded
+mail brings a second kind of sender, and it is the one kind that is not a
+person. A relay cannot open an envelope, so when mail arrives from a neighbour
+the only sender the receiving relay can prove is that neighbour's identity, its
+courier, and that is what the recipient's allow list is asked about. So a
+recipient with a restricted list admits a *relay* rather than a person, and
+admits everybody who can post through it along with it.
+
+That is why it goes nowhere near `authorized_peers`. A peer is somebody whose
+key seals mail to you and whose fingerprint you confirmed with them; a courier
+is admitted so that a delivery may be accepted at all, and it can read nothing —
+a relay cannot open an envelope, and admitting one does not change that.
+
+What it can do is worth stating exactly, because the narrower reading is the
+tempting one. An allow list is one list and the relay asks it one question: may
+this fingerprint put something in this mailbox. There is no separate answer for
+the forward route, so **whoever holds a courier's key may also seal a message
+and post it directly**, as an ordinary sender would. Two things bound that.
+Whoever holds the key is whoever the relay's operator put in their couriers
+file, which the confirmation says in as many words when it names the relay's
+registration mode. And such a message lands in quarantine, not the inbox: what
+decides that is this identity's peer list, and admitting a courier does not add
+anything to it, so a courier's own message arrives as a stranger's does and is
+read only if its recipient trusts it. The courier's advantage over any other
+registered identity is that a restricted mailbox refuses a stranger outright and
+does not refuse it. Putting one on the peer list would make it addressable as a
+correspondent and would put a relay's identity where a person's belongs, and
+`auu allow push` would then send it as a peer with no record that it was
+anything else. It is kept in `relays/<name>/couriers` instead, per relay
+because a courier's fingerprint means nothing at another, and merged into the
+signed list only at the push.
+
+What a person is told before they admit one says what it admits, in those
+words, and `auu allow add --courier` asks at a terminal or takes `--yes`, so
+it is not a command the skills run. The fingerprint comes from the recipient's
+own relay rather than from the courier or from anything the sender typed:
+`GET /v1/couriers` answers that relay's own users with the neighbours it accepts
+from, which is what they need in order to be reachable and what their operator
+could not withhold and still forward their mail.
 
 A knock is the one message that crosses without an entry, and it adds
 none. `auu knock` reaches somebody whose card says they take knocks, and

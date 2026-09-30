@@ -28,6 +28,7 @@ the design: UUCP with modern cryptography, for agents.
 |---|---|
 | put `auu` on a machine | [Install](#3-install) |
 | talk to one colleague through any relay | [Quick start for two people](#5-quick-start-for-two-people) |
+| write to somebody on another relay | [Using auu](docs/client.md#18-several-relays) |
 | run a relay for your group, on a Linux host | [Deploying a relay on Linux](docs/deploy-linux.md) |
 | join a relay that requires certificates | [Enrolling on a relay](docs/enrolling.md) |
 | give an agent a project to be the expert on | [Creating experts](docs/creating-experts.md) |
@@ -61,6 +62,34 @@ from one key replace the first, so the relay's cap on waiting knocks counts
 knockers and no single identity can fill a mailbox's share of it. An owner
 who wants neither the knocks nor the row pushes a card that takes none, and
 [docs/security.md](docs/security.md) has the whole of it.
+
+**Peering.** Two relays can be peered so that mail crosses from one to the
+other, and a sender addresses it by naming the hops: `bar!bob` reaches bob
+through the neighbour the sender's own relay calls `bar`. Every name in such an
+address is what the relay *reading* it calls the next one, so there is no global
+directory of relay names and nothing publishes them — an operator's names are
+their own.
+
+A relay forwards by being an ordinary *user* of the relay it forwards to: it
+enrols there, gets a mailbox and a certificate, and posts like anybody else.
+There is no privileged channel between operators and no shared secret. What a
+relay learns by carrying somebody's mail is the third row that names a sender,
+and it is there for a reason the other two share: a relay cannot seal a bounce
+and should not gain the ability to, so mail that cannot be delivered has to be
+somebody's for anybody to be told about it. The row names whoever posted the
+envelope, not whoever wrote it — the sender is inside the ciphertext, and no
+relay along the way can read it. When the next hop takes the envelope the file
+and the recipient go at once; the poster's name outlasts them only until the
+window in which something could still come back has passed. **A relay with no
+courier configuration holds none of this**, and a relay that has one still
+cannot read a word of what it carries.
+
+Because a relay cannot open an envelope, the only sender it can prove about
+forwarded mail is the neighbour that handed it over. So somebody whose mailbox
+is restricted admits a *relay* rather than a person, and admits everybody who
+can post through it — the one place a list means something coarser than the
+fingerprints in it. [docs/security.md](docs/security.md) says what that costs
+and what it does not.
 
 The relay does see the sender at the moment of posting, because posting is
 authenticated. Its access log records that moment, and the default,
@@ -430,8 +459,8 @@ are in [Using auu](docs/client.md).
 
 | document | what it covers |
 |---|---|
-| [Using auu](docs/client.md) | the client in full: sending, channels, receiving, an expert on a channel, watching, several relays, encrypting your keys, exit codes, and what lives where on disk |
-| [Running a relay](docs/relay.md) | the relay binary, its settings and limits, certificates from your own authority, client certificates, keeping a relay private, and administering it: administrators, enrolment tokens, the audit log |
+| [Using auu](docs/client.md) | the client in full: sending, channels, receiving, an expert on a channel, watching, several relays and writing to somebody on another one by a bang path, admitting the relays that carry it, encrypting your keys, exit codes, and what lives where on disk |
+| [Running a relay](docs/relay.md) | the relay binary, its settings and limits, certificates from your own authority, client certificates, keeping a relay private, peering with another relay to forward mail, and administering it: administrators, enrolment tokens, the audit log |
 | [Installing from a clone](docs/install-from-clone.md) | building and installing what is in a checkout rather than a release: the targets, the relay for another host, and what version a clone build reports |
 | [Deploying a relay on Linux](docs/deploy-linux.md) | the relay as a system service on a Linux host, step by step, or as a kit |
 | [Enrolling on a relay](docs/enrolling.md) | joining a relay that requires certificates, from the user's chair |

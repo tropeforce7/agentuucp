@@ -761,6 +761,27 @@ start rather than refuse every request afterwards.
 
 ### 1.9 Keeping a relay private
 
+**What `registration: "open"` costs, in one place.** Open registration means a
+registered identity is anybody who asked, and several things this relay serves
+to its registered identities are therefore public: the cards of users who chose
+to be listed, the answers to key lookups, and — if you peer — the list of
+neighbours you accept forwarded mail from, each with its courier's fingerprint.
+That last one is new in this release and is the reason this paragraph is here
+rather than only beside the route in 1.10.
+
+Two things bound it. A fingerprint is a global identifier where a relay name is
+deliberately local, so what a reader learns is *which* relays carry mail to you
+and not merely what you call them; but an open relay cannot forward outward at
+all — `courier.home` beside open registration refuses to start — so what is
+disclosed is who carries in, never who you carry to. And the list cannot be
+withheld from your own users without making forwarding unusable for them: a
+recipient who cannot read it cannot admit a courier, and cannot be reached from
+any other relay. An administrator-only list would make you a help desk for every
+fingerprint.
+
+So the remedy is not a setting on the route. It is `token`, which is the remedy
+for the rest of what open registration discloses too.
+
 Set `registration` to `token` and nobody creates a mailbox without an
 invitation an administrator signed. Combined with each user running
 `auu allow push`, that keeps a relay to a known group. `closed` stops new
@@ -1055,6 +1076,39 @@ neighbour so that its relay can forward through it, and those forwards are
 accepted only where that neighbour's file lists it. A relay that has not
 admitted an identity treats that identity's mailbox as any other, which is
 right: it has no grounds to call it anything else.
+
+**Your users can read your couriers file, and they have to.** `GET
+/v1/couriers` answers every registered identity of this relay with the
+neighbours you accept forwarded mail from — your name for each, out of
+`courier.authorized_file`, and its fingerprint — and answers nobody else.
+
+They need it because of how delivery works. A relay cannot open an envelope,
+so when mail arrives from a neighbour the only sender this relay can prove is
+that neighbour, and it is that identity the recipient's allow list is asked
+about. A user of yours with a restricted list is therefore unreachable from
+every other relay until they admit your couriers by name, which they do with
+`auu allow add --courier`. You could not withhold this and still have
+forwarding work for them.
+
+It is not the disclosure the silent courier mailbox above exists to prevent.
+That one was an oracle open to anybody holding a fingerprint, who needed no
+mailbox here to use it; this route answers only identities that have one.
+
+**How much that narrows it is your `registration` setting.** With `token` or
+`closed` it is the identities an administrator let in, or the ones already there.
+With `open`, the default, a registered identity is anybody who asked, so your
+accept-side peering is public to anyone who asks for a mailbox — and one of those
+identities is a neighbour's own courier, since a courier registers here in order
+to forward. [1.9](#19-keeping-a-relay-private) says what that costs beside the
+rest of what open registration discloses, and why the remedy is `token` rather
+than a setting on this route.
+
+There is no paging and no parameter: `relayapi.MaxCouriers`, a thousand,
+bounds both the lines you may put in the file and the entries a client will
+read, so the whole list is one answer. A relay with no `courier` block answers
+an empty list rather than an error — it forwards nothing, and that is an
+answer. A line added to or removed from the file shows up in the next answer
+without a restart, as it does everywhere else the file is read.
 
 ## 2. Administering a relay
 

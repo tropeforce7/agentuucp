@@ -159,6 +159,43 @@ type (
 		Entries []ListedEntry `json:"entries"`
 		Listed  int64         `json:"listed"`
 	}
+	// Courier is one neighbouring relay a relay accepts forwarded mail from,
+	// as the couriers route answers it: this relay's own name for that
+	// neighbour, out of its couriers file, and the fingerprint of the
+	// identity that file admits.
+	//
+	// The name is this relay's and nobody else's. It is what a sender writes
+	// as the first element of a bang path leaving here, and what the relay
+	// behind writes in a via, and it means nothing at any other relay — two
+	// relays may call the same neighbour different things, and the name a
+	// neighbour calls itself is not published anywhere.
+	Courier struct {
+		Name string `json:"name"`
+		FP   string `json:"fp"`
+	}
+	// CouriersResponse is every neighbour this relay accepts forwarded mail
+	// from, in name order, at most MaxCouriers of them — which is also the
+	// most lines the couriers file may hold, so a relay that loaded its file
+	// cannot answer more.
+	//
+	// couriers is always sent, empty for a relay with no courier block at
+	// all, because a relay that forwards nothing is a fact about the relay
+	// and not an absence: a reader that had to tell absent from empty would
+	// be guessing about whether it may address mail through here.
+	//
+	// Who may read it is any registered identity of this relay, and that is
+	// narrower than it looks. A recipient cannot receive forwarded mail
+	// without admitting the courier that carries it — delivery asks the
+	// allow list about the neighbour that handed the envelope over, a relay
+	// being unable to open one — so this relay's own users must know these
+	// names and fingerprints to be reachable at all, and the operator could
+	// not withhold them and still have forwarding work. It is not the oracle
+	// a courier's mailbox was made silent to close: that one answered
+	// anybody holding a fingerprint, and this answers nobody who is not
+	// registered here.
+	CouriersResponse struct {
+		Couriers []Courier `json:"couriers"`
+	}
 	// ChannelsRequest carries an owner's channel directory: the document
 	// bytes exactly as the owner signed them, and the signature over them
 	// under the directory's own domain. The relay verifies the pair against
@@ -591,6 +628,23 @@ const MaxCardBytes = 512
 // the hold and one over.
 const MaxListedBytes = 256 << 10
 
+// MaxCouriersBytes is the most the client holds of the courier listing:
+// MaxCouriers entries as this client marshals them, each a relay name at
+// identity.MaxNameBytes and a 64-character fingerprint inside the entry's
+// JSON, with the answer's framing.
+//
+// Measured rather than estimated, by TestLimitTheCourierListingIsHeldToItsBytes:
+// one entry at every bound is 147 bytes, the empty answer is 15, and the worst
+// answer a relay that loaded its file could send is
+//
+//	148,014 bytes with every name at 64 characters and every fingerprint full
+//
+// so the hold is the round number above it, 192 KiB, leaving 48,594 bytes
+// spare. The listing has no paging and needs none: MaxCouriers bounds the
+// couriers file at load, so the whole list is one answer of a known size, and
+// an answer over the hold is refused by name.
+const MaxCouriersBytes = 192 << 10
+
 // The listing's hold. A listing asked for with wait=D is held open until a
 // message arrives after the id it asked from, or a watched directory is
 // replaced, or D elapses; a longer D is clamped to MaxWait rather than
@@ -659,12 +713,14 @@ const MaxAllowlist = 1000
 // MaxCouriers caps the neighbouring relays one relay accepts forwarded mail
 // from: the lines its couriers file may hold, refused above it at load.
 //
-// It is a protocol constant for MaxAllowlist's reason rather than a setting:
-// the relay holds the file to it today, and the route that will list the
-// couriers back to a user — so that somebody with a restricted allow list
-// can admit one by name — will be read by a client that must know the same
-// bound before it reads the answer. That route is not in the tree yet, and
-// this is a bound on both ends of it when it is. A thousand neighbours is far past any network of relays whose
+// It is a protocol constant for MaxAllowlist's reason rather than a setting,
+// and it bounds both ends of one thing: the lines the relay will load from the
+// file, and the entries a client will accept from the couriers route, which
+// lists them back to a user so that somebody with a restricted allow list can
+// admit one by name. The client holds the answer to it without asking the
+// relay, which is the point of its being a constant — a relay that answered
+// more than it could have loaded is answering about something other than its
+// file. A thousand neighbours is far past any network of relays whose
 // operators know one another, which is the only kind this is for.
 const MaxCouriers = 1000
 
@@ -1008,7 +1064,13 @@ const MsgAlreadyCarried = "already carried"
 // MsgNoNeighbour is the phrase in the 404 for a path whose first name is not
 // a relay this one can dial: the sentence names the name. A sender reads it
 // as the address being wrong at that hop rather than as the recipient being
-// unknown, and it is the only discovery of a relay's neighbours there is.
+// unknown.
+//
+// It is the only discovery there is of the neighbours a relay *dials*. The
+// couriers route lists the other half of a peering — the neighbours a relay
+// accepts forwarded mail from — because its own users must know those to be
+// reachable at all; nothing lists what a relay dials, and nothing needs to,
+// since a sender learns a name they may use from whoever gave them the address.
 const MsgNoNeighbour = "no neighbour named"
 
 // MsgForwardsNothing is the 403 for a forward request to a relay with no

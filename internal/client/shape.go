@@ -178,6 +178,59 @@ func (c *Client) checkListed(page *relayapi.ListedResponse) error {
 	return c.counts(answer, count{"listed", page.Listed})
 }
 
+// checkCouriers is the relays this one accepts forwarded mail from: the list
+// always sent, no more entries than the file the relay loaded could have held,
+// every name a relay name and every fingerprint a fingerprint, and no name
+// twice.
+//
+// The name rule is store.ValidRelayName and not the laxer identity.ValidName,
+// for one reason and not the two an earlier draft of this comment gave: it is
+// the rule the relay itself runs over the same names when it loads its couriers
+// file. One name, one rule, both ends — and the rule includes how two names are
+// told apart, which is why the check below folds as the relay's loader does.
+//
+// The second reason that draft gave was wrong and is worth recording as wrong:
+// it said a name admitted here becomes a directory segment under relays/. It
+// does not. The only path segment from a name is the *local relay's* name,
+// which ValidRelayName guards at each of the store's own doors; a courier's name
+// is written as the content of a line and compared as a string, and never
+// reaches a path. The check is right; that was not why.
+//
+// No name twice matters more here than it looks. The relay refuses a couriers
+// file that lists one fingerprint under two names, and its answer is keyed by
+// fingerprint so it cannot repeat one; two fingerprints under one name is the
+// case it cannot rule out, and a name is what a person types and what goes on
+// the wire as a bang path's first element, so two couriers sharing a name
+// would make the name a person admits ambiguous. Refused by name rather than
+// resolved in favour of either.
+func (c *Client) checkCouriers(r *relayapi.CouriersResponse) error {
+	const answer = "the courier listing"
+	if r.Couriers == nil {
+		return c.malformed(answer, "couriers", "present: a relay that forwards nothing sends []")
+	}
+	if len(r.Couriers) > relayapi.MaxCouriers {
+		return c.malformed(answer, "couriers", fmt.Sprintf("at most %d, which is the most lines a couriers file may hold", relayapi.MaxCouriers))
+	}
+	seen := make(map[string]bool, len(r.Couriers))
+	for _, n := range r.Couriers {
+		if err := store.ValidRelayName(n.Name); err != nil {
+			return c.malformed(answer, "name", "a relay name: "+err.Error())
+		}
+		if !identity.ValidFingerprint(n.FP) {
+			return c.malformed(answer, "fp", "a fingerprint")
+		}
+		// Folded, because the relay folds: its couriers file refuses two
+		// neighbours whose names differ only in case, so an answer holding
+		// both is an answer no honest file produced. Comparing exactly here
+		// would take it and leave the ambiguity this check exists to refuse.
+		if seen[strings.ToLower(n.Name)] {
+			return c.malformed(answer, "name", fmt.Sprintf("one name for one relay: %q twice", n.Name))
+		}
+		seen[strings.ToLower(n.Name)] = true
+	}
+	return nil
+}
+
 // checkCard is the owner's own card as the relay serves it: the state as
 // one of its three words, which the relay always sends.
 func (c *Client) checkCard(r *relayapi.CardResponse) error {

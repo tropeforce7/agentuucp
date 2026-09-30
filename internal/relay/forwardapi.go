@@ -494,6 +494,42 @@ func reportBack(st *Store, c *Courier, limits CourierLimits, now time.Time,
 	return neighbour.Name
 }
 
+// handleCouriers answers every neighbour this relay accepts forwarded mail
+// from, this relay's own name for each and the fingerprint its couriers file
+// admits.
+//
+// It is for this relay's own users, and what they need it for is the allow
+// list. Delivery of a forwarded message asks the recipient's allow list about
+// the *courier* that handed the envelope over, because a relay cannot open one
+// and the only sender it can prove is its neighbour — so a recipient who has
+// pushed a list at all is unreachable from every other relay until they admit
+// these fingerprints by name. Somebody who cannot read this cannot be written
+// to from off this relay, so an operator who withheld it would be breaking
+// forwarding for their own users rather than keeping a secret.
+//
+// callerAuthed and not adminAuthed, and not open: any registered identity here,
+// nobody else. That is narrower than it looks and it does not reopen what a
+// courier's mailbox was made silent to close. That mailbox answers exactly as
+// every refusing mailbox does, so a stranger holding a fingerprint cannot learn
+// whether this relay accepts from it by posting at it; this route answers only
+// identities that have a mailbox here, which the same stranger does not have.
+//
+// There is no paging and no parameter. The whole list is at most
+// relayapi.MaxCouriers entries, which is also the most lines the couriers file
+// may hold, so a relay that loaded its file cannot answer more than a client
+// will accept; and a list of relay names is small enough that a page would be
+// an interface nobody needs. A relay with no courier block answers an empty
+// list rather than a 404: it forwards nothing, which is an answer.
+func (s *Server) handleCouriers(w http.ResponseWriter, r *http.Request, callerFP string) {
+	// Always a list and never null: absent and empty are one value after a
+	// decode, and empty is the honest one for a relay that peers with nobody.
+	list := s.courier.Accepted()
+	if list == nil {
+		list = []relayapi.Courier{}
+	}
+	s.writeJSON(w, http.StatusOK, relayapi.CouriersResponse{Couriers: list})
+}
+
 // handleQueue answers the caller their own rows in this relay's forwarding
 // queue: the mail they addressed to somebody on another relay and this relay
 // has still to hand over, or has handed over, or has given up on.

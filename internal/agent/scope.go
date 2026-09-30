@@ -85,6 +85,7 @@ var receiveRoutes = []struct {
 	{"GET", "/v1/mailbox/*/card"},     // the owner's own card
 	{"GET", "/v1/mailbox/*/queue"},    // the owner's own forwarding queue
 	{"GET", "/v1/listed"},             // the cards whose owners chose to be listed
+	{"GET", "/v1/couriers"},           // the relays this one accepts forwarded mail from
 	{"GET", "/v1/mailbox/*/channels"}, // a directory
 	{"GET", "/v1/mailbox/*/certs"},    // this identity's certificates
 	{"DELETE", "/v1/mailbox/*/*"},     // acknowledging a message, and auu rm

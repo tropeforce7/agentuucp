@@ -162,6 +162,7 @@ internal/agent/scope.go shapeMatches string shape[1:] = local: shape is one of t
 internal/agent/socket.go homeID string hex.EncodeToString(sum[:])[:idLen] = local: hex of a sha256 sum, 64 characters
 internal/allowlist/allowlist.go Document int V int = [1, 1] shown by TestLimitDocumentV
 internal/auu/agent_cmds.go cmdUnlock int fs.Duration("ttl") = >= 0 shown by TestLimitWaitAndWatchFlags
+internal/auu/allow.go allowCourier string found.FP[:16] = local: ValidFingerprint at checkCouriers shown by TestLimitACourierListingIsHeldToItsShape
 internal/auu/allow.go issuedFrom string msg[i + len(mark):len(msg) - 1] = local: i from LastIndex of mark in msg, checked >= 0, and msg ends in ")" by HasSuffix
 internal/auu/allow.go printAllowShow string sender.Fingerprint[:identity.ShortIDLen] = local: ValidFingerprint at Validate shown by TestLimitSenderOneShort
 internal/auu/anchor.go anchorPin string hash[:16] = local: ValidFingerprint at anchorPin shown by TestLimitAnchorArgsOneShort
@@ -225,6 +226,7 @@ internal/auu/outbox.go pending int ChunkSize int = [4096, 16777216] shown by Tes
 internal/auu/outbox.go pending int Chunks int64 = >= 0 shown by TestLimitPendingRecordIntegers
 internal/auu/queue.go queuedJSON int ID int64 = output
 internal/auu/queue.go queuedJSON int Tries int64 = output
+internal/auu/relay.go printCouriers string n.FP[:16] = local: ValidFingerprint at checkCouriers shown by TestLimitACourierListingIsHeldToItsShape
 internal/auu/relay.go relayAdd string (*anchor)[:16] = local: ValidFingerprint at relayAdd shown by TestLimitAnchorArgsOneShort
 internal/auu/relay.go relayFlags string r.Anchor[:8] = local: ValidFingerprint at readRelay shown by TestLimitRelayRecordHashes
 internal/auu/relay.go relayRemove string r.TrustAnchorSPKI[:16] = local: ValidFingerprint at readRelay shown by TestLimitRelayRecordHashes

@@ -56,6 +56,7 @@ var subcommands = []subcommand{
 		{name: "add", describe: "add a relay by URL"},
 		{name: "ls", describe: "list relays"},
 		{name: "show", describe: "everything this home holds for one relay"},
+		{name: "couriers", describe: "the relays one accepts forwarded mail from"},
 		{name: "default", describe: "which relay commands use when none is named"},
 		{name: "rename", describe: "rename a relay here"},
 		{name: "rm", describe: "forget a relay"},

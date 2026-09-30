@@ -228,6 +228,44 @@ be delivered, never be acknowledged, and sat in the database forever. It now
 hands back what it stored and the client decides; undecodable bytes are
 surfaced as a nil envelope so the client acknowledges and clears them.
 
+**A relay resolves the first name of an address and no other.** A bang path is
+`bar!baz!bob`, and every name in it is what the relay *reading* it calls the
+next hop. So a relay strips the first element, looks that one up in its own
+courier home, and passes the rest along untouched; it never resolves `baz`,
+never learns what `baz` means to `bar`, and never rewrites what it forwards.
+The names are not a namespace and nothing publishes them: a relay calls each
+neighbour whatever its operator chose, and what a relay calls itself appears
+nowhere. A change that made a relay look past the first element would be
+inventing a global namespace the protocol does not have, and would make one
+operator's naming somebody else's business.
+
+**The address rule is one function and both ends run it.**
+`store.CheckAddress`, with `store.ValidRelayName` inside it: every name a relay
+name, no relay named twice, and at most the cap it is given. The client runs it
+before sealing and every relay runs it after appending its own name, which is
+what makes a repeated name evidence of a relay that did not run it rather than a
+coincidence. The cap is a parameter for the one reason worth remembering: a
+relay refuses above its own `courier.max_hops`, nothing on the wire carries that
+number, so a client can hold an address only to the protocol's 32 and an address
+between the two passes at the terminal and is refused at the first hop in that
+hop's words. The rule could not live in `relayapi`, which already holds
+`MaxHops`, because `ValidRelayName` calls `channels.WindowsDevice` and
+`channels` imports `relayapi`; that is a cycle, and moving the name rule instead
+would have moved two dozen call sites to reach one of them.
+
+**A courier is an identity, not a capability.** A relay forwards by being a
+*user* of the relay it forwards to: it enrols there, gets a mailbox and a
+certificate, and posts like anybody else. There is no privileged path and no
+shared secret between operators. Two consequences a change must not break.
+Everything that bounds a poster bounds a courier, which is why its quotas come
+from the same helper with a different number rather than from a second
+comparison beside the first. And a courier has an ordinary mailbox at its
+neighbour, which nothing reads and which the relay therefore refuses every
+sender into — in the words every refused sender gets, so that the refusal is not
+a way to ask which relays this one peers with. That refusal is the relay's own
+rule and runs before any allow document, which is testable and tested: a courier
+that pushes a list admitting somebody is still refused.
+
 **Log a fingerprint only once a signature has proved it.** The access log
 took the fingerprint from the request header, so anyone could seed the log
 with an identity they did not hold. `verified(w, fp)` is called only after
@@ -465,6 +503,29 @@ lives in `internal/relay`; `cmd/auu-relay` populates its config from it. A
 zero-value `relay.Config` is unlimited, which is what the library should do;
 having opinions about numbers is the command's job. There is a test that
 fails if the two drift.
+
+**A configuration block that does nothing is refused, not ignored.** The
+`courier` block has two halves and they are independent: `home` is the directory
+of neighbours this relay dials, and `authorized_file` is the list of couriers it
+accepts from. One without the other is a one-way peering, which is a thing an
+operator may want — a relay that receives but cannot reply, or sends but hears
+nothing back — so neither is required. A block with *neither* is refused at
+startup by name, because it is configuration somebody wrote expecting an effect
+and it has none. The start also says which names appear in one half and not the
+other, since nothing can enforce that an operator used one name in both and a
+mismatch is otherwise undetectable until somebody's reply will not route.
+
+**A default lives in the library, and it is checked against the decision that
+set it, not only against its copy.** The drift test compares the command's
+defaults to the library's field by field, which proves the two agree and says
+nothing about whether either is the number that was decided.
+`courier.reports_per_minute` shipped at 600 where the plan said 60 — not a
+mistyped figure but one reasoned out from how fast a backlog drains by somebody
+who never checked it against a settled question, with a comment arguing for it.
+A default that has a reason should have that reason tested as a relationship
+rather than as a literal: the test that now holds it says reporting is a tenth
+of posting and checks the two durations the guide quotes, so changing either
+number fails it and asks whether the ratio was meant to go too.
 
 **Zero means unlimited, everywhere, and it must be cheap.** A limiter built
 with rate zero allows everything, allocates nothing, and takes no locks.

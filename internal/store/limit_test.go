@@ -424,6 +424,23 @@ func TestLimitRelayNameIsNotAPath(t *testing.T) {
 		if _, err := s.LeftBehind(v); err == nil {
 			t.Errorf("LeftBehind took the name %q", v)
 		}
+		// The couriers file is under the same relay directory and reached by
+		// the same kind of name, so it is held to the same rule at each of
+		// its three doors. RemoveCourier and AddCourier reach it through
+		// Couriers, which is where the check is, and are driven here anyway
+		// because the ledger names the function and not the path.
+		if err := s.SetCouriers(v, []AdmittedCourier{{FP: strings.Repeat("a", 64), Name: "bar"}}); err == nil {
+			t.Errorf("SetCouriers took the name %q", v)
+		}
+		if _, err := s.Couriers(v); err == nil {
+			t.Errorf("Couriers took the name %q", v)
+		}
+		if err := s.AddCourier(v, strings.Repeat("a", 64), "bar"); err == nil {
+			t.Errorf("AddCourier took the name %q", v)
+		}
+		if _, err := s.RemoveCourier(v, "bar"); err == nil {
+			t.Errorf("RemoveCourier took the name %q", v)
+		}
 		if _, err := s.DamagedPath(v, 1); err == nil {
 			t.Errorf("DamagedPath took the name %q", v)
 		}

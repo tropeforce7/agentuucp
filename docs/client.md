@@ -704,11 +704,19 @@ in both at once is refused rather than merged.
 is. There is no global directory of relays: `bar` is the name your relay's
 operator gave that neighbour when they peered with it, and the second name
 in `bar!baz!bob` is what *bar* calls the next one, which you have to have
-been told. Ask whoever gave you the address. Nothing lists the names your
-relay will carry to — they are its operator's, kept where it dials from and
-served by no route — so a name that is wrong is found by sending, and comes
-back as `no neighbour named "bar" on this relay` before anything is
-queued.
+been told. Ask whoever gave you the address.
+
+A peering has two halves and only one of them is listed, which is worth being
+exact about because the names look alike. The relays your relay *dials* — the
+ones a path's first name is resolved against — are its operator's, kept in the
+directory it dials from and served by no route, so a name that is wrong there is
+found by sending, and comes back as `no neighbour named "bar" on this relay`
+before anything is queued. The relays your relay *accepts* forwarded mail from
+are listed, by `auu relay couriers`, because you have to admit them to be
+reachable from off your relay; [*Admitting a courier*](#18-several-relays) below
+is that. An operator normally uses one name for a neighbour in both halves, but
+nothing can make them, so a name from the listing is a good guess at an address
+and not a promise.
 
 Your relay queues the message and answers at once; the id you get back is
 a row in that queue rather than a message in a mailbox, and the `sent`
@@ -742,6 +750,59 @@ protocol's ceiling. A relay may allow fewer — `courier.max_hops` is 8
 unless its operator changed it — and nothing on the wire says what a given
 relay allows, so an address between the two passes here and is refused by
 the first hop, in that hop's words.
+
+**Admitting a courier.** If your mailbox is restricted — if you have run
+`auu allow push` — then nothing forwarded reaches you until you say which
+relays may carry it. That is not the same as trusting the people behind them,
+and the difference is the whole of why it is a separate step.
+
+A relay cannot open an envelope. When mail arrives from another relay, the only
+sender your relay can prove is the neighbour that handed it over, so that
+neighbour's identity — its *courier* — is what your allow list is asked about.
+Admitting one means "mail that came through this relay may be delivered to me",
+whoever sent it. It is the one place an allow list means something coarser than
+the fingerprints in it.
+
+It means one thing more, and it is better read here than discovered. Your allow
+list is one list, and your relay asks it one question: may this fingerprint put
+something in this mailbox. So the courier's own key may also write to you
+directly, as any sender would. That message lands in quarantine rather than your
+inbox — what decides that is your peer list, which admitting a courier does not
+touch — so you see an unknown sender and decide, exactly as you would for a
+stranger. The difference admitting makes is that a restricted mailbox refuses a
+stranger at the relay and will not refuse this one.
+
+Your relay will tell you which relays it accepts forwarded mail from:
+
+*Listing 1.8f*
+```
+auu relay couriers                 # and --relay NAME, and --json
+auu allow add --courier bar        # admit one, by the name your relay gives it
+auu allow rm --courier bar
+auu allow push                     # nothing changes at the relay until you do
+```
+
+`auu relay couriers` prints each one with its fingerprint and whether you
+admit it already. The names are **your relay's own**. A relay calls each
+neighbour whatever its operator chose, the same relay may be called something
+else at the next hop, and what a relay calls itself is published nowhere — so a
+name from this listing is good for addressing mail through your relay and for
+nothing else. It is also the first element of a path: `bar!bob` reaches bob
+through the neighbour your relay calls `bar`.
+
+`auu allow add --courier` asks your relay for the fingerprint rather than
+taking your word for it, so a name your relay does not have is refused with the
+names it does have. It then says what admitting the courier lets through and
+asks, and writes nothing unless you agree or pass `--yes`. What it writes is a
+line in `relays/<name>/couriers`, and `auu allow push` sends your peers and that
+relay's admitted couriers as one list. Each relay has its own file, because a
+courier's fingerprint means nothing at another relay.
+
+If you admit nobody, forwarded mail is refused and the sender eventually reads
+that their message could not be delivered, naming your relay's neighbour as the
+hop that refused. If your list is not restricted at all — if you have never
+pushed one — then every registered sender may post to you and forwarded mail
+arrives without any of this.
 
 ### 1.9 Encrypting your keys
 

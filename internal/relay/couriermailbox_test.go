@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/allowlist"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
@@ -271,5 +272,97 @@ func TestNothingOnTheWireTellsACouriersMailboxApart(t *testing.T) {
 				t.Errorf("the bodies differ:\n courier: %s\n refused: %s", courierBody, refusedBody)
 			}
 		})
+	}
+}
+
+// TestACouriersMailboxRefusesEvenWithAListAdmittingTheSender: ruling 35,
+// written rather than reasoned.
+//
+// The refusal above is the relay's own rule and not a default, and the
+// difference is testable: a courier has an ordinary mailbox, so nothing stops
+// it pushing a signed allow list admitting somebody. If the relay consulted
+// that document the mailbox would become postable, the rule would be a mere
+// absence of a list, and these routes would stop answering as every other
+// refusing mailbox does — which is the property 10b rests on.
+//
+// So the claim is that the refusal comes before and independently of any
+// document, on every route that asks a list. The reviewer's instruction was to
+// write this rather than reason it, and to stop and say so if the order turned
+// out otherwise; it did not.
+func TestACouriersMailboxRefusesEvenWithAListAdmittingTheSender(t *testing.T) {
+	courier := neighbourID(t, "alpha")
+	h := peered(t, []string{"bar"}, []*identity.Identity{courier}, nil)
+	h.enroll(courier)
+	sender := h.user(t, "alice")
+	to := courier.Fingerprint()
+
+	// The courier pushes a list admitting alice, as its own owner, so what is
+	// refused below is refused despite a valid document and not because of a
+	// malformed one.
+	if status, body, _ := h.pushAllow(courier, courier, time.Now(), sender.Fingerprint()); status != 204 {
+		t.Fatalf("the courier's own allow list: %d %s", status, body)
+	}
+	// It really is there and really names alice, so a failure below cannot be
+	// the push having been dropped or having stored something else. The
+	// document is base64 in the answer, so it is decoded rather than searched
+	// for a fingerprint that is not in the bytes as sent.
+	status, body := h.do(courier, "GET", "/v1/mailbox/"+to+"/allow", nil, nil)
+	if status != 200 {
+		t.Fatalf("reading the list back: %d %s", status, body)
+	}
+	var got relayapi.AllowResponse
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("the allow answer is not JSON: %s", body)
+	}
+	if got.State != relayapi.AllowSigned {
+		t.Fatalf("the courier's list is %q, want signed", got.State)
+	}
+	doc, err := allowlist.Verify(courier.Public(), got.Document, got.Signature)
+	if err != nil {
+		t.Fatalf("the courier's own list does not verify: %v", err)
+	}
+	if len(doc.Senders) != 1 || doc.Senders[0] != sender.Fingerprint() {
+		t.Fatalf("the courier's list names %v, want alice alone", doc.Senders)
+	}
+
+	for _, tc := range []struct {
+		name string
+		do   func() (int, []byte)
+	}{
+		{"a post", func() (int, []byte) {
+			return h.do(sender, "POST", "/v1/mailbox/"+to, sealed(t, sender, courier.Public(), "hello"), nil)
+		}},
+		{"a post to a channel", func() (int, []byte) {
+			return h.postTo(sender, courier, "work")
+		}},
+		{"a stream open", func() (int, []byte) {
+			return h.do(sender, "POST", "/v1/mailbox/"+to+"/streams",
+				relayapi.OpenStreamRequest{Size: 1 << 16}, nil)
+		}},
+		{"a knock", func() (int, []byte) {
+			return h.do(sender, "POST", "/v1/mailbox/"+to+"/knock",
+				sealed(t, sender, courier.Public(), "knock"), nil)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, body := tc.do()
+			if status != 403 {
+				t.Fatalf("%d %s; want the refusal whatever the list says", status, body)
+			}
+		})
+	}
+	if n, _ := h.queued(to); n != 0 {
+		t.Errorf("%d messages stored in a courier's mailbox", n)
+	}
+	// The control, so the refusals above are about the mailbox being a
+	// courier's and not about alice: the same sender, the same shape of list,
+	// an ordinary mailbox, and the post is taken.
+	bob := h.user(t, "bob")
+	if status, body, _ := h.pushAllow(bob, bob, time.Now(), sender.Fingerprint()); status != 204 {
+		t.Fatalf("bob's allow list: %d %s", status, body)
+	}
+	if status, body := h.do(sender, "POST", "/v1/mailbox/"+bob.Fingerprint(),
+		sealed(t, sender, bob.Public(), "hello"), nil); status != 200 {
+		t.Fatalf("the same sender to an ordinary mailbox: %d %s", status, body)
 	}
 }

@@ -363,6 +363,17 @@ func (s *Server) isCourierMailbox(fp string) bool {
 	return ok
 }
 
+// Accepted is every neighbour this relay accepts forwarded mail from, name and
+// fingerprint, in name order, for the route that lists them. Nil for a relay
+// with no couriers file, which the route sends as an empty list rather than as
+// an absence.
+func (c *Courier) Accepted() []relayapi.Courier {
+	if c == nil {
+		return nil
+	}
+	return c.couriers.accepted()
+}
+
 // Identity is the courier's own identity, what this relay posts to its
 // neighbours as.
 func (c *Courier) Identity() *identity.Identity {
@@ -527,6 +538,32 @@ func (c *courierSet) count() int {
 	defer c.mu.Unlock()
 	c.refreshLocked()
 	return len(c.names)
+}
+
+// accepted is every neighbour this relay accepts from, name and fingerprint,
+// in name order, for the route that lists them.
+//
+// It answers pairs where acceptedNames answers names because the route's
+// caller needs the fingerprint: a recipient admits a courier by putting that
+// fingerprint in their allow list, the name being only how they ask for it.
+// Sorted by name and not by fingerprint, since the name is what a person reads
+// and types.
+//
+// The file is re-read first, as every reader here does, so a neighbour added
+// or removed since the last request is in the answer without a restart.
+func (c *courierSet) accepted() []relayapi.Courier {
+	if !c.enabled() {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.refreshLocked()
+	out := make([]relayapi.Courier, 0, len(c.names))
+	for fp, name := range c.names {
+		out = append(out, relayapi.Courier{Name: name, FP: fp})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // acceptedNames is every name this relay has for a neighbour it accepts

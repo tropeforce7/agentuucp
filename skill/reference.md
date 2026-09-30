@@ -31,9 +31,11 @@ auu peers ls [--json]                              # who you can reach
 auu peers rm <name|fingerprint>
 auu peers fetch NAME|SHORT-ID|FINGERPRINT [--yes]  # add a peer found on the relay: the person's command, at a terminal; never run it
 auu knock NAME|SHORT-ID|FINGERPRINT [--text "..."] [--yes]   # one message to somebody who has not admitted you: the person's command, at a terminal; never run it
-auu allow push                                     # tell the relay to take mail only from your peers, signed
+auu allow push                                     # tell the relay to take mail only from your peers and that relay's admitted couriers, signed
 auu allow clear                                    # accept from anyone again
 auu allow show [--json]                            # what each relay holds for you, verified with your own key
+auu allow add --courier NAME [--relay NAME] [--yes]  # admit a relay that carries forwarded mail to you: the person's command, at a terminal; never run it
+auu allow rm --courier NAME [--relay NAME]         # stop admitting one; push again to make it take effect
 auu card push [--listed] [--knocks]                # sign your card and push it: whether the relay may list you, and whether you take knocks
 auu card clear                                     # a card that says neither: not listed, no knocks
 auu card show [--json]                             # what each relay holds for you, verified with your own key
@@ -48,6 +50,7 @@ auu relay show [NAME] [--json]
 auu relay default NAME                             # which relay commands use when none is named
 auu relay rename OLD NEW
 auu relay rm NAME [--yes]
+auu relay couriers [--relay NAME] [--json]         # the relays one accepts forwarded mail from, and which of them you admit
 auu anchor [status] [--json]                       # the trust anchor this machine pinned
 auu anchor pin HASH                                # pin one and keep the identity
 auu anchor forget
