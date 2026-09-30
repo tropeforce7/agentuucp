@@ -283,7 +283,11 @@ func TestShowReportsWhatIsHeldAndNothingSecret(t *testing.T) {
 	}
 	// The date that matters is the intermediates', not only the anchor's:
 	// it is the yearly one, and the one this machine has to be visited for.
-	year := time.Now().AddDate(1, 0, 0).Format("2006-01")
+	// The month is read in UTC, the zone show prints it in: the date is
+	// the certificate's NotAfter as x509 parsed it, and on the local clock
+	// the month turns hours apart from it, so a local month here failed
+	// for the first ten hours of every month east of Greenwich.
+	year := time.Now().UTC().AddDate(1, 0, 0).Format("2006-01")
 	if !strings.Contains(out, "intermediates expire "+year) {
 		t.Errorf("show does not say when the relay's intermediates expire:\n%s", out)
 	}

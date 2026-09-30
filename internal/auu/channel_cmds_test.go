@@ -61,8 +61,14 @@ func TestTheFirstCreateKeepsDefault(t *testing.T) {
 		t.Fatalf("ls before any channel:\n%s", out)
 	}
 
+	// The window is a year ahead of today, from the clock: this test asserts
+	// the channel is not yet open, and a literal date is a test that fails
+	// on the day it arrives. The start is a day, which the flag reads as
+	// local midnight; the end is a time in a zone of its own.
+	opens := aYearAhead()
+	closes := time.Date(opens.Year(), opens.Month(), opens.Day(), 23, 59, 59, 0, time.FixedZone("", 10*3600)).AddDate(0, 3, 0)
 	out := alice.run("channel", "create", "bug reports", "--description", "One bug\r\nper message;\tattach\nthe log",
-		"--not-before", "2026-10-01", "--not-after", "2026-12-31T23:59:59+10:00")
+		"--not-before", opens.Format(time.DateOnly), "--not-after", closes.Format(time.RFC3339))
 	if !strings.Contains(out, "work: directory pushed (2 channels)\n") || !strings.Contains(out, "personal: directory pushed (2 channels)\n") {
 		t.Fatalf("create:\n%s", out)
 	}
@@ -74,8 +80,8 @@ func TestTheFirstCreateKeepsDefault(t *testing.T) {
 	if bugs.Description != "One bug per message; attach the log" {
 		t.Fatalf("the description was not folded: %q", bugs.Description)
 	}
-	if bugs.NotBefore == nil || !bugs.NotBefore.Equal(time.Date(2026, 10, 1, 0, 0, 0, 0, time.Local)) ||
-		bugs.NotAfter == nil || !bugs.NotAfter.Equal(time.Date(2026, 12, 31, 13, 59, 59, 0, time.UTC)) {
+	if bugs.NotBefore == nil || !bugs.NotBefore.Equal(opens) ||
+		bugs.NotAfter == nil || !bugs.NotAfter.Equal(closes) {
 		t.Fatalf("the period: %v to %v", bugs.NotBefore, bugs.NotAfter)
 	}
 	if d.Issued.IsZero() || d.Owner == "" || d.V != 1 {
@@ -105,6 +111,14 @@ func TestTheFirstCreateKeepsDefault(t *testing.T) {
 	if d := alice.channelsOf(); len(d.Channels) != 3 || d.Channels[2].Name != "cfp" {
 		t.Fatalf("the second create: %+v", d)
 	}
+}
+
+// aYearAhead is local midnight a year from today: the start of a window a
+// test asserts is not yet open, taken from the clock so that it stays in
+// the future on whatever day the test runs.
+func aYearAhead() time.Time {
+	d := time.Now().AddDate(1, 0, 0)
+	return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.Local)
 }
 
 // Each usage error names the channel, and none of them touches the file or
@@ -295,9 +309,13 @@ func TestLsOfAPeerIsReadAgainstTheKeyHeld(t *testing.T) {
 		t.Fatalf("ls --json of a peer with no directory: %+v", ls)
 	}
 
-	alice.run("channel", "create", "bug reports", "--description", "One bug per message", "--not-before", "2026-10-01T00:00:00Z")
+	// A year ahead of today, from the clock, since the view asserted is of
+	// a channel not yet open.
+	at := aYearAhead().UTC()
+	at = time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, time.UTC)
+	alice.run("channel", "create", "bug reports", "--description", "One bug per message", "--not-before", at.Format(time.RFC3339))
 	out := bob.run("channel", "ls", "alice")
-	opens := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Local().Format(time.RFC3339)
+	opens := at.Local().Format(time.RFC3339)
 	for _, want := range []string{"bug reports  One bug per message  from " + opens + "  opens " + opens + "\n", "issued ", " by alice\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the sender's view lacks %q:\n%s", want, out)
@@ -307,7 +325,7 @@ func TestLsOfAPeerIsReadAgainstTheKeyHeld(t *testing.T) {
 		t.Fatalf("the sender's view has the owner's lines:\n%s", out)
 	}
 	ls := bob.lsJSON("alice")
-	if ls.Peer != "alice" || !ls.Directory || len(ls.Channels) != 2 || ls.Channels[1].Why != "opens 2026-10-01T00:00:00Z" ||
+	if ls.Peer != "alice" || !ls.Directory || len(ls.Channels) != 2 || ls.Channels[1].Why != "opens "+at.Format(time.RFC3339) ||
 		ls.Channels[1].Open || ls.Relays != nil {
 		t.Fatalf("the sender's --json: %+v", ls)
 	}

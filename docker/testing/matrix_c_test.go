@@ -22,10 +22,16 @@ var channelRows = []matrixRow{
 	{"C07", "directory_edited_on_the_host", "the stored directory's signature edited, and a post to a named channel and to default", c07},
 }
 
-const (
-	cfpOpens  = "2026-10-01T00:00:00Z"
-	cfpCloses = "2026-12-31T23:59:59Z"
-)
+// cfpOpens and cfpCloses are a window that opens a year from the day the
+// suite runs, from the clock, since the rows assert the channel is not yet
+// open: a literal date fails every row that uses it on the day it arrives.
+var cfpOpens, cfpCloses = cfpWindow()
+
+func cfpWindow() (opens, closes string) {
+	d := time.Now().UTC().AddDate(1, 0, 0)
+	o := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC)
+	return o.Format(time.RFC3339), o.AddDate(0, 3, 0).Add(-time.Second).Format(time.RFC3339)
+}
 
 // tableHas asserts a table printed through tabwriter has each row, the
 // columns' padding collapsed to one space, so a row is written as a person

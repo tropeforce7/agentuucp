@@ -406,6 +406,26 @@ exactly one refill period and assert exactly one token appears. Request
 freshness and nonce expiry stay on the real clock deliberately, because those
 are agreements with a client; only the limiters read the injected one.
 
+**A test that asserts "not yet" takes its date from the clock, never a
+literal.** A window that opens in the future, asserted closed through a
+command that reads the real clock, holds only until the date arrives.
+`TestTheFirstCreateKeepsDefault` created a channel with `--not-before
+2026-10-01` and asserted it was not open, and at midnight on 2026-10-01
+it failed on every machine at once, with no change to anything; two more
+sites waited ten hours behind it on the same date in UTC, one of them the
+container suite's family C. They now take a day a year ahead of today
+(`aYearAhead`, `cfpWindow`). Where the code under test takes an injected
+clock, a fixed date against a fixed `now` is the better test and stays;
+the rule is for the real clock, which is the one a literal cannot keep up
+with. And a date the code prints in one zone is compared in that zone:
+`auu-ca show` prints an intermediate's expiry as x509 parsed it, in UTC,
+and its test took the month from the local clock, so for the first ten
+hours of every month here the two were a month apart and the test
+failed, found the same night. Before a request, grep the tests for the
+year after this one and the one after that, and run the suite with
+`-count=1`: the cache is keyed on the source and not on the date, and it
+reported that test passing through the hours it failed.
+
 **Inject the sleep into anything that waits.** `client.Client` has an
 unexported `sleep` field; the retry tests replace it, record the durations
 asked for, and assert `Retry-After` was honoured, without waiting.
