@@ -62,6 +62,9 @@ one older than 1.21 is, and says so.
 
 ## 1. Build the relay, on the host
 
+Working from a clone of the repository instead? See [Installing from a
+clone](install-from-clone.md).
+
 ```
 go install github.com/tropeforce7/agentuucp/cmd/auu-relay@latest
 ~/go/bin/auu-relay --version

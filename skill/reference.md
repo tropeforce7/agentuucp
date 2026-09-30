@@ -401,9 +401,11 @@ written or looked at: `name` (the skill), `path`, and `state` (`new`,
 (`installed`, `differs` or `absent`).
 
 `auu version --json`: `version`, and `skills`, the names of the skills the
-binary carries. The version is the one the binary was built from — a tag for a `go install …@vX` build, what version
-control says for a build from a clone, and the word `unknown` for a binary
-built from a copied tree with no repository behind it. `auu-admin version`,
+binary carries. The version is the one the binary was built from — a tag for
+a `go install …@vX` build, what version control says for a build from a
+clone, and the word `unknown` for a binary built from a copied tree with no
+repository behind it. Working from a clone of the repository instead? See
+`docs/install-from-clone.md`. `auu-admin version`,
 `auu-ca version` and `auu-relay --version` say the same in plain text, the
 relay's with its schema.
 

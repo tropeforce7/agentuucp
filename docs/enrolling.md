@@ -49,6 +49,9 @@ enough.
 
 ## 2. Install auu
 
+Working from a clone of the repository instead? See [Installing from a
+clone](install-from-clone.md).
+
 ```
 go install github.com/tropeforce7/agentuucp/cmd/auu@latest
 auu --help

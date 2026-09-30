@@ -263,7 +263,9 @@ yours, which is where `auu`, `git` and `claude` all keep their state.
 on your own machine as `deploy-linux.md` builds the relay, installed with
 `go install`, or — the shortest way on the host itself — installed by
 `scripts/install.sh`, which brings Go with it if the host has none new
-enough and puts the tools in `/usr/local/bin` when it is run as root. `git` and the project's toolchain come from the
+enough and puts the tools in `/usr/local/bin` when it is run as root.
+Working from a clone of the repository instead? See [Installing from a
+clone](install-from-clone.md). `git` and the project's toolchain come from the
 distribution or from wherever the project's own instructions put them;
 they must be on the PATH the unit sets below, so note where they land.
 

@@ -142,6 +142,9 @@ Requires Go 1.27 or later, for the standard library's `crypto/hpke` and `crypto/
 
 Without cloning anything, `go install` fetches the module and builds it:
 
+Working from a clone of the repository instead? See [Installing from a
+clone](docs/install-from-clone.md).
+
 *Listing 3a*
 ```
 go install github.com/tropeforce7/agentuucp/cmd/...@latest
@@ -196,7 +199,9 @@ Or, once you trust it, in one line:
 curl -fsSL https://raw.githubusercontent.com/tropeforce7/agentuucp/main/scripts/install.sh | sudo sh
 ```
 
-From a checkout it builds what is there rather than fetching a release:
+From a checkout it builds what is there rather than fetching a release —
+[Installing from a clone](docs/install-from-clone.md) is the whole of that
+way of working:
 
 *Listing 3.1c*
 ```
@@ -231,7 +236,8 @@ than by CI. `docker/testing/README.md` has the rest.
 
 `auu version` says what you have — the version the binary was built from,
 which for a `go install …@vX` build is that tag and for a build from a clone
-is what its version control says. `auu-admin version`, `auu-ca version` and
+is what its version control says — [Installing from a
+clone](docs/install-from-clone.md) sets out what each state reports. `auu-admin version`, `auu-ca version` and
 `auu-relay --version` do the same, and the relay's line adds the database
 schema it speaks; every one of the four answers `--version` too. A running
 relay says the same two things on its `relay starting` log line, so a
@@ -426,6 +432,7 @@ are in [Using auu](docs/client.md).
 |---|---|
 | [Using auu](docs/client.md) | the client in full: sending, channels, receiving, an expert on a channel, watching, several relays, encrypting your keys, exit codes, and what lives where on disk |
 | [Running a relay](docs/relay.md) | the relay binary, its settings and limits, certificates from your own authority, client certificates, keeping a relay private, and administering it: administrators, enrolment tokens, the audit log |
+| [Installing from a clone](docs/install-from-clone.md) | building and installing what is in a checkout rather than a release: the targets, the relay for another host, and what version a clone build reports |
 | [Deploying a relay on Linux](docs/deploy-linux.md) | the relay as a system service on a Linux host, step by step, or as a kit |
 | [Enrolling on a relay](docs/enrolling.md) | joining a relay that requires certificates, from the user's chair |
 | [Creating experts](docs/creating-experts.md) | an agent that answers for one project, with `auu serve`, as a service |
@@ -531,7 +538,7 @@ bug in the claim.
 | `cmd/auu`, `cmd/auu-relay`, `cmd/auu-admin`, `cmd/auu-ca` | the four binaries; `cmd/auu` is one line |
 | `main.go` | the client again, as `agentuucp`, so the bare `go install` path has something to build |
 | `scripts` | the public install script and the checks CI runs over it, the kit and the unit |
-| `docs` | the seven guides, the systemd unit and a settings file, and the serve handler script |
+| `docs` | the eight guides, the systemd unit and a settings file, and the serve handler script |
 | `docker/testing` | the container suite: four machines, the two guides in order, and the matrix of what goes wrong, with its report |
 | `.claude/guides` | development and testing rules for contributors |
 
