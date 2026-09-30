@@ -136,6 +136,7 @@ beside it.
   messages/
     tmp/                       writes in progress, swept at startup
     uploads/                   streams still being uploaded
+    outbound/                  mail waiting to go on to a neighbouring relay, one file per queued row
     b4/
       b49c…64 hex…/            one directory per recipient
         17                     one message, exactly the bytes that were posted
@@ -187,8 +188,10 @@ An operator can list all of this, and count it, and delete it. None of it can
 be read. Every file is a sealed envelope or a sealed stream. **Back up the
 database and the message directory together**, or you will restore an index
 pointing at mail that is not there. A relay that finds one without the other
-says so at startup and repairs itself towards the database. Files with no row
-are removed. Rows with no file are dropped and logged. A stream whose file
+says so at startup and repairs itself towards the database. Files in a
+mailbox's directory with no row are removed; `tmp/`, `uploads/` and
+`outbound/` are the relay's own and are not read as mailboxes. Rows with
+no file are dropped and logged. A stream whose file
 has changed length since it was stored is dropped by the same rule when its
 recipient asks for it. The log carries the message id and both lengths. It
 carries the mailbox only under `access_log: "full"`, since its owner is the

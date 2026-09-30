@@ -46,6 +46,17 @@ func (s *Store) messagePath(fp string, id int64) string {
 
 func (s *Store) tmpDir() string { return filepath.Join(s.dir, tmpName) }
 
+// notMailboxes reports whether a directory at the top of the message tree
+// is one of the relay's own rather than a shard of mailboxes: writes in
+// progress, uploads, and the queue of mail waiting to leave. The sweep and
+// the lost-database check both walk the tree as shards and ask this first,
+// so that a directory added beside these is added here, once, for both.
+// outbound was missing until a restart was found removing every waiting
+// envelope's file as an orphan.
+func notMailboxes(name string) bool {
+	return name == tmpName || name == uploadsName || name == outboundDir
+}
+
 // storageErr turns a full disk into the answer the sender should get. An
 // operator running out of room is a 507 and a message that says so, not a 500
 // that says nothing.
@@ -168,7 +179,7 @@ func (s *Store) mailboxesHoldingFiles() (int, error) {
 	}
 	held := 0
 	for _, shard := range shards {
-		if !shard.IsDir() || shard.Name() == tmpName || shard.Name() == uploadsName {
+		if !shard.IsDir() || notMailboxes(shard.Name()) {
 			continue
 		}
 		boxes, err := os.ReadDir(filepath.Join(s.dir, shard.Name()))
@@ -261,7 +272,7 @@ func (s *Store) sweep() (SweepResult, error) {
 		return res, err
 	}
 	for _, shard := range shards {
-		if !shard.IsDir() || shard.Name() == tmpName || shard.Name() == uploadsName {
+		if !shard.IsDir() || notMailboxes(shard.Name()) {
 			continue
 		}
 		boxes, err := os.ReadDir(filepath.Join(s.dir, shard.Name()))

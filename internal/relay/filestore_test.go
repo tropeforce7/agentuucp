@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
@@ -616,5 +617,83 @@ func assertCounters(t *testing.T, s *Store) {
 	}
 	if storedN != realN || storedB != realB {
 		t.Fatalf("counters say %d/%d, the table says %d/%d", storedN, storedB, realN, realB)
+	}
+}
+
+// enqueueOne puts one envelope in the outbound queue and returns its row's
+// id and the bytes it was given.
+func enqueueOne(t *testing.T, s *Store) (int64, []byte) {
+	t.Helper()
+	now := time.Now()
+	raw := []byte("an envelope waiting to go on to a neighbour")
+	id, err := s.Enqueue(&Outbound{PosterFP: strings.Repeat("b0", 32), Neighbour: "bee", Path: "dave",
+		ToFP: strings.Repeat("da", 32), Hash: strings.Repeat("4a", 32), Kind: relayapi.KindEnvelope,
+		Received: now, GivesUp: now.Add(72 * time.Hour)}, raw, CourierQuotas{}, now.Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id, raw
+}
+
+// A restart keeps the mail that is waiting to leave. The sweep walked every
+// directory at the top of the message tree as a shard of mailboxes, and
+// outbound/, where the queue keeps one file per waiting envelope, is one of
+// them: each file was a message no mailbox row claimed, and was removed, so
+// a relay restarted with mail queued for a neighbour kept every row as
+// waiting and had nothing left to send. After a close and an open the sweep
+// finds nothing, the envelope reads back whole, and the row still waits.
+func TestARestartKeepsTheMailWaitingToLeave(t *testing.T) {
+	dir := t.TempDir()
+	db, messages := filepath.Join(dir, "relay.db"), filepath.Join(dir, "messages")
+	s, err := OpenStore(db, messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice := ids(t, "alice")[0]
+	if err := s.Register(alice.Fingerprint(), alice.Public().Bundle(), alice.Name, RegisterOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	id, raw := enqueueOne(t, s)
+	s.Close()
+
+	s, err = OpenStore(db, messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if swept := s.Swept(); !swept.Empty() {
+		t.Errorf("the sweep after a restart put something right: %+v", swept)
+	}
+	body, err := s.OutboundBody(id)
+	if err != nil || !bytes.Equal(body, raw) {
+		t.Fatalf("the waiting envelope after a restart: %q, %v", body, err)
+	}
+	rows, err := s.OutboundFor(strings.Repeat("b0", 32), 10)
+	if err != nil || len(rows) != 1 || rows[0].ID != id || rows[0].State != OutWaiting {
+		t.Fatalf("the queue after a restart: %+v, %v", rows, err)
+	}
+}
+
+// A relay whose only files are mail waiting to leave, with no mailbox of
+// its own, is not a database that was lost: the check that refuses a new
+// database beside old mail counted outbound/ as a mailbox holding some, and
+// refused to start.
+func TestAQueueWithNoMailboxesIsNotALostDatabase(t *testing.T) {
+	dir := t.TempDir()
+	db, messages := filepath.Join(dir, "relay.db"), filepath.Join(dir, "messages")
+	s, err := OpenStore(db, messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, raw := enqueueOne(t, s)
+	s.Close()
+
+	s, err = OpenStore(db, messages)
+	if err != nil {
+		t.Fatalf("a relay whose only files are its queue did not open: %v", err)
+	}
+	defer s.Close()
+	if body, err := s.OutboundBody(id); err != nil || !bytes.Equal(body, raw) {
+		t.Fatalf("the waiting envelope after a restart: %q, %v", body, err)
 	}
 }
