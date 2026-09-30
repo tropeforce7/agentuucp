@@ -890,6 +890,23 @@ func (c *Client) Queue(ctx context.Context) ([]relayapi.QueuedMessage, error) {
 	return resp.Queued, nil
 }
 
+// ReportFailed tells a neighbour that a message it handed this relay cannot be
+// delivered: the first control message, sent by a relay's courier and by
+// nothing else.
+//
+// id is the id that neighbour answered with when it handed the envelope over,
+// which is the one number both sides hold. A 404 means it holds no such row,
+// a 409 that the row is not one it is waiting to hear about — either never
+// handed or already told — and both are final: a report is taken once, and the
+// caller writes a line rather than retrying.
+func (c *Client) ReportFailed(ctx context.Context, id int64, code, said string) error {
+	raw, err := json.Marshal(relayapi.ForwardFailedRequest{ID: id, Code: code, Said: said})
+	if err != nil {
+		return err
+	}
+	return c.do(ctx, "POST", "/v1/forward/failed", raw, nil, nil)
+}
+
 // Knock posts a sealed knock to the knock route of a mailbox whose owner
 // has said, on their signed card, that they take them. It is the one post
 // that goes to somebody who has not admitted the sender, so it has a

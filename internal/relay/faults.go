@@ -108,6 +108,49 @@ func (f *faultLog) noteDirectory(fp string) {
 	}
 }
 
+// noteUndialable says a courier this relay accepts from is one it cannot dial,
+// so news for it stops here. It is the one-way peering the start already says
+// out loud, met at the moment it costs something.
+func (f *faultLog) noteUndialable(name string) {
+	if f.due("undialable:" + name) {
+		f.log.Warn("courier: an undeliverable cannot be passed back to a neighbour this relay "+
+			"accepts from but cannot dial; the peering is one-way", "neighbour", name)
+	}
+}
+
+// noteReportNotQueued says an undeliverable could not be written down. The row
+// it was about is already failed, which is what its own poster needs.
+//
+// Nobody further back is told, and nothing will tell them later: the row that
+// would have to notice is a handed one, and a handed row is never given up on.
+// So this line is the only trace, and it says that rather than promising a
+// timeout that does not exist. The error here is this relay's own — a full
+// disk, a queue at its bound — and so is bounded by this tree's own words.
+func (f *faultLog) noteReportNotQueued(name string, err error) {
+	if f.due("report:" + name) {
+		f.log.Error("courier: an undeliverable for a neighbour could not be queued; "+
+			"nobody further back will be told of it", "neighbour", name, "err", err)
+	}
+}
+
+// noteReportRefused says a neighbour would not take an undeliverable this
+// relay was passing back. The chain ends here: a report is never generated
+// for a report, so there is nothing further to try and nothing to tell.
+//
+// It takes the sentence and not the error, for the reason noteRefusal exists.
+// An *HTTPError prints the neighbour's whole message, which is bounded by what
+// a client will read from a relay — sixteen megabytes twice over, which
+// escaping can quadruple — and by nothing smaller. A line a minute of that,
+// per peer, is a neighbour choosing how large this relay's log grows, which is
+// the choice said takes away and which passing the error here took back.
+func (f *faultLog) noteReportRefused(name, said string) {
+	if f.due("reportrefused:" + name) {
+		f.log.Warn("courier: a neighbour would not take an undeliverable; the chain ends here, "+
+			"and nothing further is tried or told",
+			"neighbour", name, "said", said)
+	}
+}
+
 // due reports whether a line for key is to be written now, and records it
 // when so. On every line written, entries older than a minute are dropped,
 // and past the cap the oldest goes.

@@ -50,6 +50,7 @@ Later ones win. A flag you do not type never overrides the file.
 | `--courier-queue-max-messages-per-courier N` | `courier.queue_max_messages_per_courier` | 10000 for one neighbour, in place of the per-poster count, at most 1000000, 0 is unlimited |
 | `--courier-queue-max-bytes-per-poster N` | `courier.queue_max_bytes_per_poster` | 256 MiB, 0 is unlimited |
 | `--courier-posts-per-minute N` | `courier.posts_per_minute` | 600, a neighbour's own rate, 0 is unlimited |
+| `--courier-reports-per-minute N` | `courier.reports_per_minute` | 600, a neighbour's rate for undeliverables, beside its posting, 0 is unlimited |
 | `--courier-post-bytes-per-hour N` | `courier.post_bytes_per_hour` | 0, unlimited; see 1.10 |
 | `--courier-carried-max-rows N` | `courier.carried_max_rows` | 1000000, 0 is unlimited |
 | `--client-certs off\|required` | `client_certs.mode` | `off`; `required` needs `registration` `token` or `closed` |
@@ -958,6 +959,42 @@ message that failed keeps the hop's sentence for a day, so its sender can
 read what happened, and then goes the same way. A message still waiting is
 never purged: its own `courier.forward_ttl` ends it, and that tells the
 sender rather than leaving them to find their mail gone.
+
+**When a message cannot be delivered.** The relay that finally cannot deliver
+tells the one behind it, which ends its own row and tells the one behind that,
+until the news reaches the row whose poster is the person who sent the message.
+Both ways a message can fail travel that way: a hop refusing it, and a hop
+giving up on a neighbour that never answered once its own `courier.forward_ttl`
+has run out. The second matters as much as the first, because a relay whose
+neighbour is down has already taken the message and answered for it, so the
+relay behind it is holding a row it thinks arrived and would otherwise never
+hear anything about it at all. They read it with `auu queue`: the row is `final`, with a code —
+`refused` or `gave-up` — and the sentence the relay that failed gave, with
+each hop's name in front of it as the news came back, so `bar: baz: no such
+mailbox` is baz refusing, reported through bar, both named as *your* relay and
+its neighbour name them.
+
+A relay can only report on a message it was actually handed, and once, so a
+neighbour cannot end mail it was not carrying. `courier.reports_per_minute`
+bounds how fast one may report at all, beside its posting rate, because an
+undeliverable is not mail arriving. A report the next hop back will not
+take — it holds no such row, or the peering only goes one way, or its queue
+is full — is a line in your log naming that neighbour, and that line is the
+only trace there will be. A report is never made for a report, so a chain ends
+rather than echoing.
+
+Nothing tells the hop behind later, and it is worth being plain about why,
+since it is the one place news is lost rather than delayed. The row that would
+have to notice is one that relay has already handed over, and a handed row that
+hears nothing is the ordinary shape of success: a message delivered produces no
+report at all. So a relay cannot tell a delivery from news that never arrived,
+and ending handed rows on a timer would tell every sender that every delivered
+message had failed. `courier.forward_ttl` ends a row that is still *waiting*,
+which is a relay that never got the message away, and that is a different
+thing. What it costs when it happens is that the sender reads `handed over`
+until the row is purged and then reads nothing; what keeps it rare is that it
+takes a peering an operator has half-configured, or a queue already at its
+bound, on top of a message that could not be delivered in the first place.
 
 The relay also remembers the envelopes it has carried, by a hash of the
 recipient and the ciphertext, so that it never carries or delivers one

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -106,6 +107,10 @@ type workers struct {
 	// postToNeighbour, and the peered harness exercises those.
 	dial func(r *store.Relay) (*client.Client, error)
 	post func(ctx context.Context, c *client.Client, req *relayapi.ForwardRequest) (int64, error)
+	// reportTo is how an undeliverable reaches a neighbour, a field for the
+	// same reason post is: a test makes the answers a real relay is awkward
+	// to make.
+	reportTo func(ctx context.Context, c *client.Client, id int64, code, said string) error
 }
 
 // startWorkers builds the set and starts one worker per neighbour. A relay
@@ -144,7 +149,7 @@ func newWorkers(st *Store, c *Courier, limits CourierLimits, log *slog.Logger, n
 			Note: func(s string) { log.Warn("courier: " + s) },
 		},
 	}
-	w.dial, w.post = w.dialNeighbour, w.postToNeighbour
+	w.dial, w.post, w.reportTo = w.dialNeighbour, w.postToNeighbour, w.reportToNeighbour
 	for _, r := range sortedNeighbours(c.neighbours) {
 		w.wakeup[r.Name] = make(chan struct{}, 1)
 	}
@@ -250,7 +255,7 @@ func (w *workers) drain(r *store.Relay) time.Duration {
 	// A row whose forward_ttl has run out is failed before anything is
 	// dialled: the poster is told, and a neighbour that has been down for
 	// three days is not asked again on this row's account.
-	if n, err := w.store.GiveUp(w.ctx, r.Name, w.now(), w.limits.ForwardTTL); err != nil {
+	if n, err := w.store.GiveUp(w.ctx, r.Name, w.now(), w.limits.ForwardTTL, w.fail); err != nil {
 		w.log.Error("courier: giving up on mail for a neighbour failed", "neighbour", r.Name, "err", err)
 	} else if n > 0 {
 		w.log.Warn("courier: gave up on mail for a neighbour", "neighbour", r.Name, "messages", n,
@@ -388,6 +393,9 @@ func (w *workers) report(neighbour string, handed, failed int) {
 // neighbour's answer to every row rather than to this one, so it is decided
 // there and never here.
 func (w *workers) attempt(r *store.Relay, c *client.Client, row *Outbound) (attemptOutcome, time.Duration) {
+	if row.Kind == KindReport {
+		return w.attemptReport(r, c, row)
+	}
 	raw, err := w.store.OutboundBody(row.ID)
 	if err != nil {
 		// The bytes are gone from under a committed row, which is the
@@ -426,6 +434,62 @@ func (w *workers) attempt(r *store.Relay, c *client.Client, row *Outbound) (atte
 		// already-carried and read as handed.
 		return attemptBackOff, firstRetry
 	}
+	return w.classify(r, row, err)
+}
+
+// attemptReport hands an undeliverable back one hop: the worker's second job,
+// on the same connection, with the same backoff and the same forward_ttl as
+// an envelope, because a neighbour that is not answering is not answering to
+// either kind.
+//
+// What differs is what a refusal means. An envelope refused finally is news
+// its sender is owed, so the row is failed and carries a sentence. A report
+// refused finally is news nobody is owed: a report is never generated for a
+// report, so there is nothing to pass back and nothing to write down but a
+// line for the operator. The row ends either way — this relay has said what
+// it had to say, or found that it cannot — and when it cannot, nobody further
+// back is told at all: the row that would have to notice is one that relay has
+// already handed over, and a handed row that hears nothing is the ordinary
+// shape of success, so there is no timer that could end it without telling
+// every sender their delivered mail had failed. forward_ttl ends a row that is
+// still waiting, which is a different thing.
+func (w *workers) attemptReport(r *store.Relay, c *client.Client, row *Outbound) (attemptOutcome, time.Duration) {
+	if w.ctx.Err() != nil {
+		return attemptBackOff, firstRetry
+	}
+	err := w.reportTo(w.ctx, c, row.TheirID, row.Code, row.Said)
+	if err == nil {
+		// Handed over and done with. The state is the envelope's word for
+		// the same thing: this row is no longer this relay's to act on.
+		if err := w.store.Handed(row.ID, 0, w.now()); err != nil {
+			w.log.Error("courier: recording a handed report failed", "id", row.ID, "err", err)
+		}
+		return attemptHanded, 0
+	}
+	if errors.Is(err, w.ctx.Err()) && w.ctx.Err() != nil {
+		return attemptBackOff, firstRetry
+	}
+	var he *client.HTTPError
+	if errors.As(err, &he) {
+		switch he.Status {
+		case http.StatusNotFound, http.StatusConflict:
+			// The neighbour holds no such row, or is not waiting to hear
+			// about it: a report is taken once, and both of those are
+			// final. There is nobody to tell, so the row ends and the
+			// operator gets a line.
+			w.store.faults.noteReportRefused(r.Name, said(r.Name, he.Message))
+			w.fail(row, row.Code, row.Said)
+			return attemptFailed, 0
+		case http.StatusBadRequest, http.StatusForbidden, http.StatusRequestEntityTooLarge:
+			// This relay sent something that neighbour will not take, which
+			// no retry fixes and which is this relay's own fault.
+			w.store.faults.noteReportRefused(r.Name, said(r.Name, he.Message))
+			w.fail(row, row.Code, row.Said)
+			return attemptFailed, 0
+		}
+	}
+	// Anything else is the neighbour not answering, which is every row's
+	// answer and not this one's.
 	return w.classify(r, row, err)
 }
 
@@ -509,18 +573,68 @@ func (w *workers) classify(r *store.Relay, row *Outbound, err error) (attemptOut
 // the rule: it costs a few hundred bytes now that what reaches it is
 // bounded, and it means this function is right whatever a caller hands it.
 func said(neighbour, message string) string {
-	cut := false
+	// Bounded before the escaping, since escaping only grows a string; the
+	// generous cut here is from the front too, for the reason below.
 	if len(message) > relayapi.MaxSaid {
-		message, cut = message[:runeBoundary(message, relayapi.MaxSaid)], true
+		message = message[runeStart(message, len(message)-relayapi.MaxSaid):]
 	}
-	s := neighbour + ": " + identity.PrintableText(message)
-	if len(s) > relayapi.MaxSaid {
-		s, cut = s[:runeBoundary(s, relayapi.MaxSaid)], true
+	s := neighbour + ": " + oneLine(message)
+	if len(s) <= relayapi.MaxSaid {
+		return s
 	}
-	if cut {
-		s += "…"
+	// Over the cap, and it is the front that goes. A sentence grows at the
+	// front as a report travels back — each hop writes its own name for the
+	// hop that told it — so the tail is the sentence the relay that actually
+	// failed wrote, and the head is a list of names. The tail is what the
+	// reader needs: it is the only thing that says what went wrong. And the
+	// first name they lose is the one they can spare, being this relay's own
+	// name for its neighbour, which the row's own neighbour column prints on
+	// the line above it.
+	//
+	// Cutting the other way is what this did first, and it would drop the
+	// one thing a report is for. Cutting out the middle — dropping the
+	// oldest names and keeping both ends — cannot be done at all: the oldest
+	// name is in the middle, and no relay can find where the names end and
+	// another relay's free text begins, since that text may hold ": " of its
+	// own.
+	keep := relayapi.MaxSaid - len(reportEllipsis)
+	return reportEllipsis + s[runeStart(s, len(s)-keep):]
+}
+
+// oneLine escapes a sentence for a terminal and for the rule the report route
+// holds an incoming one to, which are not quite the same rule.
+//
+// identity.PrintableText keeps a tab, because a tab reaching a terminal is not
+// a hazard. message.ValidOneLine refuses one, because a said is one line and a
+// tab is a control character. Over every rune there is exactly one that the
+// first keeps and the second refuses, and it is U+0009 --
+// TestASentenceThisRelayWritesIsOneItsOwnRouteAccepts sweeps them to say so
+// rather than taking this comment's word for it.
+//
+// So without this a relay that failed could put one tab in its refusal, and the
+// sentence this relay produced from it would be refused 400 by the hop behind.
+// The worker reads a 400 as something this relay sent that no retry fixes: the
+// report row ends, the chain stops there, and the person who sent the message is
+// never told. One byte, to suppress a bounce for every message.
+//
+// It runs inside the escaping step and before the cut that follows it, so the
+// two characters a tab becomes are bounded by that cut like any other growth.
+func oneLine(s string) string {
+	return strings.ReplaceAll(identity.PrintableText(s), "\t", `\t`)
+}
+
+// reportEllipsis says in front of a sentence that hops were dropped from it.
+const reportEllipsis = "…"
+
+// runeStart is the smallest index at or above n that begins a rune, so that a
+// string cut there is still a string of characters. It is runeBoundary's
+// other direction: that one walks down for a cut that keeps the head, this
+// one walks up for a cut that keeps the tail.
+func runeStart(s string, n int) int {
+	for n < len(s) && !utf8.RuneStart(s[n]) {
+		n++
 	}
-	return s
+	return n
 }
 
 // runeBoundary is the largest index at or below n that begins a rune, so
@@ -550,10 +664,21 @@ func (w *workers) wait(row *Outbound, d time.Duration) time.Duration {
 	return d
 }
 
-// fail ends a row with a code and the sentence a person reads.
+// fail ends a row with a code and the sentence a person reads, and passes the
+// news back a hop when the row was a neighbour's rather than one of this
+// relay's own users'.
+//
+// That second part is what makes an undeliverable travel at all in the
+// commonest case. The last hop refuses a delivery synchronously, so the relay
+// before it learns here and not on the report route; if only the route
+// reported onward, the news would unwind exactly one hop and stop.
 func (w *workers) fail(row *Outbound, code, said string) {
 	if err := w.store.Failed(row.ID, code, said, w.now()); err != nil {
 		w.log.Error("courier: recording a failed message failed", "id", row.ID, "err", err)
+		return
+	}
+	if name := reportBack(w.store, w.courier, w.limits, w.now(), row, code, said); name != "" {
+		w.wake(name)
 	}
 }
 
@@ -596,6 +721,12 @@ func (w *workers) dialNeighbour(r *store.Relay) (*client.Client, error) {
 	// dial is the other half of an attempt, and a shutdown that waits on it
 	// is a shutdown that waits on a neighbour.
 	return w.dialer.Dial(w.ctx, w.courier.home, w.courier.id, r)
+}
+
+// reportToNeighbour is the real report: one control message to the
+// neighbour's own failed route.
+func (w *workers) reportToNeighbour(ctx context.Context, c *client.Client, id int64, code, said string) error {
+	return c.ReportFailed(ctx, id, code, said)
 }
 
 // postToNeighbour is the real attempt: one forward request, signed fresh, to

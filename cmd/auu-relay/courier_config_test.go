@@ -289,6 +289,7 @@ func TestTheCourierDefaultsMatchTheLibrarys(t *testing.T) {
 		got.QueueMaxBytesPerPoster != want.QueueMaxBytesPerPoster ||
 		got.QueueMaxMessagesPerCourier != want.QueueMaxMessagesPerCourier ||
 		got.PostsPerMinute != want.PostsPerMinute ||
+		got.ReportsPerMinute != want.ReportsPerMinute ||
 		got.PostBytesPerHour != want.PostBytesPerHour ||
 		got.CarriedMaxRows != want.CarriedMaxRows {
 		t.Fatalf("the command's courier defaults have drifted from the relay's:\n got %+v\nwant %+v", got, want)
@@ -357,6 +358,7 @@ func TestLimitCourierSettingRanges(t *testing.T) {
 			"--courier-carried-max-rows", "--courier-queue-max-messages",
 			"--courier-queue-max-messages-per-poster",
 			"--courier-queue-max-messages-per-courier",
+			"--courier-reports-per-minute",
 		} {
 			// Zero is unlimited and is taken; a negative one is refused with
 			// the sentence that says what zero means.

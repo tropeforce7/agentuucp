@@ -86,6 +86,7 @@ type flagValues struct {
 	courierQueueMaxMessagesPerCourier int64
 	courierQueueMaxBytesPerPoster     int64
 	courierPostsPerMinute             int64
+	courierReportsPerMinute           int64
 	courierPostBytesPerHour           int64
 	courierCarriedMaxRows             int64
 }
@@ -121,6 +122,8 @@ func registerFlags(fs *flag.FlagSet) *flagValues {
 		"messages waiting to leave for one neighbouring relay, in place of the per-poster count; 0 is unlimited")
 	fs.Int64Var(&f.courierQueueMaxBytesPerPoster, "courier-queue-max-bytes-per-poster", d.Courier.QueueMaxBytesPerPoster,
 		"bytes waiting to leave for one poster; 0 is unlimited")
+	fs.Int64Var(&f.courierReportsPerMinute, "courier-reports-per-minute", d.Courier.ReportsPerMinute,
+		"undeliverable reports one neighbour may send this relay per minute; 0 is unlimited")
 	fs.Int64Var(&f.courierPostsPerMinute, "courier-posts-per-minute", d.Courier.PostsPerMinute,
 		"forwards one neighbouring relay may post a minute; 0 is unlimited")
 	fs.Int64Var(&f.courierPostBytesPerHour, "courier-post-bytes-per-hour", d.Courier.PostBytesPerHour,

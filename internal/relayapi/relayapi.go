@@ -790,7 +790,11 @@ const MaxBytesCeiling int64 = 1 << 30
 // knock is an envelope posted to the knock route: a stranger's one
 // message to a mailbox whose card says knocks, past no allow list, listed
 // by its own word so a receiver can file it as a knock before opening it.
-// A client refuses a fourth word by name.
+// These are the messages column's words, and a client refuses a fourth by
+// name on every listing row. The forwarding queue's own kind column is a
+// different set in a different package: it holds KindEnvelope or
+// internal/relay's report, and no answer carries it, so nothing here needs
+// widening for a control message.
 const (
 	KindEnvelope = "envelope"
 	KindStream   = "stream"
@@ -899,12 +903,19 @@ const (
 // The codes a failed outbound row carries, which say what kind of failure it
 // was where the sentence beside them says whose and why.
 //
-// This is not the whole set. An undeliverable reported back from a later hop
-// carries a code of its own out of a closed set — no mailbox, blocked,
-// refused by an allow list, no such channel, full, too large, no neighbour,
-// already carried — and those arrive with the route that reports them, since
-// nothing here reads them yet. These two are what a relay writes about its
-// own attempts to hand an envelope over.
+// These two are the whole set, and a report from a later hop carries one of
+// them and nothing finer. That is not a gap left to fill: a refusal on the
+// wire is a status and a sentence, and a status is shared by causes the
+// relay that met it cannot tell apart — 404 is no such mailbox and no such
+// neighbour both, 403 is blocked and not admitted both, the second saying
+// nothing finer on purpose — so a finer code would be either a guess from a
+// shared status or a match against another relay's free text, and a relay
+// writes neither. What says where a message failed is the sentence, which
+// each hop prepends its own name to as a report passes back.
+//
+// Widening the set would mean a refusal answer carrying a code beside its
+// sentence: a change to every refusal a relay makes and to the client's
+// error decode, which is a wire version of its own.
 const (
 	// CodeGaveUp is forward_ttl having run out with the neighbour still
 	// unreachable. The sentence says how long the relay tried and since
@@ -927,6 +938,64 @@ const (
 // than any refusal in this tree, and what is cut is cut on a rune boundary
 // with an ellipsis, since it is read by a person.
 const MaxSaid = 512
+
+// ForwardFailedRequest is an undeliverable coming back: the first control
+// message, a small body between two couriers about a row the receiving relay
+// already holds.
+//
+// ID is the id the reporting relay itself answered with when it took the
+// envelope, which is the one number both sides hold — this relay wrote it
+// into its handed row as their_id, and the reporter wrote it as its own row's
+// id. Code is one of CodeRefused or CodeGaveUp. Said is the sentence the
+// failing relay gave, at most MaxSaid bytes and one line.
+type ForwardFailedRequest struct {
+	ID   int64  `json:"id"`
+	Code string `json:"code"`
+	Said string `json:"said"`
+}
+
+// MaxReportBytes caps a report's body. It is read under this rather than
+// under a post's cap because nothing about a report is a message.
+//
+// The number is derived from MaxSaid and not chosen. encoding/json escapes
+// '<', '>' and '&' to six bytes each, and those are characters ValidOneLine
+// permits and a relay's refusal really carries — a URL's query string among
+// them — so a sentence legal at MaxSaid can reach six times its own bound on
+// the wire. Six times MaxSaid is the sentence; the 128 is the rest of the
+// object, which at its widest is 54 bytes — an int64 at 20 characters, the
+// longer of the two codes at 7, and 27 for the keys, the punctuation and the
+// quotes around the two string values. So the widest body this route can be
+// asked to read is 3072 + 54 = 3126, which leaves 74 bytes spare, and the
+// object's 54 is the number to check this against rather than the 128.
+//
+// 20 characters and not 19 on purpose: the widest id the route will accept is
+// positive and 19 digits, but the body is read before the shape is, so the cap
+// has to cover a body whose id is any int64 the decoder can produce, including
+// a negative one that is then refused.
+//
+// A kibibyte, which is what this was, is not enough: a legal sentence of 512
+// '&' encodes to 3125 bytes with the widest positive id and 3126 with the
+// widest int64, so the relay being told refused it 413 before the shape was
+// read, the relay passing it back read that as a refusal and ended the chain
+// with a line in its log, and the sender waited out forward_ttl to be told the
+// neighbour was unreachable — which was false. The bound MaxSaid puts on what
+// is stored and echoed is unchanged; this is only how much is read before it
+// is parsed.
+const MaxReportBytes = 6*MaxSaid + 128
+
+// MsgNotACourier is the 403 for a report from somebody who is not a
+// neighbour this relay accepts from. A report is between couriers: a user has
+// no row here to report on and no name this relay would write.
+const MsgNotACourier = "this route is for a neighbouring relay's courier"
+
+// MsgNoSuchRow is the 404 for a report naming a row this relay does not hold
+// for that courier. It says nothing about which rows it does hold.
+const MsgNoSuchRow = "no such message was handed to you"
+
+// MsgRowNotHanded is the 409 for a report about a row this relay holds but
+// has not handed over, or has already been told about: a report is taken
+// once.
+const MsgRowNotHanded = "that message is not one this relay is waiting to hear about"
 
 // MsgAlreadyCarried is the 409 for an envelope this relay has already taken.
 //

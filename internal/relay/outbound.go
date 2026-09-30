@@ -42,6 +42,18 @@ const (
 	OutFinal = "final"
 )
 
+// KindReport is a queue row that carries an undeliverable back one hop rather
+// than an envelope onward: no file, no hash, and a body of three fields.
+//
+// It is this package's word and not relayapi's, and deliberately. The
+// outbound table's kind column holds relayapi.KindEnvelope or this; the
+// messages column holds relayapi's three and a client refuses a fourth by
+// name on every listing row. No answer carries this one — a queue row on the
+// wire has no kind at all — so the two sets never meet, and the client's is
+// untouched by construction rather than by a constant somebody remembered to
+// keep out of it.
+const KindReport = "report"
+
 // carriedDomain separates this hash from every other hash this tree makes.
 //
 // It is not a signing domain and no signature covers it: the carried table
@@ -92,6 +104,10 @@ type Outbound struct {
 	ToFP string
 	Hash string
 	Size int64
+	// Kind is relayapi.KindEnvelope for mail being carried onward, or
+	// KindReport for an undeliverable being carried back. The column holds
+	// those two words and no others; a mailbox row's kind is a different
+	// column with a different set.
 	Kind string
 
 	Received time.Time
@@ -415,6 +431,91 @@ func (s *Store) OutboundFor(posterFP string, limit int) ([]*Outbound, error) {
 	return out, rows.Err()
 }
 
+// EnqueueReport puts an undeliverable in the queue for the courier that
+// posted the row it is about, so that the news travels back a hop at a time.
+//
+// It is Enqueue's shape with three things left out, each for the same reason:
+// a report is not a message. There is no file, since what it carries is three
+// fields and they fit in the row; no hash in the carried table, since a report
+// is bound to a row the receiving relay already holds and is not a thing that
+// could arrive twice from two directions; and no size charged, since the
+// queue's byte bounds are about mail waiting on a disk. It is counted against
+// the row bounds, because it is a row and rows are what those bound.
+//
+// their_id carries this relay's own row id, which is the number the courier
+// being told holds: it took this relay's answer when it handed the envelope
+// over and wrote that number into its own row.
+func (s *Store) EnqueueReport(o *Outbound, q CourierQuotas) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := roomInQueue(tx, o.PosterFP, 0, q); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO outbound
+		(poster_fp, neighbour, path, via, to_fp, hash, size, kind, received, state,
+		 gives_up, next_try, their_id, code, said)
+		VALUES (?, ?, '', '', '', '', 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		o.PosterFP, o.Neighbour, o.Kind, o.Received.Unix(), OutWaiting,
+		o.GivesUp.Unix(), o.Received.Unix(), o.TheirID, o.Code, o.Said); err != nil {
+		return err
+	}
+	// One row, no bytes: the counters move by one and by nothing, so a queue
+	// full of reports is still refused by the row bound and a report never
+	// makes a byte bound wrong.
+	if err := adjustQueueCounters(tx, 1, 0); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// HandedTo is the row this relay handed to that courier under that id, for a
+// report coming back about it.
+//
+// The pair is (this relay's name for the courier, the id the courier itself
+// answered with), which is the one number both sides hold: this relay wrote
+// it into the row as their_id when the courier took the envelope, and the
+// courier wrote it as its own row's id. So a report names the id the
+// reporting relay issued, and the relay receiving it looks up by the pair.
+//
+// The pair is not unique and cannot be. A neighbour whose database was
+// recreated numbers its rows from one again, and this relay may still hold a
+// handed row from before with the same pair, inside the window a report could
+// still arrive in. So every row with the pair is read: none at all is no such
+// row; among them the newest handed row by id is the one, since a report
+// comes from the neighbour's present numbering and the newest row is the one
+// that numbering produced; and rows with none handed is a row that is not
+// one this relay is waiting to hear about — either never handed, or already
+// told about, which is the same answer because a report is taken once.
+//
+// found says whether any row carried the pair, which is what tells 404 from
+// 409; row is nil when found is true and none of them was handed.
+func (s *Store) HandedTo(neighbour string, theirID int64) (row *Outbound, found bool, err error) {
+	rows, err := s.db.Query(`SELECT id, poster_fp, neighbour, path, via, to_fp, hash, size, kind,
+		received, state, tries, last_try, next_try, gives_up, their_id, code, said
+		FROM outbound WHERE neighbour = ? AND their_id = ? ORDER BY id DESC`, neighbour, theirID)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		o, err := scanOutboundRows(rows)
+		if err != nil {
+			return nil, false, err
+		}
+		found = true
+		if o.State == OutHanded && row == nil {
+			row = o
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	return row, found, nil
+}
+
 // OutboundIDFor is the id of the row this poster holds for an envelope, or
 // zero when they hold none.
 //
@@ -567,6 +668,53 @@ func (s *Store) Failed(id int64, code, said string, now time.Time) error {
 	return nil
 }
 
+// FailHandedOnce finals a row if it is still handed, and says whether this call
+// is the one that did it.
+//
+// Taking a report is a read and a write: HandedTo finds the row, to tell a row
+// this relay never handed to that courier from one it is not waiting to hear
+// about, and then the row is ended. Those are two statements, and the one
+// connection the store has serialises statements and not pairs — so two reports
+// naming one id both read handed and both took it. What that cost: a duplicate
+// report row charged to the hop behind's share of this relay's queue, which a
+// neighbour reporting concurrently could spend to have that hop's honest
+// forwards refused 507; and a second report arriving at the hop behind, which
+// answers 409 as it should, which this relay then writes up as a neighbour
+// refusing an undeliverable — a false line in the operator's log about news
+// that did travel. Both documents say a report is taken "and once", and it was
+// not.
+//
+// The guard is in the UPDATE's own WHERE, so the deciding and the writing are
+// one statement. A handed row was charged off the queue when it was handed, so
+// no counter moves here, which is the only way this differs from Failed.
+func (s *Store) FailHandedOnce(id int64, code, said string, now time.Time) (bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`UPDATE outbound SET state = ?, to_fp = '', code = ?, said = ?, last_try = ?,
+		tries = tries + 1 WHERE id = ? AND state = ?`,
+		OutFinal, code, said, now.Unix(), id, OutHanded)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if n == 0 {
+		// Somebody else took it between the read and here. Nothing was
+		// written, so there is nothing to commit and nothing to undo.
+		return false, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	s.removeOutbound(id)
+	return true, nil
+}
+
 // Retry puts a row back for another attempt at next, counting the one that
 // just failed.
 func (s *Store) Retry(id int64, now, next time.Time) error {
@@ -656,50 +804,65 @@ func (s *Store) PurgeOutbound(now time.Time, finalFor time.Duration, handedFor f
 	return len(ids), nil
 }
 
-// GiveUp fails every row whose gives_up has passed, with the sentence that
+// GiveUp ends every row whose gives_up has passed, with the sentence that
 // says how long the relay tried and since when the neighbour has been
 // unreachable. It answers how many it ended.
 //
-// It ends one row per transaction, since each is a file removed as well as
-// a row and a counter moved, and there can be a great many of them: a
-// worker only reaches this when its neighbour's backoff lifts, so one pass
-// can cover an hour of arrivals. That is why it takes a context. A relay
-// stopping must not wait out the whole of it — the stop is what runs before
-// the listener's own grace period, so an unbounded wait here is a relay
-// that is killed rather than stopped — and a row left for the next start is
-// a row still waiting, which is the state it was already in.
-func (s *Store) GiveUp(ctx context.Context, neighbour string, now time.Time, ttl time.Duration) (int, error) {
-	rows, err := s.db.Query(`SELECT id, received FROM outbound
+// It does not end them itself: end does, and end is the worker's fail, which
+// is the one place that finals a row and passes the news back a hop. Giving up
+// is the third way a row ends — the route's report and the worker's refusal
+// are the other two — and the news travels from it exactly as it does from a
+// refusal. Ending rows here with Failed, which is what this did, left the hop
+// behind told nothing, and its sender told nothing at all rather than told
+// something wrong: that relay handed the envelope over successfully, so its row
+// is handed and not waiting, and the query below only ever finds waiting rows,
+// so its row is never given up on either and goes at the purge with nobody
+// told. CodeGaveUp is only ever produced here, so nothing emitted it.
+//
+// The row passed to end carries four fields and no others: ID, PosterFP, Kind
+// and Received. They are what fail and reportBack read, and the query selects
+// exactly them because a neighbour down for the whole of forward_ttl can leave
+// a great many rows due at once and a full row apiece would be the envelope's
+// address and hash held in memory for every one of them. A field added to
+// either of those readers has to be added here.
+//
+// One row per transaction, since each is a file removed as well as a row and a
+// counter moved, and there can be a great many of them: a worker only reaches
+// this when its neighbour's backoff lifts, so one pass can cover an hour of
+// arrivals. That is why it takes a context. A relay stopping must not wait out
+// the whole of it — the stop is what runs before the listener's own grace
+// period, so an unbounded wait here is a relay that is killed rather than
+// stopped — and a row left for the next start is a row still waiting, which is
+// the state it was already in.
+func (s *Store) GiveUp(ctx context.Context, neighbour string, now time.Time, ttl time.Duration,
+	end func(row *Outbound, code, said string)) (int, error) {
+
+	rows, err := s.db.Query(`SELECT id, poster_fp, kind, received FROM outbound
 		WHERE neighbour = ? AND state = ? AND gives_up <= ?`, neighbour, OutWaiting, now.Unix())
 	if err != nil {
 		return 0, err
 	}
-	type dead struct {
-		id       int64
-		received int64
-	}
-	var ended []dead
+	var ended []*Outbound
 	for rows.Next() {
-		var d dead
-		if err := rows.Scan(&d.id, &d.received); err != nil {
+		var o Outbound
+		var received int64
+		if err := rows.Scan(&o.ID, &o.PosterFP, &o.Kind, &received); err != nil {
 			rows.Close()
 			return 0, err
 		}
-		ended = append(ended, d)
+		o.Received = time.Unix(received, 0).UTC()
+		ended = append(ended, &o)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		return 0, err
 	}
-	for i, d := range ended {
+	for i, o := range ended {
 		if ctx.Err() != nil {
 			return i, nil
 		}
-		said := fmt.Sprintf("gave up after %s; %s has been unreachable since %s",
-			ttl, neighbour, time.Unix(d.received, 0).UTC().Format(time.RFC3339))
-		if err := s.Failed(d.id, relayapi.CodeGaveUp, said, now); err != nil {
-			return i, err
-		}
+		end(o, relayapi.CodeGaveUp, fmt.Sprintf("gave up after %s; %s has been unreachable since %s",
+			ttl, neighbour, o.Received.Format(time.RFC3339)))
 	}
 	return len(ended), nil
 }

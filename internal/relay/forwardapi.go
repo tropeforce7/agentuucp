@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
@@ -280,9 +282,228 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, env *envelope.E
 	s.writeJSON(w, http.StatusCreated, relayapi.ForwardResponse{ID: id})
 }
 
+// handleFailed takes an undeliverable coming back from a neighbour: the first
+// control message, and the one route on which a relay tells another relay
+// something rather than handing it something.
+//
+// The order is this route's whole content, as every route's is:
+//
+//   - the certificate, the header, the identity and the signature over the
+//     body, in callerAuthedBody;
+//   - the caller is a courier this relay accepts from, which is what a report
+//     is between, and any other caller is refused before the body is looked
+//     at;
+//   - the courier's request budget and its reports_per_minute, beside each
+//     other and both keyed by the fingerprint the signature proved;
+//   - the three fields to their rules, so nothing is looked up for a body
+//     that is not a report;
+//   - then the row.
+//
+// A report is never stored as a file, never hashed into the carried table and
+// never turned into a message: what it costs this relay is one row's state
+// and, when the row's poster is itself a courier, one more row in the queue.
+func (s *Server) handleFailed(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {
+	if s.courier == nil {
+		s.fail(w, http.StatusForbidden, relayapi.MsgForwardsNothing)
+		return
+	}
+	courierName, isCourier := s.courier.Accepts(callerFP)
+	if !isCourier {
+		s.fail(w, http.StatusForbidden, relayapi.MsgNotACourier)
+		return
+	}
+	if ok, retry := s.lim.courierReports.Allow(callerFP); !ok {
+		s.rateLimited(w, limitCourierReports, retry, "")
+		return
+	}
+	var req relayapi.ForwardFailedRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		s.fail(w, http.StatusBadRequest, "malformed report")
+		return
+	}
+	if req.ID <= 0 {
+		s.fail(w, http.StatusBadRequest, "a report names the id this relay was answered with")
+		return
+	}
+	if req.Code != relayapi.CodeRefused && req.Code != relayapi.CodeGaveUp {
+		s.fail(w, http.StatusBadRequest, fmt.Sprintf("code is %q or %q",
+			relayapi.CodeRefused, relayapi.CodeGaveUp))
+		return
+	}
+	if len(req.Said) > relayapi.MaxSaid {
+		s.fail(w, http.StatusBadRequest, fmt.Sprintf("said is %d bytes; at most %d",
+			len(req.Said), relayapi.MaxSaid))
+		return
+	}
+	if err := message.ValidOneLine("said", req.Said); err != nil {
+		s.fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// The name a row was handed under is the courier home's spelling, since
+	// that is what handleForward and reportBack write into the row. The
+	// couriers file's spelling is what Accepts answers, and the two may differ
+	// in case: both halves of a peering fold internally, so a file saying Bar
+	// against a home saying bar is one neighbour and not a pair of one-way
+	// ones, and this relay says so in as many words where it reads them. The
+	// column has no COLLATE, so looking a row up by the file's spelling found
+	// nothing and every report from such a peering was refused 404 for ever —
+	// with the reporting relay reading a 404 as final and dropping the news,
+	// and nothing logged at the end that could have fixed it. One name, one
+	// spelling, resolved through the home exactly as reportBack resolves it.
+	neighbour, dialable := s.courier.Neighbour(courierName)
+	if !dialable {
+		// A courier this relay accepts from under a name its home does not
+		// know. Either nothing was ever handed to it — a one-way peering,
+		// which the relay names at its start — or the operator gave it two
+		// different names rather than two spellings of one, which the start
+		// also names, and rows for it were written under the home's name.
+		// Neither is answerable here: this route is given a fingerprint and
+		// an id, and the one name it can reach from them is this one. So the
+		// answer is the same as for a row that is not there, and the operator
+		// has already been told at the start which names appear in one file
+		// and not the other, that being the only place the two can be
+		// compared.
+		s.fail(w, http.StatusNotFound, relayapi.MsgNoSuchRow)
+		return
+	}
+	row, found, err := s.store.HandedTo(neighbour.Name, req.ID)
+	if err != nil {
+		s.storageFault(w, r, err)
+		return
+	}
+	if !found {
+		s.fail(w, http.StatusNotFound, relayapi.MsgNoSuchRow)
+		return
+	}
+	if row == nil {
+		s.fail(w, http.StatusConflict, relayapi.MsgRowNotHanded)
+		return
+	}
+
+	// The row ends, with this relay's own name for the hop that reported in
+	// front of the sentence, so that what the sender eventually reads names
+	// each relay by a name their own relay chose. said also cuts and escapes
+	// it, as it does a refusal met on a dial.
+	//
+	// The ending is guarded on the row still being handed, in the UPDATE's own
+	// WHERE, because the read above and this write are two statements: two
+	// reports naming one id both read handed, and without the guard both took
+	// it. A report is taken once, which both documents say, and a caller that
+	// lost the race gets the answer it would have got had it arrived second.
+	took, err := s.store.FailHandedOnce(row.ID, req.Code, said(neighbour.Name, req.Said), s.cfg.Now())
+	if err != nil {
+		s.storageFault(w, r, err)
+		return
+	}
+	if !took {
+		s.fail(w, http.StatusConflict, relayapi.MsgRowNotHanded)
+		return
+	}
+	// And one hop further back, when the row was not this relay's own user's
+	// but a neighbour's. Never for a report: the chain ends where it started.
+	//
+	// Whatever that does, this request succeeded. The report has been taken
+	// and the row is final, which is everything the relay that reported
+	// needed: it may let its own row go. Passing a failure back to it would
+	// invite it to retry a report this relay has already acted on, and a
+	// second report on a final row is refused, so the retry would be a
+	// request nobody can answer usefully. So the news failing to travel
+	// further is a line in this relay's log keyed by the neighbour it was
+	// for — the same line as a neighbour refusing one — and that line is the
+	// only trace there will be.
+	//
+	// Nothing tells the hop behind later, which is worth saying plainly
+	// because it is the one place news is lost rather than delayed: the row
+	// that would have to notice is one that relay has already handed over,
+	// and a handed row that hears nothing is the ordinary shape of success,
+	// a delivered message producing no report at all. So no relay can tell a
+	// delivery from news that never arrived, and ending handed rows on a
+	// timer would tell every sender that every delivered message had failed.
+	// forward_ttl ends a row that is still waiting, which is a relay that
+	// never got the message away, and is a different thing.
+	//
+	// That includes the case where this relay's queue has no room for the
+	// report: a report row is counted against the row bounds because it is a
+	// row, so a courier at its share can be refused one.
+	if name := reportBack(s.store, s.courier, s.cfg.CourierLimits, s.cfg.Now(),
+		row, req.Code, said(neighbour.Name, req.Said)); name != "" {
+		s.wake(name)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// reportBack queues an undeliverable for the courier that posted the row just
+// failed, so that the news travels one hop at a time back to whoever sent the
+// message. It answers the neighbour to wake, or the empty string.
+//
+// Both ways a row can end come here, and they are the two halves of the same
+// thing. The last hop refuses a delivery synchronously, so the relay before it
+// learns at its own worker and fails the row there; a hop further out learns
+// by a report on the route. Either way the row is final and either way the
+// poster may be a neighbour rather than one of this relay's own users, and a
+// poster that is a neighbour is owed the news. Wiring only the route would
+// have left the commonest failure of all — the last hop refusing — unwinding
+// exactly one hop and stopping.
+//
+// The id it carries is this relay's own row id, because that is the number the
+// courier being told holds: it took this relay's answer when it handed the
+// envelope over and wrote it into its own row as their_id.
+//
+// A report is never made for a report: the chain ends where it started. And a
+// failure to queue one is a line in the log and nothing more — the row is
+// already final, which is what its own poster needs, and nobody further back is
+// told, then or later. The note at the call in handleFailed says why there is no
+// timer that could tell them: a handed row hearing nothing is success, so a
+// timer would tell every sender their delivered mail had failed.
+func reportBack(st *Store, c *Courier, limits CourierLimits, now time.Time,
+	row *Outbound, code, said string) string {
+
+	if c == nil || row.Kind == KindReport {
+		return ""
+	}
+	name, ok := c.Accepts(row.PosterFP)
+	if !ok {
+		// The poster is one of this relay's own users. Their row says
+		// everything, and they read it in their own queue.
+		return ""
+	}
+	neighbour, ok := c.Neighbour(name)
+	if !ok {
+		// A courier this relay accepts from that it cannot dial: a one-way
+		// peering, which the start says out loud. The news stops here.
+		st.faults.noteUndialable(name)
+		return ""
+	}
+	if err := st.EnqueueReport(&Outbound{
+		PosterFP:  row.PosterFP,
+		Neighbour: neighbour.Name,
+		Kind:      KindReport,
+		TheirID:   row.ID,
+		Code:      code,
+		Said:      said,
+		Received:  now,
+		GivesUp:   now.Add(limits.ForwardTTL),
+		// A courier's own quotas and not a user's: the poster of this row is
+		// the courier being told, so its share of the queue is the share
+		// this row spends.
+	}, limits.CourierQuotasFor()); err != nil {
+		st.faults.noteReportNotQueued(neighbour.Name, err)
+		return ""
+	}
+	return neighbour.Name
+}
+
 // handleQueue answers the caller their own rows in this relay's forwarding
 // queue: the mail they addressed to somebody on another relay and this relay
 // has still to hand over, or has handed over, or has given up on.
+//
+// For a caller that is a neighbour's courier the rows include the reports this
+// relay owes it, a report row's poster being that courier. They are its own
+// rows and belong on its page, but they are rows about its mail rather than its
+// mail, so a courier's page can hold both; nothing reads that page to learn
+// about a report, the report route being how a courier is told, so this is a
+// thing to know rather than a thing to work around.
 //
 // It is the owner's own, by the fingerprint the signature proved, and a
 // mailbox that is not the caller's is refused as it is on every other route

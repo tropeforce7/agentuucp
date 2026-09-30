@@ -143,6 +143,11 @@ type CourierLimits struct {
 	// of the queue as it may — and the remedy is the neighbour's own, to
 	// stop posting what it cannot get delivered.
 	QueueMaxMessagesPerCourier int64
+	// ReportsPerMinute is a courier's rate on the report route, beside its
+	// request budget and separate from its posting: an undeliverable
+	// unwinding a chain is not mail arriving, and a neighbour doing it
+	// should not spend what it needs to carry mail.
+	ReportsPerMinute int64
 	// PostsPerMinute and PostBytesPerHour are a courier's budgets, in
 	// place of a user's on the forward route, keyed by the verified
 	// fingerprint as every per-identity limit is.
@@ -180,6 +185,11 @@ func DefaultCourierLimits() CourierLimits {
 		// between them.
 		QueueMaxMessagesPerCourier: 10_000,
 		PostsPerMinute:             600,
+		// A report costs a row's state and, one hop further back, one small
+		// row: far less than an envelope, and a neighbour unwinding a long
+		// chain after an outage makes a burst of them. Ten a second is more
+		// than any honest chain and still a bound.
+		ReportsPerMinute: 600,
 		// Unlimited by default: a courier carries many people's mail, and
 		// the relay-wide queue cap and the couriers file are the bounds
 		// that suit that. A relay whose neighbour floods it removes one
@@ -277,7 +287,13 @@ const (
 	// that the limit= field on a refusal says which bound was reached and
 	// an operator is not left reading a user's name for a neighbour's
 	// rate.
-	limitCourierPosts    = "courier_posts"
+	limitCourierPosts = "courier_posts"
+	// limitCourierReports is a courier's own rate on the report route,
+	// beside its request budget and independent of its posting: telling this
+	// relay that something failed is not putting mail into it, and a
+	// neighbour unwinding a long chain of undeliverables should not spend
+	// the budget it needs to carry mail.
+	limitCourierReports  = "courier_reports"
 	limitPostBytes       = "post bytes"
 	limitUnauthenticated = "unauthenticated"
 	limitRegistrations   = "registrations"
@@ -324,12 +340,14 @@ type limiters struct {
 	// would be refused for being busy.
 	courierPosts     *ratelimit.Limiter
 	courierPostBytes *ratelimit.Limiter
+	courierReports   *ratelimit.Limiter
 }
 
 func newLimiters(l Limits, c CourierLimits, now func() time.Time) limiters {
 	return limiters{
 		courierPosts:     ratelimit.New(c.PostsPerMinute, time.Minute, time.Minute, now),
 		courierPostBytes: ratelimit.New(c.PostBytesPerHour, time.Hour, time.Hour, now),
+		courierReports:   ratelimit.New(c.ReportsPerMinute, time.Minute, time.Minute, now),
 		requests:         ratelimit.New(l.RequestsPerMinute, time.Minute, time.Minute, now),
 		posts:            ratelimit.New(l.PostsPerMinute, time.Minute, time.Minute, now),
 		postBytes:        ratelimit.New(l.PostBytesPerHour, time.Hour, time.Hour, now),

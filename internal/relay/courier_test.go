@@ -21,12 +21,23 @@ import (
 // and one entry per neighbour, named as a sender would write the name.
 func courierHome(t *testing.T, neighbours map[string]string) string {
 	t.Helper()
-	root := filepath.Join(t.TempDir(), "courier")
-	s, err := store.Open(root)
+	id, err := identity.Generate("relay-a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, err := identity.Generate("relay-a")
+	return courierHomeAs(t, id, neighbours)
+}
+
+// courierHomeAs is courierHome with the identity given rather than generated,
+// for a test where another relay has to admit this one: a courier is admitted
+// by an export line, so the neighbour's file and this home must hold the same
+// key. A test that peers two relays and lets each generate its own would have
+// each signing as a key the other never admitted, and every hand-over would
+// be unauthorized.
+func courierHomeAs(t *testing.T, id *identity.Identity, neighbours map[string]string) string {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "courier")
+	s, err := store.Open(root)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -265,6 +265,60 @@ relay it belongs to cannot. The file is protected the way the bundle is, by
 the host — the relay's user alone, 0600, under the unit's hardening — and
 `docs/relay.md` section 1.10 says how the peering is set up.
 
+**A control message, and what a lying courier can do with one.** There is one
+route on which a relay tells another relay something rather than handing it
+something: an undeliverable, `POST /v1/forward/failed`, carrying an id, a code
+and a sentence. A relay cannot seal a bounce and should not be able to, so
+this is how a sender learns that mail could not be delivered three relays
+away — the news unwinds one hop at a time along the rows each relay is
+holding, until it reaches the row whose poster is the sender, who reads it in
+`auu queue`.
+
+What a hostile or lying courier can do with it is bounded by what it can name.
+A report is accepted only against a row this relay really handed to *that*
+courier, and once: so a courier can end the messages it was given and no
+others, and what it was given is bounded by this relay's own queue caps. There
+is no way to make a relay carry a report it did not earn, no way to end
+somebody else's mail, and nothing to learn — a refusal says a row is not one
+this relay is waiting to hear about and never which rows it holds. What a
+courier can do is lie about *why*: the code is one of two words a relay can
+prove about its own attempt, and the sentence is free text, so a courier can
+say a message was refused when it was not, or give a reason of its own
+invention. That ends mail the courier was carrying anyway, which it could
+equally do by dropping it, and the sentence reaches a person with this relay's
+own name for that courier in front of it and escaped. The rate is bounded by
+`courier.reports_per_minute` beside the request budget.
+
+What a courier can also do is say nothing, and that is the limit worth stating
+plainly. **A courier that swallows a report, or a relay whose report the hop
+behind refuses, leaves the sender believing the message was delivered, and
+nothing in the design detects it.** The reason is not a gap that could be
+closed: a row a relay has handed over and heard nothing further about is the
+ordinary shape of *success*, a delivered message producing no report at all, so
+no relay can tell a delivery from news that never arrived. Ending such rows on a
+timer would tell every sender that every delivered message had failed.
+`courier.forward_ttl` ends a row that is still *waiting*, which is a relay that
+never got the message away, and that is a different thing. So the guarantee this
+route offers is one-sided: news that arrives is news a relay was really handed
+and can be trusted about which hop failed, while news that does not arrive
+proves nothing either way. A sender who needs to know a message was read needs
+the recipient to say so, which is a message and not a relay's business.
+`docs/relay.md` says what keeps the silent case rare and what an operator sees
+when it happens.
+
+A report is never made for a report: a report the next hop back will not take
+is a line in this relay's log and nothing further, so a chain ends rather than
+echoing. And a report is never a message — no seal, no mailbox, no file, no
+hash — so what one costs a relay is a row's state and one small request.
+
+Three lines in the relay's log are about undeliverables it could not pass
+back: one for a neighbour it accepts from but cannot dial, which is the one-way
+peering the relay already names at its start, met at the moment it costs
+something; one for a report its own queue had no room to write down; and one for
+a report the neighbour behind refused. Each is rate-limited to one a minute on
+its own key, and each names the neighbour by the name this relay's operator gave
+it and never an identity, which is what every courier line here does.
+
 The relay also learns how many machines an identity uses and what each one
 calls itself. That is operational data it needs in order to revoke one of them.
 It is not who talks to whom, and `access_log: "minimal"` is unaffected.

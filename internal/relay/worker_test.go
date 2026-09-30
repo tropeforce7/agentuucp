@@ -557,20 +557,30 @@ func TestANeighboursSentenceIsASentence(t *testing.T) {
 	w.attempt(r, nil, h.outbound(t, answer.ID))
 
 	row := h.outbound(t, answer.ID)
-	if len(row.Said) > relayapi.MaxSaid+4 {
+	if len(row.Said) > relayapi.MaxSaid {
 		t.Errorf("the row kept %d bytes of a neighbour's sentence, want at most %d",
 			len(row.Said), relayapi.MaxSaid)
 	}
-	if !strings.HasPrefix(row.Said, "bar: ") {
-		t.Errorf("said %q; want the hop that refused named first", row.Said[:40])
+	// Over the cap it is the front that goes, so what survives is the end of
+	// what the neighbour said and the marker says hops were dropped. The tail
+	// is the part a report is for: it is what the relay that actually failed
+	// wrote, where the head is a list of names.
+	if !strings.HasPrefix(row.Said, "…") {
+		t.Errorf("said %q; want the marker in front, saying the front was cut", row.Said[:40])
 	}
-	if !strings.HasSuffix(row.Said, "…") {
-		t.Errorf("a cut sentence does not say it was cut: %q", row.Said[len(row.Said)-8:])
+	if !strings.HasSuffix(row.Said, huge[len(huge)-20:]) {
+		t.Errorf("said %q; want the end of what the neighbour said", row.Said[len(row.Said)-30:])
 	}
 	// What is kept is still a sentence: cut on a rune boundary, whatever
 	// the neighbour sent.
 	if !utf8.ValidString(row.Said) {
 		t.Error("the sentence was cut through a character")
+	}
+
+	// And a sentence that fits is untouched, with the hop that refused named
+	// first: the cut is what happens at the cap and not what happens.
+	if got := said("bar", "no such mailbox"); got != "bar: no such mailbox" {
+		t.Errorf("said %q; want the name in front and the sentence whole", got)
 	}
 }
 
@@ -582,7 +592,7 @@ func TestASentenceIsCutOnARuneBoundary(t *testing.T) {
 		if !utf8.ValidString(got) {
 			t.Errorf("%q: the sentence was cut through a character", r)
 		}
-		if len(got) > relayapi.MaxSaid+4 {
+		if len(got) > relayapi.MaxSaid {
 			t.Errorf("%q: %d bytes, want at most %d", r, len(got), relayapi.MaxSaid)
 		}
 	}
@@ -985,14 +995,19 @@ func TestANeighboursSentenceCostsWhatItIsKept(t *testing.T) {
 	}
 }
 
-// TestASentenceCutBeforeEscapingStillSaysItWasCut: the two cuts are one
-// promise to the reader, so a sentence shortened by either says so.
-func TestASentenceCutBeforeEscapingStillSaysItWasCut(t *testing.T) {
-	// Printable ASCII: the escaping changes nothing, so this is cut by the
-	// first cut alone and would keep no ellipsis if that cut were silent.
-	long := strings.Repeat("l", relayapi.MaxSaid*2)
-	if got := said("bar", long); !strings.HasSuffix(got, "…") {
-		t.Errorf("a sentence cut before escaping does not say it was cut: %q", got[len(got)-8:])
+// TestASentenceOverTheCapKeepsItsEndAndSaysSo: a sentence shortened at all
+// says so, and what it keeps is its end.
+func TestASentenceOverTheCapKeepsItsEndAndSaysSo(t *testing.T) {
+	long := strings.Repeat("l", relayapi.MaxSaid) + "the innermost sentence"
+	got := said("bar", long)
+	if !strings.HasPrefix(got, "…") {
+		t.Errorf("no marker in front of %q", got[:40])
+	}
+	if !strings.HasSuffix(got, "the innermost sentence") {
+		t.Errorf("said %q; want the innermost sentence intact at the end", got[len(got)-40:])
+	}
+	if len(got) > relayapi.MaxSaid {
+		t.Errorf("%d bytes, want at most %d", len(got), relayapi.MaxSaid)
 	}
 	// And a sentence that fits says nothing of the kind.
 	if got := said("bar", "no such mailbox"); got != "bar: no such mailbox" {
@@ -1178,7 +1193,7 @@ func TestAStopDoesNotWaitOutAGiveUp(t *testing.T) {
 
 	w := worker(t, h)
 	w.stop()
-	n, err := h.store.GiveUp(w.ctx, "bar", h.clock.Now(), limits.ForwardTTL)
+	n, err := h.store.GiveUp(w.ctx, "bar", h.clock.Now(), limits.ForwardTTL, w.fail)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1190,7 +1205,7 @@ func TestAStopDoesNotWaitOutAGiveUp(t *testing.T) {
 	}
 	// And with the relay running, the same call ends every one of them.
 	live := worker(t, h)
-	if n, err := h.store.GiveUp(live.ctx, "bar", h.clock.Now(), limits.ForwardTTL); err != nil || n != 20 {
+	if n, err := h.store.GiveUp(live.ctx, "bar", h.clock.Now(), limits.ForwardTTL, live.fail); err != nil || n != 20 {
 		t.Fatalf("a running relay gave up on %d rows: %v", n, err)
 	}
 }

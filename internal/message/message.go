@@ -236,11 +236,28 @@ func ValidSubject(subject string) error {
 	if len(subject) > maxSubjectBytes {
 		return errors.New("message: subject too long")
 	}
-	if !utf8.ValidString(subject) {
-		return errors.New("message: subject is not valid UTF-8")
+	return ValidOneLine("subject", subject)
+}
+
+// ValidOneLine is the rule for a string that is one line: valid UTF-8, and
+// none of the characters a channel name may not hold — a line break and a tab
+// among them, since a line that holds one is not one line.
+//
+// noun is what the sentence calls it, because the callers are about different
+// things and a person reads which. Each caller puts its own length bound in
+// front: the bound is the caller's, the shape is everybody's, and a second
+// copy of this loop would be a second rule.
+//
+// A message's subject is one caller. A relay's sentence about why it could
+// not deliver something is the other: it arrives from another relay, is kept
+// in a row and shown on a terminal, and a newline in it would let that relay
+// write a line of its own under this program's.
+func ValidOneLine(noun, s string) error {
+	if !utf8.ValidString(s) {
+		return fmt.Errorf("message: %s is not valid UTF-8", noun)
 	}
-	if r, what := channels.ForbiddenRune(subject); what != "" {
-		return fmt.Errorf("message: subject contains %U, a %s; a subject is one line", r, what)
+	if r, what := channels.ForbiddenRune(s); what != "" {
+		return fmt.Errorf("message: %s contains %U, a %s; a %s is one line", noun, r, what, noun)
 	}
 	return nil
 }

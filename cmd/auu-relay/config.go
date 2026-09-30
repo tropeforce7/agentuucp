@@ -131,6 +131,10 @@ type CourierConfig struct {
 	// many people's mail, and there at all because the relay-wide pair
 	// bounds every neighbour together and not one of them.
 	QueueMaxMessagesPerCourier int64 `json:"queue_max_messages_per_courier"`
+	// ReportsPerMinute is a courier's rate on the report route, beside its
+	// request budget and separate from its posting: an undeliverable coming
+	// back is not mail arriving.
+	ReportsPerMinute int64 `json:"reports_per_minute"`
 	// PostsPerMinute and PostBytesPerHour are a courier's budgets on the
 	// forward route, in place of a user's posts_per_minute and
 	// post_bytes_per_hour.
@@ -196,6 +200,7 @@ func (c CourierConfig) Relay() (relay.CourierLimits, error) {
 		QueueMaxMessagesPerCourier: c.QueueMaxMessagesPerCourier,
 		PostsPerMinute:             c.PostsPerMinute,
 		PostBytesPerHour:           c.PostBytesPerHour,
+		ReportsPerMinute:           c.ReportsPerMinute,
 		CarriedMaxRows:             c.CarriedMaxRows,
 	}, nil
 }
@@ -403,6 +408,7 @@ func Defaults() Config {
 			QueueMaxMessagesPerCourier: c.QueueMaxMessagesPerCourier,
 			PostsPerMinute:             c.PostsPerMinute,
 			PostBytesPerHour:           c.PostBytesPerHour,
+			ReportsPerMinute:           c.ReportsPerMinute,
 			CarriedMaxRows:             c.CarriedMaxRows,
 		},
 		ClientCerts: ClientCertsConfig{
@@ -695,6 +701,8 @@ func (c *Config) Merge(fs *flag.FlagSet, f *flagValues) {
 			c.Courier.QueueMaxMessagesPerCourier = f.courierQueueMaxMessagesPerCourier
 		case "courier-queue-max-bytes-per-poster":
 			c.Courier.QueueMaxBytesPerPoster = f.courierQueueMaxBytesPerPoster
+		case "courier-reports-per-minute":
+			c.Courier.ReportsPerMinute = f.courierReportsPerMinute
 		case "courier-posts-per-minute":
 			c.Courier.PostsPerMinute = f.courierPostsPerMinute
 		case "courier-post-bytes-per-hour":
@@ -1032,6 +1040,7 @@ func (c Config) courierValidate() error {
 		{"courier.queue_max_messages_per_courier", c.Courier.QueueMaxMessagesPerCourier},
 		{"courier.queue_max_bytes_per_poster", c.Courier.QueueMaxBytesPerPoster},
 		{"courier.posts_per_minute", c.Courier.PostsPerMinute},
+		{"courier.reports_per_minute", c.Courier.ReportsPerMinute},
 		{"courier.post_bytes_per_hour", c.Courier.PostBytesPerHour},
 		{"courier.carried_max_rows", c.Courier.CarriedMaxRows},
 	} {

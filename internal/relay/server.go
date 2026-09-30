@@ -244,6 +244,10 @@ func NewServer(store *Store, cfg Config) *Server {
 	// envelope and the next hop is the first name of the path, so it is
 	// caller-authenticated with a body the signature covers.
 	s.route("POST /v1/forward", s.callerAuthedBody(s.forwardCap(), "", s.handleForward))
+	// A control message, read under its own small cap and not under a post's:
+	// nothing about a report is a message, and a body over a kibibyte is not
+	// one whatever it says.
+	s.route("POST /v1/forward/failed", s.callerAuthedBody(relayapi.MaxReportBytes, "", s.handleFailed))
 
 	s.route("GET /v1/admin/status", s.adminAuthed(s.handleAdminStatus))
 	s.route("GET /v1/admin/mailboxes", s.adminAuthed(s.handleAdminMailboxes))

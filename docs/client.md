@@ -410,9 +410,20 @@ says the message cannot go back the way it came and offers `--via NAME` or
 somebody on another relay which your relay has taken and not yet handed over.
 Each row says which neighbour it is going to, what is left of the address,
 how many times it has been tried, when it will be tried again and when your
-relay gives up. A row that failed keeps the sentence the hop that refused
-gave, with that hop's name in front, which is how you learn that `bar` has no
-such mailbox rather than guessing. `auu inbox` prints one line while anything
+relay gives up.
+
+A row that failed says why. Its code is `refused` — some relay along the way
+would not take it — or `gave-up`, meaning a relay stopped trying a neighbour
+that was not answering: your own relay, if the row never left it, or a relay
+further along, which tells the one behind it and so on back to you. Beside it is
+the sentence the relay that actually failed gave, with each hop's name in front
+of it as the news came back: `bar: baz: no such mailbox` is `baz` refusing it, reported to you
+through `bar`, each named as the relay in front of it names it. So you learn
+which relay along the way said no and what it said, rather than guessing. A
+very long chain eventually fills the sentence, and then it is the front that
+is dropped, marked with `…`, because the reason it failed is worth more than
+the list of names — and the first name you lose is the one on the line above
+it anyway. `auu inbox` prints one line while anything
 is waiting and says nothing when nothing is.
 
 `auu extract` writes each attachment under `--out` (the working directory

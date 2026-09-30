@@ -177,7 +177,11 @@ func fullAllowList(t *testing.T, owner *identity.Identity, at time.Time) relayap
 // taken under it, one byte over refused with the hint to send the
 // document compact; the documents inside have caps of their own,
 // MaxDirectoryBytes and MaxAllowlistBytes, which the packages that own
-// them test and which the measurements live in the comments of; every other body route takes FramingAllowance
+// them test and which the measurements live in the comments of; the report
+// route takes MaxReportBytes, which is derived from MaxSaid because JSON
+// escaping expands a legal sentence up to sixfold and
+// TestLimitAReportAtItsBoundFitsItsBodyCap holds the arithmetic to every
+// character that expands; every other body route takes FramingAllowance
 // alone, shown on the card, the registration, the stream open and an
 // admin token. A card at its maximum, a name of 64 bytes, is a few
 // hundred bytes and is taken under the general cap.
@@ -249,6 +253,10 @@ func TestLimitBodyCapsPerRoute(t *testing.T) {
 		{"the knock", "POST", "/v1/mailbox/" + bob.Fingerprint() + "/knock", alice, 1<<20 + relayapi.FramingAllowance, ""},
 		{"the stream open", "POST", "/v1/mailbox/" + bob.Fingerprint() + "/streams", alice, relayapi.FramingAllowance, ""},
 		{"the forward", "POST", "/v1/forward", alice, 1<<20 + relayapi.FramingAllowance, ""},
+		// The report route's cap is reached before the handler's check that
+		// the caller is a courier, readBody running inside callerAuthedBody,
+		// so a user shows the cap as well as a neighbour would.
+		{"the report", "POST", "/v1/forward/failed", alice, relayapi.MaxReportBytes, ""},
 		{"the registration", "POST", "/v1/register", alice, relayapi.FramingAllowance, ""},
 		{"the certificate request", "POST", "/v1/mailbox/" + me + "/certs", alice, relayapi.FramingAllowance, ""},
 	} {
