@@ -101,7 +101,7 @@ func TestDamagedFilesAreNamed(t *testing.T) {
 			damage: func(t *testing.T, s *Store, r *Relay) string {
 				write(t, s.path(configFile), "{")
 				return s.path(configFile) + " is not valid JSON (unexpected end of JSON input): delete it and set the " +
-					"default relay again with 'auu relay default NAME'; it holds only that, the stream settings and your editor"
+					"default relay again with 'auu relay default NAME'; it holds only that, the stream settings, your editor and whether vouch questions are answered"
 			},
 			read: func(s *Store, r *Relay) error { _, err := s.Config(); return err },
 		},

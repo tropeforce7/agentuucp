@@ -71,6 +71,8 @@ Usage:
   auu listed [--json]                 # who on the relay chose to be listed, verified here
   auu knock NAME|SHORT-ID|FINGERPRINT [--text "..."] [--yes]   # one message to somebody who has not admitted you
   auu vouch PEER --to PEER            # send a peer your word that you hold another
+  auu vouch --ask PEER FINGERPRINT|SHORT-ID   # ask a peer whether they hold a key
+  auu vouch answer on|off|show        # whether inbox and wait answer a peer's question by themselves
   auu introduce PEER PEER             # a vouch each way, so each is told about the other
 
   auu allow push                     # sign your peer list and push it to every relay

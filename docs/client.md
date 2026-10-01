@@ -203,6 +203,43 @@ offers to push your allow list as trusting a knock does. Like `peers
 fetch` it refuses without a terminal unless you pass `--yes`, and the
 skills never run it.
 
+#### Asking a peer
+
+When a stranger knocks, or a message from somebody you do not hold sits in
+your quarantine, you can ask a peer whether they hold that key:
+
+```
+auu vouch --ask victor 4c1d9e2a7b0f3c58       # a short id from your quarantine, or a whole fingerprint
+auu vouch answer on                            # let inbox and wait answer such questions by themselves
+auu vouch answer show
+```
+
+The question reaches victor as a message of type `vouch-ask`, listed as
+`asks whether you trust 4c1d… "xena"` when he holds that key, under his
+name for it, or `(not on your list)` when he does not, and `auu read`
+says which command answers it. He answers with `auu vouch xena --to
+rita`, which reaches you as an introduction, or not at all: there is no
+signed no, because a refusal would tell somebody he trusts something about
+somebody he does not.
+
+`auu vouch answer on` lets `auu inbox` and `auu wait` answer by themselves:
+a question from a peer about a key on your list is answered with your
+vouch, sent to them by the relay the question came through, and marked
+read, with one line, `answered rita: you hold 4c1d… as "xena"`. Each
+answer discloses one thing, that the key is on your list, with your name
+for it and your signature, and only to a peer already on it; but nothing
+limits how many a peer may ask, so a peer who asks about every key they
+can see learns which of them you hold and what you call them. The
+setting is for somebody content to tell their peers that; it is off unless
+you turn it on, and the command says all of this when you do. A
+question about a key you do not hold, or about you, is left for you; one
+from somebody not on your list is in quarantine and never answered; and
+serve's own rounds never answer one, though a handler of yours that runs
+`auu inbox` is `auu inbox`. Signing the answer
+originates as you, so where the agent holds your key and is unlocked only
+to receive, the question is left unread and the line names `auu unlock
+--send`.
+
 Trusting a vouch is trusting the voucher: somebody you hold can introduce
 anybody to you, which is no more than they could do across a table. There
 are no chains — a vouch counts only from somebody already on your list —

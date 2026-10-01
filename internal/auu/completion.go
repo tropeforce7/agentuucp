@@ -37,7 +37,9 @@ var subcommands = []subcommand{
 	{name: "lookup", describe: "ask the relay about a fingerprint, short id or peer"},
 	{name: "listed", describe: "who on the relay chose to be listed, verified here"},
 	{name: "knock", describe: "one message to somebody who has not admitted you, at a terminal"},
-	{name: "vouch", describe: "send a peer your word that you hold another"},
+	{name: "vouch", describe: "send a peer your word that you hold another", subs: []subcommand{
+		{name: "answer", describe: "whether inbox and wait answer a peer's question by themselves"},
+	}},
 	{name: "introduce", describe: "a vouch each way between two peers"},
 	{name: "enrol", describe: "create an identity and register with an enrolment token"},
 	{name: "register", describe: "register your identity with the relay"},

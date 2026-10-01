@@ -180,7 +180,7 @@ func TestAHomeFromBeforeIsRefusedByNameAndNotMoved(t *testing.T) {
 // it is accepted without a list to update, and the set is shown here.
 func TestConfigRefusesAKeyItDoesNotKnow(t *testing.T) {
 	s := newStore(t)
-	want := map[string]bool{"name": true, "default_relay": true, "stream_threshold": true, "chunk_size": true, "editor": true}
+	want := map[string]bool{"name": true, "default_relay": true, "stream_threshold": true, "chunk_size": true, "editor": true, "vouch_answer": true}
 	if len(configKeys) != len(want) {
 		t.Fatalf("configKeys is %v, want %v", configKeys, want)
 	}
@@ -202,7 +202,7 @@ func TestConfigRefusesAKeyItDoesNotKnow(t *testing.T) {
 	}
 	_, err := s.Config()
 	wantErr := s.path(configFile) + ` has a key this auu does not know, "colour": remove it, or delete the file and ` +
-		"set the default relay again with 'auu relay default NAME'; it holds only that, the stream settings and your editor"
+		"set the default relay again with 'auu relay default NAME'; it holds only that, the stream settings, your editor and whether vouch questions are answered"
 	if err == nil || err.Error() != wantErr {
 		t.Fatalf("Config: %v\nwant %s", err, wantErr)
 	}

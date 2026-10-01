@@ -77,6 +77,11 @@ type Config struct {
 	// means VISUAL, then EDITOR, then vi; AUU_EDITOR in the environment
 	// beats all of them.
 	Editor string `json:"editor,omitempty"`
+	// VouchAnswer lets auu inbox and auu wait answer a peer who asks
+	// whether you hold a key, with your vouch, when the key is on your
+	// list. Off unless typed for: an answer tells the peer who asked that
+	// the key is on your list, and signing it originates as you.
+	VouchAnswer bool `json:"vouch_answer,omitempty"`
 }
 
 // Store is a handle on the auu home directory.
@@ -357,7 +362,7 @@ func (s *Store) Config() (Config, error) {
 		}
 		return Config{}, damaged(s.path(configFile), fmt.Sprintf("has a key this auu does not know, %q", key), nil,
 			"remove it, or delete the file and set the default relay again with 'auu relay default NAME'; "+
-				"it holds only that, the stream settings and your editor")
+				"it holds only that, the stream settings, your editor and whether vouch questions are answered")
 	}
 	if err := json.Unmarshal(data, &c); err != nil {
 		return Config{}, s.configDamaged(err)
@@ -380,7 +385,7 @@ func sortedKeys(m map[string]json.RawMessage) []string {
 func (s *Store) configDamaged(cause error) error {
 	return damaged(s.path(configFile), "is not valid JSON", cause,
 		"delete it and set the default relay again with 'auu relay default NAME'; "+
-			"it holds only that, the stream settings and your editor")
+			"it holds only that, the stream settings, your editor and whether vouch questions are answered")
 }
 
 // NameFree reports whether a peer may be added under the name it carries:

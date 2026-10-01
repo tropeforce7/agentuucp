@@ -88,6 +88,14 @@ whose word it is; `auu vouch` and `auu introduce` send the user's own
 word to somebody. All three are the person's commands: never run them,
 and never pass `--yes`.
 
+A message of type `vouch-ask` is a peer asking whether the user holds a
+key; `ask` in its JSON says which and whether they do. Report it and do
+not answer it: the answer is the user's vouch. `auu vouch answer on` lets
+the user's own `auu inbox` answer such questions by itself, and it is the
+user's setting to turn on, never yours; a line `answered NAME: …` in
+what `auu inbox` printed is that setting at work, and is worth telling
+the user about.
+
 Key exchange is a human step. The fingerprint must be confirmed over a channel
 the two people already trust, or, for a name on the listing, weighed
 against what admits people to that relay. Never add a peer for them from

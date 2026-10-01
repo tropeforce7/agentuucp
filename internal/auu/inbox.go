@@ -403,6 +403,9 @@ type messageJSON struct {
 	// Vouch is a vouch message's judgement here: whether it counts and
 	// why not, and what it says when it does. On a vouch alone.
 	Vouch *vouchJSON `json:"vouch,omitempty"`
+	// Ask is a vouch question's account: the fingerprint asked about and
+	// whether this machine holds it. On a vouch-ask alone.
+	Ask *askJSON `json:"ask,omitempty"`
 }
 
 func toJSON(s *store.Store, box store.Box, m *store.Stored, includeText bool) messageJSON {
@@ -428,6 +431,9 @@ func toJSON(s *store.Store, box store.Box, m *store.Stored, includeText bool) me
 	}
 	if m.Inner.Body.Type == message.TypeVouch && s != nil {
 		out.Vouch = vouchToJSON(judgeVouch(s, m, time.Now()))
+	}
+	if m.Inner.Body.Type == message.TypeVouchAsk && s != nil {
+		out.Ask = askToJSON(s, m)
 	}
 	if includeText {
 		out.Text = m.Inner.Body.Text
@@ -554,6 +560,14 @@ func cmdInbox(args []string) error {
 		if res, reports, err = fetchEvery(s, id, relays, narrowed); err != nil {
 			return err
 		}
+		// A peer's question, answered here when the person has turned
+		// that on, and never in serve. Its line goes beside the listing,
+		// or to standard error under --json so the answer stays one object.
+		answered := io.Writer(os.Stdout)
+		if *asJSON {
+			answered = os.Stderr
+		}
+		answerAsks(s, id, answered)
 	}
 
 	msgs, err := s.List(store.Inbox)
@@ -690,6 +704,9 @@ func printInboxLine(s *store.Store, m *store.Stored) {
 	if m.Inner.Body.Type == message.TypeVouch && s != nil {
 		what = vouchLine(judgeVouch(s, m, time.Now()))
 	}
+	if m.Inner.Body.Type == message.TypeVouchAsk && s != nil {
+		what = askLine(s, m)
+	}
 	fmt.Printf("%s %s  %-14s %-8s %-32s %s%s%s%s\n",
 		flag,
 		m.Inner.ID[:12],
@@ -784,6 +801,9 @@ func printMessage(s *store.Store, box store.Box, m *store.Stored) {
 	}
 	if m.Inner.Body.Type == message.TypeVouch {
 		printVouch(m.Inner.ID, judgeVouch(s, m, time.Now()))
+	}
+	if m.Inner.Body.Type == message.TypeVouchAsk {
+		printAsk(s, m)
 	}
 	// The thread's subject, and under it this message's own when it was
 	// given one: a reply can be about something of its own without
@@ -1268,6 +1288,10 @@ func cmdWait(args []string) error {
 			}
 		}
 		if ok > 0 {
+			// A question that arrived during the wait, answered as auu inbox
+			// answers it, to standard error since what this command prints
+			// on standard output is the message waited for.
+			answerAsks(s, id, os.Stderr)
 			msgs, err := s.List(store.Inbox)
 			if err != nil {
 				return err

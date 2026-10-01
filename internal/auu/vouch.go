@@ -3,6 +3,7 @@ package auu
 import (
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -23,13 +24,23 @@ import (
 // to R, another peer, as a message of type vouch. Signing is an
 // origination, so it needs the key unlocked to send.
 func cmdVouch(args []string) error {
+	if len(args) > 0 && args[0] == "answer" {
+		return vouchAnswer(args[1:])
+	}
 	fs := newFlagSet("vouch")
 	to := fs.String("to", "", "the peer to send the vouch to")
+	ask := fs.String("ask", "", "ask this peer whether they hold the key named, instead of vouching")
 	relay := relayFlag(fs)
 	asJSON := fs.Bool("json", false, "machine readable output")
 	positional, err := parseArgs(fs, args)
 	if err != nil {
 		return err
+	}
+	if *ask != "" {
+		if len(positional) != 1 || *to != "" {
+			return usageErrf("usage: %s vouch --ask PEER FINGERPRINT|SHORT-ID [--relay NAME]", prog)
+		}
+		return askVouch(*ask, positional[0], *relay, *asJSON)
 	}
 	if len(positional) != 1 || *to == "" {
 		return usageErrf("usage: %s vouch PEER --to PEER [--relay NAME]", prog)
@@ -356,4 +367,231 @@ func freeName(s *store.Store, fp, claimed string) (name string, takenBy string) 
 		}
 	}
 	return claimed, ""
+}
+
+// askVouch is 'auu vouch --ask V X': ask V, a peer, whether they hold X.
+// X is a fingerprint, or a short id that names exactly one sender in the
+// quarantine, since the person asking holds no entry for X by definition.
+// The answer is a vouch or nothing; there is no signed no.
+func askVouch(peerQuery, about, relayName string, asJSON bool) error {
+	s, id, err := loadIdentity()
+	if err != nil {
+		return err
+	}
+	asked, err := s.Resolve(peerQuery)
+	if err != nil {
+		return usageErrf("%s is not on your peer list, so you cannot ask them: %v", peerQuery, err)
+	}
+	if asked.Fingerprint() == id.Fingerprint() {
+		return usageErrf("that is you")
+	}
+	fp, err := askedAbout(s, about)
+	if err != nil {
+		return err
+	}
+	switch {
+	case fp == id.Fingerprint():
+		return usageErrf("that is you")
+	case fp == asked.Fingerprint():
+		return usageErrf("%s is the peer you would be asking; ask about somebody else", identity.Printable(orNone(asked.Name)))
+	}
+	if known, err := s.Resolve(fp); err == nil && known.Fingerprint() == fp {
+		return usageErrf("you hold %s… already, as %s", fp[:identity.ShortIDLen], identity.Printable(orNone(known.Name)))
+	}
+	r, err := selectRelay(s, relayName)
+	if err != nil {
+		return err
+	}
+	body := message.Body{
+		Type:    message.TypeVouchAsk,
+		Subject: "do you trust " + fp[:identity.ShortIDLen] + "…",
+		About:   fp,
+	}
+	return sealAndSend(s, id, r, asked, body, nil, sendMode{inline: true}, asJSON)
+}
+
+// askedAbout turns what the person typed into the fingerprint asked about:
+// a whole fingerprint as it is, or a short id that begins exactly one
+// quarantined sender's fingerprint.
+func askedAbout(s *store.Store, about string) (string, error) {
+	if identity.ValidFingerprint(about) {
+		return about, nil
+	}
+	if !identity.ValidShortID(about) {
+		return "", usageErrf("%q is not a fingerprint or a short id", about)
+	}
+	held, err := s.List(store.Quarantine)
+	if err != nil {
+		return "", err
+	}
+	found := ""
+	for _, m := range held {
+		if strings.HasPrefix(m.Inner.From, about) && m.Inner.From != found {
+			if found != "" {
+				return "", usageErrf("%s begins more than one sender in your quarantine; give the whole fingerprint", about)
+			}
+			found = m.Inner.From
+		}
+	}
+	if found == "" {
+		return "", usageErrf("%s begins no sender in your quarantine; give the whole fingerprint", about)
+	}
+	return found, nil
+}
+
+// askLine is the inbox's column for a question: what is asked about, and
+// what that key is to this machine.
+func askLine(s *store.Store, m *store.Stored) string {
+	about := m.Inner.Body.About
+	if !identity.ValidFingerprint(about) {
+		return "a question about nothing"
+	}
+	if self, err := s.Self(); err == nil && self.Fingerprint() == about {
+		return "that is you; there is nothing to answer"
+	}
+	if known, err := s.Resolve(about); err == nil && known.Fingerprint() == about {
+		return fmt.Sprintf("asks whether you trust %s… %q", about[:identity.ShortIDLen], identity.Printable(orNone(known.Name)))
+	}
+	return fmt.Sprintf("asks whether you trust %s… (not on your list)", about[:identity.ShortIDLen])
+}
+
+// askJSON is a question's account for --json: the fingerprint asked about
+// and, when it is on the list, this machine's name for it.
+type askJSON struct {
+	About   string `json:"about"`
+	KnownAs string `json:"known_as,omitempty"`
+	Known   bool   `json:"known"`
+}
+
+func askToJSON(s *store.Store, m *store.Stored) *askJSON {
+	out := &askJSON{About: m.Inner.Body.About}
+	if known, err := s.Resolve(out.About); err == nil && known.Fingerprint() == out.About {
+		out.Known, out.KnownAs = true, known.Name
+	}
+	return out
+}
+
+// printAsk is auu read's account of a question, with the one command that
+// answers it when it can be answered.
+func printAsk(s *store.Store, m *store.Stored) {
+	about := m.Inner.Body.About
+	fmt.Printf("asks:    whether you trust %s\n", about)
+	if self, err := s.Self(); err == nil && self.Fingerprint() == about {
+		fmt.Println("         that is you; there is nothing to answer")
+		return
+	}
+	if known, err := s.Resolve(about); err == nil && known.Fingerprint() == about {
+		fmt.Printf("         you hold them as %s; answer with: %s vouch %s --to %s\n",
+			identity.Printable(orNone(known.Name)), prog, identity.Printable(orNone(known.Name)),
+			identity.Printable(orNone(m.SenderName)))
+		return
+	}
+	fmt.Println("         not on your list; there is nothing to answer, and silence is the answer")
+}
+
+// vouchAnswer is 'auu vouch answer on|off|show': whether this machine
+// answers a peer's question by itself.
+func vouchAnswer(args []string) error {
+	if len(args) != 1 {
+		return usageErrf("usage: %s vouch answer on|off|show", prog)
+	}
+	s, _, err := requireIdentity()
+	if err != nil {
+		return err
+	}
+	cfg, err := s.Config()
+	if err != nil {
+		return err
+	}
+	switch args[0] {
+	case "show":
+		fmt.Printf("vouch_answer: %s\n", onOff(cfg.VouchAnswer))
+		return nil
+	case "on", "off":
+		cfg.VouchAnswer = args[0] == "on"
+		if err := s.SaveConfig(cfg); err != nil {
+			return err
+		}
+		if cfg.VouchAnswer {
+			fmt.Println("vouch_answer: on")
+			fmt.Println("auu inbox and auu wait now answer a peer who asks whether you hold a key that is on your list,")
+			fmt.Println("by sending them your vouch for it: that tells a peer you already trust that the key is on your list.")
+			fmt.Println("Each answer carries your name for the key and your signature, and nothing limits how many a peer may ask:")
+			fmt.Println("a peer who asks about every key they can see learns which of them you hold, and what you call them.")
+			fmt.Println("Turn this on only if you are content to tell your peers that.")
+			fmt.Println("A question about a key you do not hold is left for you; serve's own rounds never answer one;")
+			fmt.Println("and signing an answer needs your key unlocked to send, so a key unlocked to receive leaves the question for you.")
+			return nil
+		}
+		fmt.Println("vouch_answer: off; questions are left for you")
+		return nil
+	default:
+		return usageErrf("usage: %s vouch answer on|off|show", prog)
+	}
+}
+
+// answerAsks is the automatic answer, run by auu inbox and auu wait after
+// a fetch and never by serve: with vouch_answer on, each unread question
+// from a peer about a key on the list is answered with this machine's
+// vouch for that key, sent to the asker by the relay the question came
+// through, and marked read, with one line saying so. A question about a key
+// not on the list is left as it is and nothing is sent; one from somebody
+// not on the list is in the quarantine and never looked at. Signing is an
+// origination: a key that cannot sign leaves the question, says why, and
+// the rest of the command goes on.
+func answerAsks(s *store.Store, id *identity.Identity, out io.Writer) {
+	cfg, err := s.Config()
+	if err != nil || !cfg.VouchAnswer {
+		return
+	}
+	msgs, err := s.List(store.Inbox)
+	if err != nil {
+		return
+	}
+	for _, m := range msgs {
+		if m.Read || m.Inner.Body.Type != message.TypeVouchAsk {
+			continue
+		}
+		about := m.Inner.Body.About
+		// A question about this identity is nobody's to answer: a voucher
+		// does not vouch for themselves, and the signature would only say
+		// so at every fetch.
+		if about == id.Fingerprint() {
+			continue
+		}
+		subject, err := s.Resolve(about)
+		if err != nil || subject.Fingerprint() != about {
+			continue
+		}
+		asker, err := s.Resolve(m.Inner.From)
+		if err != nil || asker.Fingerprint() != m.Inner.From || asker.Fingerprint() == about {
+			continue
+		}
+		r, err := relayOf(s, m, "")
+		if err != nil {
+			continue
+		}
+		name := subject.Name
+		if name == "" {
+			name = fallbackName(about)
+		}
+		now := time.Now()
+		doc, sig, err := vouch.Sign(id, &vouch.Document{Subject: about, Bundle: subject.Bundle(), Name: name, Issued: now.UTC()}, now)
+		if err == nil {
+			body := message.Body{Type: message.TypeVouch, Subject: "vouch for " + name,
+				Vouch: &message.Carried{Document: doc, Signature: sig}}
+			_, _, err = sendSealed(s, id, r, asker, body, nil, sendMode{inline: true})
+		}
+		if err != nil {
+			fmt.Fprintf(out, "%s asks whether you trust %s…; not answered: %s\n",
+				identity.Printable(orNone(asker.Name)), about[:identity.ShortIDLen], identity.PrintableText(err.Error()))
+			continue
+		}
+		if err := s.MarkRead(store.Inbox, m.Inner.ID); err != nil {
+			fmt.Fprintf(out, "answered %s, but the question could not be marked read: %v\n", identity.Printable(orNone(asker.Name)), err)
+			continue
+		}
+		fmt.Fprintf(out, "answered %s: you hold %s… as %q\n", identity.Printable(orNone(asker.Name)),
+			about[:identity.ShortIDLen], identity.Printable(name))
+	}
 }

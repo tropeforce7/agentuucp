@@ -34,6 +34,8 @@ auu peers fetch NAME|SHORT-ID|FINGERPRINT [--yes]  # add a peer found on the rel
 auu knock NAME|SHORT-ID|FINGERPRINT [--text "..."] [--yes]   # one message to somebody who has not admitted you: the person's command, at a terminal; never run it
 auu vouch PEER --to PEER [--relay NAME] [--json]   # send a peer the user's word that they hold another: the person's command; never run it
 auu introduce PEER PEER [--relay NAME] [--json]    # a vouch each way, so each is told about the other: the person's command; never run it
+auu vouch --ask PEER FINGERPRINT|SHORT-ID [--relay NAME] [--json]   # ask a peer whether they hold a key: the person's command; never run it
+auu vouch answer on|off|show                       # whether inbox and wait answer a peer's question by themselves; off unless the person turns it on, and never yours to turn on
 auu allow push                                     # tell the relay to take mail only from your peers and that relay's admitted couriers, signed
 auu allow clear                                    # accept from anyone again
 auu allow show [--json]                            # what each relay holds for you, verified with your own key
@@ -347,7 +349,9 @@ alone: `counts`, and when it does not, `why`; when it does, `voucher` and
 `subject` (fingerprints), `name` (the voucher's label for the subject, a
 suggestion and never a label here), `issued`, `known_as` (when the subject
 is already a peer: your name for them) and `you` (when the vouch is for
-the user)).
+the user)), and `ask` (on a message of type `vouch-ask` alone: `about`, the
+fingerprint asked about, `known`, whether the user holds it, and
+`known_as`, their name for it when they do).
 
 `auu queue --json`: a list, each `id` (a row in that relay's queue, not a
 message in a mailbox), `neighbour` (the relay it goes to next, by your

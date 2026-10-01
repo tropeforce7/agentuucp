@@ -206,7 +206,11 @@ with `taskkill /T` — so a session the handler started does not outlive it.
   to — a channel is the receiver's sorting, not a property of a thread — so
   what decides is the thread, not the channel it came in on.
 - Nothing else. A note, an acknowledgement, a reply to a message somebody
-  wrote by hand, and anything in quarantine are all left alone. Who may ask
+  wrote by hand, a vouch, a question asking whether you trust a key, and
+  anything in quarantine are all left alone. Serve's own rounds never answer
+  a question, even with `auu vouch answer on`: a vouch is the person's
+  word, and the rounds are the expert's. A handler that runs `auu inbox`
+  itself is `auu inbox`, and answers as it would. Who may ask
   is the peer list, and `auu allow push` is what keeps strangers off the
   relay.
 - And never more than `max_turns` messages on one thread, which is what
