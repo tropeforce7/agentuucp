@@ -162,8 +162,8 @@ func TestLimitAnAnswerIsHeldToWhatItsRouteHolds(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"messages": []map[string]any{{"id": 1, "received": "2026-09-20T00:00:00Z", "kind": "envelope",
 				"size": page.Load(), "channel": "default", "envelope": map[string]any{"v": 1, "to": "x", "ct": strings.Repeat("A", int(page.Load()))}}},
-			"queued": 1,
-			"allow":  "none", "card": "none", "directory": "none",
+			"queued": 1, "first": 1, "last": 1,
+			"allow": "none", "card": "none", "directory": "none",
 		})
 	}))
 	t.Cleanup(srv.Close)
@@ -229,8 +229,8 @@ func TestARaisedMaxBytesIsLearnedWhenAPageIsRefusedForItsSize(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"messages": []map[string]any{{"id": 1, "received": "2026-09-20T00:00:00Z", "kind": "envelope",
 				"size": page.Load(), "channel": "default", "envelope": map[string]any{"v": 1, "to": "x", "ct": strings.Repeat("A", int(page.Load()))}}},
-			"queued": 1,
-			"allow":  "none", "card": "none", "directory": "none",
+			"queued": 1, "first": 1, "last": 1,
+			"allow": "none", "card": "none", "directory": "none",
 		})
 	}))
 	t.Cleanup(srv.Close)
@@ -645,7 +645,7 @@ func TestAHeldListingCompletes(t *testing.T) {
 			return
 		}
 		time.Sleep(relayapi.MaxWait)
-		json.NewEncoder(w).Encode(map[string]any{"messages": []any{}, "queued": 0, "allow": "none", "card": "none", "directory": "none"})
+		json.NewEncoder(w).Encode(map[string]any{"messages": []any{}, "queued": 0, "first": 0, "last": 0, "allow": "none", "card": "none", "directory": "none"})
 	}))
 	t.Cleanup(srv.Close)
 	c, err := New(srv.URL, testIdentity(t, "alice"), nil)

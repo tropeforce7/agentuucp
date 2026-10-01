@@ -531,7 +531,7 @@ func TestKeepDamagedRefusesARelayNameThatIsNotAName(t *testing.T) {
 func TestSetLeftBehindRefusesARelayNameThatIsNotAName(t *testing.T) {
 	s, outside, _ := reviewHome(t)
 	relay := "../../outside"
-	err := s.SetLeftBehind(relay, []int64{1})
+	err := s.SetLeftBehind(relay, []LeftEntry{{RelayID: 1, ID: strings.Repeat("a", 32)}})
 	if _, statErr := os.Stat(filepath.Join(outside, leftBehindFile)); statErr == nil {
 		t.Errorf("SetLeftBehind(%q) wrote outside the home (err=%v)", relay, err)
 	}

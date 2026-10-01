@@ -4,6 +4,7 @@ package e2e
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -39,6 +40,7 @@ var keyRows = []matrixRow{
 	{"K27", "unknown_recipient", "send --to a name that is not a peer", k27},
 	{"K28", "init_force_encrypted", "auu init --force on an encrypted home", k28},
 	{"K29", "home_read_only", "the home directory made read-only", k29},
+	{"K30", "cursor_skipped_mail", "the cursor set to mail it never fetched, inside the relay's span", k30},
 }
 
 const (
@@ -221,9 +223,42 @@ func k16(t *testing.T) {
 func k17(t *testing.T) {
 	undo := alice.write(t, aliceRelayDir+"/cursor", "999999")
 	id := queueForAlice(t, "--subject", "behind the cursor", "will you see this")
-	// Refused by the relay's count, the file and the command that starts
-	// again, at exit 5; the relay still holds the message and the cursor
-	// is the bytes that were written.
+	held := queued(t, state.aliceFP)
+	// Above everything the relay holds: the relay says its span, and the
+	// fetch matches its rows to what alice has. The new one is not hers,
+	// so the cursor is set before the relay's first id and the mailbox is
+	// fetched again in the same run, the mail alice kept there met by its
+	// own id and not delivered again; the sentence is said once, and the
+	// cursor ends at the relay's last id.
+	r := alice.auu("inbox")
+	expectSays(t, r, 0, "behind the cursor")
+	stderrIs(t, r, "relay.example.com: this machine's cursor was 999999 and the relay's mail is numbered "+
+		strconv.FormatInt(held[0], 10)+" to "+strconv.FormatInt(held[len(held)-1], 10)+
+		", so the cursor was reset and mail is fetched from the beginning; nothing is delivered twice here")
+	if got := strings.TrimSpace(alice.read(t, aliceRelayDir+"/cursor")); got != strconv.FormatInt(id, 10) {
+		t.Errorf("the cursor is %q after the reset, want the relay's last id, %d", got, id)
+	}
+	if !holds(queued(t, state.aliceFP), id) {
+		t.Errorf("queued %v after the reset, want %d kept there as the default channel keeps it", queued(t, state.aliceFP), id)
+	}
+	// Once: the next fetch is silence.
+	r = alice.auu("inbox")
+	expectCode(t, r, 0)
+	stderrIs(t, r, "")
+	undo()
+	verdict(t, "ok", "A cursor above everything the relay holds is reset: the new mail is fetched from the relay's "+
+		"first id, what alice already had is met and not delivered twice, and one sentence says so.")
+}
+
+func k30(t *testing.T) {
+	id := queueForAlice(t, "--subject", "skipped", "inside the span")
+	undo := alice.write(t, aliceRelayDir+"/cursor", strconv.FormatInt(id, 10))
+	// The cursor at the relay's last id, which alice never fetched: the
+	// skipped mail is inside the span, and no fetch from the front could
+	// reach it without delivering again what came after it. Refused by
+	// the relay's count, the file and the command that starts again, at
+	// exit 5; the relay still holds the message and the cursor is the
+	// bytes that were written.
 	r := alice.auu("inbox")
 	expectCode(t, r, 5)
 	stderrIs(t, r, "auu: 1 message is waiting on relay.example.com before this machine's cursor; delete "+
@@ -231,28 +266,13 @@ func k17(t *testing.T) {
 	if !holds(queued(t, state.aliceFP), id) {
 		t.Errorf("queued %v after the refusal, want %d untouched", queued(t, state.aliceFP), id)
 	}
-	if got := strings.TrimSpace(alice.read(t, aliceRelayDir+"/cursor")); got != "999999" {
-		t.Errorf("the cursor is %q after the refusal, want the 999999 that was written", got)
-	}
-	// The advice, followed: the cursor gone and the relay named. From the
-	// beginning is from the beginning — with a channel set to keep, which
-	// is the default, that is every message the relay still holds for
-	// alice, this one among them, and nothing is delivered twice because
-	// the spool keeps one record per id.
-	alice.remove(t, aliceRelayDir+"/cursor")
-	in := fetchJSON(t, alice, "--relay", "relay.example.com")
-	var got bool
-	for _, msg := range in.Messages {
-		if msg.Subject == "behind the cursor" {
-			got = true
-		}
-	}
-	if !got || in.Fetch.Delivered < 1 {
-		t.Errorf("alice fetched %+v after following the advice: %+v", in.Fetch, in.Messages)
+	if got := strings.TrimSpace(alice.read(t, aliceRelayDir+"/cursor")); got != strconv.FormatInt(id, 10) {
+		t.Errorf("the cursor is %q after the refusal, want the %d that was written", got, id)
 	}
 	undo()
-	verdict(t, "ok", "The relay's count beside an empty page is a cursor past mail: said with the count, the file "+
-		"and the command, exit 5, nothing acknowledged; the advice delivers the message.")
+	expectSays(t, alice.auu("inbox"), 0, "skipped")
+	verdict(t, "ok", "A cursor inside the relay's span beside an empty page and a count is a cursor past mail: "+
+		"said with the count, the file and the command, exit 5, nothing acknowledged.")
 }
 
 func k18(t *testing.T) {
@@ -311,7 +331,7 @@ func k20(t *testing.T) {
 	expectCode(t, r, 5)
 	stderrIs(t, r, "auu: opening auu home: /home/alice/.auu/config.json is not valid JSON (unexpected end of JSON input): "+
 		"delete it and set the default relay again with 'auu relay default NAME'; it holds only that, the stream "+
-		"settings and your editor")
+		"settings, your editor and whether vouch questions are answered")
 	verdict(t, "ok", "The file is named, with what deleting it costs, and exit 5.")
 }
 

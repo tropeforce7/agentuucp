@@ -124,6 +124,7 @@ import (
 type Shape struct {
 	Name string `+"`json:\"name\"`"+`
 	Size int64  `+"`json:\"size\"`"+`
+	Left *int64 `+"`json:\"left\"`"+`
 }
 
 func parse(s string) (int64, error) { return strconv.ParseInt(s, 10, 64) }
@@ -139,10 +140,11 @@ func rest(b []byte, n int) []byte { return b[n:] }
 func fixed(xs []string) []string { return xs[:2] }
 `)
 	problems, sites := check(t, root, "")
-	if len(sites) != 6 {
-		t.Fatalf("found %d sites, want 6: %+v", len(sites), sites)
+	if len(sites) != 7 {
+		t.Fatalf("found %d sites, want 7: %+v", len(sites), sites)
 	}
 	want := []string{
+		"internal/planted/planted.go Shape int Left *int64 has no row in ledger.txt; add one saying the range the code holds it to, or open, and the TestLimit test that shows it",
 		"internal/planted/planted.go Shape int Size int64 has no row in ledger.txt; add one saying the range the code holds it to, or open, and the TestLimit test that shows it",
 		"internal/planted/planted.go flags int fs.Int(\"n\") has no row in ledger.txt; add one saying the range the code holds it to, or open, and the TestLimit test that shows it",
 		"internal/planted/planted.go parse int strconv.ParseInt(s) has no row in ledger.txt; add one saying the range the code holds it to, or open, and the TestLimit test that shows it",
@@ -684,8 +686,9 @@ func (tr *tree) sites() []site {
 						}
 					}
 					for _, fl := range x.Fields.List {
-						// An integer field, or a map or slice whose values are
-						// integers, which the decoder fills with numbers all the same.
+						// An integer field, a pointer to one, or a map or slice
+						// whose values are integers, which the decoder fills
+						// with numbers all the same.
 						if !integerType(p.info.TypeOf(fl.Type)) && !integerElems(p.info.TypeOf(fl.Type)) {
 							continue
 						}
@@ -829,6 +832,10 @@ func integerElems(t types.Type) bool {
 		return false
 	}
 	switch u := types.Unalias(t).Underlying().(type) {
+	case *types.Pointer:
+		// A pointer to an integer, which a field takes so that absent is
+		// not zero: the decoder fills it with a number all the same.
+		return integerType(u.Elem())
 	case *types.Map:
 		return integerType(u.Elem())
 	case *types.Slice:

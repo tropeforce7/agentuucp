@@ -327,7 +327,9 @@ own line for each round that did something, and nothing for a quiet one.
 
 `auu inbox --json`: `fetch` with `delivered`, `quarantined`, `unreadable`,
 `kept` and `channels_gone` (when set); `relays`, a list of `relay`, `url`,
-the same fetch counts, `queued` (what that relay still holds), `allow`
+the same fetch counts, `queued` (what that relay still holds), `first`
+and `last` (the lowest and highest message ids it holds for you, both 0
+when it holds nothing), `allow`
 (the state of your allow list there: `signed`, `none` or
 `broken`), `card` (the state of your card there, the same three words),
 `directory` (the state of your channel directory there, the same three

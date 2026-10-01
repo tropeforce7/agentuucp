@@ -1023,6 +1023,10 @@ type Listing struct {
 	// asked from is past mail. Zero from a relay that predates the field,
 	// which is indistinguishable from an empty mailbox and is meant to be.
 	Queued int64
+	// First and Last are the lowest and highest ids the mailbox holds,
+	// both zero for an empty mailbox, held to that shape: a cursor above
+	// Last is past everything the relay holds.
+	First, Last int64
 	// DirectoriesChanged names the watched peers whose directory the relay
 	// holds a newer issue of than the request said. Empty when none has,
 	// when nothing was watched, and from a relay that predates the field.
@@ -1145,8 +1149,9 @@ func (c *Client) ListWait(ctx context.Context, req ListRequest) (Listing, error)
 		}
 		out = append(out, msg)
 	}
-	return Listing{Messages: out, Queued: resp.Queued, DirectoriesChanged: resp.DirectoriesChanged,
-		Allow: resp.Allow, Card: resp.Card, Directory: resp.Directory}, nil
+	return Listing{Messages: out, Queued: resp.Queued, First: *resp.First, Last: *resp.Last,
+		DirectoriesChanged: resp.DirectoriesChanged,
+		Allow:              resp.Allow, Card: resp.Card, Directory: resp.Directory}, nil
 }
 
 // Ack deletes a message from the relay once it is safely on disk locally.

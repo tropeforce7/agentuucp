@@ -53,6 +53,45 @@ func TestLimitStoredRelayID(t *testing.T) {
 	}
 }
 
+// TestLimitStoredRelaySize: a message record's relay size is the size the
+// relay listed it at, never negative; Load refuses a record that says
+// otherwise, and zero, a record from before it was kept, one and the
+// type's maximum load.
+func TestLimitStoredRelaySize(t *testing.T) {
+	s := newStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	m := stored("00000000000000000000000000000001", now)
+	if err := s.Save(Inbox, m); err != nil {
+		t.Fatal(err)
+	}
+	path := s.msgPath(Inbox, m.Inner.ID)
+	write := func(t *testing.T, size int64) {
+		t.Helper()
+		m.RelaySize = size
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, size := range []int64{-1, math.MinInt64} {
+		write(t, size)
+		_, err := s.Load(Inbox, m.Inner.ID)
+		if err == nil || !strings.Contains(err.Error(), "relay size "+strconv.FormatInt(size, 10)+" is negative") {
+			t.Errorf("relay size %d: %v; want the refusal naming it", size, err)
+		}
+	}
+	for _, size := range []int64{0, 1, math.MaxInt64} {
+		write(t, size)
+		got, err := s.Load(Inbox, m.Inner.ID)
+		if err != nil || got.RelaySize != size {
+			t.Errorf("relay size %d: %v (got %d)", size, err, got.RelaySize)
+		}
+	}
+}
+
 // TestLimitDamagedRelayID: a damaged message is kept under the relay's
 // number for it, and a negative number is refused before it becomes a
 // file name; zero and the type's maximum are file names.
@@ -104,39 +143,64 @@ func TestLimitChannelSettingsV(t *testing.T) {
 	}
 }
 
-// TestLimitLeftBehindIDs: the left-behind file holds relay message ids,
-// one per line, each positive: zero, a negative, the type's minimum, the
-// text one past the type's maximum, a sign, a leading space that TrimSpace
-// does not take, and a digit outside ASCII are each a damaged file naming
-// the line; one and the type's maximum are ids.
+// TestLimitLeftBehindIDs: each line of the left-behind file holds a relay
+// id, positive, and a size, zero or more. The relay id at zero, a negative,
+// the type's minimum, the text one past the type's maximum, a digit outside
+// ASCII and a hex form are each a damaged file naming the line, and so is
+// the size at a negative, the minimum and one past the maximum; one and the
+// type's maximum are relay ids, zero and the maximum are sizes. A leading
+// sign is what ParseInt takes.
 func TestLimitLeftBehindIDs(t *testing.T) {
 	s := newStore(t)
 	const name = "work"
-	if err := s.AddLeftBehind(name, 1); err != nil {
+	id := strings.Repeat("a", 32)
+	if err := s.AddLeftBehind(name, LeftEntry{RelayID: 1, ID: id}); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(s.relayDir(name), leftBehindFile)
-	for _, text := range []string{"0", "-1", "-0", strconv.FormatInt(math.MinInt64, 10), "9223372036854775808", "1 2", "\u0661", "0x10"} {
-		if err := os.WriteFile(path, []byte(text+"\n"), 0o600); err != nil {
+	line := func(relayID, size string) string {
+		return relayID + " " + id + " 2026-10-01T02:03:04Z " + size + "\n"
+	}
+	for _, text := range []string{
+		line("0", "1"), line("-1", "1"), line("-0", "1"), line(strconv.FormatInt(math.MinInt64, 10), "1"),
+		line("9223372036854775808", "1"), line("\u0661", "1"), line("0x10", "1"),
+		line("1", "-1"), line("1", strconv.FormatInt(math.MinInt64, 10)), line("1", "9223372036854775808"),
+	} {
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}
 		_, err := s.LeftBehind(name)
-		if !errors.Is(err, ErrDamaged) || !strings.Contains(err.Error(), "which is not a message id") {
+		if !errors.Is(err, ErrDamaged) || !strings.Contains(err.Error(), "which is not a message left on the relay") {
 			t.Errorf("%q: %v; want ErrDamaged", text, err)
 		}
 	}
-	// A leading sign and surrounding space are what ParseInt and TrimSpace
-	// take: the number is the number.
-	for _, tc := range []struct {
-		text string
-		want int64
-	}{{"1", 1}, {"+1", 1}, {" 7 ", 7}, {"9223372036854775807", math.MaxInt64}} {
-		if err := os.WriteFile(path, []byte(tc.text+"\n"), 0o600); err != nil {
+	// A line that is one field is the old shape when it is a relay id
+	// above zero, said by name, and a damaged line otherwise: the number
+	// picks the sentence and is used for nothing else.
+	for _, tc := range []struct{ text, want string }{
+		{"7\n", "has a relay id alone on line 1"},
+		{strconv.FormatInt(math.MaxInt64, 10) + "\n", "has a relay id alone on line 1"},
+		{"0\n", "which is not a message left on the relay"},
+		{"-1\n", "which is not a message left on the relay"},
+		{"9223372036854775808\n", "which is not a message left on the relay"},
+	} {
+		if err := os.WriteFile(path, []byte(tc.text), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		ids, err := s.LeftBehind(name)
-		if err != nil || len(ids) != 1 || ids[0] != tc.want {
-			t.Errorf("%q: %v %v; want [%d]", tc.text, ids, err, tc.want)
+		if _, err := s.LeftBehind(name); !errors.Is(err, ErrDamaged) || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q: %v; want %q", tc.text, err, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		relayID, size    string
+		wantID, wantSize int64
+	}{{"1", "0", 1, 0}, {"+1", "+5", 1, 5}, {"9223372036854775807", "9223372036854775807", math.MaxInt64, math.MaxInt64}} {
+		if err := os.WriteFile(path, []byte(line(tc.relayID, tc.size)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.LeftBehind(name)
+		if err != nil || len(got) != 1 || got[0].RelayID != tc.wantID || got[0].Size != tc.wantSize {
+			t.Errorf("%s %s: %v %v; want %d %d", tc.relayID, tc.size, got, err, tc.wantID, tc.wantSize)
 		}
 	}
 }
@@ -421,7 +485,7 @@ func TestLimitRelayNameIsNotAPath(t *testing.T) {
 		if err := s.RenameRelay(r.Name, v); err == nil {
 			t.Errorf("RenameRelay took the name %q", v)
 		}
-		if err := s.SetLeftBehind(v, []int64{1}); err == nil {
+		if err := s.SetLeftBehind(v, []LeftEntry{{RelayID: 1, ID: strings.Repeat("a", 32)}}); err == nil {
 			t.Errorf("SetLeftBehind took the name %q", v)
 		}
 		if _, err := s.LeftBehind(v); err == nil {

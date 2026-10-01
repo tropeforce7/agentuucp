@@ -5,9 +5,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/tropeforce7/agentuucp/internal/relay"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
 
@@ -35,6 +37,16 @@ func leftOn(u *user, relayName string) (int64, error) {
 	return s.LeftOn(relayName)
 }
 
+// relayLast is the relay's highest id for a mailbox, as a cursor file holds it.
+func relayLast(t *testing.T, st *relay.Store, fp string) string {
+	t.Helper()
+	l, err := st.Listing(fp, 0, 1, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strconv.FormatInt(l.Last, 10) + "\n"
+}
+
 func (u *user) setCursor(relayName, text string) {
 	u.t.Helper()
 	if err := os.WriteFile(u.cursorPath(relayName), []byte(text), 0o600); err != nil {
@@ -45,7 +57,10 @@ func (u *user) setCursor(relayName, text string) {
 // A cursor past mail the relay still holds is said to be, with the relay's
 // count, the file and the command that starts again; nothing is acknowledged
 // and the cursor is not written, since only a person can decide the cursor
-// is wrong. A listing whose count is absent decodes as zero, an empty
+// is wrong. The cursor here is at the relay's last id, inside its span, so
+// the mail it skipped is in the middle and no reset from the front could
+// fetch it without delivering again what was fetched; a cursor above the
+// span is reset.go's, and TestACursorPastEverythingTheRelayHolds's. A listing whose count is absent decodes as zero, an empty
 // mailbox, and is silence: absent and zero are one number. The container
 // suite's K17 found the mail sitting on the relay with nothing to say so.
 func TestASkippedMailboxIsSaidToBe(t *testing.T) {
@@ -73,7 +88,8 @@ func TestASkippedMailboxIsSaidToBe(t *testing.T) {
 	}
 
 	// Refused, by the count and the file, at exit 5.
-	bob.setCursor(name, "999999\n")
+	written := strconv.FormatInt(queued[1].ID, 10) + "\n"
+	bob.setCursor(name, written)
 	spool := func() map[string]int {
 		t.Helper()
 		out := map[string]int{}
@@ -101,8 +117,8 @@ func TestASkippedMailboxIsSaidToBe(t *testing.T) {
 		}
 		// Nothing touched: the relay holds what it held, the cursor is the
 		// bytes that were written, and the spool is as it was.
-		if data, err := os.ReadFile(cursor); err != nil || string(data) != "999999\n" {
-			t.Fatalf("the cursor is %q (%v) after the refusal, want the 999999 that was written", data, err)
+		if data, err := os.ReadFile(cursor); err != nil || string(data) != written {
+			t.Fatalf("the cursor is %q (%v) after the refusal, want the %q that was written", data, err, written)
 		}
 		if after := spool(); after["inbox"] != before["inbox"] || after["quarantine"] != before["quarantine"] {
 			t.Fatalf("the spool went from %v to %v across the refusal", before, after)
@@ -168,16 +184,19 @@ func TestASkippedMailboxIsSaidToBe(t *testing.T) {
 		t.Fatalf("the relay holds %d (%v) after the envelope, want the stream alone", len(left), err)
 	}
 	alice.run("send", "--to", "bob", "--subject", "skipped", "past")
-	bob.setCursor(name, "999999\n")
+	written = relayLast(t, st, bobFP)
+	bob.setCursor(name, written)
 	refused("1 message is waiting on " + name + " before this machine's cursor; delete " + cursor +
 		" and run 'auu inbox --relay " + name + "' to fetch from the beginning")
 	if err := os.Remove(cursor); err != nil {
 		t.Fatal(err)
 	}
-	// Fetched from the beginning: the stream is listed again and
-	// quarantined again under the one record, the skipped message arrives,
-	// and the relay is back to holding the stream alone.
-	if in := bob.inboxJSON("--relay", name); in.Fetch.Delivered != 1 || in.Fetch.Quarantined != 1 {
+	// Fetched from the beginning: the skipped message arrives, and the
+	// stream is listed again and met at its manifest under the one record
+	// it has, not quarantined again or counted (ruling 53, a behaviour
+	// changed on purpose: a message the relay serves again is met). The
+	// relay is back to holding the stream alone.
+	if in := bob.inboxJSON("--relay", name); in.Fetch.Delivered != 1 || in.Fetch.Quarantined != 0 {
 		t.Fatalf("after following the advice with a stream left on the relay: %+v", in.Fetch)
 	}
 	var q []messageJSON
@@ -215,7 +234,7 @@ func TestASkippedMailboxIsSaidToBe(t *testing.T) {
 	// absence is not refused, being one number with a value the relay
 	// sends.
 	alice.run("send", "--to", "bob", "--subject", "third", "three")
-	bob.setCursor(name, "999999\n")
+	bob.setCursor(name, relayLast(t, st, bobFP))
 	gate.set("old", -1)
 	var stderr string
 	var out string
@@ -273,10 +292,11 @@ func TestTheCursorAdviceWorksInBothShapesOfHome(t *testing.T) {
 		t.Fatalf("payloads left on personal: %d (%v), want 1", n, err)
 	}
 
-	// The cursor ahead on work, refused by name at exit 5 — the command's
-	// failure, not one relay's trouble among two — and then gone, as
-	// advised.
-	bob.setCursor("work", "999999\n")
+	// The cursor at work's one message, which bob never fetched, refused
+	// by name at exit 5 — the command's failure, not one relay's trouble
+	// among two — and then gone, as advised. Work is a relay of its own
+	// and alice's is the only message on it, so it is numbered 1.
+	bob.setCursor("work", "1\n")
 	var err error
 	stderr := captureStderr(t, func() { _, err = bob.tryRun("inbox") })
 	var e *exitError
@@ -311,7 +331,7 @@ func TestTheCursorAdviceWorksInBothShapesOfHome(t *testing.T) {
 	dave.run("allow", "push")
 	carol.run("send", "--to", "dave", "--subject", "alone", "hello")
 	name := dave.defaultRelayName()
-	dave.setCursor(name, "999999\n")
+	dave.setCursor(name, "1\n")
 	if _, err := dave.tryRun("inbox"); err == nil {
 		t.Fatal("inbox with the cursor ahead succeeded")
 	}

@@ -92,6 +92,11 @@ type relayFetch struct {
 	// finished: with a channel set to keep, the mail read and left there,
 	// which 'auu rm' is what removes.
 	Queued int64 `json:"queued"`
+	// First and Last are the lowest and highest ids that relay said it
+	// holds for this mailbox, zero for an empty one: a cursor above Last is
+	// past everything there, and the fetch resets it.
+	First int64 `json:"first"`
+	Last  int64 `json:"last"`
 	// Outbound is this identity's own rows in that relay's forwarding
 	// queue, when it forwards at all: mail on its way to another relay.
 	// Absent on a relay that forwards nothing, which answers the route
@@ -111,10 +116,11 @@ type relayFetch struct {
 // read, and the state of the allow list, which the warning after the
 // messages reads.
 type relaySaid struct {
-	Queued    int64
-	Allow     string
-	Card      string
-	Directory string
+	Queued      int64
+	First, Last int64
+	Allow       string
+	Card        string
+	Directory   string
 }
 
 // fetch drains one relay's mailbox into the local spool.
@@ -197,18 +203,79 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 	if err != nil {
 		return res, said, err
 	}
+	// What this machine already holds from this relay is met, not saved,
+	// on every fetch (reset.go).
+	met, err := newMeeter(s, r)
+	if err != nil {
+		return res, said, err
+	}
+	var (
+		// reset is the re-fetch from the relay's first id, while it runs;
+		// reckoned says the cursor has been held against the relay's span
+		// once in this run, which is all it needs, and marked that the
+		// marks on what was left there are as fresh as the relay's rows.
+		reset            *resetRun
+		reckoned, marked bool
+	)
 	for {
 		page, err := c.ListWait(ctx, client.ListRequest{After: cursor, Limit: relayapi.MaxListLimit, Wait: hold})
 		if err != nil {
 			return res, said, transportErr(err)
 		}
 		hold = 0
-		said = relaySaid{Queued: page.Queued, Allow: page.Allow, Card: page.Card, Directory: page.Directory}
+		said = relaySaid{Queued: page.Queued, First: page.First, Last: page.Last,
+			Allow: page.Allow, Card: page.Card, Directory: page.Directory}
+		if len(page.Messages) == 0 && !reckoned && cursor > page.Last {
+			// A cursor past everything the relay holds: reset.go says
+			// what it is and what is done about it, here and in a watch.
+			reckoned = true
+			past, err := classifyPast(ctx, s, c, r, page.Last)
+			if err != nil {
+				return res, said, transportErr(err)
+			}
+			if len(past.fresh) == 0 {
+				// All of it is mail this machine has: the newest was
+				// removed. The cursor goes back to the relay's last id,
+				// and nothing is said or downloaded.
+				if _, err := settleMatched(ctx, s, c, r.Name, past); err != nil {
+					return res, said, err
+				}
+				cursor, marked = page.Last, true
+			} else {
+				reset = startReset(r, cursor, page, past, met)
+				cursor = max(page.First-1, 0)
+			}
+			// Written before the fetch that relies on it.
+			if err := s.SetCursorFor(r, cursor); err != nil {
+				return res, said, err
+			}
+			continue
+		}
+		if len(page.Messages) == 0 && reset != nil {
+			if err := reset.finish(s); err != nil {
+				return res, said, err
+			}
+			reset, marked = nil, true
+		}
 		if len(page.Messages) == 0 {
+			if err := met.settle(s); err != nil {
+				return res, said, err
+			}
+			// Everything after the cursor is here; now the marks on what
+			// was left behind, which another machine or an administrator
+			// may have removed since, unless a reset has just made them
+			// from the relay's own rows. Before the count below, so that
+			// it counts what is there: after a relay's numbering began
+			// again, a mark on a message under an id a new message now
+			// has is cleared here, and the new one is then said to be
+			// skipped in this fetch rather than the next.
+			if !marked {
+				refreshKept(ctx, s, c, r, page.Queued)
+			}
 			// Nothing after the cursor, and yet the relay holds mail: the
 			// cursor is past it. The relay says how many, the sentence
-			// names the file, and nothing here is touched, since only a
-			// person can decide the cursor is wrong. Zero is an empty
+			// names the file, and neither the cursor nor the relay is
+			// touched, since only a person can decide the cursor is wrong. Zero is an empty
 			// mailbox, which is silence. The container suite's K17 found
 			// mail sitting on the relay with nothing to say so.
 			//
@@ -228,15 +295,11 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 					return res, said, s.CursorSkipsMail(r, page.Queued-left)
 				}
 			}
-			// Everything after the cursor is here; now the marks on what
-			// was left behind, which another machine or an administrator
-			// may have removed since.
-			refreshKept(ctx, s, c, r, page.Queued)
 			return res, said, nil
 		}
 		for _, m := range page.Messages {
 			if m.IsStream() {
-				if err := fetchOneStream(ctx, s, id, c, r, m, directory, settings, &res); err != nil {
+				if err := fetchOneStream(ctx, s, id, c, r, m, directory, settings, &res, met); err != nil {
 					return res, said, transportErr(err)
 				}
 				cursor = m.ID
@@ -252,6 +315,18 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 				// message stays queued for the next fetch.
 				return res, said, err
 			}
+			if err == nil {
+				if held, err := met.meet(ctx, s, c, m, inner.ID); err != nil {
+					return res, said, err
+				} else if held {
+					cursor = m.ID
+					if err := s.SetCursorFor(r, cursor); err != nil {
+						return res, said, err
+					}
+					continue
+				}
+			}
+			met.fresh++
 			if err != nil {
 				// Nobody will ever be able to read this, so leaving it queued
 				// would block the mailbox forever. Keep the bytes, say why
@@ -324,6 +399,7 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 				RelayID:    m.ID,
 				Relay:      r.Name,
 				Received:   m.Received,
+				RelaySize:  m.Size,
 				Inner:      inner,
 				SenderName: s.PeerName(sender.Fingerprint()),
 				Channel:    channel,
@@ -483,6 +559,7 @@ func fetchEvery(s *store.Store, id *identity.Identity, relays []*store.Relay, na
 			var said relaySaid
 			report.fetchResult, said, err = fetch(ctx(), s, id, c, r, 0)
 			report.Queued, report.Allow, report.Card = said.Queued, said.Allow, said.Card
+			report.First, report.Last = said.First, said.Last
 			report.Directory = said.Directory
 		}
 		if err == nil {
@@ -739,6 +816,8 @@ func printInboxLine(s *store.Store, m *store.Stored) {
 // has the body to give.
 func whereElse(m *store.Stored) string {
 	switch {
+	case m.PayloadOnRelay && m.PayloadGone:
+		return "  body not fetched, and gone from the relay"
 	case m.OnRelay && m.PayloadOnRelay:
 		return "  on relay, body not fetched"
 	case m.OnRelay:
@@ -908,6 +987,9 @@ func cmdExtract(args []string) error {
 		return usageErrf("message %s was sent as a stream: its files were read from your own disk "+
 			"and never copied into the store, so there is nothing here to extract",
 			m.Inner.ID[:12])
+	}
+	if m.PayloadGone {
+		return bodyGone(m)
 	}
 	if m.PayloadOnRelay {
 		return usageErrf("message %s is from somebody you have not added as a peer, so its "+
@@ -1579,6 +1661,11 @@ func cmdQuarantine(args []string) error {
 				"and never copied into the store, so there is nothing here to extract",
 				m.Inner.ID[:12])
 		}
+		if m.PayloadGone {
+			// Its relay id names other mail now, or nothing: the relay
+			// is not asked under it.
+			return bodyGone(m)
+		}
 		if m.PayloadOnRelay {
 			_, id, err := loadIdentity()
 			if err != nil {
@@ -1615,7 +1702,7 @@ func cmdQuarantine(args []string) error {
 			if err != nil {
 				return err
 			}
-			if err := deliverStream(ctx(), s, id, c, r, m.RelayID, opened, store.Quarantine, keep); err != nil {
+			if err := deliverStream(ctx(), s, id, c, r, relayCopy{m.RelayID, m.Received, m.RelaySize}, opened, store.Quarantine, keep); err != nil {
 				// The body was never fetched, and the relay no longer
 				// has it: an administrator's purge, or another machine
 				// of this identity removing the message. Nothing here

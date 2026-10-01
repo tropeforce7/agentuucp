@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/client"
@@ -168,8 +167,9 @@ func (r *resumingReader) Close() error {
 
 // deliverStream fetches a stream's payload and delivers it, atomically.
 func deliverStream(ctx context.Context, s *store.Store, id *identity.Identity, c *client.Client,
-	r *store.Relay, relayID int64, opened *stream.Opened, box store.Box, keep bool) error {
+	r *store.Relay, listed relayCopy, opened *stream.Opened, box store.Box, keep bool) error {
 
+	relayID := listed.ID
 	m := opened.Manifest
 	payloadFrom := int64(stream.HeaderSize) + int64(opened.SealedManifestBytes)
 	body := &resumingReader{
@@ -209,7 +209,8 @@ func deliverStream(ctx context.Context, s *store.Store, id *identity.Identity, c
 	return s.Save(box, &store.Stored{
 		RelayID:    relayID,
 		Relay:      r.Name,
-		Received:   time.Now().UTC().Truncate(time.Second),
+		Received:   listed.Received,
+		RelaySize:  listed.Size,
 		Inner:      inner,
 		SenderName: s.PeerName(m.From),
 		Streamed:   true,
@@ -223,7 +224,7 @@ func deliverStream(ctx context.Context, s *store.Store, id *identity.Identity, c
 // The payload stays on the relay and is not acknowledged, so nothing is lost
 // if the recipient later decides to trust the sender. A stranger cannot make
 // anyone download anything.
-func quarantineStream(s *store.Store, r *store.Relay, relayID int64, opened *stream.Opened) error {
+func quarantineStream(s *store.Store, r *store.Relay, listed relayCopy, opened *stream.Opened) error {
 	m := opened.Manifest
 	inner := &envelope.Inner{
 		From: m.From, FromBundle: m.FromBundle, To: m.To, ID: m.ID, Time: m.Time,
@@ -239,9 +240,10 @@ func quarantineStream(s *store.Store, r *store.Relay, relayID int64, opened *str
 	}
 	inner.Channel = m.Channel
 	return s.Save(store.Quarantine, &store.Stored{
-		RelayID:        relayID,
+		RelayID:        listed.ID,
 		Relay:          r.Name,
-		Received:       time.Now().UTC().Truncate(time.Second),
+		Received:       listed.Received,
+		RelaySize:      listed.Size,
 		Inner:          inner,
 		Streamed:       true,
 		PayloadOnRelay: true,
@@ -261,7 +263,7 @@ func storedChannel(channel string) string {
 // fetchOneStream is the stream branch of fetch.
 func fetchOneStream(ctx context.Context, s *store.Store, id *identity.Identity, c *client.Client,
 	r *store.Relay, m client.Message, directory *channels.Directory, settings store.ChannelSettings,
-	res *fetchResult) error {
+	res *fetchResult, met *meeter) error {
 
 	relayID := m.ID
 	opened, manifest, err := fetchManifest(ctx, c, id, relayID)
@@ -273,6 +275,7 @@ func fetchOneStream(ctx context.Context, s *store.Store, id *identity.Identity, 
 		// block the mailbox for ever. What is kept is the manifest chunk,
 		// which is all that was fetched.
 		if isPermanent(err) {
+			met.fresh++
 			if err := keepDamaged(s, r, relayID, m.Received, manifest, streamCause(err), res); err != nil {
 				return err
 			}
@@ -280,6 +283,13 @@ func fetchOneStream(ctx context.Context, s *store.Store, id *identity.Identity, 
 		}
 		return err
 	}
+	// A stream this machine already holds from this relay is met at the
+	// manifest, before a byte of payload is asked for.
+	held, err := met.meet(ctx, s, c, m, opened.Manifest.ID)
+	if err != nil || held {
+		return err
+	}
+	met.fresh++
 	// The manifest's channel against the one the relay listed the stream
 	// under: a stream has no outer name, so only a relay that says where it
 	// filed it can be found to have filed it elsewhere.
@@ -293,7 +303,7 @@ func fetchOneStream(ctx context.Context, s *store.Store, id *identity.Identity, 
 	if !s.IsAuthorized(opened.Sender.Fingerprint()) {
 		// Recorded, not fetched, and deliberately not acknowledged: the
 		// payload waits on the relay until a person decides.
-		if err := quarantineStream(s, r, relayID, opened); err != nil {
+		if err := quarantineStream(s, r, relayCopy{relayID, m.Received, m.Size}, opened); err != nil {
 			return err
 		}
 		res.Quarantined++
@@ -317,7 +327,7 @@ func fetchOneStream(ctx context.Context, s *store.Store, id *identity.Identity, 
 	// Kept on the relay, or acknowledged away, as this machine's setting
 	// for the manifest's channel says.
 	keep := keepFor(settings, channel)
-	if err := deliverStream(ctx, s, id, c, r, relayID, opened, store.Inbox, keep); err != nil {
+	if err := deliverStream(ctx, s, id, c, r, relayCopy{relayID, m.Received, m.Size}, opened, store.Inbox, keep); err != nil {
 		if isGone(err) {
 			return droppedOnRelay(relayID, res)
 		}

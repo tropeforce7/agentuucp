@@ -210,8 +210,25 @@ func watchRelay(ctx context.Context, s *store.Store, id *identity.Identity, r *s
 			continue
 		}
 		warned, floor = false, 0
+		// A cursor past everything the relay holds is classified as a
+		// fetch classifies it (reset.go): the rows nothing here matches
+		// are what is new, and they are what this watch says; the rest is
+		// mail this machine has. The watch writes nothing: the fetch that
+		// follows, or --fetch's, resets the cursor itself.
+		past := after == cursor && len(listing.Messages) == 0 && cursor > listing.Last
+		if past {
+			classified, err := classifyPast(ctx, s, c, r, listing.Last)
+			if err != nil {
+				if !retry(err) {
+					return
+				}
+				watchSleep(ctx, max(opts.interval-time.Since(began), floor))
+				continue
+			}
+			listing.Messages = classified.fresh
+		}
 		events, ids := messageEvents(r, listing, opts)
-		if after == cursor && len(listing.Messages) == 0 && listing.Queued > 0 {
+		if !past && after == cursor && len(listing.Messages) == 0 && listing.Queued > 0 {
 			// Nothing after the cursor, and yet the relay holds mail: the
 			// diagnosis a fetch makes, at its exit code, since only a
 			// person can decide the cursor is wrong. Less what this
@@ -237,9 +254,17 @@ func watchRelay(ctx context.Context, s *store.Store, id *identity.Identity, r *s
 			}
 		}
 		if len(events) == 0 {
-			// Rows listed and dismissed are behind the next ask.
+			// Rows listed and dismissed are behind the next ask; after a
+			// cursor past everything, all of the relay's rows are.
 			if n := len(listing.Messages); n > 0 {
 				after = listing.Messages[n-1].ID
+			}
+			if past {
+				// Answered at once, since the relay saw the cursor past
+				// everything, and nothing in it new: the hold this watch
+				// is for starts now, not an interval from now.
+				after = listing.Last
+				continue
 			}
 			watchSleep(ctx, max(opts.interval-time.Since(began), floor))
 			if ctx.Err() != nil {

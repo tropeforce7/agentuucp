@@ -86,7 +86,8 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 	callTokens := func(c *Client) error { _, err := c.AdminTokens(context.Background(), false); return err }
 	listing := func(set func(l *relayapi.ListResponse, n int64)) func(int64) any {
 		return func(n int64) any {
-			l := relayapi.ListResponse{Allow: relayapi.AllowNone, Card: relayapi.CardNone,
+			one := int64(1)
+			l := relayapi.ListResponse{First: &one, Last: &one, Allow: relayapi.AllowNone, Card: relayapi.CardNone,
 				Directory: relayapi.DirectoryNone,
 				Messages:  []relayapi.StoredMessage{{ID: 1, Size: 10, Kind: relayapi.KindStream, Channel: "default"}}}
 			set(&l, n)
@@ -126,6 +127,12 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 		{"/v1/admin/tokens", tokens(func(tk *relayapi.TokenRecord, n int64) { tk.Uses, tk.UsesLeft = int(n), 0 }), callTokens},
 		{"/v1/admin/tokens", tokens(func(tk *relayapi.TokenRecord, n int64) { tk.Uses, tk.UsesLeft = int(n), int(n) }), callTokens},
 		{"/v1/mailbox/" + fp, listing(func(l *relayapi.ListResponse, n int64) { l.Queued = n }), callList},
+		// The span of ids held, both ends at one integer: the shape that
+		// is valid for every count, so the range alone is what is held.
+		{"/v1/mailbox/" + fp, listing(func(l *relayapi.ListResponse, n int64) {
+			first, last := n, n
+			l.First, l.Last = &first, &last
+		}), callList},
 		{"/v1/mailbox/" + fp, listing(func(l *relayapi.ListResponse, n int64) { l.Messages[0].Size = n }), callList},
 		{"/v1/listed", func(n int64) any { return relayapi.ListedResponse{Entries: []relayapi.ListedEntry{}, Listed: n} },
 			func(c *Client) error { _, err := c.Listed(context.Background()); return err }},
@@ -615,7 +622,9 @@ func TestLimitAViaIsHeldToTheAddressRule(t *testing.T) {
 	}
 	fp := alice.Fingerprint()
 	row := func(via string) any {
+		one := int64(1)
 		return relayapi.ListResponse{
+			First: &one, Last: &one,
 			Messages: []relayapi.StoredMessage{{
 				ID: 1, Received: time.Now().UTC(), Kind: relayapi.KindEnvelope,
 				Channel: "default", Via: via, Envelope: raw,

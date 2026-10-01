@@ -152,8 +152,11 @@ func TestRmLocalOnlyLeavesTheRelaysCopy(t *testing.T) {
 	// The left-behind file remembers it, so the next fetch is quiet and
 	// fetches nothing.
 	s, _, _ := bob.opened()
-	if ids, err := s.LeftBehind(name); err != nil || len(ids) != 1 || ids[0] != m.RelayID {
-		t.Fatalf("left behind: %v (%v), want %d", ids, err, m.RelayID)
+	// By the relay's id, and by the message's own with the relay's time
+	// and size, which name it whatever the relay calls it later.
+	if ids, err := s.LeftBehind(name); err != nil || len(ids) != 1 ||
+		ids[0] != (store.LeftEntry{RelayID: m.RelayID, ID: m.Inner.ID, Received: m.Received, Size: m.RelaySize}) || m.RelaySize <= 0 {
+		t.Fatalf("left behind: %v (%v), want %d %s %s %d", ids, err, m.RelayID, m.Inner.ID, m.Received, m.RelaySize)
 	}
 	in := bob.inboxJSON()
 	if in.Fetch.Delivered != 0 || len(in.Messages) != 0 {
@@ -417,8 +420,11 @@ func TestRmRemovesARecordLoadRefusesByItsID(t *testing.T) {
 	if _, err := os.Stat(s.AttachmentDir(store.Inbox, m.Inner.ID)); !os.IsNotExist(err) {
 		t.Errorf("the attachment directory is still there: %v", err)
 	}
-	if ids, err := s.LeftBehind(name); err != nil || len(ids) != 1 || ids[0] != m.RelayID {
-		t.Fatalf("left behind: %v (%v), want %d", ids, err, m.RelayID)
+	// The record could not be read, so the entry has the relay's id and
+	// the message's own, and zero for what only the record knew.
+	if ids, err := s.LeftBehind(name); err != nil || len(ids) != 1 ||
+		ids[0].RelayID != m.RelayID || ids[0].ID != m.Inner.ID || !ids[0].Received.IsZero() || ids[0].Size != 0 {
+		t.Fatalf("left behind: %v (%v), want %d %s", ids, err, m.RelayID, m.Inner.ID)
 	}
 	if len(queuedOn(t, st, bob.exportFingerprint())) != 1 {
 		t.Fatal("the relay's copy went")

@@ -54,6 +54,7 @@ const (
 	wantKind        = "a message kind (envelope, stream or knock)"
 	wantChannelName = "a channel name"
 	wantTime        = "a time"
+	wantSpan        = "the lowest message id held, from 0 to last, and 0 only with last 0"
 )
 
 // The enumerated fields of an answer, each held to the set the protocol
@@ -360,6 +361,18 @@ func (c *Client) checkListing(page *relayapi.ListResponse, stubs bool) error {
 	const answer = "the listing"
 	if err := c.counts(answer, count{"queued", page.Queued}); err != nil {
 		return err
+	}
+	// The span of ids the mailbox holds: both present, neither below
+	// zero, the first no later than the last, and zero only together,
+	// which is an empty mailbox, since ids begin at 1.
+	if page.First == nil {
+		return c.malformed(answer, "first", wantSpan)
+	}
+	if page.Last == nil {
+		return c.malformed(answer, "last", wantSpan)
+	}
+	if *page.First < 0 || *page.First > *page.Last || (*page.First == 0) != (*page.Last == 0) {
+		return c.malformed(answer, "first", wantSpan)
 	}
 	if !oneOf(page.Allow, allowWords) {
 		return c.malformed(answer, "allow", wantOneOf(allowWords))

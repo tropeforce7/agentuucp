@@ -330,6 +330,17 @@ type (
 		// a mailbox that is empty; zero is the count of an empty mailbox,
 		// and a client reads zero as nothing to say.
 		Queued int64 `json:"queued"`
+		// First and Last are the lowest and highest message ids the
+		// mailbox holds, whatever the page, and both zero for an empty
+		// mailbox. Always present: a client whose cursor is above Last
+		// is past everything the relay holds, which is a relay whose
+		// numbering began again, or the newest mail removed, and it
+		// fetches from First rather than being told its cursor is
+		// wrong. A client refuses a listing without either, by name;
+		// they are pointers so that absent is not zero, since zero is
+		// the value of an empty mailbox.
+		First *int64 `json:"first"`
+		Last  *int64 `json:"last"`
 		// DirectoriesChanged names the watched peers whose directory the
 		// relay holds a newer issue of than the listing's peers parameter
 		// said. Absent when none has, or when nothing was watched, so a

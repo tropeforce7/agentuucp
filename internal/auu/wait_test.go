@@ -35,9 +35,12 @@ type waitGate struct {
 	mu    sync.Mutex
 	mode  string // "", "hang", "drop", "old", or a status to answer
 	left  int    // misbehaviours still to perform; negative means for ever
+	pass  int    // listings served as they are before the misbehaviour begins
 	lists atomic.Int32
-	// requests counts everything that reached the gate, listings or not.
+	// requests counts everything that reached the gate, listings or not,
+	// and seen is each one's method and path, in order.
 	requests atomic.Int32
+	seen     []string
 	// cancelled says a hung request saw its context done before anything
 	// was written: the client cut it off, not the transport.
 	cancelled atomic.Bool
@@ -99,6 +102,9 @@ func (g *waitGate) set(mode string, times int) {
 
 func (g *waitGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.requests.Add(1)
+	g.mu.Lock()
+	g.seen = append(g.seen, r.Method+" "+r.URL.Path)
+	g.mu.Unlock()
 	isList := r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/mailbox/") && !strings.HasSuffix(r.URL.Path, "/channels") &&
 		!strings.HasSuffix(r.URL.Path, "/blob")
 	if !isList {
@@ -119,7 +125,11 @@ func (g *waitGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	g.mu.Lock()
 	mode := g.mode
-	if g.left == 0 {
+	if g.pass > 0 {
+		// Served as they are before the misbehaviour begins.
+		g.pass--
+		mode = ""
+	} else if g.left == 0 {
 		mode = ""
 	} else if g.left > 0 {
 		g.left--
@@ -212,6 +222,13 @@ func startGatedRelayStore(t *testing.T) (string, *waitGate, *relay.Store) {
 	srv := httptest.NewServer(gate)
 	t.Cleanup(srv.Close)
 	return srv.URL, gate, st
+}
+
+// since is the requests seen from the n'th on.
+func (g *waitGate) since(n int) []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]string(nil), g.seen[n:]...)
 }
 
 // aboutTheInterval reports whether a pause is the interval less the moment

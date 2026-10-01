@@ -657,6 +657,45 @@ is read strictly. So a stream whose manifest carries a field this build
 does not know is refused as malformed and kept under `damaged/`. That is
 what a peer running something other than this `auu` looks like from here.
 
+*When the relay's numbering restarts.* The relay numbers the mail it holds,
+and your cursor, `relays/<name>/cursor`, is the number of the last message
+this machine fetched there. Every listing says the lowest and highest numbers
+the relay holds for you. A cursor above the highest is past everything there.
+That happens on an ordinary day, when you `auu rm` the newest message kept on
+the relay. It also happens when the relay's operator deleted its database and
+its numbering began again; an upgrade does not do that. The next fetch tells
+the two apart by asking the relay for its list without the messages and
+matching each row to what you already have from it. When it all matches, the
+cursor goes back to the relay's highest number and nothing is said. When it
+does not, the fetch starts again from the relay's lowest number in the same
+run and says so once:
+
+    relay.example: this machine's cursor was 9 and the relay's mail is numbered 1 to 3, so the cursor was reset and mail is fetched from the beginning; nothing is delivered twice here
+
+A message you already have is recognised by its own id and left as it is,
+read or not, and one you removed here with `--local-only` stays removed. One
+you had let go from the relay, from a channel set not to keep or with `auu rm
+--remote-only`, is let go again. What the relay no longer holds stops saying
+`on relay`. A stranger's stream whose body you left there and the relay lost
+says `body not fetched, and gone from the relay`, and `quarantine trust`
+says the body is gone rather than asking the relay for it.
+
+Every fetch recognises mail it already has this way, not only after a
+reset. A message the relay serves again, because it lost an acknowledgement
+or because the cursor was set back, keeps its record and its read mark and
+is not counted as new. So a reset that is cut off part-way, by a wait's
+deadline, a dropped connection or Ctrl-C, leaves nothing to put right: the
+next fetch carries on from where it stopped, delivers each new message once,
+and only the sentence is not said again. `auu wait`, `auu
+watch --fetch` and `auu serve` fetch the same way. A plain `auu watch`
+reports only the mail you do not have, and moves nothing.
+
+A cursor inside the relay's span, with mail before it that was neither
+fetched nor left there on purpose, is different. That cursor was set by
+hand or copied from a machine that had fetched further, and a fetch from the
+front would deliver again what was fetched after the gap. That one is
+refused, with the count and the file to delete, at exit 5.
+
 ### 1.6 An expert on a channel
 
 A channel can be answered by a program rather than by a person, Claude Code
@@ -1080,10 +1119,10 @@ Go's file modes say nothing about who can read.
 | `relays/<name>/relay.json` | one relay: its URL, when it was added, and what this machine has learned about its certificates |
 | `relays/<name>/trust_anchor.pem` | that relay's pinned trust anchor, when it has one; `relay.json` records its hash, and a file here with no hash recorded is refused as an edit, not taken as unpinned |
 | `relays/<name>/cert.json` | this machine's client certificate for that relay, and its key — sealed under the home key when a passphrase is set |
-| `relays/<name>/cursor` | how far that relay's mailbox has been drained; one past mail the relay still holds is refused with the count and the file to delete, exit 5 |
+| `relays/<name>/cursor` | how far that relay's mailbox has been drained; one above everything the relay holds is reset by the next fetch (1.5, *When the relay's numbering restarts*), and one that skipped mail inside the relay's span is refused with the count and the file to delete, exit 5 |
 | `relays/<name>/allow_pushed` | when this machine last pushed a signed allow list to that relay, one RFC 3339 line, so a fetch can tell a relay that never had one from a relay that has lost it; `auu allow clear` removes it |
 | `relays/<name>/card_pushed` | the same for the card; `auu card clear` removes it |
-| `relays/<name>/left-behind` | the ids `auu rm --local-only` removed here and left on that relay, one per line, so the fetch does not mistake them for mail the cursor has skipped; pruned when the relay no longer lists them |
+| `relays/<name>/left-behind` | the messages `auu rm --local-only` removed here and left on that relay, one per line: the relay's id, the message's own id, the time the relay received it and its size. The fetch does not mistake them for mail the cursor has skipped, and a reset does not deliver them again; pruned when the relay no longer lists them. A file of bare ids, from before, is refused by name; deleting it costs that a message you removed here alone may come back once |
 | `relays/<name>/fetch.lock` | held while a fetch from that relay runs, so two `auu inbox` at once take turns; the second waits up to a minute and then says so |
 | `inbox/`, `sent/`, `quarantine/` | the message spool, one JSON file each; a record that will not read is said to be, once, and left out of the listing |
 | `inbox/<id>.d/` | a large message's files, written straight to disk |

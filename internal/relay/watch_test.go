@@ -236,6 +236,42 @@ func TestAHeldListingAnswersEmptyAtTheWait(t *testing.T) {
 	}
 }
 
+// A held listing whose cursor is above the highest id the mailbox holds is
+// answered at once, with the span: mail posted later is numbered after what
+// is held and never after that cursor, so a hold would only ever end at the
+// wait. A cursor at the highest id is held as before.
+func TestAHeldListingPastEverythingIsAnsweredAtOnce(t *testing.T) {
+	h := newHarness(t, Config{})
+	people := ids(t, "alice", "bob")
+	alice, bob := people[0], people[1]
+	h.register(alice)
+	h.register(bob)
+	if status, body := h.postTo(bob, alice, ""); status != http.StatusOK {
+		t.Fatalf("post: %d %s", status, body)
+	}
+	held, err := h.store.Listing(alice.Fingerprint(), 0, 10, true)
+	if err != nil || len(held.Rows) != 1 {
+		t.Fatalf("the row: %v %+v", err, held)
+	}
+	last := held.Rows[0].ID
+	l := h.list(alice, "after="+strconv.FormatInt(last+1, 10)+"&wait=30s")
+	status, resp, body := l.answer(t)
+	if status != http.StatusOK || len(resp.Messages) != 0 || resp.First == nil || *resp.First != last || *resp.Last != last {
+		t.Fatalf("the answer past everything: %d %s", status, body)
+	}
+	if l.dur > 5*time.Second {
+		t.Fatalf("answered after %s: held, when nothing could ever be listed after the cursor", l.dur)
+	}
+	h.holding(0)
+	l = h.list(alice, "after="+strconv.FormatInt(last, 10)+"&wait=300ms")
+	if status, resp, body := l.answer(t); status != http.StatusOK || len(resp.Messages) != 0 {
+		t.Fatalf("the answer at the last id: %d %s", status, body)
+	}
+	if l.dur < 300*time.Millisecond {
+		t.Fatalf("a cursor at the last id answered after %s, before the wait was up", l.dur)
+	}
+}
+
 func TestAPlacedStreamWakesAHeldListing(t *testing.T) {
 	h := newHarness(t, Config{})
 	people := ids(t, "alice", "bob")
@@ -792,6 +828,8 @@ func TestAListingWithoutWaitIsUnchanged(t *testing.T) {
 	want, err := json.Marshal(struct {
 		Messages  []listedMessage `json:"messages"`
 		Queued    int64           `json:"queued"`
+		First     int64           `json:"first"`
+		Last      int64           `json:"last"`
 		Allow     string          `json:"allow"`
 		Card      string          `json:"card"`
 		Directory string          `json:"directory"`
@@ -802,6 +840,8 @@ func TestAListingWithoutWaitIsUnchanged(t *testing.T) {
 			Envelope: json.RawMessage(row.Rows[0].Envelope),
 		}},
 		Queued:    1,
+		First:     row.Rows[0].ID,
+		Last:      row.Rows[0].ID,
 		Allow:     "none",
 		Card:      "none",
 		Directory: "none",

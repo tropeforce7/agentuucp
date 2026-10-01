@@ -1077,9 +1077,16 @@ type Row struct {
 // table and the next start it counts a message the page can never show,
 // which the container suite's M05 found telling a client its cursor was
 // past mail.
+//
+// First and Last are the lowest and highest ids the mailbox holds, read in
+// the same transaction, and zero for an empty mailbox: a client whose
+// cursor is above Last is past everything here, which is how it tells a
+// relay whose numbering began again. They are of rows, as the count is.
 type Listing struct {
 	Rows   []Row
 	Queued int64
+	First  int64
+	Last   int64
 }
 
 // List returns messages with id greater than after, oldest first.
@@ -1136,7 +1143,10 @@ func (s *Store) ListingWithin(toFP string, after int64, limit int, stubs bool, b
 		return l, err
 	}
 	// The index on (to_fp, id) makes this a range count, not a scan.
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM messages WHERE to_fp = ?`, toFP).Scan(&l.Queued); err != nil {
+	// The same index answers MIN and MAX from its ends. COALESCE makes an
+	// empty mailbox zero and zero, which no row can be: ids begin at 1.
+	if err := tx.QueryRow(`SELECT COUNT(*), COALESCE(MIN(id), 0), COALESCE(MAX(id), 0) FROM messages WHERE to_fp = ?`,
+		toFP).Scan(&l.Queued, &l.First, &l.Last); err != nil {
 		return l, err
 	}
 	rows, err := tx.Query(

@@ -380,7 +380,7 @@ func TestResponseIsBounded(t *testing.T) {
 // peers as FP:ISSUED in Unix nanoseconds sorted by fingerprint; and it
 // reads directories_changed back. List asks for neither.
 func TestListWaitCarriesTheHoldAndThePeers(t *testing.T) {
-	answer := map[string]any{"messages": []any{}, "queued": 0, "allow": "none", "card": "none", "directory": "none", "directories_changed": []string{"bbbb", "aaaa"}}
+	answer := map[string]any{"messages": []any{}, "queued": 0, "first": 0, "last": 0, "allow": "none", "card": "none", "directory": "none", "directories_changed": []string{"bbbb", "aaaa"}}
 	rec := &recorder{replies: []reply{{status: http.StatusOK, body: answer}}}
 	c, _ := newTestClient(t, rec)
 	box := "GET /v1/mailbox/" + c.id.Fingerprint()
@@ -463,7 +463,7 @@ func TestListWaitCarriesTheHoldAndThePeers(t *testing.T) {
 	}
 	// A listing with nothing changed leaves the field out.
 	rec.mu.Lock()
-	rec.replies = []reply{{status: http.StatusOK, body: map[string]any{"messages": []any{}, "queued": 0, "allow": "none", "card": "none", "directory": "none"}}}
+	rec.replies = []reply{{status: http.StatusOK, body: map[string]any{"messages": []any{}, "queued": 0, "first": 0, "last": 0, "allow": "none", "card": "none", "directory": "none"}}}
 	rec.mu.Unlock()
 	if l, err := c.ListWait(context.Background(), ListRequest{Wait: time.Second}); err != nil || l.DirectoriesChanged != nil {
 		t.Fatalf("a listing with nothing changed: %+v %v", l, err)
@@ -492,8 +492,8 @@ func TestARelayThatAnswersAfterTheHoldIsNotATransportError(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{
 			"messages": []map[string]any{{"id": 9, "received": "2026-09-14T00:00:00Z", "kind": "envelope",
 				"size": 3, "channel": "default", "envelope": map[string]any{"v": 1, "to": "x", "ct": "AAA"}}},
-			"queued": 1,
-			"allow":  "none", "card": "none", "directory": "none",
+			"queued": 1, "first": 9, "last": 9,
+			"allow": "none", "card": "none", "directory": "none",
 		})
 	}))
 	t.Cleanup(srv.Close)
@@ -542,7 +542,7 @@ func TestTheClientSignsOnlyWhatTheRelayVerifies(t *testing.T) {
 		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}},
 		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}},
 		{status: 200, body: relayapi.KeysResponse{Bundle: id.Public().Bundle(), Name: "peer", Created: time.Now()}},
-		{status: 200, body: relayapi.ListResponse{Allow: relayapi.AllowNone, Card: relayapi.CardNone, Directory: relayapi.DirectoryNone}},
+		{status: 200, body: relayapi.ListResponse{First: new(int64), Last: new(int64), Allow: relayapi.AllowNone, Card: relayapi.CardNone, Directory: relayapi.DirectoryNone}},
 		{status: 200, body: relayapi.PostResponse{ID: 1}},
 	}}
 	c, _ := newTestClient(t, rec)

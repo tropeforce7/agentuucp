@@ -192,7 +192,8 @@ func (s *Server) listing(w http.ResponseWriter, r *http.Request, fp string, afte
 // look is one listing: the rows after the id asked from, the count of
 // everything held, and which watched peers hold a directory issued later
 // than the watcher said. found reports whether there is anything to
-// answer with rather than hold for.
+// answer with rather than hold for, which a cursor past the highest id
+// held is.
 func (s *Server) look(fp string, after int64, limit int, stubs bool, peers map[string]time.Time) (resp relayapi.ListResponse, found bool, err error) {
 	// A page follows max_bytes: as many envelopes as fit the budget, and
 	// one at least, so a client sized to the relay's max_bytes holds it.
@@ -223,6 +224,8 @@ func (s *Server) look(fp string, after int64, limit int, stubs bool, peers map[s
 	resp = relayapi.ListResponse{
 		Messages:  make([]relayapi.StoredMessage, 0, len(listing.Rows)),
 		Queued:    listing.Queued,
+		First:     &listing.First,
+		Last:      &listing.Last,
 		Allow:     allow,
 		Card:      cardState,
 		Directory: directory,
@@ -255,7 +258,11 @@ func (s *Server) look(fp string, after int64, limit int, stubs bool, peers map[s
 	}
 	// The map's order is nobody's; the answer's is fixed.
 	sort.Strings(resp.DirectoriesChanged)
-	return resp, len(resp.Messages) > 0 || len(resp.DirectoriesChanged) > 0, nil
+	// A cursor above the highest id held is answered at once too: mail
+	// posted later is numbered after what is held, not after the cursor,
+	// so nothing would ever be listed after it, and the client that asked
+	// learns from the span that its cursor is past everything here.
+	return resp, len(resp.Messages) > 0 || len(resp.DirectoriesChanged) > 0 || after > listing.Last, nil
 }
 
 func (s *Server) listingFailed(w http.ResponseWriter, err error) {

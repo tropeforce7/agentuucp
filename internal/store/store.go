@@ -728,6 +728,18 @@ type Stored struct {
 	// PayloadOnRelay says only the manifest has been fetched: the body is
 	// still on the relay, waiting for somebody to decide about the sender.
 	PayloadOnRelay bool `json:"payload_on_relay,omitempty"`
+	// PayloadGone says the payload PayloadOnRelay left there is no longer
+	// on the relay: a cursor reset found the relay holding nothing that
+	// is this message, so its relay id names nothing of it any more and
+	// nothing asks the relay for it under that id. PayloadOnRelay stays,
+	// since the body is still not here.
+	PayloadGone bool `json:"payload_gone,omitempty"`
+	// RelaySize is the size the relay listed the message at. With RelayID
+	// and Received it names the relay's copy, which is what a cursor past
+	// everything the relay holds is checked against before anything is
+	// downloaded again. Zero, a record written before it was kept, matches
+	// nothing, and the check falls to the re-fetch.
+	RelaySize int64 `json:"relay_size,omitempty"`
 	// OnRelay says the message is still queued on the relay it came
 	// through: this machine fetched it from a channel set to keep, and it
 	// stays there until somebody removes it with 'auu rm'. False, the
@@ -767,6 +779,13 @@ const (
 	Quarantine Box = quarantineDir
 )
 
+// StillOnRelay reports whether the relay is taken to hold something of this
+// message under its relay id: the message itself, kept there, or a
+// quarantined stream's payload that was left there and is not gone.
+func (m *Stored) StillOnRelay() bool {
+	return m.OnRelay || (m.PayloadOnRelay && !m.PayloadGone)
+}
+
 func (s *Store) msgPath(box Box, id string) string {
 	return s.path(string(box), id+".json")
 }
@@ -786,6 +805,21 @@ func (s *Store) Save(box Box, m *Stored) error {
 	return writeFileAtomic(s.msgPath(box, m.Inner.ID), append(data, '\n'), fileMode)
 }
 
+// errNoMessage is Load's error for an id the box does not hold, which
+// Holding tells from every other.
+var errNoMessage = errors.New("no message")
+
+// Holding is Load for a caller that asks whether a box holds a message at
+// all, by its whole id: nil and no error when it does not, and Load's error
+// for a record that is there and will not read.
+func (s *Store) Holding(box Box, id string) (*Stored, error) {
+	m, err := s.Load(box, id)
+	if errors.Is(err, errNoMessage) {
+		return nil, nil
+	}
+	return m, err
+}
+
 // Load reads one message from a spool directory.
 func (s *Store) Load(box Box, id string) (*Stored, error) {
 	// Guards the filesystem: an id arrives inside a signed but otherwise
@@ -795,7 +829,7 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	}
 	data, err := regular.ReadFile(s.msgPath(box, id))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("no message %s", id)
+		return nil, fmt.Errorf("%w %s", errNoMessage, id)
 	}
 	if err != nil {
 		return nil, err
@@ -809,6 +843,9 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	}
 	if m.RelayID < 0 {
 		return nil, fmt.Errorf("the record's relay id %d is negative", m.RelayID)
+	}
+	if m.RelaySize < 0 {
+		return nil, fmt.Errorf("the record's relay size %d is negative", m.RelaySize)
 	}
 	// Every record names the relay it came through. One that names none
 	// is from before a home could know more than one, and nothing on this
@@ -906,7 +943,7 @@ func (s *Store) LeftOn(relay string) (int64, error) {
 			return 0, err
 		}
 		for _, m := range msgs {
-			if (m.OnRelay || m.PayloadOnRelay) && m.Relay == relay {
+			if m.Relay == relay && m.StillOnRelay() {
 				n++
 			}
 		}

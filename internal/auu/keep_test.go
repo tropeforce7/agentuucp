@@ -3,6 +3,7 @@ package auu
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -258,18 +259,31 @@ func TestAFetchLeavesKeptMailWhereTheCursorIsPastIt(t *testing.T) {
 	if !asExit(err, &exit) || exit.code != exitTimeout {
 		t.Fatalf("a watch with kept mail behind the cursor: %v", err)
 	}
-	// One more, never fetched, with the cursor put past it: that is mail
-	// this machine has not seen, and it is said.
+	// One more, never fetched, with the cursor put past both: that is mail
+	// this machine has not seen, and a cursor above everything the relay
+	// holds is reset and fetched again from the relay's first id. The kept
+	// one is met, its record as it was; the skipped one is delivered, and
+	// the sentence says so.
+	kept := recordOf(t, bob, store.Inbox, "kept")
+	bob.run("read", kept.Inner.ID[:12])
 	alice.run("send", "--to", "bob", "--subject", "skipped", "two")
 	rows := queuedOn(t, st, bob.exportFingerprint())
-	bob.setCursor(bob.defaultRelayName(), "999999\n")
-	_, err = bob.tryRun("inbox")
-	if !asExit(err, &exit) || exit.code != exitDamaged ||
-		!strings.Contains(err.Error(), "1 message is waiting on "+bob.defaultRelayName()+" before this machine's cursor") {
-		t.Fatalf("a cursor past mail beside kept mail: %v, want the one message counted", err)
-	}
 	if len(rows) != 2 {
 		t.Fatalf("the relay holds %v, want the kept one and the skipped one", rows)
+	}
+	bob.setCursor(bob.defaultRelayName(), "999999\n")
+	var in inboxJSON
+	stderr := captureStderr(t, func() { in = bob.inboxJSON() })
+	if in.Fetch.Delivered != 1 || !strings.Contains(stderr, "this machine's cursor was 999999 and the relay's mail is numbered "+
+		strconv.FormatInt(rows[0], 10)+" to "+strconv.FormatInt(rows[1], 10)+", so the cursor was reset") {
+		t.Fatalf("a cursor past both: %+v, said %q", in.Fetch, stderr)
+	}
+	if again := recordOf(t, bob, store.Inbox, "kept"); !again.Read || !again.OnRelay || again.RelayID != kept.RelayID {
+		t.Fatalf("the kept record after the reset: %+v", again)
+	}
+	if data, err := os.ReadFile(bob.cursorPath(bob.defaultRelayName())); err != nil ||
+		string(data) != strconv.FormatInt(rows[1], 10)+"\n" {
+		t.Fatalf("the cursor after the reset: %q (%v), want the last id", data, err)
 	}
 }
 

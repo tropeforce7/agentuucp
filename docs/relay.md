@@ -142,6 +142,15 @@ beside it.
         17                     one message, exactly the bytes that were posted
 ```
 
+Each message's row has an id the database numbers from 1 and never reuses.
+A listing says the lowest and highest ids the mailbox holds, read from those
+rows in the same transaction as the page; nothing new is counted or kept
+for it. A client whose cursor is above the highest is told at once, even on
+a held listing, and fetches again from the lowest. A database that is
+deleted begins its numbering again, which is when that happens to every
+client at once; a relay that carries its database forward keeps its
+numbering.
+
 So `relay.db` stays small whatever the relay is carrying. A 2 GB message is
 four kilobytes of database and a two gigabyte file. A completed upload is
 *renamed* into place rather than copied. That is why finishing one is instant

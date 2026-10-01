@@ -87,7 +87,7 @@ func cmdRm(args []string) error {
 			return usageErrf("%v", err)
 		}
 		res := rmResult{ID: m.Inner.ID}
-		onRelay := m.OnRelay || m.PayloadOnRelay
+		onRelay := m.StillOnRelay()
 		// A sent message is a copy of what was posted to somebody else's
 		// mailbox; this identity's mailbox never held it.
 		if box == store.Sent {
@@ -153,7 +153,8 @@ func cmdRm(args []string) error {
 					return err
 				}
 				res.Relay = r.Name
-				if err := s.AddLeftBehind(r.Name, m.RelayID); err != nil {
+				if err := s.AddLeftBehind(r.Name, store.LeftEntry{RelayID: m.RelayID, ID: m.Inner.ID,
+					Received: m.Received, Size: m.RelaySize}); err != nil {
 					return err
 				}
 			}
@@ -192,7 +193,10 @@ func rmUnreadable(s *store.Store, id string, localOnly, remoteOnly, asJSON bool)
 	res := rmResult{ID: id, RemovedLocal: true}
 	line := fmt.Sprintf("%s: removed here (the record could not be read)", id[:12])
 	if relay != "" && box != store.Sent {
-		if err := s.AddLeftBehind(relay, relayID); err != nil {
+		// The record could not be read, so the relay's time and size for
+		// it are not known: zero, which the check before a re-fetch
+		// cannot match and the re-fetch matches by the message's own id.
+		if err := s.AddLeftBehind(relay, store.LeftEntry{RelayID: relayID, ID: id}); err != nil {
 			return rmResult{}, false, err
 		}
 		res.Relay = relay

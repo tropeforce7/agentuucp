@@ -851,15 +851,39 @@ default a channel keeps its mail, so the fetch leaves it queued. The
 remove it.
 
 The answer at step 7 lists what is after this machine's cursor and, beside
-it, how many messages the mailbox holds in all (`queued`). The count is
-routinely the larger, since by default a channel keeps its mail, which is
-counted but not listed after the cursor. The client subtracts what this
-machine deliberately left on the relay before it judges the rest. When the
-list is empty and the count still exceeds that, the cursor is past mail,
-set by hand or copied from a machine that had fetched further. Then `auu
-inbox` says so, with the count, the cursor file to delete and the `auu inbox
---relay NAME` to run after. It exits 5 without acknowledging or writing
-anything. Each message listed says which channel it is under (`channel`),
+it, how many messages the mailbox holds in all (`queued`) and the lowest and
+highest ids among them (`first` and `last`, both 0 for an empty mailbox,
+read from the rows in the same transaction as the page). All three are
+required, and a listing without one is refused by name.
+
+A cursor above `last` is past everything the relay holds. That happens on
+an ordinary day, when the newest mail kept on the relay is removed, and
+when the relay's numbering began again because its operator deleted its
+database. An upgrade does not do it: a relay carries its database forward.
+The client tells the two apart by what the relay holds. It lists the
+mailbox without envelopes and matches each row to what this machine has of
+that relay by the relay's id, the time the relay received it and its size.
+When every row matches, the cursor is set to `last` and nothing is said or
+downloaded. When one does not, the cursor is set before `first` and the
+mailbox is fetched again in the same run. A message this machine already
+holds is met by its own id rather than saved, so its record, read mark and
+all, stands, and one it let go from the relay is acknowledged again. What
+the fetch does not meet is marked as no longer on the relay, so nothing
+asks the relay for anything under an id that may now name other mail. Then
+it says `relay.example: this machine's cursor was 9 and the relay's mail is
+numbered 1 to 3, so the cursor was reset and mail is fetched from the
+beginning; nothing is delivered twice here`.
+
+The count is routinely larger than what is listed, since by default a
+channel keeps its mail, which is counted but not listed after the cursor.
+The client subtracts what this machine deliberately left on the relay before
+it judges the rest. When the list is empty, the cursor is inside the span,
+and the count still exceeds that, the cursor has skipped mail in the middle.
+That is set by hand or copied from a machine that had fetched further, and
+no fetch from the front could put it right without delivering again what
+was fetched. Then `auu inbox` says so, with the count, the cursor file to
+delete and the `auu inbox --relay NAME` to run after. It exits 5 without
+acknowledging or writing anything. Each message listed says which channel it is under (`channel`),
 always, `default` included, held to the channel name rule as it is read. It
 says how it came, too: `via`, the relays it crossed before the one holding
 it, nearest the sender first and joined by `!`, always present and empty for

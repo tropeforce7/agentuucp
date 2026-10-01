@@ -15,6 +15,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relay"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/term"
 )
 
@@ -235,6 +236,48 @@ func TestAWatchReportsMailAlreadyQueuedAtOnce(t *testing.T) {
 	out = bob.run("watch", "--timeout", "1m")
 	if !strings.Contains(out, relayName+": 2 messages in \"bugs\" (") || !strings.Contains(out, ", ") {
 		t.Fatalf("plain with two under one channel:\n%s", out)
+	}
+}
+
+// After the newest kept message is removed the cursor is past everything
+// the relay holds, and the relay answers the watch's first listing at once;
+// with nothing new in it, the watch holds again straight away rather than
+// an interval later, so a post then ends it when it lands. The container
+// suite's W02 found it returning seventeen seconds after the send.
+func TestAWatchPastEverythingHoldsAgainAtOnce(t *testing.T) {
+	slept := recordSleeps(t)
+	relayURL, gate := startGatedRelay(t)
+	alice, bob := watchers(t, relayURL)
+	alice.run("send", "--to", "bob", "--subject", "kept", "x")
+	alice.run("send", "--to", "bob", "--subject", "newest", "y")
+	bob.run("inbox")
+	bob.run("rm", recordOf(t, bob, store.Inbox, "newest").Inner.ID[:12])
+	gate.lists.Store(0)
+
+	posted := make(chan time.Time, 1)
+	joined(t, func() {
+		// The first listing, answered at once, the stubs, and the hold.
+		deadline := time.Now().Add(15 * time.Second)
+		for gate.lists.Load() < 3 && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		time.Sleep(200 * time.Millisecond)
+		posted <- time.Now()
+		alice.elsewhere("send", "--to", "bob", "--subject", "during the hold", "now")
+	})
+	got, err := watchJSONOf(t, bob, "--interval", "20s")
+	ended := time.Now()
+	if err != nil {
+		t.Fatalf("watch: %v", err)
+	}
+	if at := <-posted; ended.Sub(at) > 10*time.Second {
+		t.Fatalf("the watch ended %s after the post", ended.Sub(at))
+	}
+	if events := got.messages(t); len(events) != 1 {
+		t.Fatalf("events: %s", got.Events)
+	}
+	if len(*slept) != 0 {
+		t.Fatalf("slept %v; a watch past everything holds again without a pause", *slept)
 	}
 }
 
@@ -819,8 +862,11 @@ func TestAWatchDiagnosesACursorPastTheMail(t *testing.T) {
 	relayURL := startRelay(t)
 	alice, bob := watchers(t, relayURL)
 	alice.run("send", "--to", "bob", "--subject", "behind", "x")
+	// The cursor at the relay's last id, its only message, which bob never
+	// fetched: the skipped mail is inside the span. A cursor above the span
+	// is reset.go's, and TestWaitAndWatchFetchReset's.
 	s, _, relays := bob.opened()
-	if err := s.SetCursorFor(relays[0], 5); err != nil {
+	if err := s.SetCursorFor(relays[0], 1); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()

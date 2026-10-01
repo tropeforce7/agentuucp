@@ -65,7 +65,7 @@ func refreshMarks(ctx context.Context, s *store.Store, c *client.Client, r *stor
 	// What the relay holds, or does not. An empty mailbox answers the
 	// question for every id at once.
 	var (
-		there = map[int64]bool{}
+		there = map[int64]relayCopy{}
 		err2  error
 	)
 	if queued > 0 {
@@ -75,33 +75,38 @@ func refreshMarks(ctx context.Context, s *store.Store, c *client.Client, r *stor
 		}
 	}
 	for id, records := range marked {
-		if there[id] {
-			continue
-		}
 		for _, rec := range records {
+			if stillThere(there, id, rec.listed) {
+				continue
+			}
 			m, err := s.Load(rec.box, rec.id)
 			if err != nil {
 				return err
 			}
-			// OnRelay alone. PayloadOnRelay is a statement about this
-			// machine — the body was never fetched — and stays true
-			// whatever the relay holds: clearing it would turn a
-			// quarantined stream's record into one claiming its files
-			// are in the directory beside it, which they are not, and
-			// 'auu extract' would go looking for them.
-			if !m.OnRelay {
+			// OnRelay, and PayloadGone beside PayloadOnRelay. PayloadOnRelay
+			// is a statement about this machine — the body was never
+			// fetched — and stays true whatever the relay holds: clearing
+			// it would turn a quarantined stream's record into one
+			// claiming its files are in the directory beside it, which
+			// they are not, and 'auu extract' would go looking for them.
+			// PayloadGone says the relay no longer has the body either, so
+			// nothing asks it for one under an id that may now be other
+			// mail's.
+			gone := m.PayloadOnRelay && !m.PayloadGone
+			if !m.OnRelay && !gone {
 				continue
 			}
 			m.OnRelay = false
+			m.PayloadGone = m.PayloadGone || m.PayloadOnRelay
 			if err := s.Save(rec.box, m); err != nil {
 				return err
 			}
 		}
 	}
-	var left []int64
-	for _, id := range behind {
-		if there[id] {
-			left = append(left, id)
+	var left []store.LeftEntry
+	for _, e := range behind {
+		if stillThere(there, e.RelayID, relayCopy{ID: e.RelayID, Received: e.Received, Size: e.Size}) {
+			left = append(left, e)
 		}
 	}
 	if len(left) != len(behind) {
@@ -110,10 +115,29 @@ func refreshMarks(ctx context.Context, s *store.Store, c *client.Client, r *stor
 	return nil
 }
 
-// record names one stored message: the box it is in and its own id.
+// stillThere reports whether the relay still lists what this machine left
+// there under an id: the same copy, by the time the relay received it and
+// its size as well, so that after a relay's numbering began again a new
+// message under an old id is not taken for the one left; by the id alone
+// for a record that has no size, which is one written before this machine
+// kept it (ruling 53).
+func stillThere(there map[int64]relayCopy, id int64, held relayCopy) bool {
+	listed, ok := there[id]
+	if !ok {
+		return false
+	}
+	if held.Size == 0 {
+		return true
+	}
+	return held.same(listed)
+}
+
+// record names one stored message: the box it is in and its own id, and
+// what it says of the relay's copy.
 type record struct {
-	box store.Box
-	id  string
+	box    store.Box
+	id     string
+	listed relayCopy
 }
 
 // markedOn is every record this machine has marked as still on one relay,
@@ -128,13 +152,14 @@ func markedOn(s *store.Store, relayName string) (map[int64][]record, error) {
 			return nil, err
 		}
 		for _, m := range msgs {
-			if !m.OnRelay && !m.PayloadOnRelay {
+			if !m.StillOnRelay() {
 				continue
 			}
 			if m.Relay != relayName {
 				continue
 			}
-			out[m.RelayID] = append(out[m.RelayID], record{box: box, id: m.Inner.ID})
+			out[m.RelayID] = append(out[m.RelayID], record{box: box, id: m.Inner.ID,
+				listed: relayCopy{ID: m.RelayID, Received: m.Received, Size: m.RelaySize}})
 		}
 	}
 	return out, nil
@@ -144,7 +169,7 @@ func markedOn(s *store.Store, relayName string) (map[int64][]record, error) {
 // lowest to the highest. A row outside it cannot be one of these, so the
 // listing stops there rather than reading a mailbox full of another
 // machine's kept mail.
-func span(marked map[int64][]record, behind []int64) (from, to int64) {
+func span(marked map[int64][]record, behind []store.LeftEntry) (from, to int64) {
 	first := true
 	consider := func(id int64) {
 		if first || id < from {
@@ -158,17 +183,18 @@ func span(marked map[int64][]record, behind []int64) (from, to int64) {
 	for id := range marked {
 		consider(id)
 	}
-	for _, id := range behind {
-		consider(id)
+	for _, e := range behind {
+		consider(e.RelayID)
 	}
 	return from - 1, to
 }
 
-// idsOnRelay is which of the ids in a span the relay still holds, listed
+// idsOnRelay is which of the ids in a span the relay still holds, and what
+// it lists under each, listed
 // without the envelopes; a listing that carries one anyway is refused by
 // the client as a relay that ignored the parameter.
-func idsOnRelay(ctx context.Context, c *client.Client, from, to int64) (map[int64]bool, error) {
-	there := map[int64]bool{}
+func idsOnRelay(ctx context.Context, c *client.Client, from, to int64) (map[int64]relayCopy, error) {
+	there := map[int64]relayCopy{}
 	for after := from; ; {
 		page, err := c.ListWait(ctx, client.ListRequest{
 			After: after, Limit: relayapi.MaxListLimit, Stubs: true,
@@ -183,7 +209,7 @@ func idsOnRelay(ctx context.Context, c *client.Client, from, to int64) (map[int6
 			if m.ID > to {
 				return there, nil
 			}
-			there[m.ID] = true
+			there[m.ID] = copyOf(m)
 			after = m.ID
 		}
 		if page.Messages[len(page.Messages)-1].ID >= to {

@@ -39,7 +39,12 @@ func TestAnAnswerWithoutARequiredFieldIsRefusedByName(t *testing.T) {
 		return m
 	}
 	listing := func(over map[string]any, rows ...map[string]any) map[string]any {
-		m := map[string]any{"messages": rows, "queued": len(rows), "allow": "none", "card": "none", "directory": "none"}
+		span := 0
+		if len(rows) > 0 {
+			span = 1
+		}
+		m := map[string]any{"messages": rows, "queued": len(rows), "first": span, "last": span,
+			"allow": "none", "card": "none", "directory": "none"}
 		for k, v := range over {
 			if v == nil {
 				delete(m, k)
@@ -89,6 +94,12 @@ func TestAnAnswerWithoutARequiredFieldIsRefusedByName(t *testing.T) {
 		whole                   any
 	}{
 		{"a listing without queued", "/v1/mailbox/" + fp, "queued", "", listing(map[string]any{"queued": nil}, row(nil)), list, listing(nil, row(nil))},
+		{"a listing without first", "/v1/mailbox/" + fp, "first", "the lowest message id held, from 0 to last, and 0 only with last 0", listing(map[string]any{"first": nil}, row(nil)), list, listing(nil, row(nil))},
+		{"a listing without last", "/v1/mailbox/" + fp, "last", "the lowest message id held, from 0 to last, and 0 only with last 0", listing(map[string]any{"last": nil}, row(nil)), list, listing(nil, row(nil))},
+		{"a listing whose first is after its last", "/v1/mailbox/" + fp, "first", "the lowest message id held, from 0 to last, and 0 only with last 0", listing(map[string]any{"first": 2, "last": 1}, row(nil)), list, listing(nil, row(nil))},
+		{"a listing with a last and no first", "/v1/mailbox/" + fp, "first", "the lowest message id held, from 0 to last, and 0 only with last 0", listing(map[string]any{"first": 0, "last": 5}, row(nil)), list, listing(nil, row(nil))},
+		{"a listing with a first and no last", "/v1/mailbox/" + fp, "first", "the lowest message id held, from 0 to last, and 0 only with last 0", listing(map[string]any{"first": 3, "last": 0}, row(nil)), list, listing(nil, row(nil))},
+		{"a listing with a negative first", "/v1/mailbox/" + fp, "first", "the lowest message id held, from 0 to last, and 0 only with last 0", listing(map[string]any{"first": -1, "last": -1}, row(nil)), list, listing(nil, row(nil))},
 		{"a listing without allow", "/v1/mailbox/" + fp, "allow", "one of signed, none, broken", listing(map[string]any{"allow": nil}, row(nil)), list, listing(nil, row(nil))},
 		{"a listing without card", "/v1/mailbox/" + fp, "card", "one of signed, none, broken", listing(map[string]any{"card": nil}, row(nil)), list, listing(nil, row(nil))},
 		{"a listing with another card word", "/v1/mailbox/" + fp, "card", "one of signed, none, broken", listing(map[string]any{"card": "lost"}, row(nil)), list, listing(nil, row(nil))},
