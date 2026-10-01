@@ -346,6 +346,11 @@ func cmdPeers(args []string) error {
 }
 
 func peersAdd(args []string) error {
+	for _, a := range args {
+		if a == "--vouched" || a == "-vouched" || strings.HasPrefix(a, "--vouched=") || strings.HasPrefix(a, "-vouched=") {
+			return peersAddVouched(args)
+		}
+	}
 	if len(args) == 0 {
 		return usageErrf("usage: %s peers add <export-line | @file | ->", prog)
 	}

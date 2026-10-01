@@ -470,7 +470,7 @@ func fetchForEvents(ctx context.Context, s *store.Store, id *identity.Identity, 
 		}
 		for _, id := range ids {
 			if m.RelayID == id {
-				byID[id] = append(byID[id], toJSON(store.Inbox, m, false))
+				byID[id] = append(byID[id], toJSON(s, store.Inbox, m, false))
 				delivered = append(delivered, m)
 			}
 		}
@@ -488,7 +488,7 @@ func fetchForEvents(ctx context.Context, s *store.Store, id *identity.Identity, 
 // printEvents is the plain output: one line per relay per channel for
 // messages, one per directory change, then under --fetch the messages
 // delivered as the inbox lists them.
-func printEvents(events []any, delivered []*store.Stored) {
+func printEvents(s *store.Store, events []any, delivered []*store.Stored) {
 	type key struct{ relay, channel string }
 	var order []key
 	sizes := map[key][]string{}
@@ -518,7 +518,7 @@ func printEvents(events []any, delivered []*store.Stored) {
 	}
 	fmt.Println()
 	for _, m := range delivered {
-		printInboxLine(m)
+		printInboxLine(s, m)
 	}
 	fmt.Printf("\nRead one with: %s read <id>\n", prog)
 }

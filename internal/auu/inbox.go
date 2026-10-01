@@ -400,9 +400,12 @@ type messageJSON struct {
 	// through, and PayloadOnRelay that a quarantined stream's body is.
 	OnRelay        bool `json:"on_relay,omitempty"`
 	PayloadOnRelay bool `json:"payload_on_relay,omitempty"`
+	// Vouch is a vouch message's judgement here: whether it counts and
+	// why not, and what it says when it does. On a vouch alone.
+	Vouch *vouchJSON `json:"vouch,omitempty"`
 }
 
-func toJSON(box store.Box, m *store.Stored, includeText bool) messageJSON {
+func toJSON(s *store.Store, box store.Box, m *store.Stored, includeText bool) messageJSON {
 	out := messageJSON{
 		ID:          m.Inner.ID,
 		Thread:      m.Inner.Body.Thread,
@@ -422,6 +425,9 @@ func toJSON(box store.Box, m *store.Stored, includeText bool) messageJSON {
 
 		OnRelay:        m.OnRelay,
 		PayloadOnRelay: m.PayloadOnRelay,
+	}
+	if m.Inner.Body.Type == message.TypeVouch && s != nil {
+		out.Vouch = vouchToJSON(judgeVouch(s, m, time.Now()))
 	}
 	if includeText {
 		out.Text = m.Inner.Body.Text
@@ -568,7 +574,7 @@ func cmdInbox(args []string) error {
 	if *asJSON {
 		out := inboxJSON{Fetch: res, Relays: reports, Messages: make([]messageJSON, 0, len(msgs))}
 		for _, m := range msgs {
-			out.Messages = append(out.Messages, toJSON(store.Inbox, m, false))
+			out.Messages = append(out.Messages, toJSON(s, store.Inbox, m, false))
 		}
 		return printJSON(out)
 	}
@@ -584,7 +590,7 @@ func cmdInbox(args []string) error {
 		fmt.Println("inbox is empty")
 	} else {
 		for _, m := range msgs {
-			printInboxLine(m)
+			printInboxLine(s, m)
 		}
 		fmt.Printf("\nRead one with: %s read <id>\n", prog)
 	}
@@ -664,7 +670,7 @@ func printQuarantineLine(m *store.Stored) {
 // printInboxLine is one message as the inbox lists it: unread flag, the
 // id, sender, type, subject, when it arrived, attachments, channel, and
 // where it still is besides here.
-func printInboxLine(m *store.Stored) {
+func printInboxLine(s *store.Store, m *store.Stored) {
 	flag := " "
 	if !m.Read {
 		flag = "*"
@@ -677,12 +683,19 @@ func printInboxLine(m *store.Stored) {
 	if m.Channel != "" {
 		ch = fmt.Sprintf("  in %q", m.Channel)
 	}
+	// A vouch's column is what it vouches for and what that is to this
+	// machine, judged here against the peer list, in place of a subject
+	// the sender chose.
+	what := truncate(orNone(identity.PrintableText(m.Inner.Body.Subject)), 32)
+	if m.Inner.Body.Type == message.TypeVouch && s != nil {
+		what = vouchLine(judgeVouch(s, m, time.Now()))
+	}
 	fmt.Printf("%s %s  %-14s %-8s %-32s %s%s%s%s\n",
 		flag,
 		m.Inner.ID[:12],
 		truncate(orNone(identity.Printable(m.SenderName)), 14),
 		m.Inner.Body.Type,
-		truncate(orNone(identity.PrintableText(m.Inner.Body.Subject)), 32),
+		what,
 		m.Received.Local().Format("2006-01-02 15:04"),
 		att, ch, whereElse(m))
 }
@@ -749,7 +762,7 @@ func threadSubject(s *store.Store, m *store.Stored) string {
 // wholeMessage is one message in full, with the thread's subject alongside
 // its own.
 func wholeMessage(s *store.Store, box store.Box, m *store.Stored) messageJSON {
-	out := toJSON(box, m, true)
+	out := toJSON(s, box, m, true)
 	out.ThreadSubject = threadSubject(s, m)
 	return out
 }
@@ -768,6 +781,9 @@ func printMessage(s *store.Store, box store.Box, m *store.Stored) {
 	// never written into the peer list unless a person accepts it.
 	if m.Inner.Body.Type == message.TypeKnock {
 		fmt.Printf("claims:  %s (their own claim, not a name you gave)\n", identity.Printable(m.Inner.Body.Name))
+	}
+	if m.Inner.Body.Type == message.TypeVouch {
+		printVouch(m.Inner.ID, judgeVouch(s, m, time.Now()))
 	}
 	// The thread's subject, and under it this message's own when it was
 	// given one: a reply can be about something of its own without
@@ -1415,7 +1431,7 @@ func cmdQuarantine(args []string) error {
 		if *asJSON {
 			out := make([]messageJSON, 0, len(msgs))
 			for _, m := range msgs {
-				out = append(out, toJSON(store.Quarantine, m, false))
+				out = append(out, toJSON(s, store.Quarantine, m, false))
 			}
 			return printJSON(out)
 		}
@@ -1589,19 +1605,12 @@ func cmdQuarantine(args []string) error {
 // refuses on, so the offer and the refusal agree.
 func knockName(s *store.Store, m *store.Stored) (name string, takenBy string) {
 	fp := m.Inner.From
-	claimed := m.Inner.Body.Name
-	if m.Inner.Body.Type != message.TypeKnock || claimed == "" || identity.ValidName(claimed) != nil {
+	if m.Inner.Body.Type != message.TypeKnock {
 		return fallbackName(fp), ""
 	}
 	// A peer list that cannot be read is AddPeer's error to report, a
 	// moment later, so the offer stands.
-	peers, _ := s.Peers()
-	for _, other := range peers {
-		if other.Fingerprint() != fp && strings.EqualFold(other.Name, claimed) {
-			return fallbackName(fp), other.Fingerprint()
-		}
-	}
-	return claimed, ""
+	return freeName(s, fp, m.Inner.Body.Name)
 }
 
 // offerAllowPush is what a newly trusted sender needs before they can
@@ -1614,6 +1623,12 @@ func knockName(s *store.Store, m *store.Stored) (name string, takenBy string) {
 // passphrase, which is why it is a question and not something done
 // silently.
 func offerAllowPush(s *store.Store, m *store.Stored) error {
+	return offerAllowPushFor(s, m, m.SenderName)
+}
+
+// offerAllowPushFor is offerAllowPush naming the person who can now write,
+// who is not the message's sender when the message was a vouch for them.
+func offerAllowPushFor(s *store.Store, m *store.Stored, who string) error {
 	r, err := relayOf(s, m, "")
 	if err != nil {
 		// Not a failure of the trust, which is done: the relay the
@@ -1630,7 +1645,7 @@ func offerAllowPush(s *store.Store, m *store.Stored) error {
 	// empty answer — end of input on a pipe — is a no, which prints the
 	// push to run later.
 	if !confirm(fmt.Sprintf("Push your allow list to %s now, so %s can write to you?",
-		r.Name, identity.Printable(m.SenderName))) {
+		r.Name, identity.Printable(who))) {
 		fmt.Printf("nothing pushed; run '%s allow push --relay %s' when you are ready\n", prog, r.Name)
 		return nil
 	}

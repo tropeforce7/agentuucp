@@ -444,11 +444,33 @@ func (s *Store) Peers() ([]*identity.Public, error) {
 	return peers, nil
 }
 
+// VouchedPrefix begins the comment line written above an entry added on
+// a peer's word: "# vouched for by NAME (SHORT-ID) on DATE". The reader
+// skips it as it skips every comment, and RemovePeer takes it with the
+// entry below it. It is the one place the file records where an entry
+// came from.
+const VouchedPrefix = "# vouched for by "
+
 // AddPeer appends a peer. Re-adding the same key is a no-op; presenting a
 // different key for a fingerprint that is already known is refused, since a
 // fingerprint commits to its key material and a mismatch means something is
 // wrong rather than updated.
 func (s *Store) AddPeer(pub *identity.Public) (added bool, err error) {
+	return s.addPeer(pub, "")
+}
+
+// AddPeerNoted is AddPeer with one comment line written directly above the
+// entry, in the same write: where the entry came from. The note is one line
+// beginning with VouchedPrefix, since that is the only comment this program
+// writes and the only one RemovePeer takes with its entry.
+func (s *Store) AddPeerNoted(pub *identity.Public, note string) (added bool, err error) {
+	if !strings.HasPrefix(note, VouchedPrefix) || strings.ContainsAny(note, "\r\n") {
+		return false, fmt.Errorf("store: a peer's note is one line beginning %q", VouchedPrefix)
+	}
+	return s.addPeer(pub, note)
+}
+
+func (s *Store) addPeer(pub *identity.Public, note string) (added bool, err error) {
 	if self, err := s.Self(); err == nil && self.Fingerprint() == pub.Fingerprint() {
 		return false, ErrSelfPeer
 	}
@@ -484,6 +506,9 @@ func (s *Store) AddPeer(pub *identity.Public) (added bool, err error) {
 	if buf != "" && !strings.HasSuffix(buf, "\n") {
 		buf += "\n"
 	}
+	if note != "" {
+		buf += note + "\n"
+	}
 	buf += line + "\n"
 	if err := writeFileAtomic(s.path(peersFile), []byte(buf), fileMode); err != nil {
 		return false, err
@@ -492,28 +517,46 @@ func (s *Store) AddPeer(pub *identity.Public) (added bool, err error) {
 }
 
 // RemovePeer drops a peer by fingerprint. It reports whether anything went.
+//
+// It edits the file line by line and leaves every other line as it was
+// written: every other entry, a blank line, and a comment, whether this
+// program wrote it or a person did. The one line it takes besides the
+// entry is the vouched-for comment directly above it, which is about that
+// entry and nothing else. It used to rewrite the file from the parsed
+// entries, which dropped every comment in it whenever any peer was removed.
 func (s *Store) RemovePeer(fp string) (bool, error) {
-	peers, err := s.Peers()
+	// The whole file is held to the reader's rule first, so a file that
+	// cannot be read is refused by the reader's sentence and not edited.
+	if _, err := s.Peers(); err != nil {
+		return false, err
+	}
+	data, err := os.ReadFile(s.path(peersFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
+	lines := strings.SplitAfter(string(data), "\n")
 	var kept []string
 	found := false
-	for _, p := range peers {
-		if p.Fingerprint() == fp {
-			found = true
-			continue
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			if pub, err := identity.ParseExportLine(trimmed); err == nil && pub.Fingerprint() == fp {
+				found = true
+				if n := len(kept); n > 0 && strings.HasPrefix(strings.TrimSpace(kept[n-1]), VouchedPrefix) {
+					kept = kept[:n-1]
+				}
+				continue
+			}
 		}
-		kept = append(kept, p.ExportLine())
+		kept = append(kept, line)
 	}
 	if !found {
 		return false, nil
 	}
-	out := ""
-	if len(kept) > 0 {
-		out = strings.Join(kept, "\n") + "\n"
-	}
-	return true, writeFileAtomic(s.path(peersFile), []byte(out), fileMode)
+	return true, writeFileAtomic(s.path(peersFile), []byte(strings.Join(kept, "")), fileMode)
 }
 
 // Resolve finds a peer by exact fingerprint, exact name, unique fingerprint

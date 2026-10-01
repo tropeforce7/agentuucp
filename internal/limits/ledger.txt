@@ -272,6 +272,18 @@ internal/auu/stream.go resumeStreams string p.MessageID[:12] #2 = local: ValidID
 internal/auu/stream.go resumeStreams string p.MessageID[:12] #3 = local: ValidID at listPending shown by TestLimitPendingRecordShapes
 internal/auu/stream.go resumeStreams string p.MessageID[:12] = local: ValidID at listPending shown by TestLimitPendingRecordShapes
 internal/auu/streamrecv.go readBlobRange string buf[:n] = local: n from ReadFull into buf, at most len(buf)
+internal/auu/vouch.go peersAddVouched string j.Doc.Subject[:identity.ShortIDLen] = local: ValidFingerprint at Validate, which judgeVouch runs through vouch.Verify shown by TestLimitAVouchsFingerprintsOneShort
+internal/auu/vouch.go peersAddVouched string j.Doc.Subject[:identity.ShortIDLen] #2 = local: ValidFingerprint at Validate, which judgeVouch runs through vouch.Verify shown by TestLimitAVouchsFingerprintsOneShort
+internal/auu/vouch.go peersAddVouched string j.Doc.Voucher[:identity.ShortIDLen] = local: ValidFingerprint at Validate, which judgeVouch runs through vouch.Verify shown by TestLimitAVouchsFingerprintsOneShort
+internal/auu/vouch.go peersAddVouched string j.Doc.Voucher[:identity.ShortIDLen] #2 = local: ValidFingerprint at Validate, which judgeVouch runs through vouch.Verify shown by TestLimitAVouchsFingerprintsOneShort
+internal/auu/vouch.go peersAddVouched string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/vouch.go peersAddVouched string m.Inner.ID[:12] #2 = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/vouch.go peersAddVouched string m.Inner.ID[:12] #3 = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/vouch.go peersAddVouched string m.Inner.ID[:12] #4 = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/vouch.go peersAddVouched string takenBy[:identity.ShortIDLen] = local: Fingerprint of a resolved peer at freeName, 64 hex characters
+internal/auu/vouch.go printVouch string id[:12] = local: ValidID at Load, the id being the stored message's shown by TestLimitStoredRecordShapes
+internal/auu/vouch.go vouchLine string j.Doc.Subject[:identity.ShortIDLen] = local: ValidFingerprint at Validate, which judgeVouch runs through vouch.Verify shown by TestLimitAVouchsFingerprintsOneShort
+internal/auu/vouch.go vouchLine string j.Doc.Subject[:identity.ShortIDLen] #2 = local: ValidFingerprint at Validate, which judgeVouch runs through vouch.Verify shown by TestLimitAVouchsFingerprintsOneShort
 internal/auu/watch.go messageEvent int ID int64 = output
 internal/auu/watch.go messageEvent int Size int64 = output
 internal/auu/watch_cmds.go cmdWatch int fs.Duration("interval") = >= 5s shown by TestLimitWaitAndWatchFlags
@@ -390,6 +402,7 @@ internal/store/relay.go SplitAddress string parts[:len(parts) - 1] = local: stri
 internal/store/store.go (*Store).Find string d[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/store/store.go (*Store).FindThread string t[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/store/store.go (*Store).RemoveByID.struct int RelayID int64 = > 0 shown by TestLimitRemoveByIDRelayFields
+internal/store/store.go (*Store).RemovePeer string kept[:n - 1] = local: n-1 of kept, with n > 0 by the check before
 internal/store/store.go Config int ChunkSize int = 0 or [4096, 16777216] shown by TestLimitStreamSettings
 internal/store/store.go Config int StreamThreshold int64 = 0 or >= 4096 shown by TestLimitStreamSettings
 internal/store/store.go Stored int RelayID int64 = >= 0 shown by TestLimitStoredRelayID

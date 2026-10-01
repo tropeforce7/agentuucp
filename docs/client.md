@@ -170,6 +170,45 @@ take it with nobody there, and `peer-<short>` is offered instead. Then,
 if your mailbox is restricted, it asks whether to push your allow list so
 they can write to you.
 
+#### Being introduced
+
+A peer can tell you about somebody they hold, and you can take their word
+for the key:
+
+```
+auu vouch xena --to rita           # victor tells rita he holds xena
+auu introduce xena rita            # one each way: each is told about the other
+auu peers add --vouched MESSAGE-ID # rita adds xena on victor's word, at a terminal
+```
+
+`auu vouch` signs a statement — *I hold this key on my peer list, under
+this name, as of now* — and sends it to another peer as a message of its
+own. Both must be on your list, and they must be two different people.
+The name in it is yours for them; at the other end it is offered and
+never taken. Signing it is an act of yours, so where the agent holds your
+key it needs `auu unlock --send`.
+
+At the other end the inbox lists it as `vouch`, with what it is for:
+`vouches for "xena" 4c1d… (not on your list)`, or `(already your peer as
+…)` once you hold them. `auu read` shows it whole. It counts only when
+the person who sent it is on your list and its signature checks out under
+the key you hold for them; a vouch from anybody else is held in
+quarantine like any stranger's mail and adds nobody. `auu peers add
+--vouched` prints the fingerprint, whose word it is, and the sentence
+*victor is on your list, so this is victor's word for the key*, asks, and
+asks the local name with the voucher's name offered. It writes a comment
+line above the entry, `# vouched for by victor (6b2e…) on 2026-10-01`,
+which `auu peers rm` takes with the entry, marks the message read, and
+offers to push your allow list as trusting a knock does. Like `peers
+fetch` it refuses without a terminal unless you pass `--yes`, and the
+skills never run it.
+
+Trusting a vouch is trusting the voucher: somebody you hold can introduce
+anybody to you, which is no more than they could do across a table. There
+are no chains — a vouch counts only from somebody already on your list —
+and once added, the entry is yours: the voucher changing their mind later
+changes nothing here.
+
 ### 1.3 Send something
 
 *Listing 1.3a*

@@ -27,10 +27,13 @@ auu token show TOKEN                               # what a token carries, witho
 auu lookup FINGERPRINT|SHORT-ID|PEER [--json]      # what the relay knows about an id; adds nobody
 auu listed [--json]                                # who on the relay chose to be listed, each entry verified here; adds nobody
 auu peers add <export-line | @file | ->            # add a colleague; the user confirms the fingerprint
+auu peers add --vouched MESSAGE-ID [--yes]         # add the peer a vouch in the inbox is for, on the voucher's word: the person's command, at a terminal; never run it
 auu peers ls [--json]                              # who you can reach
 auu peers rm <name|fingerprint>
 auu peers fetch NAME|SHORT-ID|FINGERPRINT [--yes]  # add a peer found on the relay: the person's command, at a terminal; never run it
 auu knock NAME|SHORT-ID|FINGERPRINT [--text "..."] [--yes]   # one message to somebody who has not admitted you: the person's command, at a terminal; never run it
+auu vouch PEER --to PEER [--relay NAME] [--json]   # send a peer the user's word that they hold another: the person's command; never run it
+auu introduce PEER PEER [--relay NAME] [--json]    # a vouch each way, so each is told about the other: the person's command; never run it
 auu allow push                                     # tell the relay to take mail only from your peers and that relay's admitted couriers, signed
 auu allow clear                                    # accept from anyone again
 auu allow show [--json]                            # what each relay holds for you, verified with your own key
@@ -338,8 +341,13 @@ thread was opened with, which is `subject` unless the message was given one
 of its own), `text` (only where the whole message is printed), `attachments` of `name`,
 `media`, `size`, `sha256`, `channel`, `via` (when the message came through
 another relay: the relays it crossed, nearest the sender first, joined by
-`!`), `on_relay` (when set) and
-`payload_on_relay` (when set).
+`!`), `on_relay` (when set),
+`payload_on_relay` (when set) and `vouch` (on a message of type `vouch`
+alone: `counts`, and when it does not, `why`; when it does, `voucher` and
+`subject` (fingerprints), `name` (the voucher's label for the subject, a
+suggestion and never a label here), `issued`, `known_as` (when the subject
+is already a peer: your name for them) and `you` (when the vouch is for
+the user)).
 
 `auu queue --json`: a list, each `id` (a row in that relay's queue, not a
 message in a mailbox), `neighbour` (the relay it goes to next, by your

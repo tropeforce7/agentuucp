@@ -512,7 +512,7 @@ func TestAKnocksWordsReachTheTerminalEscaped(t *testing.T) {
 	printed, _ := captureStdout(t, func() error {
 		printMessage(s, store.Quarantine, hostile)
 		printQuarantineLine(hostile)
-		printInboxLine(hostile)
+		printInboxLine(nil, hostile)
 		return nil
 	})
 	if strings.ContainsRune(printed, 0x1b) || strings.ContainsRune(printed, 0x07) {

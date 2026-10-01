@@ -64,11 +64,14 @@ Usage:
   auu anchor forget
 
   auu peers add <export-line | @file | ->
+  auu peers add --vouched MESSAGE-ID [--yes]   # add the peer a vouch in your inbox is for, at a terminal
   auu peers ls [--json]
   auu peers rm <name|fingerprint>
   auu peers fetch NAME|SHORT-ID|FINGERPRINT [--yes]   # add a peer found on the relay, at a terminal
   auu listed [--json]                 # who on the relay chose to be listed, verified here
   auu knock NAME|SHORT-ID|FINGERPRINT [--text "..."] [--yes]   # one message to somebody who has not admitted you
+  auu vouch PEER --to PEER            # send a peer your word that you hold another
+  auu introduce PEER PEER             # a vouch each way, so each is told about the other
 
   auu allow push                     # sign your peer list and push it to every relay
   auu allow clear
@@ -283,6 +286,10 @@ func dispatch(args []string) error {
 		return cmdListed(rest)
 	case "knock":
 		return cmdKnock(rest)
+	case "vouch":
+		return cmdVouch(rest)
+	case "introduce":
+		return cmdIntroduce(rest)
 	case "enrol", "enroll":
 		return cmdEnrol(rest)
 	case "register":

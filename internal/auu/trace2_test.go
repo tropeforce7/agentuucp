@@ -771,7 +771,7 @@ func TestAPebibyteDeclaredByAPeerPrints(t *testing.T) {
 	}
 	// And the relay's listing through watch's summary.
 	out, _ = captureStdout(t, func() error {
-		printEvents([]any{&messageEvent{Type: eventMessage, Relay: "relay", Channel: "default", Kind: "stream", Size: 1 << 50, ID: 7}}, nil)
+		printEvents(nil, []any{&messageEvent{Type: eventMessage, Relay: "relay", Channel: "default", Kind: "stream", Size: 1 << 50, ID: 7}}, nil)
 		return nil
 	})
 	if !strings.Contains(out, "1.0 PiB") {

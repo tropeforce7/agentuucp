@@ -476,6 +476,19 @@ asks, at a terminal, and never without a person. The name on a card is
 the owner's claim, offered at the prompt as the local name and never
 taken as one until the person accepts it. A relay that lies about its
 mode is admitting anybody, which is the case the sentence warns of.
+A vouch is the third way, and it rests on a peer already in the file: a
+message from somebody you hold carrying their signed word that they hold
+another key, under a name. It counts only when its signer is on your list
+and it verifies under the key you hold for them, never the bundle the
+message brought; from anybody else it is held in quarantine and adds
+nobody. There are no chains and no arithmetic: a vouch from somebody you
+added on a vouch is a vouch from them, judged the same way. `auu peers add
+--vouched` is the one command that adds from one, at a terminal, saying
+whose word it is, with the voucher's name offered at the prompt and never
+taken until the person accepts it; it writes a comment above the entry
+saying whose word it was. A peer who is compromised can introduce anybody
+to you, which is what trusting them means, and no more than they could
+do across a table.
 
 **A courier is admitted to a mailbox and never to the peer list.** Forwarded
 mail brings a second kind of sender, and it is the one kind that is not a

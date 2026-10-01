@@ -114,7 +114,7 @@ func watch(s *store.Store, id *identity.Identity, relays []*store.Relay, opts wa
 		if asJSON {
 			return printJSON(watchJSON{Events: o.events, Waited: waited})
 		}
-		printEvents(o.events, o.delivered)
+		printEvents(s, o.events, o.delivered)
 		return nil
 	case errors.Is(err, context.DeadlineExceeded):
 		if asJSON {
