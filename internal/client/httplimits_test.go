@@ -47,7 +47,7 @@ func TestTheClientSpeaksHTTP11Alone(t *testing.T) {
 	}
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Proto", r.Proto)
-		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"registration":"open"}`))
+		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"knock_max_bytes":16777216,"registration":"open"}`))
 	}))
 	// The server offers h2 first and serves it when negotiated (EnableHTTP2
 	// installs the handler); a client offering http/1.1 alone is answered
@@ -112,7 +112,7 @@ func TestLimitResponseHeadersAreCapped(t *testing.T) {
 			w.Header().Set("X-Junk", strings.Repeat("j", int(n)))
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"registration":"open"}`))
+		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"knock_max_bytes":16777216,"registration":"open"}`))
 	}))
 	t.Cleanup(srv.Close)
 	c, err := New(srv.URL, testIdentity(t, "alice"), nil)
@@ -152,10 +152,10 @@ func TestLimitAnAnswerIsHeldToWhatItsRouteHolds(t *testing.T) {
 		if r.URL.Path == "/v1/health" {
 			healths.Add(1)
 			if n := healthSize.Load(); n > 0 {
-				w.Write(paddedJSON(fmt.Sprintf(`{"ok":true,"max_bytes":%d,"registration":"open"`, maxBytes), n))
+				w.Write(paddedJSON(fmt.Sprintf(`{"ok":true,"max_bytes":%d,"knock_max_bytes":16777216,"registration":"open"`, maxBytes), n))
 				return
 			}
-			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: maxBytes, Registration: relayapi.RegistrationOpen})
+			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: maxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen})
 			return
 		}
 		// A listing of one envelope whose ct is page bytes of base64.
@@ -222,7 +222,7 @@ func TestARaisedMaxBytesIsLearnedWhenAPageIsRefusedForItsSize(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/v1/health" {
 			healths.Add(1)
-			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: maxBytes.Load(), Registration: relayapi.RegistrationOpen})
+			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: maxBytes.Load(), KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen})
 			return
 		}
 		listings.Add(1)
@@ -641,7 +641,7 @@ func TestAHeldListingCompletes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/v1/health" {
-			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen})
+			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen})
 			return
 		}
 		time.Sleep(relayapi.MaxWait)

@@ -363,6 +363,13 @@ type (
 		// the ceiling. Always sent; a health answer without it is refused
 		// by name.
 		MaxBytes int64 `json:"max_bytes"`
+		// KnockMaxBytes is the largest knock envelope the relay takes:
+		// knock_max_bytes, or max_bytes when that is zero. A client seals a
+		// knock and holds it to this before sending, so that a knock that
+		// carries vouches is refused here with the number to drop rather
+		// than by the relay with a 413. Always sent; a health answer
+		// without it is refused by name.
+		KnockMaxBytes int64 `json:"knock_max_bytes"`
 		// Registration is the relay's registration mode, one of the
 		// Registration* words: what admission to this relay means, and so
 		// what a name listed on it rests on. A relay that lies here is

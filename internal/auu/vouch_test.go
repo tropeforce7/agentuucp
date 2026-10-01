@@ -134,7 +134,6 @@ func TestAVouchIsForOnePeerToAnother(t *testing.T) {
 	}{
 		{[]string{"vouch", "nobody", "--to", "rita"}, "nobody is not on your peer list, so you cannot vouch for them"},
 		{[]string{"vouch", "xena", "--to", "nobody"}, "nobody is not on your peer list, so a vouch cannot be sent to them"},
-		{[]string{"vouch", "xena", "--to", "xena"}, "xena would be vouched for to themselves; introduce two different peers"},
 		{[]string{"vouch", "self", "--to", "rita"}, "a vouch is for one of your peers, to another; neither may be you"},
 		{[]string{"introduce", "xena", "xena"}, "xena would be vouched for to themselves"},
 		{[]string{"vouch", "xena"}, "usage: auu vouch PEER --to PEER"},
@@ -276,8 +275,8 @@ func TestAVouchedNameIsHeldToThePeerList(t *testing.T) {
 
 // A vouch from somebody not on the list is quarantined, and peers add
 // --vouched refuses it by name with nothing written; one whose voucher is
-// not its sender, a vouch carried for somebody else, is refused too, until
-// the knock that carries one.
+// not its sender is a carried vouch, and counts for nothing when its
+// voucher is not on the list either, whoever carried it.
 func TestAVouchFromNobodyYouTrustAddsNobody(t *testing.T) {
 	victor, xena, rita := vouchTrio(t)
 	atTerminal(t)
@@ -321,7 +320,7 @@ func TestAVouchFromNobodyYouTrustAddsNobody(t *testing.T) {
 		t.Fatal(err)
 	}
 	listing := rita.run("inbox")
-	if !strings.Contains(listing, "a vouch that does not count: the vouch inside is not its sender's own") {
+	if !strings.Contains(listing, "a vouch that does not count: its voucher is not on your peer list, so nobody you trust stands behind it") {
 		t.Fatalf("a carried vouch in the inbox:\n%s", listing)
 	}
 	var carried *store.Stored
@@ -331,7 +330,7 @@ func TestAVouchFromNobodyYouTrustAddsNobody(t *testing.T) {
 		}
 	}
 	_, err = rita.answer("y\n", "peers", "add", "--vouched", carried.Inner.ID[:12])
-	if err == nil || !strings.Contains(err.Error(), "does not count: the vouch inside is not its sender's own; nothing was added") {
+	if err == nil || !strings.Contains(err.Error(), "does not count: its voucher is not on your peer list, so nobody you trust stands behind it; nothing was added") {
 		t.Fatalf("a carried vouch: %v", err)
 	}
 	if rita.peersFile() != before {
@@ -504,5 +503,36 @@ func TestAVouchStopsCountingWhenItsVoucherIsRemoved(t *testing.T) {
 	}
 	if rita.peersFile() != before {
 		t.Fatal("a vouch from a removed voucher changed the peer list")
+	}
+}
+
+// A carried vouch counts when its voucher is held, whoever carried it: xena
+// gives victor a vouch for himself to keep, victor carries it to rita in a
+// message of his own, and rita, who holds xena, reads it as xena's word,
+// carried by victor.
+func TestACarriedVouchCountsWhenItsVoucherIsHeld(t *testing.T) {
+	victor, xena, rita := vouchTrio(t)
+	rita.run("peers", "add", xena.exportLine())
+	xena.run("vouch", "victor", "--to", "victor")
+	victor.run("inbox")
+	kept, err := func() (message.Carried, error) {
+		s, _, _ := victor.opened()
+		return s.KeptVouch(xena.exportFingerprint())
+	}()
+	if err != nil {
+		t.Fatalf("victor did not keep xena's vouch for him: %v", err)
+	}
+	s, id, relays := victor.opened()
+	ritaPub, err := s.Resolve("rita")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := message.Body{Type: message.TypeVouch, Subject: "xena vouches for me", Vouch: &kept}
+	if err := sealAndSend(s, id, relays[0], ritaPub, body, nil, sendMode{inline: true}, true); err != nil {
+		t.Fatal(err)
+	}
+	listing := rita.run("inbox")
+	if !strings.Contains(listing, "(already your peer as victor), xena's vouch carried by victor") {
+		t.Fatalf("rita's inbox:\n%s", listing)
 	}
 }

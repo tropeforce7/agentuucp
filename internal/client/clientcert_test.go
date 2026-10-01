@@ -124,7 +124,7 @@ func TestARejectedHandshakeBecomesCertRefused(t *testing.T) {
 	// *net.OpError with Op "remote error".
 	bundle := pki.TestHierarchy(t, []string{"127.0.0.1"}, mldsa.MLDSA65())
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"registration":"open"}`))
+		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"knock_max_bytes":16777216,"registration":"open"}`))
 	}))
 	srv.TLS = clientca.NewVerifier(bundle).TLSConfig(&tls.Config{})
 	srv.StartTLS()
@@ -189,7 +189,7 @@ func TestAClientWithACertificatePresentsIt(t *testing.T) {
 			cn = r.TLS.PeerCertificates[0].Subject.CommonName
 		}
 		seen <- cn
-		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"registration":"open"}`))
+		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"knock_max_bytes":16777216,"registration":"open"}`))
 	}))
 	srv.TLS = clientca.NewVerifier(bundle).TLSConfig(&tls.Config{})
 	srv.StartTLS()
@@ -277,9 +277,9 @@ func TestMLDSAAsksTheRelayAndDefaultsWhenItDoesNotSay(t *testing.T) {
 		body string
 		want int
 	}{
-		{"the relay says 87", `{"ok":true,"mldsa":87,"max_bytes":16777216,"registration":"open"}`, 87},
-		{"the relay says 44", `{"ok":true,"mldsa":44,"max_bytes":16777216,"registration":"open"}`, 44},
-		{"the relay says nothing", `{"ok":true,"max_bytes":16777216,"registration":"open"}`, clientca.DefaultMLDSA},
+		{"the relay says 87", `{"ok":true,"mldsa":87,"max_bytes":16777216,"knock_max_bytes":16777216,"registration":"open"}`, 87},
+		{"the relay says 44", `{"ok":true,"mldsa":44,"max_bytes":16777216,"knock_max_bytes":16777216,"registration":"open"}`, 44},
+		{"the relay says nothing", `{"ok":true,"max_bytes":16777216,"knock_max_bytes":16777216,"registration":"open"}`, clientca.DefaultMLDSA},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -415,7 +415,7 @@ func serveOrRefuse(conn net.Conn, leaf tls.Certificate, n int, policy func(int, 
 			break
 		}
 	}
-	body := `{"ok":true,"max_bytes":16777216,"registration":"open"}`
+	body := `{"ok":true,"max_bytes":16777216,"knock_max_bytes":16777216,"registration":"open"}`
 	fmt.Fprintf(tc, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"+
 		"Content-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
 }
@@ -767,7 +767,7 @@ func TestAnExpiredRelayCertificateIsSaidToBe(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"registration":"open"}`))
+		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"knock_max_bytes":16777216,"registration":"open"}`))
 	}))
 	srv.TLS = &tls.Config{Certificates: []tls.Certificate{*leaf}, MinVersion: tls.VersionTLS13}
 	srv.StartTLS()

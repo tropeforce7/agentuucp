@@ -83,11 +83,19 @@ func DefaultLimits() Limits {
 		MailboxMaxBytes:          1 << 30,
 		RelayMaxBytes:            0,
 		MaxOpenUploads:           4,
-		KnockMaxBytes:            8192,
-		MaxKnocksWaiting:         10,
-		KnocksPerHour:            10,
-		MaxInflight:              256,
-		MaxWaiting:               64,
+		// A knock may carry up to message.MaxKnockVouches vouches, each a
+		// document with a whole bundle in it. Sealed as posted, a knock at
+		// its longest text and name, every vouch at its longest name, was
+		// 5,103 bytes alone and 19,663 with four, each vouch about 3,636:
+		// 20 KiB takes four at full length and not five (D27, the maintainer's,
+		// 1 Oct 2026).
+		// TestTheDefaultKnockCapTakesFourVouchesAndNotFive holds that
+		// relationship against the encoder rather than this figure.
+		KnockMaxBytes:    20480,
+		MaxKnocksWaiting: 10,
+		KnocksPerHour:    10,
+		MaxInflight:      256,
+		MaxWaiting:       64,
 	}
 }
 

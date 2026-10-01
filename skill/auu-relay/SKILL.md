@@ -215,9 +215,9 @@ must run `auu rm`; and `limits.max_waiting` must sit under
 `limits.max_inflight`, since a held listing keeps an in-flight slot, and
 the relay refuses to start when it does not, naming both. Three bound the
 knock, a stranger's one message to a mailbox whose card says knocks:
-`limits.knock_max_bytes` (8192; 0 is `max_bytes`, and over `max_bytes` the
-relay refuses to start naming both, so a `max_bytes` set under 8192 needs
-`knock_max_bytes` set beside it), `limits.max_knocks_waiting` (10, at most
+`limits.knock_max_bytes` (20480, room for a knock carrying four vouches; 0
+is `max_bytes`, and over `max_bytes` the relay refuses to start naming both,
+so a `max_bytes` set under 20480 needs `knock_max_bytes` set beside it), `limits.max_knocks_waiting` (10, at most
 1000; a knock at it is refused without a `Retry-After`) and
 `limits.knocks_per_hour` (10, per sender across every mailbox). The two
 knock refusals are `limit=knocks` and `limit=knocks_waiting` in the access

@@ -215,6 +215,7 @@ internal/auu/inbox.go printMessage string m.Inner.ID[:12] = local: ValidID at Lo
 internal/auu/inbox.go fallbackName string fp[:8] = local: fp is Fingerprint of a parsed bundle at every caller, 64 hex characters
 internal/auu/inbox.go relayFetch int Queued int64 = output
 internal/auu/knock.go cmdKnock string takenBy[:identity.ShortIDLen] = local: Fingerprint of a resolved peer at suggestedName, 64 hex characters
+internal/auu/knock.go knockFits string body.Vouches[:n] = local: n from len(body.Vouches) down to 0 by the loop
 internal/auu/knock.go knockJSON int RelayID int64 = output
 internal/auu/listed.go listedJSON int Dropped int = output
 internal/auu/lookup.go knownAs string fp[:identity.ShortIDLen] = local: equal to Fingerprint of the resolved key, checked at knownAs
@@ -290,6 +291,7 @@ internal/auu/vouch.go peersAddVouched string takenBy[:identity.ShortIDLen] = loc
 internal/auu/vouch.go printVouch string id[:12] = local: ValidID at Load, the id being the stored message's shown by TestLimitStoredRecordShapes
 internal/auu/vouch.go vouchLine string j.Doc.Subject[:identity.ShortIDLen] = local: ValidFingerprint at Validate, which judgeVouch runs through vouch.Verify shown by TestLimitAVouchsFingerprintsOneShort
 internal/auu/vouch.go vouchLine string j.Doc.Subject[:identity.ShortIDLen] #2 = local: ValidFingerprint at Validate, which judgeVouch runs through vouch.Verify shown by TestLimitAVouchsFingerprintsOneShort
+internal/auu/vouch.go knockVouchesJSON int Unknown int = output
 internal/auu/watch.go messageEvent int ID int64 = output
 internal/auu/watch.go messageEvent int Size int64 = output
 internal/auu/watch_cmds.go cmdWatch int fs.Duration("interval") = >= 5s shown by TestLimitWaitAndWatchFlags
@@ -360,6 +362,7 @@ internal/relayapi/relayapi.go AdminStatusResponse int TokenMaxAgeSecs int64 = [0
 internal/relayapi/relayapi.go ChannelsResponse int Queued map[string]int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go ForwardFailedRequest int ID int64 = > 0 shown by TestLimitAReportIsHeldToItsShape
 internal/relayapi/relayapi.go ForwardResponse int ID int64 = > 0 shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go HealthResponse int KnockMaxBytes int64 = [1, 1073741824] shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go HealthResponse int MLDSA int = one of 0, 44, 65, 87 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go HealthResponse int MaxBytes int64 = [1, 1073741824] shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int KnockMaxBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers

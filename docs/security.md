@@ -543,7 +543,21 @@ sender's own claim, shown as theirs, offered at the prompt when somebody
 runs `auu quarantine trust` and never taken as a label until a person
 accepts it. On the knocking side the peer being added is that person's
 own decision, asked for at a terminal before anything is sent, which is
-why neither `knock` nor `peers fetch` is a command the skills run.
+why neither `knock` nor `peers fetch` is a command the skills run. A
+knock may carry up to four vouches the knocker keeps, each a peer's
+signed word that they hold the knocker, chosen by the knocker, since what
+it carries tells the knocked person who vouches for them. What one adds is
+a sentence and no more: a vouch counts only when its voucher is somebody
+the knocked person already holds, it verifies under the key they hold for
+that voucher, and it is for the knocker's own key, so a vouch about
+somebody else cannot be presented as one's own; the quarantine line names
+those vouchers and counts the rest, and `auu quarantine trust` says whose
+word each is before the name is asked. It adds nobody, opens nothing past
+the relay, and changes nothing about who decides. The relay sees a larger
+knock: `knock_max_bytes` is 20 KiB by default, which takes four at their
+longest, and the health answer carries it so a client refuses a knock
+with vouches over it before sending, naming how many to leave off; one
+with none meets the relay's own refusal, which names the setting.
 The one identity trusted without an entry
 is your own. A message you sent yourself is opened, verified and delivered
 like any other, and the relay accepts it for your mailbox whatever your allow
@@ -866,7 +880,7 @@ before this batch is supported. So a field one end always sends is
 required by the other and refused by name when it is absent, with nothing
 of the answer used, rather than read as a peer from before the field. A
 listing without `channel`, `kind`, `allow` or `card`, a health answer
-without `max_bytes` or `registration`, a card answer without `state`, a
+without `max_bytes`, `knock_max_bytes` or `registration`, a card answer without `state`, a
 lookup without `created`, and a status without `registration` or
 `client_certs` are each refused so. Neither end carries
 a branch for an older peer. The wire has one version, this one, and a peer

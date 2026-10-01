@@ -72,7 +72,7 @@ Later ones win. A flag you do not type never overrides the file.
 | `--max-open-uploads N` | `limits.max_open_uploads` | 4, at most 1000 |
 | `--max-inflight N` | `limits.max_inflight` | 256 |
 | `--max-waiting N` | `limits.max_waiting` | 64 |
-| `--knock-max-bytes N` | `limits.knock_max_bytes` | 8192, at most `max_bytes`; 0 is `max_bytes` |
+| `--knock-max-bytes N` | `limits.knock_max_bytes` | 20480, at most `max_bytes`; 0 is `max_bytes` |
 | `--max-knocks-waiting N` | `limits.max_knocks_waiting` | 10, at most 1000 |
 | `--knocks-per-hour N` | `limits.knocks_per_hour` | 10 |
 | `--access-log full\|minimal` | `access_log` | `full` |
@@ -326,7 +326,7 @@ switch the lot off.
 | `max_open_uploads` | uploads one sender may have open at once, across every mailbox it sends to; each is a file and a reservation the relay holds for that sender, so 0, unlimited like the rest, lets one sender hold as many as it likes; at most 1000 | 4 |
 | `max_inflight` | requests being handled at once | 256 |
 | `max_waiting` | listings held open at once for watchers; over it the next is answered at once rather than held, and each held listing keeps an in-flight slot, so keep this well under `max_inflight` | 64 |
-| `knock_max_bytes` | the largest knock envelope, on the knock route's own cap, so a stranger's one message is read under a bound of its own; 0 is `max_bytes`, since a knock is a post, and a value over `max_bytes` is refused at startup naming both | 8192 |
+| `knock_max_bytes` | the largest knock envelope, on the knock route's own cap, so a stranger's one message is read under a bound of its own; 0 is `max_bytes`, since a knock is a post, and a value over `max_bytes` is refused at startup naming both; the default takes a knock at its longest with four vouches and not five | 20480 |
 | `max_knocks_waiting` | knockers one mailbox holds a knock from, counted as rows the relay has whatever the owner has read. One knocker holds one row however often they knock: a second knock from a key replaces the first, so this counts knockers and one identity cannot fill it. A knock from somebody the mailbox holds none from is refused `429` at the cap, with no `Retry-After`, since the relay cannot say when the owner will fetch or remove them, and the sender's knock is not charged for it; 0 is unlimited; at most 1000, for the reason `max_open_uploads` has a ceiling | 10 |
 | `knocks_per_hour` | knocks one sender may post in an hour, across every mailbox, beside the post budgets every knock is charged as a post; 0 is unlimited | 10 |
 

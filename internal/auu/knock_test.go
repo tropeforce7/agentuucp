@@ -511,7 +511,7 @@ func TestAKnocksWordsReachTheTerminalEscaped(t *testing.T) {
 	}
 	printed, _ := captureStdout(t, func() error {
 		printMessage(s, store.Quarantine, hostile)
-		printQuarantineLine(hostile)
+		printQuarantineLine(nil, hostile)
 		printInboxLine(nil, hostile)
 		return nil
 	})

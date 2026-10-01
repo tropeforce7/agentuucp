@@ -31,7 +31,7 @@ auu peers add --vouched MESSAGE-ID [--yes]         # add the peer a vouch in the
 auu peers ls [--json]                              # who you can reach
 auu peers rm <name|fingerprint>
 auu peers fetch NAME|SHORT-ID|FINGERPRINT [--yes]  # add a peer found on the relay: the person's command, at a terminal; never run it
-auu knock NAME|SHORT-ID|FINGERPRINT [--text "..."] [--yes]   # one message to somebody who has not admitted you: the person's command, at a terminal; never run it
+auu knock NAME|SHORT-ID|FINGERPRINT [--text "..."] [--vouch PEER]... [--yes]   # one message to somebody who has not admitted you, carrying up to four vouches you keep: the person's command, at a terminal; never run it
 auu vouch PEER --to PEER [--relay NAME] [--json]   # send a peer the user's word that they hold another: the person's command; never run it
 auu introduce PEER PEER [--relay NAME] [--json]    # a vouch each way, so each is told about the other: the person's command; never run it
 auu vouch --ask PEER FINGERPRINT|SHORT-ID [--relay NAME] [--json]   # ask a peer whether they hold a key: the person's command; never run it
@@ -369,7 +369,11 @@ a list without either. A reply given a subject of its own carries it in
 `subject`, and the thread's in `thread_subject`. A knock carries
 `claimed_name` beside `from_name`: the name its sender called themselves,
 their own claim, where `from_name` is what this machine calls them, which
-is empty until somebody accepts one.
+is empty until somebody accepts one. A knock that carries vouches carries
+`vouches`: `by`, the user's own names for the vouchers they hold whose vouch
+counts, `not_verifying`, those whose does not, and `unknown`, how many are
+from people the user does not hold. Report it; it changes nothing about who
+decides.
 
 `auu wait --json`: `found`, `message` (when found, the message shape),
 `waited`.

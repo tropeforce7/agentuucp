@@ -43,6 +43,7 @@ func (c *Client) malformed(answer, field, want string) error {
 
 const (
 	wantMaxBytes    = "the relay's max_bytes (from 1 to 1073741824; a health answer without it is refused)"
+	wantKnockMax    = "the relay's knock cap (from 1 to 1073741824; a health answer without it is refused)"
 	wantFingerprint = "a fingerprint (64 lowercase hex characters)"
 	wantSerial      = "a certificate serial"
 	wantTokenID     = "a token id (32 lowercase hex characters)"
@@ -151,6 +152,12 @@ func (c *Client) checkHealth(h *relayapi.HealthResponse) error {
 	// is refused by name.
 	if h.MaxBytes < 1 || h.MaxBytes > relayapi.MaxBytesCeiling {
 		return c.malformed("the health answer", "max_bytes", wantMaxBytes)
+	}
+	// knock_max_bytes is what a knock is held to before it is sent; the
+	// relay's own is positive, since zero there means max_bytes and the
+	// relay sends the cap it enforces, and under the same ceiling.
+	if h.KnockMaxBytes < 1 || h.KnockMaxBytes > relayapi.MaxBytesCeiling {
+		return c.malformed("the health answer", "knock_max_bytes", wantKnockMax)
 	}
 	// The registration mode is what a listed name rests on, said wherever
 	// a command asks a person to trust one; a health answer without it,

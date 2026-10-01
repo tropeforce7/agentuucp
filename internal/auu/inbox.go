@@ -406,6 +406,11 @@ type messageJSON struct {
 	// Ask is a vouch question's account: the fingerprint asked about and
 	// whether this machine holds it. On a vouch-ask alone.
 	Ask *askJSON `json:"ask,omitempty"`
+	// Vouches is what this machine makes of the vouches a knock carries:
+	// the vouchers it holds whose vouch counts, those whose does not
+	// verify, and how many are from people it does not hold. On a knock
+	// that carries any.
+	Vouches *knockVouchesJSON `json:"vouches,omitempty"`
 }
 
 func toJSON(s *store.Store, box store.Box, m *store.Stored, includeText bool) messageJSON {
@@ -434,6 +439,10 @@ func toJSON(s *store.Store, box store.Box, m *store.Stored, includeText bool) me
 	}
 	if m.Inner.Body.Type == message.TypeVouchAsk && s != nil {
 		out.Ask = askToJSON(s, m)
+	}
+	if m.Inner.Body.Type == message.TypeKnock && len(m.Inner.Body.Vouches) > 0 && s != nil {
+		k := judgeKnockVouches(s, m, time.Now())
+		out.Vouches = &knockVouchesJSON{By: k.Held, NotVerifying: k.Bad, Unknown: k.Unknown}
 	}
 	if includeText {
 		out.Text = m.Inner.Body.Text
@@ -567,6 +576,7 @@ func cmdInbox(args []string) error {
 		if *asJSON {
 			answered = os.Stderr
 		}
+		keepVouches(s, answered)
 		answerAsks(s, id, answered)
 	}
 
@@ -670,11 +680,15 @@ func cmdInbox(args []string) error {
 // has no subject and carries its sender's own name and one line instead,
 // both said as theirs and both escaped here, as every word from outside
 // is wherever it is printed.
-func printQuarantineLine(m *store.Stored) {
+func printQuarantineLine(s *store.Store, m *store.Stored) {
 	if m.Inner.Body.Type == message.TypeKnock {
-		fmt.Printf("%s  knock  from %s  %s  %s%s\n", m.Inner.ID[:12], m.Inner.From[:16],
+		vouched := ""
+		if s != nil {
+			vouched = knockVouchLine(judgeKnockVouches(s, m, time.Now()))
+		}
+		fmt.Printf("%s  knock  from %s  %s  %s%s%s\n", m.Inner.ID[:12], m.Inner.From[:16],
 			truncate(orNone(identity.Printable(m.Inner.Body.Name)), 20),
-			truncate(identity.PrintableText(m.Inner.Body.Text), 40), whereElse(m))
+			truncate(identity.PrintableText(m.Inner.Body.Text), 40), vouched, whereElse(m))
 		return
 	}
 	fmt.Printf("%s  from %s  %s%s\n", m.Inner.ID[:12], m.Inner.From[:16],
@@ -1291,6 +1305,7 @@ func cmdWait(args []string) error {
 			// A question that arrived during the wait, answered as auu inbox
 			// answers it, to standard error since what this command prints
 			// on standard output is the message waited for.
+			keepVouches(s, os.Stderr)
 			answerAsks(s, id, os.Stderr)
 			msgs, err := s.List(store.Inbox)
 			if err != nil {
@@ -1464,7 +1479,7 @@ func cmdQuarantine(args []string) error {
 			return nil
 		}
 		for _, m := range msgs {
-			printQuarantineLine(m)
+			printQuarantineLine(s, m)
 		}
 		fmt.Println("\nThese senders are not in your peer list. Confirm who they are out of band,")
 		fmt.Printf("then run: %s quarantine trust <id>\n", prog)
@@ -1525,6 +1540,20 @@ func cmdQuarantine(args []string) error {
 		// peer list with nobody answering. peer-<fp8> is this machine's
 		// own, and 'auu peers rm' and 'peers add' are the repair for
 		// somebody who meant the other.
+		// Who vouches for them, among the people this machine holds, each
+		// with whose word it is; the rest are counted and nothing else.
+		if m.Inner.Body.Type == message.TypeKnock {
+			kv := judgeKnockVouches(s, m, time.Now())
+			for _, v := range kv.Held {
+				fmt.Printf("vouched for by %s: %s is on your list, so this is %s's word for the key\n", v, v, v)
+			}
+			for _, v := range kv.Bad {
+				fmt.Printf("the vouch from %s does not verify under the key you hold for them, and counts for nothing\n", v)
+			}
+			if kv.Unknown > 0 {
+				fmt.Printf("%d more from people you do not hold, which count for nothing\n", kv.Unknown)
+			}
+		}
 		offered, takenBy := knockName(s, m)
 		if offered != fallbackName(pub.Fingerprint()) && !stdinIsTerminal() {
 			fmt.Printf("they call themselves %s, which is their own claim; without a terminal it is not offered\n",

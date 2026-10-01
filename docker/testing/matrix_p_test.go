@@ -206,7 +206,7 @@ func p04(t *testing.T) {
 	// back. The text view prints no limits at all today; --json is where
 	// they are, and this asserts them there.
 	r := operator.admin("status", "--json")
-	expectSays(t, r, 0, `"max_knocks_waiting": 1`, `"knocks_per_hour": 2`, `"knock_max_bytes": 8192`)
+	expectSays(t, r, 0, `"max_knocks_waiting": 1`, `"knocks_per_hour": 2`, `"knock_max_bytes": 20480`)
 
 	carol := enrolCarol(t)
 	dave := enrolCarol(t)

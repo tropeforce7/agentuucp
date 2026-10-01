@@ -125,7 +125,7 @@ func TestRetriesRateLimitThenSucceeds(t *testing.T) {
 func TestRetriesServiceUnavailable(t *testing.T) {
 	rec := &recorder{replies: []reply{
 		{status: http.StatusServiceUnavailable, retryAfter: "1", body: relayapi.ErrorResponse{Error: "relay is busy"}},
-		{status: http.StatusOK, body: relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}},
+		{status: http.StatusOK, body: relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}},
 	}}
 	c, slept := newTestClient(t, rec)
 	if err := c.Health(t.Context()); err != nil {
@@ -202,7 +202,7 @@ func TestA429WithoutRetryAfterIsFinal(t *testing.T) {
 	// A 503 with no Retry-After is unchanged: retried at the shortest wait.
 	rec = &recorder{replies: []reply{
 		{status: http.StatusServiceUnavailable, body: relayapi.ErrorResponse{Error: "relay is busy"}},
-		{status: http.StatusOK, body: relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}},
+		{status: http.StatusOK, body: relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}},
 	}}
 	c, slept = newTestClient(t, rec)
 	if err := c.Health(t.Context()); err != nil {
@@ -539,8 +539,8 @@ func TestTheClientSignsOnlyWhatTheRelayVerifies(t *testing.T) {
 	// decoded loosely; max_bytes is held to its range now), the key, the
 	// listing, the post, and the registration appended below.
 	rec := &recorder{replies: []reply{
-		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65, MaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}},
-		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65, MaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}},
+		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}},
+		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}},
 		{status: 200, body: relayapi.KeysResponse{Bundle: id.Public().Bundle(), Name: "peer", Created: time.Now()}},
 		{status: 200, body: relayapi.ListResponse{Allow: relayapi.AllowNone, Card: relayapi.CardNone, Directory: relayapi.DirectoryNone}},
 		{status: 200, body: relayapi.PostResponse{ID: 1}},
@@ -686,7 +686,7 @@ func fakeRelay(t *testing.T, answers map[string]any) *httptest.Server {
 		if !ok && r.URL.Path == "/v1/health" {
 			// A listing asks the relay's max_bytes first; a fake that was
 			// not asked to say otherwise answers the default.
-			body, ok = relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}, true
+			body, ok = relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}, true
 		}
 		if !ok {
 			http.NotFound(w, r)

@@ -1,6 +1,7 @@
 package auu
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
+	"github.com/tropeforce7/agentuucp/internal/vouch"
 )
 
 // knockJSON is 'auu knock --json': what was sent, to whom, and what this
@@ -56,12 +58,17 @@ func cmdKnock(args []string) error {
 	text := fs.String("text", "", "one line to say who you are (default: NAME would like to exchange keys)")
 	yes := fs.Bool("yes", false, "knock without asking, under the name offered; for a person's own script, never an agent")
 	asJSON := fs.Bool("json", false, "machine readable output")
+	var vouchers stringList
+	fs.Var(&vouchers, "vouch", "carry the vouch this peer gave you (repeatable, at most four)")
 	positional, err := parseArgs(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(positional) != 1 {
-		return usageErrf("usage: %s knock NAME|SHORT-ID|FINGERPRINT [--text \"...\"] [--relay NAME] [--yes]", prog)
+		return usageErrf("usage: %s knock NAME|SHORT-ID|FINGERPRINT [--text \"...\"] [--vouch PEER]... [--relay NAME] [--yes]", prog)
+	}
+	if len(vouchers) > message.MaxKnockVouches {
+		return usageErrf("a knock carries at most %d vouches; %d were named", message.MaxKnockVouches, len(vouchers))
 	}
 	query := positional[0]
 	// A knock takes no path. It is a request to a mailbox's own relay for
@@ -124,13 +131,23 @@ func cmdKnock(args []string) error {
 	if said == "" {
 		said = id.Name + " would like to exchange keys"
 	}
-	body := message.Body{Type: message.TypeKnock, Text: said, Name: id.Name}
+	carried, err := carriedVouches(s, id, vouchers)
+	if err != nil {
+		return err
+	}
+	body := message.Body{Type: message.TypeKnock, Text: said, Name: id.Name, Vouches: carried}
 	body.Thread, err = envelope.NewID()
 	if err != nil {
 		return err
 	}
 	if err := body.Validate(); err != nil {
 		return usageErrf("%v", err)
+	}
+	// The relay's knock cap, before anything is asked or sent: a knock
+	// that would be refused for its size is refused here, with how many
+	// vouches to leave off, measured by sealing it rather than estimated.
+	if err := knockFits(id, found.Public, body, health.KnockMaxBytes, r.Name); err != nil {
+		return err
 	}
 
 	if !*asJSON {
@@ -287,4 +304,85 @@ func isNoKnocks(err error) bool {
 	return errors.As(err, &httpErr) &&
 		httpErr.Status == http.StatusForbidden &&
 		httpErr.Message == relayapi.MsgNoKnocks
+}
+
+// carriedVouches reads the vouch kept from each peer named, and refuses any
+// that will not do on a knock: a peer not on the list, no vouch kept from
+// them, or one that no longer verifies under the key held for them or no
+// longer names this identity. Each is said by name before anything is
+// sealed.
+func carriedVouches(s *store.Store, id *identity.Identity, names []string) ([]message.Carried, error) {
+	var out []message.Carried
+	seen := map[string]bool{}
+	now := time.Now()
+	for _, q := range names {
+		v, err := s.Resolve(q)
+		if err != nil {
+			return nil, usageErrf("%s is not on your peer list, so you hold no vouch from them: %v", q, err)
+		}
+		if seen[v.Fingerprint()] {
+			return nil, usageErrf("%s is named twice; a knock carries one vouch from each voucher", identity.Printable(orNone(v.Name)))
+		}
+		seen[v.Fingerprint()] = true
+		c, err := s.KeptVouch(v.Fingerprint())
+		if errors.Is(err, store.ErrNoVouch) {
+			return nil, usageErrf("you keep no vouch from %s; they can give you one with: %s vouch <their name for you> --to <the same>",
+				identity.Printable(orNone(v.Name)), prog)
+		}
+		if err != nil {
+			return nil, err
+		}
+		d, err := vouch.Verify(v, c.Document, c.Signature, now)
+		if err != nil {
+			return nil, usageErrf("the vouch you keep from %s does not verify under the key you hold for them: %s",
+				identity.Printable(orNone(v.Name)), identity.PrintableText(err.Error()))
+		}
+		if d.Subject != id.Fingerprint() {
+			return nil, usageErrf("the vouch you keep from %s is not for you", identity.Printable(orNone(v.Name)))
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// knockFits seals a knock that carries vouches as it would be posted and
+// holds it to the relay's knock cap. Over it, the vouches are left off one
+// at a time and sealed again until it fits, so the sentence says the number
+// to drop from real sizes rather than an estimate; a knock over the cap with
+// none left says so too. A knock with no vouch is not measured here: what it costs is the text the person
+// wrote, and the relay's own refusal names the setting.
+func knockFits(id *identity.Identity, to *identity.Public, body message.Body, cap int64, relayName string) error {
+	if len(body.Vouches) == 0 {
+		return nil
+	}
+	size := func(n int) (int64, error) {
+		b := body
+		b.Vouches = body.Vouches[:n]
+		env, _, err := envelope.SealFor(id, to, "", b)
+		if err != nil {
+			return 0, err
+		}
+		raw, err := json.Marshal(env)
+		return int64(len(raw)), err
+	}
+	n := len(body.Vouches)
+	whole, err := size(n)
+	if err != nil {
+		return err
+	}
+	if whole <= cap {
+		return nil
+	}
+	for k := n - 1; k >= 0; k-- {
+		got, err := size(k)
+		if err != nil {
+			return err
+		}
+		if got <= cap {
+			return usageErrf("this knock is %d bytes with %d vouches, and %s takes a knock of at most %d: leave off %d of them",
+				whole, n, relayName, cap, n-k)
+		}
+	}
+	return usageErrf("this knock is %d bytes, and %s takes a knock of at most %d even with no vouch on it: shorten the text",
+		whole, relayName, cap)
 }

@@ -338,7 +338,7 @@ hides. A field an end always sends has no
 absent, with nothing of the answer used: `queued`, `allow`, and each row's
 `kind` (one of `envelope`, `stream` and `knock`, a fourth refused by
 name) and `channel` on a listing, `created` on a lookup, `registration`
-and `client_certs` on the status answer, `max_bytes` on health; a stubs
+and `client_certs` on the status answer, `max_bytes` and `knock_max_bytes` on health; a stubs
 listing whose row carries an envelope is a relay that ignored the
 parameter, refused the same way. A count whose zero is a value the relay
 sends, `queued`, stays an `int64`: absent and zero are one number, and

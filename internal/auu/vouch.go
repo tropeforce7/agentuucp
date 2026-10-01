@@ -49,7 +49,9 @@ func cmdVouch(args []string) error {
 	if err != nil {
 		return err
 	}
-	subject, recipient, err := vouchPair(s, id, positional[0], *to)
+	// --to naming the subject is a vouch for them to keep, which they can
+	// carry on a knock; anybody else is an introduction.
+	subject, recipient, err := vouchPair(s, id, positional[0], *to, true)
 	if err != nil {
 		return err
 	}
@@ -73,7 +75,7 @@ func cmdIntroduce(args []string) error {
 	if err != nil {
 		return err
 	}
-	a, b, err := vouchPair(s, id, positional[0], positional[1])
+	a, b, err := vouchPair(s, id, positional[0], positional[1], false)
 	if err != nil {
 		return err
 	}
@@ -86,10 +88,9 @@ func cmdIntroduce(args []string) error {
 }
 
 // vouchPair resolves a subject and a recipient, both on the peer list, and
-// refuses the pairs that are not an introduction: the same peer twice,
-// which is a vouch to keep and not yet sent from here, and this identity
-// in either place.
-func vouchPair(s *store.Store, id *identity.Identity, subjectQuery, recipientQuery string) (*identity.Public, *identity.Public, error) {
+// refuses this identity in either place, and the same peer twice unless
+// keep says a vouch for the subject to keep is meant.
+func vouchPair(s *store.Store, id *identity.Identity, subjectQuery, recipientQuery string, keep bool) (*identity.Public, *identity.Public, error) {
 	subject, err := s.Resolve(subjectQuery)
 	if err != nil {
 		return nil, nil, usageErrf("%s is not on your peer list, so you cannot vouch for them: %v", subjectQuery, err)
@@ -101,7 +102,7 @@ func vouchPair(s *store.Store, id *identity.Identity, subjectQuery, recipientQue
 	if subject.Fingerprint() == id.Fingerprint() || recipient.Fingerprint() == id.Fingerprint() {
 		return nil, nil, usageErrf("a vouch is for one of your peers, to another; neither may be you")
 	}
-	if subject.Fingerprint() == recipient.Fingerprint() {
+	if subject.Fingerprint() == recipient.Fingerprint() && !keep {
 		return nil, nil, usageErrf("%s would be vouched for to themselves; introduce two different peers",
 			identity.Printable(orNone(subject.Name)))
 	}
@@ -141,11 +142,6 @@ func sendVouch(s *store.Store, id *identity.Identity, relayName string, subject,
 	return sealAndSend(s, id, r, recipient, body, nil, sendMode{inline: true}, asJSON)
 }
 
-// errCarried is a vouch inside a message whose document names somebody
-// other than the message's sender as its voucher: a vouch carried for
-// somebody else, which is decided where it is carried, on a knock.
-var errCarried = errors.New("the vouch inside is not its sender's own")
-
 // judged is what this machine makes of one vouch message.
 type judged struct {
 	// Doc is the document, set only when the vouch counts: its voucher is
@@ -156,6 +152,12 @@ type judged struct {
 	Why error
 	// Voucher is this machine's name for the voucher.
 	Voucher string
+	// Carried says the vouch is not its sender's own: somebody carried a
+	// vouch the voucher gave them, and it counts because the voucher is on
+	// the list, whoever carried it.
+	Carried bool
+	// CarriedBy is this machine's name for whoever carried it.
+	CarriedBy string
 	// KnownAs is this machine's name for the subject, when the subject is
 	// already a peer, and Self says the subject is this identity.
 	KnownAs string
@@ -164,12 +166,12 @@ type judged struct {
 }
 
 // judgeVouch applies the rule for whether a vouch counts. The message has
-// opened and its sender's signature verified before this runs. Then the
-// document's voucher is the sender (a vouch carried for somebody else is
-// another thing); the voucher is on the peer list; the signature verifies
+// opened and its sender's signature verified before this runs. The
+// document's voucher must be on the peer list, and the signature verify
 // under the key the list holds for them, never the bundle the message
-// carried; and the subject is somebody, this identity or a peer or a
-// stranger. No chains and no arithmetic.
+// carried; a voucher who is not the sender makes it a carried vouch,
+// judged exactly the same way. Then the subject is somebody: this identity,
+// a peer, or a stranger. No chains and no arithmetic.
 func judgeVouch(s *store.Store, m *store.Stored, now time.Time) judged {
 	c := m.Inner.Body.Vouch
 	if m.Inner.Body.Type != message.TypeVouch || c == nil {
@@ -179,18 +181,22 @@ func judgeVouch(s *store.Store, m *store.Stored, now time.Time) judged {
 	if err != nil {
 		return judged{Why: err}
 	}
-	if parsed.Voucher != m.Inner.From {
-		return judged{Why: errCarried}
-	}
+	carried := parsed.Voucher != m.Inner.From
 	held, err := s.Resolve(parsed.Voucher)
 	if err != nil || held.Fingerprint() != parsed.Voucher {
+		if carried {
+			return judged{Why: errors.New("its voucher is not on your peer list, so nobody you trust stands behind it")}
+		}
 		return judged{Why: errors.New("its sender is not on your peer list, so nobody you trust stands behind it")}
 	}
 	d, err := vouch.Verify(held, c.Document, c.Signature, now)
 	if err != nil {
 		return judged{Why: fmt.Errorf("it does not verify under the key you hold for %s: %v", orNone(held.Name), err)}
 	}
-	out := judged{Doc: d, Voucher: held.Name}
+	out := judged{Doc: d, Voucher: held.Name, Carried: carried}
+	if carried {
+		out.CarriedBy = m.SenderName
+	}
 	if self, err := s.Self(); err == nil && self.Fingerprint() == d.Subject {
 		out.Self = true
 		return out
@@ -211,14 +217,23 @@ func vouchLine(j judged) string {
 		// so it is escaped as every word from outside is.
 		return "a vouch that does not count: " + identity.PrintableText(j.Why.Error())
 	case j.Self:
-		return "vouched for you"
+		return fmt.Sprintf("%s vouched for you; kept for your knocks", identity.Printable(orNone(j.Voucher)))
 	case j.Known:
-		return fmt.Sprintf("vouches for %q %s… (already your peer as %s)",
-			identity.Printable(j.Doc.Name), j.Doc.Subject[:identity.ShortIDLen], identity.Printable(orNone(j.KnownAs)))
+		return fmt.Sprintf("vouches for %q %s… (already your peer as %s)%s",
+			identity.Printable(j.Doc.Name), j.Doc.Subject[:identity.ShortIDLen], identity.Printable(orNone(j.KnownAs)), carriedBy(j))
 	default:
-		return fmt.Sprintf("vouches for %q %s… (not on your list)",
-			identity.Printable(j.Doc.Name), j.Doc.Subject[:identity.ShortIDLen])
+		return fmt.Sprintf("vouches for %q %s… (not on your list)%s",
+			identity.Printable(j.Doc.Name), j.Doc.Subject[:identity.ShortIDLen], carriedBy(j))
 	}
+}
+
+// carriedBy is what a carried vouch's line adds: whose vouch it is, since
+// the sender column names whoever carried it.
+func carriedBy(j judged) string {
+	if !j.Carried {
+		return ""
+	}
+	return fmt.Sprintf(", %s's vouch carried by %s", identity.Printable(orNone(j.Voucher)), identity.Printable(orNone(j.CarriedBy)))
 }
 
 // vouchJSON is a vouch message's judgement for --json.
@@ -594,4 +609,110 @@ func answerAsks(s *store.Store, id *identity.Identity, out io.Writer) {
 		fmt.Fprintf(out, "answered %s: you hold %s… as %q\n", identity.Printable(orNone(asker.Name)),
 			about[:identity.ShortIDLen], identity.Printable(name))
 	}
+}
+
+// keepVouches files every vouch in the inbox that counts and is for this
+// identity, under its voucher's fingerprint, for the knocks it may carry:
+// a vouch from the same voucher already kept is replaced only by one issued
+// later, so the newest word stands and an older one arriving late changes
+// nothing. It runs after a fetch, where answerAsks does.
+func keepVouches(s *store.Store, out io.Writer) {
+	msgs, err := s.List(store.Inbox)
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	for _, m := range msgs {
+		if m.Inner.Body.Type != message.TypeVouch {
+			continue
+		}
+		j := judgeVouch(s, m, now)
+		if j.Doc == nil || !j.Self {
+			continue
+		}
+		if kept, err := s.KeptVouch(j.Doc.Voucher); err == nil {
+			if old, err := vouch.Parse(kept.Document); err == nil && !j.Doc.Issued.After(old.Issued) {
+				continue
+			}
+		}
+		if err := s.KeepVouch(j.Doc.Voucher, *m.Inner.Body.Vouch); err != nil {
+			fmt.Fprintf(out, "warning: %s's vouch for you could not be kept: %s\n",
+				identity.Printable(orNone(j.Voucher)), identity.PrintableText(err.Error()))
+		}
+	}
+}
+
+// knockVouches is what this machine makes of the vouches a knock carries:
+// the local names of the vouchers it holds whose vouch verifies and is for
+// the knocker, the local names of held vouchers whose vouch does not, and
+// how many are from people it does not hold, who count for nothing.
+type knockVouches struct {
+	Held    []string
+	Bad     []string
+	Unknown int
+}
+
+// judgeKnockVouches applies the vouch rule to each vouch a knock carries.
+// The subject must be the knocker, whose key the knock was signed with, so
+// that a vouch about somebody else cannot be presented as one's own; the
+// voucher must be held, and the signature verify under the held key. A
+// voucher named twice is counted once. Names are escaped here, where the
+// list is made.
+func judgeKnockVouches(s *store.Store, m *store.Stored, now time.Time) knockVouches {
+	var out knockVouches
+	seen := map[string]bool{}
+	for _, c := range m.Inner.Body.Vouches {
+		parsed, err := vouch.Parse(c.Document)
+		if err != nil {
+			out.Unknown++
+			continue
+		}
+		if seen[parsed.Voucher] {
+			continue
+		}
+		seen[parsed.Voucher] = true
+		held, err := s.Resolve(parsed.Voucher)
+		if err != nil || held.Fingerprint() != parsed.Voucher {
+			out.Unknown++
+			continue
+		}
+		name := identity.Printable(orNone(held.Name))
+		d, err := vouch.Verify(held, c.Document, c.Signature, now)
+		if err != nil || d.Subject != m.Inner.From {
+			out.Bad = append(out.Bad, name)
+			continue
+		}
+		out.Held = append(out.Held, name)
+	}
+	return out
+}
+
+// knockVouchLine is what the quarantine line adds for a knock's vouches.
+func knockVouchLine(k knockVouches) string {
+	var parts []string
+	if len(k.Held) > 0 {
+		parts = append(parts, "vouched for by "+strings.Join(k.Held, ", "))
+	}
+	if k.Unknown > 0 {
+		if len(k.Held) > 0 {
+			parts = append(parts, fmt.Sprintf("and %d you do not know", k.Unknown))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d vouches from people you do not know", k.Unknown))
+		}
+	}
+	if len(k.Bad) > 0 {
+		parts = append(parts, "a vouch that does not verify from "+strings.Join(k.Bad, ", "))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "  " + strings.Join(parts, " ")
+}
+
+// knockVouchesJSON is a knock's vouches for --json: the names are this
+// machine's own labels for the vouchers, never a name from the wire.
+type knockVouchesJSON struct {
+	By           []string `json:"by"`
+	NotVerifying []string `json:"not_verifying"`
+	Unknown      int      `json:"unknown"`
 }

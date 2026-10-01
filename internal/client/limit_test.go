@@ -168,11 +168,11 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 	mldsa := []shape{
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.MLDSA = int(n) }), callStatus},
 		{"/v1/health", func(n int64) any {
-			return relayapi.HealthResponse{OK: true, MLDSA: int(n), MaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}
+			return relayapi.HealthResponse{OK: true, MLDSA: int(n), MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}
 		},
 			func(c *Client) error { _, err := c.MLDSA(context.Background()); return err }},
 		{"/v1/health", func(n int64) any {
-			return relayapi.HealthResponse{OK: true, MLDSA: int(n), MaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}
+			return relayapi.HealthResponse{OK: true, MLDSA: int(n), MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}
 		},
 			func(c *Client) error { return c.Health(context.Background()) }},
 	}
@@ -182,7 +182,13 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 	// what the client will hold of a page by it (TestLimitAnAnswerIsHeldToWhatItsRouteHolds).
 	maxBytes := []shape{
 		{"/v1/health", func(n int64) any {
-			return relayapi.HealthResponse{OK: true, MaxBytes: n, Registration: relayapi.RegistrationOpen}
+			return relayapi.HealthResponse{OK: true, MaxBytes: n, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}
+		},
+			func(c *Client) error { return c.Health(context.Background()) }},
+		// knock_max_bytes, held to the same range: what a knock is sealed
+		// against before it is sent, zero refused as the absent field.
+		{"/v1/health", func(n int64) any {
+			return relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: n, Registration: relayapi.RegistrationOpen}
 		},
 			func(c *Client) error { return c.Health(context.Background()) }},
 	}

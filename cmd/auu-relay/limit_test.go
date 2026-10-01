@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tropeforce7/agentuucp/internal/relay"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
@@ -221,7 +222,7 @@ func TestKnockMaxBytesMustBeUnderMaxBytes(t *testing.T) {
 	}
 	// The default knock cap over a max_bytes set under it.
 	if _, err := resolve(t, "", "--max-bytes", "4096"); err == nil ||
-		!strings.Contains(err.Error(), "knock_max_bytes (8192) must be at most max_bytes (4096)") {
+		!strings.Contains(err.Error(), "knock_max_bytes ("+strconv.FormatInt(relay.DefaultLimits().KnockMaxBytes, 10)+") must be at most max_bytes (4096)") {
 		t.Errorf("max_bytes under the default knock cap: %v", err)
 	}
 	// A negative is said as a negative first.

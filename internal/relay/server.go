@@ -626,7 +626,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// The registration mode is what admission to this relay means, and
 	// so what a name listed on it rests on; a client says it wherever it
 	// asks a person to trust a listed name.
-	resp := relayapi.HealthResponse{OK: true, MaxBytes: s.cfg.MaxBytes, Registration: s.cfg.Registration}
+	resp := relayapi.HealthResponse{OK: true, MaxBytes: s.cfg.MaxBytes, KnockMaxBytes: s.knockMax(), Registration: s.cfg.Registration}
 	if s.clientCerts() {
 		resp.MLDSA = clientca.ParameterNumber(s.cfg.ClientCerts.Issuer.Parameters())
 	}

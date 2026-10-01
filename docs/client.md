@@ -240,6 +240,33 @@ originates as you, so where the agent holds your key and is unlocked only
 to receive, the question is left unread and the line names `auu unlock
 --send`.
 
+#### Knocking with a vouch
+
+A peer can give you a vouch to keep, for a knock to somebody who does not
+know you:
+
+```
+auu vouch carol --to carol                         # bob, who holds carol, gives her one
+auu knock alice --vouch bob                        # carol knocks on alice, carrying it
+auu knock alice --vouch bob --vouch dave           # up to four
+```
+
+A vouch whose subject is you is kept when it arrives, under
+`vouches/` by its voucher's fingerprint, and its inbox line says `bob
+vouched for you; kept for your knocks`; a newer one from the same
+voucher replaces it and an older one does not. `auu knock --vouch V`
+reads the one kept from V, checks it still verifies and is still yours,
+and carries it on the knock; it refuses a voucher you hold no vouch
+from, and says how many to leave off when the knock would be over the
+relay's knock size, which the relay tells every client.
+
+At the other end the quarantine lists the knock with `vouched for by bob`
+for each voucher the person holds whose vouch checks out, `and 2 you do
+not know` for the rest, and says so of one that does not verify; `auu
+quarantine trust` says whose word each is before it asks the local name.
+Choosing what to carry is yours: a vouch tells the person you knock on
+who vouches for you.
+
 Trusting a vouch is trusting the voucher: somebody you hold can introduce
 anybody to you, which is no more than they could do across a table. There
 are no chains — a vouch counts only from somebody already on your list —
@@ -1045,7 +1072,8 @@ Go's file modes say nothing about who can read.
 | `identity.key` | with a passphrase set: your secret keys, sealed under the home key |
 | `config.json` | your name, the default relay, and optionally your editor; a key `auu` does not write is refused by name with exit 5, and one of the keys a home from before v0.11.0 held its one relay under — `relay`, `trust_anchor_spki` — is refused as that, with the fix |
 | `COMPOSE_MSG` | the last message composed in the editor |
-| `authorized_peers` | one export line per peer, the trust anchor |
+| `authorized_peers` | one export line per peer, the trust anchor; a peer added on a vouch has a `# vouched for by` comment above its line, which `auu peers rm` takes with it |
+| `vouches/<fingerprint>.json` | a vouch a peer gave you to keep, one per voucher, named by the voucher's fingerprint: the document and the signature as they arrived, the newest kept; `auu knock --vouch` carries it |
 | `channels.json` | your channel directory as this machine last signed it, `issued` included; `auu channel push` signs it under that time again, and a file that will not read, or that breaks a rule, is refused by name with exit 5 |
 | `card.json` | your card as this machine last pushed it, `issued` included: your name and whether the relay may list you and let a knock through; `auu card push` signs it again with the words a typed flag changes, and a file that will not read, or that breaks a rule, is refused by name with exit 5 |
 | `channel-settings.json` | this machine's own policy per channel: whether mail fetched from it is left on the relay; absent, and every channel keeps |

@@ -26,12 +26,14 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
 	"github.com/tropeforce7/agentuucp/internal/token"
+	"github.com/tropeforce7/agentuucp/internal/vouch"
 )
 
 // Nothing the network names is a path until its rule has run, and this one
 // test walks every component that becomes part of a path somewhere: a
 // fingerprint in a URL, an upload id, a token id, an attachment name, a
-// channel name, a relay host, a message id and a thread id. Each row names
+// channel name, a relay host, a message id, a thread id, and a voucher's
+// fingerprint. Each row names
 // the rule and the point it runs at (for an attachment name, the rule is
 // not a refusal but message.SafeName at the write, and the row asserts
 // the safe name and the sender's refusal), and is fed the limit guide's
@@ -253,6 +255,20 @@ func TestLimitNothingTheNetworkNamesIsAPath(t *testing.T) {
 					return ""
 				}
 				if _, _, err := worktreeFor(t.TempDir(), &serveChannel{name: "c", Mode: modeSideCopy}, v, t.TempDir(), true); err == nil {
+					return ""
+				}
+				return "refused"
+			}},
+		{"a voucher's fingerprint", "identity.ValidFingerprint: at vouch.Validate, which Parse and Verify run on every vouch a message carries, and again at the store's join, where a kept vouch is named by it",
+			func(v string) string {
+				d := &vouch.Document{V: vouch.Version, Voucher: v, Subject: bob.Fingerprint(), Bundle: bob.Public().Bundle(), Name: "bob", Issued: time.Now()}
+				if d.Validate() == nil {
+					return ""
+				}
+				if err := home.KeepVouch(v, message.Carried{Document: []byte("{}"), Signature: []byte{1}}); err == nil {
+					return ""
+				}
+				if _, err := home.KeptVouch(v); err == nil || errors.Is(err, store.ErrNoVouch) {
 					return ""
 				}
 				return "refused"

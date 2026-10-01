@@ -61,7 +61,7 @@ func TestAnAnswerWithoutARequiredFieldIsRefusedByName(t *testing.T) {
 		return out
 	}
 	keys := map[string]any{"bundle": bundle, "name": "alice", "created": "2026-09-20T01:19:29Z"}
-	health := map[string]any{"ok": true, "max_bytes": relayapi.DefaultMaxBytes, "registration": "open"}
+	health := map[string]any{"ok": true, "max_bytes": relayapi.DefaultMaxBytes, "knock_max_bytes": relayapi.DefaultMaxBytes, "registration": "open"}
 	cardAnswer := map[string]any{"document": nil, "signature": nil, "state": "none"}
 	over := func(m map[string]any, field string, v any) map[string]any {
 		out := map[string]any{}
@@ -95,6 +95,7 @@ func TestAnAnswerWithoutARequiredFieldIsRefusedByName(t *testing.T) {
 		{"a listing without directory", "/v1/mailbox/" + fp, "directory", "one of signed, none, broken", listing(map[string]any{"directory": nil}, row(nil)), list, listing(nil, row(nil))},
 		{"a listing with another directory word", "/v1/mailbox/" + fp, "directory", "one of signed, none, broken", listing(map[string]any{"directory": "lost"}, row(nil)), list, listing(nil, row(nil))},
 		{"a health answer without registration", "/v1/health", "registration", "one of open, token, closed", without(health, "registration"), healthCall, health},
+		{"a health answer without knock_max_bytes", "/v1/health", "knock_max_bytes", "the relay's knock cap (from 1 to 1073741824; a health answer without it is refused)", without(health, "knock_max_bytes"), healthCall, health},
 		{"a health answer with a fourth word", "/v1/health", "registration", "one of open, token, closed", over(health, "registration", "invite"), healthCall, health},
 		{"a card answer without state", "/v1/mailbox/" + fp + "/card", "state", "one of signed, none, broken", without(cardAnswer, "state"), cardCall, cardAnswer},
 		{"a card answer with another word", "/v1/mailbox/" + fp + "/card", "state", "one of signed, none, broken", over(cardAnswer, "state", "lost"), cardCall, cardAnswer},
