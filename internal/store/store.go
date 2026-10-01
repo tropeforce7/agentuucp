@@ -702,7 +702,7 @@ func readCursor(path, relay string) (int64, error) {
 			text = text[:40] + "…"
 		}
 		return 0, damaged(path, fmt.Sprintf("is not a message id (%q)", text), nil,
-			fmt.Sprintf("delete it and run 'auu inbox --relay %s'; that starts from the beginning and delivers nothing twice", relay))
+			fmt.Sprintf("run 'auu cursor reset --relay %s', which writes it again; the next fetch starts from the beginning and delivers nothing twice", relay))
 	}
 	return n, nil
 }

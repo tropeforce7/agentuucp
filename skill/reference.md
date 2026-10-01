@@ -98,6 +98,8 @@ auu inbox [--json] [--no-fetch] [--channel NAME]   # fetch from every relay, the
 auu read MESSAGE-ID [--json]
 auu extract MESSAGE-ID [--out DIR]                 # save a message's attachments
 auu rm MESSAGE-ID... [--local-only | --remote-only] [--json]
+auu cursor show [--relay NAME] [--json]
+auu cursor reset --relay NAME [--to N] [--yes]
 auu queue [--relay NAME] [--json]                  # your mail a relay is still carrying onward
 auu wait --thread THREAD-ID [--timeout 10m] [--interval 20s] [--json]
 auu watch [--event message|directory]... [--channel NAME]... [--peer NAME]...
@@ -396,6 +398,11 @@ set), `queued` (a map of channel to count) and `error` (when set).
 `auu rm --json`: a list of `id`, `relay` (when one was involved),
 `removed_relay`, `removed_local`.
 
+`auu cursor show --json`: a list of `relay`, `cursor` (absent when the
+file will not read, with `cursor_error` saying why), and `first`, `last`
+and `queued` as the relay said them, absent when it could not be asked,
+with `error` saying why.
+
 `auu relay ls --json` and `auu relay show --json`: `name`, `url`, `added`,
 `default`, `registered`, `anchor` and `anchor_expires` (when set),
 `server_intermediate` and `server_intermediate_issued` (when set),
@@ -526,10 +533,14 @@ Anywhere:
 - A damaged file is always the same shape: the path, what is wrong with it,
   Go's reason in brackets when there is one, and what to do — exit 5. Stop
   and name the file.
-- `1 message is waiting on RELAY before this machine's cursor; delete PATH
-  and run 'auu inbox --relay RELAY' to fetch from the beginning` (`N
-  messages are` for more than one) — the home was copied or its cursor
-  edited; the user decides.
+- `1 message is waiting on RELAY before this machine's cursor; run 'auu
+  cursor reset --relay RELAY' to fetch from the beginning` (`N messages
+  are` for more than one) — the home was copied or its cursor edited; the
+  user decides, and `auu cursor reset` is theirs to run. A cursor above
+  everything the relay holds is not this: the fetch resets it itself and
+  says so on stderr, `RELAY: this machine's cursor was N and the relay's
+  mail is numbered F to L, so the cursor was reset …`, which is worth
+  reporting and needs nothing.
 - `nothing happened in 10m0s` — a `watch` that timed out, exit 3.
 - `no reply on thread T after 10m0s` — a `wait` that timed out, exit 3.
 

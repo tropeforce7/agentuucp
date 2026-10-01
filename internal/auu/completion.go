@@ -98,6 +98,10 @@ var subcommands = []subcommand{
 	{name: "queue", describe: "your mail still waiting to leave a relay"},
 	{name: "extract", describe: "save a message's attachments"},
 	{name: "rm", describe: "remove a message from the relay and from here"},
+	{name: "cursor", describe: "how far this machine has fetched from each relay", subs: []subcommand{
+		{name: "show", describe: "each relay's cursor beside what the relay holds"},
+		{name: "reset", describe: "set one relay's cursor, at a terminal"},
+	}},
 	{name: "wait", describe: "wait for a reply on a thread"},
 	{name: "watch", describe: "return when mail arrives, or a colleague's channels change"},
 	{name: "quarantine", describe: "mail from senders not on your list", subs: []subcommand{

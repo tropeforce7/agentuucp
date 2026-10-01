@@ -695,9 +695,23 @@ reports only the mail you do not have, and moves nothing.
 
 A cursor inside the relay's span, with mail before it that was neither
 fetched nor left there on purpose, is different. That cursor was set by
-hand or copied from a machine that had fetched further, and a fetch from the
-front would deliver again what was fetched after the gap. That one is
-refused, with the count and the file to delete, at exit 5.
+hand or copied from a machine that had fetched further, and nothing the
+relay says can tell whether the gap was meant, so it is yours to put
+right. That one is refused, with the count and the command that puts it
+right, at exit 5.
+
+*Setting a cursor by hand.* `auu cursor show` prints each relay's cursor
+beside what the relay holds, its lowest and highest numbers and how many,
+or a dash for a relay it could not ask; `--relay NAME` narrows it and
+`--json` gives it to a script. `auu cursor reset --relay NAME` sets that
+relay's cursor to 0, or to `--to N`, after saying what the next fetch will
+then fetch, and asks first; `--yes` skips the question for a script of
+your own, and without a terminal and without `--yes` it is refused. `--to`
+is a relay message id in decimal. A relay this home has added but never
+joined has no cursor, and reset says to `auu register` there first. It
+never fetches: `auu inbox --relay NAME` does. Mail you already have is
+recognised by that fetch and not delivered again, so a cursor set too low
+costs a listing and no mail.
 
 ### 1.6 An expert on a channel
 
@@ -1122,7 +1136,7 @@ Go's file modes say nothing about who can read.
 | `relays/<name>/relay.json` | one relay: its URL, when it was added, and what this machine has learned about its certificates |
 | `relays/<name>/trust_anchor.pem` | that relay's pinned trust anchor, when it has one; `relay.json` records its hash, and a file here with no hash recorded is refused as an edit, not taken as unpinned |
 | `relays/<name>/cert.json` | this machine's client certificate for that relay, and its key — sealed under the home key when a passphrase is set |
-| `relays/<name>/cursor` | how far that relay's mailbox has been drained; one above everything the relay holds is reset by the next fetch (1.5, *When the relay's numbering restarts*), and one that skipped mail inside the relay's span is refused with the count and the file to delete, exit 5 |
+| `relays/<name>/cursor` | how far that relay's mailbox has been drained; one above everything the relay holds is reset by the next fetch (1.5, *When the relay's numbering restarts*), and one that skipped mail inside the relay's span is refused with the count and `auu cursor reset --relay NAME`, exit 5; `auu cursor show` prints it and `auu cursor reset` writes it |
 | `relays/<name>/allow_pushed` | when this machine last pushed a signed allow list to that relay, one RFC 3339 line, so a fetch can tell a relay that never had one from a relay that has lost it; `auu allow clear` removes it |
 | `relays/<name>/card_pushed` | the same for the card; `auu card clear` removes it |
 | `relays/<name>/left-behind` | the messages `auu rm --local-only` removed here and left on that relay, one per line: the relay's id, the message's own id, the time the relay received it, its size and the fingerprint of its signer (`-` when the record it was removed from could not be read). The fetch does not mistake them for mail the cursor has skipped, and a reset does not deliver them again; pruned when the relay no longer lists them. A file of bare ids, from before, is refused by name; deleting it costs that a message you removed here alone may come back once |

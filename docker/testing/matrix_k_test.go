@@ -199,9 +199,18 @@ func k15(t *testing.T) {
 	expectCode(t, r, 5)
 	// "is not a message id" since d7b8ff8, where the cursor became a
 	// message id held to its shape at the read rather than a number.
-	stderrIs(t, r, "auu: "+aliceRelayDir+`/cursor is not a message id ("abc"): delete it and run 'auu inbox --relay relay.example.com'; `+
-		"that starts from the beginning and delivers nothing twice")
-	verdict(t, "ok", "The file, what it holds, what to do and what that costs, and exit 5.")
+	stderrIs(t, r, "auu: "+aliceRelayDir+`/cursor is not a message id ("abc"): run 'auu cursor reset --relay relay.example.com', `+
+		"which writes it again; the next fetch starts from the beginning and delivers nothing twice")
+	// The advice, followed: the cursor written, and the fetch from the
+	// beginning meets the mail alice kept there and delivers none of it.
+	expectSays(t, alice.auu("cursor", "reset", "--relay", "relay.example.com", "--yes"), 0,
+		"relay.example.com's cursor is 0")
+	in := fetchJSON(t, alice)
+	if in.Fetch.Delivered != 0 {
+		t.Errorf("the fetch after the advice delivered %+v", in.Fetch)
+	}
+	verdict(t, "ok", "The file, what it holds, what to do and what that costs, and exit 5; the command it names writes "+
+		"the cursor, and the fetch after it delivers nothing twice.")
 }
 
 func k16(t *testing.T) {
@@ -261,18 +270,26 @@ func k30(t *testing.T) {
 	// bytes that were written.
 	r := alice.auu("inbox")
 	expectCode(t, r, 5)
-	stderrIs(t, r, "auu: 1 message is waiting on relay.example.com before this machine's cursor; delete "+
-		aliceRelayDir+"/cursor and run 'auu inbox --relay relay.example.com' to fetch from the beginning")
+	stderrIs(t, r, "auu: 1 message is waiting on relay.example.com before this machine's cursor; "+
+		"run 'auu cursor reset --relay relay.example.com' to fetch from the beginning")
 	if !holds(queued(t, state.aliceFP), id) {
 		t.Errorf("queued %v after the refusal, want %d untouched", queued(t, state.aliceFP), id)
 	}
 	if got := strings.TrimSpace(alice.read(t, aliceRelayDir+"/cursor")); got != strconv.FormatInt(id, 10) {
 		t.Errorf("the cursor is %q after the refusal, want the %d that was written", got, id)
 	}
+	// The advice, followed: the cursor set to the beginning, and the fetch
+	// delivers the skipped message and nothing alice already had.
+	expectSays(t, alice.auu("cursor", "reset", "--relay", "relay.example.com", "--yes"), 0,
+		"the next fetch from relay.example.com will fetch everything the relay holds")
+	in := fetchJSON(t, alice)
+	if in.Fetch.Delivered != 1 {
+		t.Errorf("the fetch after the advice delivered %+v, want the skipped one alone", in.Fetch)
+	}
 	undo()
-	expectSays(t, alice.auu("inbox"), 0, "skipped")
 	verdict(t, "ok", "A cursor inside the relay's span beside an empty page and a count is a cursor past mail: "+
-		"said with the count, the file and the command, exit 5, nothing acknowledged.")
+		"said with the count and the command, exit 5, nothing acknowledged; the command puts it right, and the "+
+		"fetch after it delivers the skipped message alone.")
 }
 
 func k18(t *testing.T) {

@@ -627,24 +627,22 @@ func (s *Store) CursorFor(r *Relay) (int64, error) {
 }
 
 // CursorSkipsMail is a relay's mailbox holding messages this home's cursor
-// is already past: the relay lists nothing after the cursor and counts
-// something in all. The cursor was set ahead by hand, or the home was
-// copied from a machine that had drained further, and either way it is a
-// person's to put right, by removing the file the sentence names. The relay
-// said how many; nothing here has been touched.
-//
-// The advice names the relay because a cursor is also the record that this
-// identity has a mailbox there: with it gone, a plain 'auu inbox' in a home
-// that knows other relays would pass this one by as one nobody has joined.
-// Naming it selects it regardless, and the fetch writes the cursor again.
+// is already past, inside the span of ids the relay holds: the relay lists
+// nothing after the cursor and counts something in all. The cursor was set
+// ahead by hand, or the home was copied from a machine that had drained
+// further, and either way it is a person's to put right, with 'auu cursor
+// reset', which says what the next fetch will fetch before it writes. The
+// relay said how many; neither the cursor nor the relay has been touched.
+// A cursor above everything the relay holds is not this: a fetch resets
+// that itself.
 func (s *Store) CursorSkipsMail(r *Relay, waiting int64) error {
 	waits := "messages are"
 	if waiting == 1 {
 		waits = "message is"
 	}
 	return &damagedFile{msg: fmt.Sprintf(
-		"%d %s waiting on %s before this machine's cursor; delete %s and run 'auu inbox --relay %s' to fetch from the beginning",
-		waiting, waits, r.Name, s.relayPath(r, cursorFile), r.Name)}
+		"%d %s waiting on %s before this machine's cursor; run 'auu cursor reset --relay %s' to fetch from the beginning",
+		waiting, waits, r.Name, r.Name)}
 }
 
 // SetCursorFor records how far one relay's mailbox has been drained.

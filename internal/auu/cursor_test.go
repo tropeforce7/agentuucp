@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/tropeforce7/agentuucp/internal/relay"
@@ -124,8 +123,8 @@ func TestASkippedMailboxIsSaidToBe(t *testing.T) {
 			t.Fatalf("the spool went from %v to %v across the refusal", before, after)
 		}
 	}
-	refused("2 messages are waiting on " + name + " before this machine's cursor; delete " + cursor +
-		" and run 'auu inbox --relay " + name + "' to fetch from the beginning")
+	refused("2 messages are waiting on " + name + " before this machine's cursor; run 'auu cursor reset --relay " + name +
+		"' to fetch from the beginning")
 	if left, err := st.List(bobFP, 0, 10); err != nil || len(left) != 2 {
 		t.Fatalf("the relay holds %d (%v) after the refusal, want 2 untouched", len(left), err)
 	}
@@ -134,14 +133,12 @@ func TestASkippedMailboxIsSaidToBe(t *testing.T) {
 	if gone, err := st.Delete(bobFP, queued[0].ID); err != nil || !gone {
 		t.Fatalf("delete on the relay: %v %v", gone, err)
 	}
-	refused("1 message is waiting on " + name + " before this machine's cursor; delete " + cursor +
-		" and run 'auu inbox --relay " + name + "' to fetch from the beginning")
+	refused("1 message is waiting on " + name + " before this machine's cursor; run 'auu cursor reset --relay " + name +
+		"' to fetch from the beginning")
 
 	// The advice, followed: the remaining message arrives, the cursor is
 	// written again, and the relay is empty.
-	if err := os.Remove(cursor); err != nil {
-		t.Fatal(err)
-	}
+	bob.run("cursor", "reset", "--relay", name, "--yes")
 	if in := bob.inboxJSON("--relay", name); in.Fetch.Delivered != 1 || len(in.Messages) != 1 {
 		t.Fatalf("after following the advice: %+v", in.Fetch)
 	}
@@ -186,11 +183,9 @@ func TestASkippedMailboxIsSaidToBe(t *testing.T) {
 	alice.run("send", "--to", "bob", "--subject", "skipped", "past")
 	written = relayLast(t, st, bobFP)
 	bob.setCursor(name, written)
-	refused("1 message is waiting on " + name + " before this machine's cursor; delete " + cursor +
-		" and run 'auu inbox --relay " + name + "' to fetch from the beginning")
-	if err := os.Remove(cursor); err != nil {
-		t.Fatal(err)
-	}
+	refused("1 message is waiting on " + name + " before this machine's cursor; run 'auu cursor reset --relay " + name +
+		"' to fetch from the beginning")
+	bob.run("cursor", "reset", "--relay", name, "--yes")
 	// Fetched from the beginning: the skipped message arrives, and the
 	// stream is listed again and met at its manifest under the one record
 	// it has, not quarantined again or counted (ruling 53, a behaviour
@@ -259,12 +254,11 @@ func TestASkippedMailboxIsSaidToBe(t *testing.T) {
 	}
 }
 
-// The advice names the relay because the cursor is also the record of a
-// mailbox there: in a home on two relays, a plain 'auu inbox' passes a relay
-// whose cursor is gone by as one nobody has joined, and 'auu inbox --relay
-// NAME' is what selects it regardless. The one-relay home is the other
-// shape, and the commoner: with no relay registered, the fetch falls through
-// to the single-relay rule, and the plain command works too.
+// The advice is 'auu cursor reset', which writes the cursor rather than
+// removing it: the cursor is also the record of a mailbox there, and in a
+// home on two relays a plain 'auu inbox' would pass a relay whose cursor is
+// gone by as one nobody has joined. With it written, the plain command
+// drains it, in a home on two relays and in one on a single relay.
 func TestTheCursorAdviceWorksInBothShapesOfHome(t *testing.T) {
 	work, personalURL := startRelay(t), startRelay(t)
 	alice := onBothRelays(t, "alice", work, personalURL)
@@ -294,34 +288,28 @@ func TestTheCursorAdviceWorksInBothShapesOfHome(t *testing.T) {
 
 	// The cursor at work's one message, which bob never fetched, refused
 	// by name at exit 5 — the command's failure, not one relay's trouble
-	// among two — and then gone, as advised. Work is a relay of its own
-	// and alice's is the only message on it, so it is numbered 1.
+	// among two — and then put right as advised. Work is a relay of its
+	// own and alice's is the only message on it, so it is numbered 1.
 	bob.setCursor("work", "1\n")
 	var err error
 	stderr := captureStderr(t, func() { _, err = bob.tryRun("inbox") })
 	var e *exitError
-	if !errors.As(err, &e) || e.code != exitDamaged ||
-		!strings.HasPrefix(err.Error(), "1 message is waiting on work before this machine's cursor; delete ") {
+	if !errors.As(err, &e) || e.code != exitDamaged || err.Error() !=
+		"1 message is waiting on work before this machine's cursor; run 'auu cursor reset --relay work' to fetch from the beginning" {
 		t.Fatalf("inbox with work's cursor ahead: %v, want exit %d and the sentence", err, exitDamaged)
 	}
 	if stderr != "" {
 		t.Fatalf("inbox with work's cursor ahead reported it as a relay that could not be reached:\n%s", stderr)
 	}
-	if err := os.Remove(bob.cursorPath("work")); err != nil {
-		t.Fatal(err)
-	}
-	// The plain command passes work by: it drains personal alone.
+	// The advice writes the cursor, so the relay is still one this home
+	// has joined, and the plain command drains it with the other.
+	bob.run("cursor", "reset", "--relay", "work", "--yes")
 	in := bob.inboxJSON()
-	if in.Fetch.Delivered != 0 || len(in.Relays) != 1 || in.Relays[0].Relay != "personal" {
-		t.Fatalf("plain inbox with work's cursor gone drained %+v", in.Relays)
-	}
-	// The advice as given selects it.
-	if in := bob.inboxJSON("--relay", "work"); in.Fetch.Delivered != 1 {
-		t.Fatalf("inbox --relay work after the cursor was removed: %+v", in.Fetch)
+	if in.Fetch.Delivered != 1 || len(in.Relays) != 2 {
+		t.Fatalf("plain inbox after the advice drained %+v, %+v", in.Fetch, in.Relays)
 	}
 
-	// One relay: the cursor gone, the plain command falls through to the
-	// only relay there is and drains it from the beginning.
+	// One relay: the same.
 	relayURL := startRelay(t)
 	carol := newUser(t, "carol", relayURL)
 	dave := newUser(t, "dave", relayURL)
@@ -335,11 +323,9 @@ func TestTheCursorAdviceWorksInBothShapesOfHome(t *testing.T) {
 	if _, err := dave.tryRun("inbox"); err == nil {
 		t.Fatal("inbox with the cursor ahead succeeded")
 	}
-	if err := os.Remove(dave.cursorPath(name)); err != nil {
-		t.Fatal(err)
-	}
+	dave.run("cursor", "reset", "--relay", name, "--yes")
 	if in := dave.inboxJSON(); in.Fetch.Delivered != 1 {
-		t.Fatalf("plain inbox in a one-relay home after the cursor was removed: %+v", in.Fetch)
+		t.Fatalf("plain inbox in a one-relay home after the advice: %+v", in.Fetch)
 	}
 }
 

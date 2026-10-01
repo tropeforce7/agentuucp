@@ -88,6 +88,11 @@ whose word it is; `auu vouch` and `auu introduce` send the user's own
 word to somebody. All three are the person's commands: never run them,
 and never pass `--yes`.
 
+`auu cursor show` says how far this machine has fetched from each relay
+beside what the relay holds, and you may run it. `auu cursor reset` sets
+one by hand when a fetch says mail is waiting before the cursor: it is the
+user's command, never yours, and never pass it `--yes`.
+
 A message of type `vouch-ask` is a peer asking whether the user holds a
 key; `ask` in its JSON says which and whether they do. Report it and do
 not answer it: the answer is the user's vouch. `auu vouch answer on` lets

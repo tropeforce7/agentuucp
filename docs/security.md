@@ -879,11 +879,13 @@ channel keeps its mail, which is counted but not listed after the cursor.
 The client subtracts what this machine deliberately left on the relay before
 it judges the rest. When the list is empty, the cursor is inside the span,
 and the count still exceeds that, the cursor has skipped mail in the middle.
-That is set by hand or copied from a machine that had fetched further, and
-no fetch from the front could put it right without delivering again what
-was fetched. Then `auu inbox` says so, with the count, the cursor file to
-delete and the `auu inbox --relay NAME` to run after. It exits 5 without
-acknowledging or writing anything. Each message listed says which channel it is under (`channel`),
+That is set by hand or copied from a machine that had fetched further. It
+is not put right by itself: the cursor is a person's to set, and nothing
+from the relay can say whether the gap was meant. Then `auu inbox` says so,
+with the count and `auu cursor reset --relay NAME`, which says what the
+next fetch will fetch before it writes the cursor; since every fetch meets
+the mail it already has, a fetch from the front delivers nothing twice. It
+exits 5 without acknowledging anything or moving the cursor. Each message listed says which channel it is under (`channel`),
 always, `default` included, held to the channel name rule as it is read. It
 says how it came, too: `via`, the relays it crossed before the one holding
 it, nearest the sender first and joined by `!`, always present and empty for

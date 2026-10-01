@@ -876,8 +876,8 @@ func TestAWatchDiagnosesACursorPastTheMail(t *testing.T) {
 	if !asExit(err, &e) || e.code != exitDamaged {
 		t.Fatalf("a watch with the cursor past the mail: %v, want exit %d", err, exitDamaged)
 	}
-	want := "1 message is waiting on " + relays[0].Name + " before this machine's cursor; delete " +
-		s.RelayDir(relays[0]) + "/cursor and run 'auu inbox --relay " + relays[0].Name + "' to fetch from the beginning"
+	want := "1 message is waiting on " + relays[0].Name + " before this machine's cursor; run 'auu cursor reset --relay " +
+		relays[0].Name + "' to fetch from the beginning"
 	if err.Error() != want {
 		t.Fatalf("the diagnosis:\n%v\nwant\n%s", err, want)
 	}

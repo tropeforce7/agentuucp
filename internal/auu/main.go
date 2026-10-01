@@ -101,6 +101,8 @@ Usage:
   auu read MESSAGE-ID [--json]
   auu extract MESSAGE-ID [--out DIR]
   auu rm MESSAGE-ID... [--local-only | --remote-only] [--json]
+  auu cursor show [--relay NAME] [--json]
+  auu cursor reset --relay NAME [--to N] [--yes]
   auu queue [--relay NAME] [--json]   # your mail a relay is still carrying to another relay
   auu wait --thread THREAD-ID [--timeout 10m] [--interval 20s] [--json]
   auu watch [--event message|directory]... [--channel NAME]... [--peer NAME]...
@@ -324,6 +326,8 @@ func dispatch(args []string) error {
 		return cmdExtract(rest)
 	case "rm":
 		return cmdRm(rest)
+	case "cursor":
+		return cmdCursor(rest)
 	case "queue":
 		return cmdQueue(rest)
 	case "wait":

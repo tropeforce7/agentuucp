@@ -178,6 +178,11 @@ internal/auu/compose.go composeTemplate string original.Inner.ID[:12] = local: V
 internal/auu/compose.go readComposed string lines[:len(lines) - 1] = local: len(lines)-1 of lines, after a check that the last is empty
 internal/auu/compose.go splitSubject string body[1:] = local: body has the prefix "\n" by HasPrefix
 internal/auu/compose.go stripComments string lines[:len(lines) - 1] = local: len(lines)-1 of lines, after a check that the last is empty
+internal/auu/cursor.go cursorJSON int Cursor *int64 = output
+internal/auu/cursor.go cursorJSON int First *int64 = output
+internal/auu/cursor.go cursorJSON int Last *int64 = output
+internal/auu/cursor.go cursorJSON int Queued *int64 = output
+internal/auu/cursor.go cursorReset int strconv.ParseInt(*toText) = >= 0 shown by TestLimitCursorResetTo
 internal/auu/enrol.go fetchAnchor string got[:16] = local: SPKI writes 64 hex characters
 internal/auu/enrol.go fetchAnchor string want[:16] = local: isAnchor at Validate shown by TestLimitAnchorClaimOneShort
 internal/auu/identity_cmds.go cmdInit string (*anchor)[:16] = local: ValidFingerprint at cmdInit shown by TestLimitAnchorArgsOneShort
