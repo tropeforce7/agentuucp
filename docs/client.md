@@ -686,7 +686,10 @@ or because the cursor was set back, keeps its record and its read mark and
 is not counted as new. So a reset that is cut off part-way, by a wait's
 deadline, a dropped connection or Ctrl-C, leaves nothing to put right: the
 next fetch carries on from where it stopped, delivers each new message once,
-and only the sentence is not said again. `auu wait`, `auu
+and only the sentence is not said again. A message is recognised by its own
+id and its signer together: one that arrives under the id of a message you
+have, signed by somebody else, is not that message. It is kept under
+`damaged/` and said to be, and the message you have is left as it was. `auu wait`, `auu
 watch --fetch` and `auu serve` fetch the same way. A plain `auu watch`
 reports only the mail you do not have, and moves nothing.
 
@@ -1122,7 +1125,7 @@ Go's file modes say nothing about who can read.
 | `relays/<name>/cursor` | how far that relay's mailbox has been drained; one above everything the relay holds is reset by the next fetch (1.5, *When the relay's numbering restarts*), and one that skipped mail inside the relay's span is refused with the count and the file to delete, exit 5 |
 | `relays/<name>/allow_pushed` | when this machine last pushed a signed allow list to that relay, one RFC 3339 line, so a fetch can tell a relay that never had one from a relay that has lost it; `auu allow clear` removes it |
 | `relays/<name>/card_pushed` | the same for the card; `auu card clear` removes it |
-| `relays/<name>/left-behind` | the messages `auu rm --local-only` removed here and left on that relay, one per line: the relay's id, the message's own id, the time the relay received it and its size. The fetch does not mistake them for mail the cursor has skipped, and a reset does not deliver them again; pruned when the relay no longer lists them. A file of bare ids, from before, is refused by name; deleting it costs that a message you removed here alone may come back once |
+| `relays/<name>/left-behind` | the messages `auu rm --local-only` removed here and left on that relay, one per line: the relay's id, the message's own id, the time the relay received it, its size and the fingerprint of its signer (`-` when the record it was removed from could not be read). The fetch does not mistake them for mail the cursor has skipped, and a reset does not deliver them again; pruned when the relay no longer lists them. A file of bare ids, from before, is refused by name; deleting it costs that a message you removed here alone may come back once |
 | `relays/<name>/fetch.lock` | held while a fetch from that relay runs, so two `auu inbox` at once take turns; the second waits up to a minute and then says so |
 | `inbox/`, `sent/`, `quarantine/` | the message spool, one JSON file each; a record that will not read is said to be, once, and left out of the listing |
 | `inbox/<id>.d/` | a large message's files, written straight to disk |

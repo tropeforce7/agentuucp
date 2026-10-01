@@ -15,6 +15,10 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/message"
 )
 
+// aSigner is a fingerprint, as a record's signer and a left-behind entry's
+// are.
+const aSigner = "4c1d0000000000000000000000000000000000000000000000000000000000aa"
+
 // TestLimitStoredRelayID: a message record's relay id is the relay's
 // number for it, never negative; Load refuses a record that says otherwise
 // before anything orders by it, and zero and the type's maximum load.
@@ -159,7 +163,7 @@ func TestLimitLeftBehindIDs(t *testing.T) {
 	}
 	path := filepath.Join(s.relayDir(name), leftBehindFile)
 	line := func(relayID, size string) string {
-		return relayID + " " + id + " 2026-10-01T02:03:04Z " + size + "\n"
+		return relayID + " " + id + " 2026-10-01T02:03:04Z " + size + " -\n"
 	}
 	for _, text := range []string{
 		line("0", "1"), line("-1", "1"), line("-0", "1"), line(strconv.FormatInt(math.MinInt64, 10), "1"),
@@ -451,7 +455,7 @@ func TestLimitMessageIDIsNotAPathAtTheStoresEdges(t *testing.T) {
 		if err := s.Remove(Inbox, v); err == nil {
 			t.Errorf("Remove took the id %q", v)
 		}
-		if _, _, _, err := s.RemoveByID(v); err == nil || errors.Is(err, os.ErrNotExist) {
+		if _, _, _, _, err := s.RemoveByID(v); err == nil || errors.Is(err, os.ErrNotExist) {
 			t.Errorf("RemoveByID took the id %q: %v", v, err)
 		}
 	}
@@ -698,27 +702,31 @@ func TestLimitRemoveByIDRelayFields(t *testing.T) {
 		relay       string
 		relayID     int64
 		description string
+		from        string
 	}{
-		{`{"relay":"work","relay_id":7}`, "work", 7, "as written"},
-		{`{"relay":"work","relay_id":9223372036854775807}`, "work", math.MaxInt64, "the type's maximum"},
-		{`{"relay":"work","relay_id":0}`, "", 0, "zero"},
-		{`{"relay":"work","relay_id":-1}`, "", 0, "negative"},
-		{`{"relay":"work","relay_id":-9223372036854775808}`, "", 0, "the type's minimum"},
-		{`{"relay":"work","relay_id":9223372036854775808}`, "", 0, "one past the maximum"},
-		{`{"relay":"../x","relay_id":7}`, "", 0, "a relay name that is a path"},
-		{`{"relay":"","relay_id":7}`, "", 0, "no relay name"},
-		{`{"relay":"CON","relay_id":7}`, "", 0, "a device as a relay name"},
-		{`not json`, "", 0, "not a record"},
-		{`{"relay":"work","relay_id":"7"}`, "", 0, "a number written as text"},
+		{`{"relay":"work","relay_id":7}`, "work", 7, "as written", ""},
+		{`{"relay":"work","relay_id":7,"inner":{"from":"` + aSigner + `"}}`, "work", 7, "with its signer", aSigner},
+		{`{"relay":"work","relay_id":7,"inner":{"from":"../` + aSigner[3:] + `"}}`, "work", 7, "a signer that is not a fingerprint", ""},
+		{`{"relay":"work","relay_id":7,"inner":{"from":"` + strings.ToUpper(aSigner) + `"}}`, "work", 7, "a signer in capitals", ""},
+		{`{"relay":"work","relay_id":9223372036854775807}`, "work", math.MaxInt64, "the type's maximum", ""},
+		{`{"relay":"work","relay_id":0}`, "", 0, "zero", ""},
+		{`{"relay":"work","relay_id":-1}`, "", 0, "negative", ""},
+		{`{"relay":"work","relay_id":-9223372036854775808}`, "", 0, "the type's minimum", ""},
+		{`{"relay":"work","relay_id":9223372036854775808}`, "", 0, "one past the maximum", ""},
+		{`{"relay":"../x","relay_id":7}`, "", 0, "a relay name that is a path", ""},
+		{`{"relay":"","relay_id":7}`, "", 0, "no relay name", ""},
+		{`{"relay":"CON","relay_id":7}`, "", 0, "a device as a relay name", ""},
+		{`not json`, "", 0, "not a record", ""},
+		{`{"relay":"work","relay_id":"7"}`, "", 0, "a number written as text", ""},
 	} {
 		write(t, tc.body)
-		box, relay, relayID, err := s.RemoveByID(id)
+		box, relay, relayID, from, err := s.RemoveByID(id)
 		if err != nil || box != Inbox {
 			t.Errorf("%s: %v, %q; want removed from the inbox", tc.description, err, box)
 			continue
 		}
-		if relay != tc.relay || relayID != tc.relayID {
-			t.Errorf("%s: relay %q id %d; want %q %d", tc.description, relay, relayID, tc.relay, tc.relayID)
+		if relay != tc.relay || relayID != tc.relayID || from != tc.from {
+			t.Errorf("%s: relay %q id %d from %q; want %q %d %q", tc.description, relay, relayID, from, tc.relay, tc.relayID, tc.from)
 		}
 		if _, err := os.Stat(s.msgPath(Inbox, id)); !os.IsNotExist(err) {
 			t.Errorf("%s: the record is still there", tc.description)
@@ -727,7 +735,7 @@ func TestLimitRemoveByIDRelayFields(t *testing.T) {
 			t.Errorf("%s: the attachment directory is still there", tc.description)
 		}
 	}
-	if _, _, _, err := s.RemoveByID(id); !errors.Is(err, os.ErrNotExist) {
+	if _, _, _, _, err := s.RemoveByID(id); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("RemoveByID of an id no box holds: %v; want ErrNotExist", err)
 	}
 	outsideUntouched(t, outside, witness, "RemoveByID")

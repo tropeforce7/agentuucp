@@ -1008,9 +1008,9 @@ func (s *Store) Remove(box Box, id string) error {
 // and empty or zero when it did not carry one that passes, so the caller
 // can leave the relay's copy accounted for. Nothing else in the record is
 // read. ErrNotExist when no box holds the id.
-func (s *Store) RemoveByID(id string) (box Box, relay string, relayID int64, err error) {
+func (s *Store) RemoveByID(id string) (box Box, relay string, relayID int64, from string, err error) {
 	if err := message.ValidID(id); err != nil {
-		return "", "", 0, fmt.Errorf("message id %q is %w", id, err)
+		return "", "", 0, "", fmt.Errorf("message id %q is %w", id, err)
 	}
 	for _, box := range []Box{Inbox, Quarantine, Sent} {
 		path := s.msgPath(box, id)
@@ -1019,23 +1019,31 @@ func (s *Store) RemoveByID(id string) (box Box, relay string, relayID int64, err
 			continue
 		}
 		if err != nil {
-			return "", "", 0, err
+			return "", "", 0, "", err
 		}
 		var raw struct {
 			Relay   string `json:"relay"`
 			RelayID int64  `json:"relay_id"`
+			Inner   struct {
+				From string `json:"from"`
+			} `json:"inner"`
 		}
 		if json.Unmarshal(data, &raw) == nil {
 			if ValidRelayName(raw.Relay) == nil && raw.RelayID > 0 {
 				relay, relayID = raw.Relay, raw.RelayID
 			}
+			// The sender, under its own rule, for the left-behind entry:
+			// what is not a fingerprint is not known.
+			if identity.ValidFingerprint(raw.Inner.From) {
+				from = raw.Inner.From
+			}
 		}
 		if err := s.Remove(box, id); err != nil {
-			return "", "", 0, err
+			return "", "", 0, "", err
 		}
-		return box, relay, relayID, nil
+		return box, relay, relayID, from, nil
 	}
-	return "", "", 0, os.ErrNotExist
+	return "", "", 0, "", os.ErrNotExist
 }
 
 // AttachmentDir is where a streamed message's files live: beside its record,

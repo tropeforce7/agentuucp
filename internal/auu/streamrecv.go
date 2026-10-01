@@ -285,9 +285,19 @@ func fetchOneStream(ctx context.Context, s *store.Store, id *identity.Identity, 
 	}
 	// A stream this machine already holds from this relay is met at the
 	// manifest, before a byte of payload is asked for.
-	held, err := met.meet(ctx, s, c, m, opened.Manifest.ID)
-	if err != nil || held {
+	meeting, err := met.meet(ctx, s, c, m, opened.Manifest.ID, opened.Sender.Fingerprint())
+	if err != nil {
 		return err
+	}
+	if meeting == collided {
+		met.fresh++
+		if err := keepCollided(s, r, relayID, m.Received, manifest, res); err != nil {
+			return err
+		}
+		return c.Ack(ctx, relayID)
+	}
+	if meeting == metHeld {
+		return nil
 	}
 	met.fresh++
 	// The manifest's channel against the one the relay listed the stream

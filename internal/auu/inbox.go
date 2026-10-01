@@ -316,9 +316,20 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 				return res, said, err
 			}
 			if err == nil {
-				if held, err := met.meet(ctx, s, c, m, inner.ID); err != nil {
+				meeting, err := met.meet(ctx, s, c, m, inner.ID, sender.Fingerprint())
+				if err != nil {
 					return res, said, err
-				} else if held {
+				}
+				if meeting == collided {
+					met.fresh++
+					if err := keepCollided(s, r, m.ID, m.Received, m.Raw, &res); err != nil {
+						return res, said, err
+					}
+					if err := c.Ack(ctx, m.ID); err != nil {
+						return res, said, transportErr(err)
+					}
+				}
+				if meeting != notHeld {
 					cursor = m.ID
 					if err := s.SetCursorFor(r, cursor); err != nil {
 						return res, said, err

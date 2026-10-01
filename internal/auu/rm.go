@@ -154,7 +154,7 @@ func cmdRm(args []string) error {
 				}
 				res.Relay = r.Name
 				if err := s.AddLeftBehind(r.Name, store.LeftEntry{RelayID: m.RelayID, ID: m.Inner.ID,
-					Received: m.Received, Size: m.RelaySize}); err != nil {
+					Received: m.Received, Size: m.RelaySize, From: m.Inner.From}); err != nil {
 					return err
 				}
 			}
@@ -183,7 +183,7 @@ func rmUnreadable(s *store.Store, id string, localOnly, remoteOnly, asJSON bool)
 	if remoteOnly {
 		return rmResult{}, false, usageErrf("%s: the record cannot be read, so the relay's copy cannot be named; remove the local copy with '%s rm %s'", id[:12], prog, id)
 	}
-	box, relay, relayID, err := s.RemoveByID(id)
+	box, relay, relayID, from, err := s.RemoveByID(id)
 	if errors.Is(err, os.ErrNotExist) {
 		return rmResult{}, false, nil
 	}
@@ -196,7 +196,9 @@ func rmUnreadable(s *store.Store, id string, localOnly, remoteOnly, asJSON bool)
 		// The record could not be read, so the relay's time and size for
 		// it are not known: zero, which the check before a re-fetch
 		// cannot match and the re-fetch matches by the message's own id.
-		if err := s.AddLeftBehind(relay, store.LeftEntry{RelayID: relayID, ID: id}); err != nil {
+		// The signer is read from the raw record under its rule, and is
+		// empty when even that fails.
+		if err := s.AddLeftBehind(relay, store.LeftEntry{RelayID: relayID, ID: id, From: from}); err != nil {
 			return rmResult{}, false, err
 		}
 		res.Relay = relay

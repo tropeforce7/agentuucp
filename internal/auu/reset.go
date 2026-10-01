@@ -206,6 +206,17 @@ func newMeeter(s *store.Store, r *store.Relay) (*meeter, error) {
 	return &meeter{relay: r, entries: entries, moved: map[string]store.LeftEntry{}, met: map[string]bool{}}, nil
 }
 
+// meeting is what meet found: the message is not held here, it is one this
+// machine holds and was met, or it carries the id of one held here and was
+// signed by somebody else.
+type meeting int
+
+const (
+	notHeld meeting = iota
+	metHeld
+	collided
+)
+
 // meet reports whether a message the fetch opened is one this machine
 // already holds from this relay. One in the inbox or the quarantine keeps
 // its record as it is, but for what the record says of the relay's copy —
@@ -215,11 +226,17 @@ func newMeeter(s *store.Store, r *store.Relay) (*meeter, error) {
 // alone and left on the relay is remembered under its new relay id. Neither
 // is counted as delivered.
 //
+// A message whose verified sender is not the record's sender is not that
+// message, whatever id it carries: an id is the sender's to choose, and one
+// that leaked must not let somebody else move this machine's record onto
+// their mail. It is collided, and the caller keeps it beside the record as
+// damaged rather than saving it over the record.
+//
 // A record of the same id held through another relay is not met: the fetch
 // saves over it as it always has, so that what arrives here is not left
 // queued on this relay, unacknowledged and behind the cursor, for every
 // later fetch to call skipped mail.
-func (mt *meeter) meet(ctx context.Context, s *store.Store, c *client.Client, m client.Message, innerID string) (bool, error) {
+func (mt *meeter) meet(ctx context.Context, s *store.Store, c *client.Client, m client.Message, innerID, from string) (meeting, error) {
 	for _, box := range []store.Box{store.Inbox, store.Quarantine} {
 		rec, err := s.Holding(box, innerID)
 		if err != nil {
@@ -232,31 +249,69 @@ func (mt *meeter) meet(ctx context.Context, s *store.Store, c *client.Client, m 
 		if rec == nil {
 			continue
 		}
+		if rec.Inner.From != from {
+			return collided, nil
+		}
 		if rec.Relay != mt.relay.Name {
-			return false, nil
+			return notHeld, nil
 		}
 		mt.met[innerID] = true
 		letGo := !rec.OnRelay && !rec.PayloadOnRelay
 		rec.RelayID, rec.Received, rec.RelaySize = m.ID, m.Received, m.Size
 		rec.PayloadGone = false
 		if err := s.Save(box, rec); err != nil {
-			return false, err
+			return notHeld, err
 		}
 		if letGo {
 			if err := c.Ack(ctx, m.ID); err != nil {
-				return false, transportErr(err)
+				return notHeld, transportErr(err)
 			}
 		}
-		return true, nil
+		return metHeld, nil
 	}
 	for _, e := range mt.entries {
 		if e.ID == innerID {
+			// Another signer under the id of mail removed here alone is
+			// not that mail. An entry whose signer could not be read,
+			// from a record that would not read, is matched by the id.
+			if e.From != "" && e.From != from {
+				return collided, nil
+			}
 			mt.met[innerID] = true
-			mt.moved[innerID] = store.LeftEntry{RelayID: m.ID, ID: innerID, Received: m.Received, Size: m.Size}
-			return true, nil
+			mt.moved[innerID] = store.LeftEntry{RelayID: m.ID, ID: innerID, Received: m.Received, Size: m.Size, From: e.From}
+			return metHeld, nil
 		}
 	}
-	return false, nil
+	return notHeld, nil
+}
+
+// keepCollided keeps a message that carries the id of one this machine
+// already holds, signed by somebody else, beside that one as damaged under
+// its relay id, and says so; the record it would have replaced is
+// unchanged. Acknowledged by the caller once the keep has succeeded, as
+// every kept message is.
+func keepCollided(s *store.Store, r *store.Relay, id int64, received time.Time, data []byte, res *fetchResult) error {
+	kept, _, err := s.KeepDamaged(store.DamagedRecord{
+		RelayID: id, Relay: r.Name, Received: received, Cause: "id taken",
+	}, data)
+	if err != nil {
+		return fmt.Errorf("keeping relay message %d under %s: %w", id, s.DamagedDir(), err)
+	}
+	res.Unreadable++
+	const said = "carries the id of a message this machine already holds, and is from somebody else"
+	if !kept {
+		fmt.Fprintf(os.Stderr, "warning: relay message %d %s; it is %s and was not kept, since %s holds at most %s\n",
+			id, said, store.MiB(int64(len(data))), s.DamagedDir(), store.MiB(store.DamagedBudget))
+		return nil
+	}
+	res.Kept++
+	path, err := s.DamagedPath(r.Name, id)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "warning: relay message %d %s; it was kept as %s and the message you have is unchanged\n",
+		id, said, path)
+	return nil
 }
 
 // settle writes the left-behind entries met under a new relay id, when no

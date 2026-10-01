@@ -198,11 +198,11 @@ func l05(t *testing.T) {
 	}
 	// The id is remembered, so the fetch that follows is quiet: it neither
 	// fetches it again nor calls this home damaged.
-	// One line: the relay's id, the message's own, the relay's time and
-	// its size.
-	if f := strings.Fields(strings.TrimSpace(bob.read(t, bobRelayDir+"/left-behind"))); len(f) != 4 ||
-		f[0] != strconv.FormatInt(id, 10) || f[1] != msgID {
-		t.Errorf("left-behind holds %q, want %d %s and the relay's time and size", f, id, msgID)
+	// One line: the relay's id, the message's own, the relay's time, its
+	// size and its signer, alice.
+	if f := strings.Fields(strings.TrimSpace(bob.read(t, bobRelayDir+"/left-behind"))); len(f) != 5 ||
+		f[0] != strconv.FormatInt(id, 10) || f[1] != msgID || f[4] != state.aliceFP {
+		t.Errorf("left-behind holds %q, want %d %s, the relay's time and size, and %s", f, id, msgID, state.aliceFP)
 	}
 	again := fetchJSON(t, bob)
 	if again.Fetch.Delivered != 0 {

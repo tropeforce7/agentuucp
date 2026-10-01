@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/regular"
 )
@@ -22,15 +23,19 @@ import (
 // delete the cursor and fetch again — exactly what they chose not to do.
 //
 // It is one message per line: the relay's id for it, its own id from inside
-// the seal, the time the relay received it and the size the relay listed it
-// at, separated by single spaces. The relay id is what the count and the
+// the seal, the time the relay received it, the size the relay listed it at
+// and the fingerprint of its signer, separated by single spaces. The relay id is what the count and the
 // refresh at the end of a fetch go by, and the refresh drops an entry the
 // relay no longer lists. The other three name the message whatever the relay
 // calls it: a relay whose numbering began again lists other mail under the
 // old ids, and a cursor reset finds a message removed here by its own id and
-// does not deliver it again. A received time of zero and a size of zero are
-// a message whose record could not be read when it was removed, which the
-// cheap check before a re-fetch cannot match and the re-fetch still can.
+// does not deliver it again. The signer is what tells the message from
+// another sender's under the same id, which is kept beside rather than
+// taken for it. A received time of zero and a size of zero are a message
+// whose record could not be read when it was removed, which the cheap check
+// before a re-fetch cannot match and the re-fetch still can; a signer
+// written "-" is one that could not be read either, and the id alone then
+// says which message it is.
 const leftBehindFile = "left-behind"
 
 const leftBehindAdvice = "fix it, or delete it; it records only the messages you removed here and left " +
@@ -53,6 +58,9 @@ type LeftEntry struct {
 	Received time.Time
 	// Size is the size the relay listed it at; zero likewise.
 	Size int64
+	// From is the fingerprint of the message's signer; empty when the
+	// record it was removed from could not be read.
+	From string
 }
 
 // LeftBehind is the messages this machine removed locally and left on that
@@ -91,10 +99,17 @@ func (s *Store) LeftBehind(relayName string) ([]LeftEntry, error) {
 	return out, nil
 }
 
-// parseLeftEntry reads one line's four fields, each under its rule: a relay
-// id above zero, a message id, a time, and a size of zero or more.
+// parseLeftEntry reads one line's five fields, each under its rule: a relay
+// id above zero, a message id, a time, a size of zero or more, and a
+// fingerprint or "-".
 func parseLeftEntry(fields []string) (LeftEntry, bool) {
-	if len(fields) != 4 {
+	if len(fields) != 5 {
+		return LeftEntry{}, false
+	}
+	from := fields[4]
+	if from == "-" {
+		from = ""
+	} else if !identity.ValidFingerprint(from) {
 		return LeftEntry{}, false
 	}
 	relayID, err := strconv.ParseInt(fields[0], 10, 64)
@@ -112,7 +127,7 @@ func parseLeftEntry(fields []string) (LeftEntry, bool) {
 	if err != nil || size < 0 {
 		return LeftEntry{}, false
 	}
-	return LeftEntry{RelayID: relayID, ID: fields[1], Received: received.UTC(), Size: size}, true
+	return LeftEntry{RelayID: relayID, ID: fields[1], Received: received.UTC(), Size: size, From: from}, true
 }
 
 // AddLeftBehind records one more, and is a no-op for a relay id already
@@ -153,13 +168,17 @@ func (s *Store) SetLeftBehind(relayName string, entries []LeftEntry) error {
 	var b strings.Builder
 	var last int64
 	for _, e := range sorted {
-		if e.RelayID <= 0 || message.ValidID(e.ID) != nil || e.Size < 0 {
-			return fmt.Errorf("store: not a message left on the relay: %d %q %d", e.RelayID, e.ID, e.Size)
+		from := e.From
+		if from == "" {
+			from = "-"
+		}
+		if e.RelayID <= 0 || message.ValidID(e.ID) != nil || e.Size < 0 || (e.From != "" && !identity.ValidFingerprint(e.From)) {
+			return fmt.Errorf("store: not a message left on the relay: %d %q %d %q", e.RelayID, e.ID, e.Size, e.From)
 		}
 		if e.RelayID == last {
 			continue
 		}
-		fmt.Fprintf(&b, "%d %s %s %d\n", e.RelayID, e.ID, e.Received.UTC().Format(time.RFC3339), e.Size)
+		fmt.Fprintf(&b, "%d %s %s %d %s\n", e.RelayID, e.ID, e.Received.UTC().Format(time.RFC3339), e.Size, from)
 		last = e.RelayID
 	}
 	if err := os.MkdirAll(s.relayDir(relayName), dirMode); err != nil {

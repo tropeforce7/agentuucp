@@ -155,7 +155,7 @@ func TestRmLocalOnlyLeavesTheRelaysCopy(t *testing.T) {
 	// By the relay's id, and by the message's own with the relay's time
 	// and size, which name it whatever the relay calls it later.
 	if ids, err := s.LeftBehind(name); err != nil || len(ids) != 1 ||
-		ids[0] != (store.LeftEntry{RelayID: m.RelayID, ID: m.Inner.ID, Received: m.Received, Size: m.RelaySize}) || m.RelaySize <= 0 {
+		ids[0] != (store.LeftEntry{RelayID: m.RelayID, ID: m.Inner.ID, Received: m.Received, Size: m.RelaySize, From: m.Inner.From}) || m.RelaySize <= 0 {
 		t.Fatalf("left behind: %v (%v), want %d %s %s %d", ids, err, m.RelayID, m.Inner.ID, m.Received, m.RelaySize)
 	}
 	in := bob.inboxJSON()
@@ -423,7 +423,7 @@ func TestRmRemovesARecordLoadRefusesByItsID(t *testing.T) {
 	// The record could not be read, so the entry has the relay's id and
 	// the message's own, and zero for what only the record knew.
 	if ids, err := s.LeftBehind(name); err != nil || len(ids) != 1 ||
-		ids[0].RelayID != m.RelayID || ids[0].ID != m.Inner.ID || !ids[0].Received.IsZero() || ids[0].Size != 0 {
+		ids[0].RelayID != m.RelayID || ids[0].ID != m.Inner.ID || !ids[0].Received.IsZero() || ids[0].Size != 0 || ids[0].From != m.Inner.From {
 		t.Fatalf("left behind: %v (%v), want %d %s", ids, err, m.RelayID, m.Inner.ID)
 	}
 	if len(queuedOn(t, st, bob.exportFingerprint())) != 1 {

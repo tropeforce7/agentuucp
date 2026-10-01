@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/envelope"
+	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/relay"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
@@ -927,5 +928,117 @@ func TestABrokenRecordIsSavedOverWhenServedAgain(t *testing.T) {
 	}
 	if got := recordOf(t, bob, store.Inbox, "broken"); got.Inner.ID != m.Inner.ID {
 		t.Fatalf("the record after: %+v", got)
+	}
+}
+
+// sealAs is a message from somebody, to bob, under an id they chose, as
+// one who learned another message's id could seal it.
+func sealAs(t *testing.T, from *identity.Identity, to *identity.Public, id, subject string) []byte {
+	t.Helper()
+	inner := &envelope.Inner{From: from.Fingerprint(), FromBundle: from.Public().Bundle(), To: to.Fingerprint(),
+		ID: id, Time: time.Now().UTC().Truncate(time.Second),
+		Body: message.Body{Type: message.TypeAsk, Thread: strings.Repeat("b", 32), Subject: subject, Text: "x"}}
+	raw, err := json.Marshal(sealInnerByHand(t, from, to, inner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// A message carrying the id of one this machine holds, signed by somebody
+// else, is not met and not saved over the record: it is kept beside it as
+// damaged under its relay id and acknowledged, the sentence says so, and
+// the record it would have taken — a peer's in the inbox, or a stranger's
+// stream waiting in the quarantine with its body on the relay, or mail
+// removed here alone and remembered in left-behind — is as it was.
+func TestAnotherSendersMessageUnderAHeldIDIsKeptBesideIt(t *testing.T) {
+	r := startResettable(t)
+	alice, bob := watchers(t, r.url)
+	fp := bob.exportFingerprint()
+	_, bobID, _ := bob.opened()
+	mallory := newUser(t, "mallory", r.url)
+	_, malloryID, _ := mallory.opened()
+
+	alice.run("send", "--to", "bob", "--subject", "real", "x")
+	bob.run("inbox")
+	real := recordOf(t, bob, store.Inbox, "real")
+	bob.run("read", real.Inner.ID[:12])
+
+	bob.run("allow", "clear")
+	file := filepath.Join(t.TempDir(), "unasked.bin")
+	if err := os.WriteFile(file, make([]byte, 300<<10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stranger := newUser(t, "stranger", r.url)
+	stranger.run("peers", "add", bob.exportLine())
+	stranger.run("send", "--to", fp, "--subject", "unasked", "--attach", file, "hello")
+	bob.run("inbox")
+	waiting := recordOf(t, bob, store.Quarantine, "unasked")
+
+	// And mail removed here alone, remembered in left-behind with its
+	// signer.
+	bob.run("allow", "push")
+	alice.run("send", "--to", "bob", "--subject", "removed here", "y")
+	bob.run("inbox")
+	removed := recordOf(t, bob, store.Inbox, "removed here")
+	bob.run("rm", "--local-only", removed.Inner.ID[:12])
+
+	for _, victim := range []*store.Stored{real, waiting, removed} {
+		id, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", sealAs(t, malloryID, bobID.Public(), victim.Inner.ID, "forged"),
+			relay.Quotas{}, relay.Forwarded{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		in, said := fetchSaying(t, bob)
+		if in.Fetch.Delivered != 0 || in.Fetch.Quarantined != 0 || in.Fetch.Kept != 1 ||
+			!strings.Contains(said, "relay message "+strconv.FormatInt(id, 10)+" carries the id of a message this machine already holds, "+
+				"and is from somebody else; it was kept as ") || !strings.Contains(said, "the message you have is unchanged") {
+			t.Fatalf("against %q: %+v, said %q", victim.Inner.Body.Subject, in.Fetch, said)
+		}
+		for _, q := range queuedOn(t, r.st, fp) {
+			if q == id {
+				t.Fatalf("the forged message %d is still on the relay", id)
+			}
+		}
+	}
+	if m := recordOf(t, bob, store.Inbox, "real"); m.Inner.From != real.Inner.From || m.RelayID != real.RelayID || !m.Read {
+		t.Fatalf("the inbox record after: %+v", m)
+	}
+	m := recordOf(t, bob, store.Quarantine, "unasked")
+	if m.Inner.From != waiting.Inner.From || m.RelayID != waiting.RelayID || !m.PayloadOnRelay || m.PayloadGone {
+		t.Fatalf("the quarantined record after: %+v", m)
+	}
+	if spoolHas(t, bob, store.Inbox, "forged") || spoolHas(t, bob, store.Quarantine, "forged") {
+		t.Fatal("the forged message was filed")
+	}
+	s, _, _ := bob.opened()
+	if left, err := s.LeftBehind(bob.defaultRelayName()); err != nil || len(left) != 1 ||
+		left[0].RelayID != removed.RelayID || left[0].From != removed.Inner.From {
+		t.Fatalf("left behind after: %v (%v), want the removed message as it was", left, err)
+	}
+}
+
+// A reset whose only new row is another sender's message under a held id
+// says what it did: that message was kept as damaged, which is handled and
+// is not mail this machine had.
+func TestAResetThatFindsOnlyACollisionSaysSo(t *testing.T) {
+	r := startResettable(t)
+	alice, bob := watchers(t, r.url)
+	fp := bob.exportFingerprint()
+	_, bobID, _ := bob.opened()
+	mallory := newUser(t, "mallory", r.url)
+	_, malloryID, _ := mallory.opened()
+	alice.run("send", "--to", "bob", "--subject", "real", "x")
+	bob.run("inbox")
+	real := recordOf(t, bob, store.Inbox, "real")
+	if _, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", sealAs(t, malloryID, bobID.Public(), real.Inner.ID, "forged"),
+		relay.Quotas{}, relay.Forwarded{}); err != nil {
+		t.Fatal(err)
+	}
+	bob.setCursor(bob.defaultRelayName(), "999\n")
+	in, said := fetchSaying(t, bob)
+	if in.Fetch.Delivered != 0 || in.Fetch.Kept != 1 || !strings.Contains(said, "so the cursor was reset") ||
+		!strings.Contains(said, "carries the id of a message this machine already holds") {
+		t.Fatalf("the reset: %+v, said %q", in.Fetch, said)
 	}
 }
