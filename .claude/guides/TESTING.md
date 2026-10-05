@@ -1399,6 +1399,20 @@ Windows job and the race job, and the one that reproduces here with
 seconds; a row that is about the timeout gets two seconds against a handler
 that sleeps thirty, since what it proves is the kill, not the clock.
 
+**A test that starts a process which detaches gives it a way to learn the
+test has gone.** A Cleanup runs only when the test binary ends on its own;
+one that is interrupted, killed or timed out runs none, and a child in its
+own session that was released is reached by no signal the test's end sends.
+`auu agent start` under test is exactly that child, and three test agents
+were found still running, one started on 22 September and two on 1 October,
+from runs stopped by hand, holding test keys under a runtime directory
+nobody would remove. Every helper-mode process now watches the test process
+named by `AUU_TEST_PARENT` and exits when it is gone: `agentEnv` sets it,
+and the serve tests set it on the environment they build by hand, since an
+`auu serve` child left the same way once its test binary was killed.
+`TestAnAgentDoesNotOutliveTheRunThatStartedIt` kills a run with an agent up
+and holds it to going within ten seconds.
+
 **Reproduce CI's contention before blaming CI, and reproduce the job that
 failed.** Six copies of `go test -count=2 ./...` in parallel, four rounds, is a
 closer approximation of a shared runner than one quiet run, and it is thirty

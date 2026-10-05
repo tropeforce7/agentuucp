@@ -1,13 +1,17 @@
 package auu
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,12 +37,59 @@ import (
 // and the line runs under sh on one platform and cmd on the other.
 const helperEnv = "AUU_TEST_HELPER"
 
+// parentEnv names the test process a helper belongs to, by its pid. A
+// helper the run detached, the agent above all, is in its own session and
+// released, so no signal that ends the test reaches it, and a Cleanup that
+// stops it does not run when the test binary is interrupted, killed or
+// timed out. A helper watches the pid it is given and exits when that
+// process is gone: agentEnv sets it for every agent a test starts, and the
+// serve tests set it on the environment they build by hand.
+const parentEnv = "AUU_TEST_PARENT"
+
+// parentPoll is how often a helper on Unix looks for its test process.
+const parentPoll = 500 * time.Millisecond
+
 func TestMain(m *testing.M) {
 	if os.Getenv(helperEnv) == "1" && !isHandlerRun(os.Args) {
+		watchTestParent()
 		Main("auu")
 		return
 	}
 	os.Exit(m.Run())
+}
+
+// testParent is the pid parentEnv names, when it names one. Zero and
+// below are refused: to kill they are a process group and every process.
+// It is read as 32 bits because a pid is, so a larger number is refused
+// rather than narrowed into one of those.
+func testParent() (int, bool) {
+	pid, err := strconv.ParseInt(os.Getenv(parentEnv), 10, 32)
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return int(pid), true
+}
+
+func TestTheTestParentIsAPidOrNothing(t *testing.T) {
+	for value, want := range map[string]int{
+		"":            0,
+		"0":           0,
+		"-1":          0,
+		"-2147483648": 0,
+		"2147483648":  0,
+		"4294967295":  0,
+		"0x10":        0,
+		" 1":          0,
+		"x":           0,
+		"1":           1,
+		"2147483647":  2147483647,
+	} {
+		t.Setenv(parentEnv, value)
+		pid, ok := testParent()
+		if ok != (want != 0) || pid != want {
+			t.Errorf("%s=%q: got %d, %v; want %d", parentEnv, value, pid, ok, want)
+		}
+	}
 }
 
 // isHandlerRun says whether these arguments are helperLine's: the test
@@ -68,6 +119,7 @@ func encryptedUser(t *testing.T, name, relayURL string) *user {
 func agentEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv(helperEnv, "1")
+	t.Setenv(parentEnv, strconv.Itoa(os.Getpid()))
 	dir, err := os.MkdirTemp("", "auu")
 	if err != nil {
 		t.Fatal(err)
@@ -798,5 +850,108 @@ func TestADamagedFileExitsFive(t *testing.T) {
 	}
 	if !errors.Is(err, store.ErrDamaged) {
 		t.Fatalf("the exit error does not carry ErrDamaged: %v", err)
+	}
+}
+
+// orphanHelperEnv is TestAgentOrphanHelperProcess's gate: set only by
+// TestAnAgentDoesNotOutliveTheRunThatStartedIt, for the child it runs.
+const orphanHelperEnv = "AUU_TEST_ORPHAN_HELPER"
+
+// TestAgentOrphanHelperProcess is the test run that the test below kills:
+// it starts an agent as every test with an encrypted user does, says where,
+// and waits to be killed.
+func TestAgentOrphanHelperProcess(t *testing.T) {
+	if os.Getenv(orphanHelperEnv) != "1" {
+		t.Skip("the child of TestAnAgentDoesNotOutliveTheRunThatStartedIt, not a test of its own")
+	}
+	u := encryptedUser(t, "alice", startRelay(t))
+	fmt.Printf("%s\n%s\n", u.home, os.Getenv("XDG_RUNTIME_DIR"))
+	// Standard input is a pipe the parent never writes to; this returns
+	// only if the parent goes, and then the Cleanups stop the agent.
+	io.Copy(io.Discard, os.Stdin)
+}
+
+// A test run that is killed runs none of its Cleanups, so the agent it
+// started is stopped by nobody: it is in a session of its own and was
+// released, and three were found running days after the runs that started
+// them. The agent watches the test process instead and goes with it.
+func TestAnAgentDoesNotOutliveTheRunThatStartedIt(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestAgentOrphanHelperProcess$", "-test.count=1")
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, helperEnv+"=") && !strings.HasPrefix(kv, parentEnv+"=") {
+			cmd.Env = append(cmd.Env, kv)
+		}
+	}
+	cmd.Env = append(cmd.Env, orphanHelperEnv+"=1")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	killed := false
+	t.Cleanup(func() {
+		if !killed {
+			cmd.Process.Kill()
+			cmd.Wait()
+		}
+	})
+	lines := bufio.NewScanner(stdout)
+	var where []string
+	for len(where) < 2 && lines.Scan() {
+		where = append(where, lines.Text())
+	}
+	if len(where) < 2 {
+		cmd.Process.Kill()
+		cmd.Wait()
+		killed = true
+		t.Fatalf("the helper run never said where its agent is:\n%s", stderr.String())
+	}
+	home, runtimeDir := where[0], where[1]
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	c, err := agent.NewClient(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The killed run's Cleanups never remove what it made, so this does;
+	// and when the agent outlived it, stopping it here is what keeps this
+	// test from leaving the orphan it is about.
+	t.Cleanup(func() {
+		c.Stop()
+		os.RemoveAll(home)
+		os.RemoveAll(runtimeDir)
+	})
+	if _, err := c.Status(); err != nil {
+		t.Fatalf("the agent does not answer before the kill: %v", err)
+	}
+	if err := cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Wait()
+	killed = true
+	// Polled, as startAgent polls for it to come up: the agent is another
+	// process, and its answering is the only thing that says it is there.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, err := c.Status()
+		if errors.Is(err, agent.ErrNotRunning) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the agent still answers ten seconds after the test run that started it was killed (status: %v)", err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

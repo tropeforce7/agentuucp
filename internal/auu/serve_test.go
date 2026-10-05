@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -1178,6 +1179,7 @@ func (e *expert) start(t *testing.T, env []string, args ...string) *service {
 	cmd := exec.Command(exe, append([]string{"serve"}, args...)...)
 	cmd.Env = append([]string{
 		"AUU_TEST_HELPER=1",
+		parentEnv + "=" + strconv.Itoa(os.Getpid()),
 		"AUU_HOME=" + e.home,
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.Getenv("HOME"),
