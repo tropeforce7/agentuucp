@@ -855,3 +855,35 @@ func TestDescribeEscapesAnUnverifiedTokensRelayAndNote(t *testing.T) {
 		t.Errorf("Describe does not show the relay and the note escaped:\n%s", got)
 	}
 }
+
+// TestATokenCarriesNoSections: a token is strict, and stays so under mixed
+// versions (D39). The door for what an older build does not understand is
+// on message content and the API alone; here a sections field is an
+// unknown field like any other, refused in a payload its issuer signed, so
+// it is never opened by habit. A change to a token is a new prefix instead.
+func TestATokenCarriesNoSections(t *testing.T) {
+	id := admin(t)
+	good, err := Issue(id, base(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := Parse(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.Verify(id.Public(), time.Now(), 0); err != nil {
+		t.Fatalf("the token whole: %v; want it taken", err)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.Split(good, ".")[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sections := range []string{`[]`, `[{"name":"later","critical":false,"data":0}]`} {
+		with := append([]byte(`{"sections":`+sections+`,`), payload[1:]...)
+		s := Prefix + "." + base64.RawURLEncoding.EncodeToString(with) + "." +
+			base64.RawURLEncoding.EncodeToString(mustSign(t, id, signingBytes(with)))
+		if _, err := Parse(s); !errors.Is(err, ErrForm) || !strings.Contains(err.Error(), `unknown field "sections"`) {
+			t.Errorf("sections %s: %v; want ErrForm naming the field", sections, err)
+		}
+	}
+}

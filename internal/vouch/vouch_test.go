@@ -440,3 +440,26 @@ func TestVouchSignatureDomainIsSeparate(t *testing.T) {
 		t.Fatalf("the vouch domain is %q, want ccx-vouch-v1", signingBytes(nil))
 	}
 }
+
+// TestAVouchCarriesNoSections: a grant document is strict, and stays so under mixed versions
+// (D39). The door for what an older build does not understand is on
+// message content and the API alone; here a sections field is an unknown
+// field like any other, refused under a good signature, so it is never
+// opened by habit. A change to a vouch is a new format version instead.
+func TestAVouchCarriesNoSections(t *testing.T) {
+	v, x := gen(t, "v"), gen(t, "x")
+	doc, sig, err := Sign(v, base(v, x), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(v.Public(), doc, sig, now); err != nil {
+		t.Fatalf("the document whole: %v; want it taken", err)
+	}
+	for _, sections := range []string{`[]`, `[{"name":"later","critical":false,"data":0}]`} {
+		with := append([]byte(`{"sections":`+sections+`,`), doc[1:]...)
+		_, err := Verify(v.Public(), with, mustSign(t, v, signingBytes(with)), now)
+		if !errors.Is(err, ErrForm) || !strings.Contains(err.Error(), `unknown field "sections"`) {
+			t.Errorf("sections %s: %v; want ErrForm naming the field", sections, err)
+		}
+	}
+}

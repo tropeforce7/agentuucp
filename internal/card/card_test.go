@@ -445,3 +445,26 @@ func TestCardSignatureDomainIsSeparate(t *testing.T) {
 		t.Fatalf("the card domain is %q, want ccx-card-v1", signingBytes(nil))
 	}
 }
+
+// TestACardCarriesNoSections: a grant document is strict, and stays so under mixed versions
+// (D39). The door for what an older build does not understand is on
+// message content and the API alone; here a sections field is an unknown
+// field like any other, refused under a good signature, so it is never
+// opened by habit. A change to a card is a new format version instead.
+func TestACardCarriesNoSections(t *testing.T) {
+	id := owner(t)
+	doc, sig, err := Sign(id, base(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(id.Public(), doc, sig); err != nil {
+		t.Fatalf("the document whole: %v; want it taken", err)
+	}
+	for _, sections := range []string{`[]`, `[{"name":"later","critical":false,"data":0}]`} {
+		with := append([]byte(`{"sections":`+sections+`,`), doc[1:]...)
+		_, err := Verify(id.Public(), with, mustSign(t, id, signingBytes(with)))
+		if !errors.Is(err, ErrForm) || !strings.Contains(err.Error(), `unknown field "sections"`) {
+			t.Errorf("sections %s: %v; want ErrForm naming the field", sections, err)
+		}
+	}
+}
