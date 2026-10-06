@@ -3,6 +3,7 @@ package pki
 import (
 	"bytes"
 	"crypto/mldsa"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,5 +64,27 @@ func TestAShortBundleIsNamed(t *testing.T) {
 	broken[0] = 'x'
 	if _, err := LoadBundle(write(t, broken)); err == nil || strings.Contains(err.Error(), "cut short") {
 		t.Fatalf("a bundle broken at the front was called cut short: %v", err)
+	}
+}
+
+// TestABundleRefusesEveryTrailingByte: a strict decode refused trailing data except the two bytes
+// json.Decoder.More does not see, a closing brace and a closing bracket
+// (ruling 56). The value is taken whole; with each of those after it, and
+// with a plain stray byte, it is refused in this reader's own words.
+func TestABundleRefusesEveryTrailingByte(t *testing.T) {
+	whole, err := json.Marshal(Bundle{V: BundleVersion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b Bundle
+	if err := unmarshalStrict(whole, &b); err != nil {
+		t.Fatalf("the bundle whole: %v", err)
+	}
+	for _, tail := range []string{"}", "]", "x"} {
+		var b Bundle
+		err := unmarshalStrict(append(append([]byte{}, whole...), tail...), &b)
+		if err == nil || err.Error() != "trailing data after the object" {
+			t.Errorf("%q after the bundle: %v; want the trailing-data sentence", tail, err)
+		}
 	}
 }

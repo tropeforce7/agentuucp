@@ -1,7 +1,6 @@
 package pki
 
 import (
-	"bytes"
 	"crypto/mldsa"
 	"crypto/x509"
 	"encoding/json"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/regular"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // BundleVersion is the shape a relay understands. A newer one is refused by
@@ -389,13 +389,9 @@ func cutShort(err error) bool {
 }
 
 func unmarshalStrict(raw []byte, v any) error {
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		return err
-	}
-	if dec.More() {
+	err := wire.Decode(raw, v)
+	if errors.Is(err, wire.ErrTrailing) {
 		return errors.New("trailing data after the object")
 	}
-	return nil
+	return err
 }

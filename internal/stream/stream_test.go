@@ -945,3 +945,55 @@ func TestAManifestCarriesItsChannel(t *testing.T) {
 		t.Fatalf("a manifest for a channel does not name it: %s", named)
 	}
 }
+
+// TestAManifestRefusesEveryTrailingByte: a strict decode refused trailing data except the two bytes
+// json.Decoder.More does not see, a closing brace and a closing bracket
+// (ruling 56). The value is taken whole; with each of those after it, and
+// with a plain stray byte, it is refused in this reader's own words.
+func TestAManifestRefusesEveryTrailingByte(t *testing.T) {
+	from, to := pair(t)
+	blob, m := build(t, from, to, 4096, map[string][]byte{"a.txt": []byte("a")})
+	if _, _, err := openAll(t, to, blob); err != nil {
+		t.Fatalf("the stream whole: %v", err)
+	}
+	manifestJSON, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Chunk 0 sealed by hand, the signature over the manifest and the bytes
+	// after it, since the decode runs once the chunk opens and before the
+	// signature is checked.
+	open := func(tail string) error {
+		with := append(append([]byte{}, manifestJSON...), tail...)
+		enc, sender, err := senderContext(to.Public())
+		if err != nil {
+			t.Fatal(err)
+		}
+		sig, err := from.Sign(sigInput(m.To, with))
+		if err != nil {
+			t.Fatal(err)
+		}
+		sealed, err := sender.Seal(aadManifest, append(sig, with...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		header := append(append([]byte{}, enc...), putPrefix(len(sealed))...)
+		_, err = OpenManifest(to, header, sealed)
+		return err
+	}
+	if err := open(""); err != nil {
+		t.Fatalf("the manifest whole, sealed by hand: %v", err)
+	}
+	for _, tail := range []string{"}", "]", "x"} {
+		err := open(tail)
+		if tail == "x" {
+			if !errors.Is(err, ErrForm) {
+				t.Errorf("%q after the manifest: %v; want ErrForm", tail, err)
+			}
+			continue
+		}
+		if !errors.Is(err, ErrForm) || !strings.HasSuffix(err.Error(), ": trailing data after the manifest") {
+			t.Errorf("%q after the manifest: %v; want the trailing-data sentence", tail, err)
+		}
+	}
+}

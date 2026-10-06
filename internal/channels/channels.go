@@ -37,7 +37,6 @@
 package channels
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -48,6 +47,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 const (
@@ -439,14 +439,13 @@ func decode(doc []byte) (*Directory, error) {
 	if err := CheckLength(doc); err != nil {
 		return nil, err
 	}
-	dec := json.NewDecoder(bytes.NewReader(doc))
-	dec.DisallowUnknownFields()
 	var d Directory
-	if err := dec.Decode(&d); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrForm, err)
-	}
-	if dec.More() {
+	err := wire.Decode(doc, &d)
+	if errors.Is(err, wire.ErrTrailing) {
 		return nil, fmt.Errorf("%w: trailing data after the document", ErrForm)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrForm, err)
 	}
 	return &d, nil
 }

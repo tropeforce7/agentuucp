@@ -96,3 +96,30 @@ func TestAKeptVouchsNameIsNotWrittenThrough(t *testing.T) {
 		t.Fatalf("the link is still a link: %v", err)
 	}
 }
+
+// TestAKeptVouchRefusesEveryTrailingByte: a strict decode refused trailing data except the two bytes
+// json.Decoder.More does not see, a closing brace and a closing bracket
+// (ruling 56). The value is taken whole; with each of those after it, and
+// with a plain stray byte, it is refused in this reader's own words.
+func TestAKeptVouchRefusesEveryTrailingByte(t *testing.T) {
+	s := newStore(t)
+	if err := os.MkdirAll(s.VouchesDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	whole := `{"document":"e30=","signature":"AQ=="}`
+	for _, tail := range []string{"", "}", "]", "x"} {
+		if err := os.WriteFile(filepath.Join(s.VouchesDir(), aVoucher+".json"), []byte(whole+tail), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err := s.KeptVouch(aVoucher)
+		if tail == "" {
+			if err != nil {
+				t.Fatalf("the file whole: %v", err)
+			}
+			continue
+		}
+		if err == nil || !strings.HasSuffix(err.Error(), "is not a kept vouch; delete it and ask for the vouch again") {
+			t.Errorf("%q after the record: %v; want the damaged-file sentence", tail, err)
+		}
+	}
+}

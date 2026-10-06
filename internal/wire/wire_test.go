@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -234,5 +235,106 @@ func TestDecodeIsStrict(t *testing.T) {
 	var s []Section
 	if err := Decode([]byte(`[{"name":"a","critical":false,"data":{},"extra":1}]`), &s); err == nil || !strings.Contains(err.Error(), `unknown field "extra"`) {
 		t.Errorf("a section with a fourth field: %v", err)
+	}
+}
+
+// A document reads one way: a key given twice, two keys equal under case
+// folding, and a key that matches a field only by case are each refused by
+// name and depth, where encoding/json would keep the last or take the
+// field. The same key in two objects is two keys, and is taken.
+func TestDecodeRefusesAKeyThatReadsTwoWays(t *testing.T) {
+	type inner struct {
+		Name string `json:"name"`
+		K    int    `json:"k"`
+	}
+	type outer struct {
+		Name  string          `json:"name"`
+		Inner inner           `json:"inner"`
+		List  []inner         `json:"list"`
+		Map   map[string]int  `json:"map"`
+		Raw   json.RawMessage `json:"raw"`
+	}
+	for _, in := range []string{
+		`{"name":"a","inner":{"name":"b","k":1},"list":[{"name":"c"},{"name":"d"}],"map":{"x":1,"y":2},"raw":{"name":1}}`,
+		`{}`,
+	} {
+		var v outer
+		if err := Decode([]byte(in), &v); err != nil {
+			t.Errorf("%s: %v; want it taken", in, err)
+		}
+	}
+	for _, tc := range []struct {
+		what, in, want string
+	}{
+		{"a key twice at the top", `{"name":"a","name":"b"}`,
+			`key "name" appears twice in an object at depth 1`},
+		{"a key twice inside a nested object", `{"inner":{"k":1,"k":2}}`,
+			`key "k" appears twice in an object at depth 2`},
+		{"a key twice inside an object in a list", `{"list":[{"name":"a"},{"name":"b","name":"c"}]}`,
+			`key "name" appears twice in an object at depth 3`},
+		{"a key twice in a map", `{"map":{"x":1,"x":2}}`,
+			`key "x" appears twice in an object at depth 2`},
+		{"a key twice inside raw data", `{"raw":{"a":1,"a":2}}`,
+			`key "a" appears twice in an object at depth 2`},
+		{"a key in another case against a lowercase field", `{"Name":"a"}`,
+			`key "Name" matches the field "name" only by case, in an object at depth 1`},
+		{"the same, nested", `{"inner":{"NAME":"a"}}`,
+			`key "NAME" matches the field "name" only by case, in an object at depth 2`},
+		{"two keys equal only under folding", `{"map":{"k":1,"K":2}}`,
+			"key \"k\" and key \"K\", the same under case folding, are both in an object at depth 2"},
+		{"the Kelvin sign against a field k", `{"inner":{"K":1}}`,
+			"key \"K\" matches the field \"k\" only by case, in an object at depth 2"},
+	} {
+		var v outer
+		if err := Decode([]byte(tc.in), &v); err == nil || err.Error() != tc.want {
+			t.Errorf("%s: %v; want %q", tc.what, err, tc.want)
+		}
+	}
+	// The sentence names the key, never its value.
+	var v outer
+	err := Decode([]byte(`{"name":"secret-value","name":"other"}`), &v)
+	if err == nil || strings.Contains(err.Error(), "secret-value") || strings.Contains(err.Error(), "other") {
+		t.Errorf("the sentence carries a value: %v", err)
+	}
+	// A syntax error is the decoder's own, for a reader that reports where.
+	var syn *json.SyntaxError
+	if err := Decode([]byte(`{"name":"a",}`), &v); !errors.As(err, &syn) {
+		t.Errorf("a syntax error: %v; want the decoder's *json.SyntaxError", err)
+	}
+	if err := Decode([]byte(`{"name":"a"}}`), &v); !errors.Is(err, ErrTrailing) {
+		t.Errorf("trailing data: %v; want ErrTrailing", err)
+	}
+}
+
+// fieldsOf follows encoding/json's naming: a tag's name, a field's own name
+// with no tag, a promoted embedded struct's fields, and nothing for "-" or
+// an unexported field.
+func TestTheWalkKnowsTheFieldsJSONDoes(t *testing.T) {
+	type Base struct {
+		ID int `json:"id"`
+	}
+	type thing struct {
+		Base
+		Plain   int
+		Tagged  int `json:"tagged,omitempty"`
+		Skipped int `json:"-"`
+		hidden  int
+	}
+	_ = thing{}.hidden
+	got := fieldsOf(reflect.TypeFor[thing]())
+	for _, want := range []string{"id", "Plain", "tagged"} {
+		if _, ok := got[want]; !ok {
+			t.Errorf("no field %q in %v", want, got)
+		}
+	}
+	if len(got) != 3 {
+		t.Errorf("fields %v; want id, Plain and tagged alone", got)
+	}
+	var v thing
+	if err := Decode([]byte(`{"id":1,"Plain":2,"tagged":3}`), &v); err != nil || v.ID != 1 || v.Plain != 2 || v.Tagged != 3 {
+		t.Errorf("the exact keys: %+v, %v", v, err)
+	}
+	if err := Decode([]byte(`{"plain":2}`), &v); err == nil || !strings.Contains(err.Error(), `matches the field "Plain" only by case`) {
+		t.Errorf("an untagged field by another case: %v", err)
 	}
 }

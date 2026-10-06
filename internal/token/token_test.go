@@ -887,3 +887,37 @@ func TestATokenCarriesNoSections(t *testing.T) {
 		}
 	}
 }
+
+// TestATokenRefusesEveryTrailingByte: a strict decode refused trailing data except the two bytes
+// json.Decoder.More does not see, a closing brace and a closing bracket
+// (ruling 56). The document is taken whole; with each of those after it,
+// and with a plain stray byte, it is refused in this reader's own words.
+func TestATokenRefusesEveryTrailingByte(t *testing.T) {
+	id := admin(t)
+	good, err := Issue(id, base(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(good); err != nil {
+		t.Fatalf("the token whole: %v", err)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(strings.Split(good, ".")[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tail := range []string{"}", "]", "x"} {
+		with := append(append([]byte{}, payload...), tail...)
+		s := Prefix + "." + base64.RawURLEncoding.EncodeToString(with) + "." +
+			base64.RawURLEncoding.EncodeToString(mustSign(t, id, signingBytes(with)))
+		_, err := Parse(s)
+		if tail == "x" {
+			if !errors.Is(err, ErrForm) {
+				t.Errorf("%q after the payload: %v; want ErrForm", tail, err)
+			}
+			continue
+		}
+		if !errors.Is(err, ErrForm) || err.Error() != "token: malformed: trailing data after the payload object" {
+			t.Errorf("%q after the payload: %v; want the trailing-data sentence", tail, err)
+		}
+	}
+}

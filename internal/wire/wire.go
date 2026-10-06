@@ -21,6 +21,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
+	"strings"
+	"unicode"
 )
 
 const (
@@ -151,26 +154,221 @@ func Sort(sections []Section) (knownSections, ignored []Section, err error) {
 	return knownSections, ignored, nil
 }
 
-// Decode is the one strict decode every reader of the wire calls: a field the
-// target does not have is refused, and so is anything after the value but
-// white space. The second check asks the decoder for the next token and
-// wants the end of the input, since json.Decoder.More reports false for a
-// stray '}' or ']' and would let either through.
+// ErrTrailing is a value with something after it but white space. Decode
+// returns it bare, so that each reader can say it in its own words.
+var ErrTrailing = errors.New("trailing data after the value")
+
+// Decode is the one strict decode every reader of the wire calls. A key the
+// target does not have is refused, and so are three things encoding/json
+// takes without complaint:
 //
-// It is not a canonical form. encoding/json matches a key to a field without
-// regard to case and takes the last of a key given twice, so {"Name":…} and
-// a repeated key decode without complaint. What a signature covers is the
-// bytes as sent, never this decode of them, and every reader is this one
-// parser, so two readers cannot disagree about one document; anything that
-// would compare or hash a decoded value must not stand in for the bytes.
+//   - anything after the value but white space, asked of the decoder as its
+//     next token, which must be the end of the input: json.Decoder.More
+//     reports false for a stray '}' or ']' and would let either through;
+//   - a key given twice in one object, or two keys equal under case
+//     folding, of which encoding/json would keep the last;
+//   - a key that matches a field of the target only without regard to
+//     case, which encoding/json would take as that field.
+//
+// So one document reads one way, and another reader of it, in this language
+// or another, has no second way to read it. The last two are a walk over
+// the tokens before the decode, holding the keys of each open object and
+// nothing more; a decoder's own error, a syntax error among them, is
+// returned as the decoder made it.
 func Decode(data []byte, v any) error {
+	if err := checkKeys(data, reflect.TypeOf(v)); err != nil {
+		return err
+	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		return err
 	}
 	if _, err := dec.Token(); err != io.EOF {
-		return errors.New("trailing data after the value")
+		return ErrTrailing
 	}
 	return nil
+}
+
+// maxDepth bounds the walk's recursion. encoding/json refuses nesting past
+// ten thousand, and so does the walk, leaving the refusal to the decode.
+const maxDepth = 10000
+
+// errStop ends a walk that met something the decode will refuse in its own
+// words: a syntax error, or nesting past maxDepth.
+var errStop = errors.New("stop")
+
+// checkKeys walks the tokens of data with the type the decode will fill, and
+// refuses a repeated key and a key that matches a field only by case.
+func checkKeys(data []byte, t reflect.Type) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	err := walkValue(dec, t, 0)
+	if errors.Is(err, errStop) {
+		return nil
+	}
+	return err
+}
+
+var unmarshaler = reflect.TypeFor[json.Unmarshaler]()
+
+// walkValue reads one value. t is the Go type it decodes into, or nil when
+// that is not known: inside a type with its own UnmarshalJSON, an
+// interface, or a key the target does not have, which the decode refuses.
+func walkValue(dec *json.Decoder, t reflect.Type, depth int) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return errStop
+	}
+	d, ok := tok.(json.Delim)
+	if !ok {
+		return nil
+	}
+	if depth+1 > maxDepth {
+		return errStop
+	}
+	t = target(t)
+	if d == '[' {
+		var elem reflect.Type
+		if t != nil && (t.Kind() == reflect.Slice || t.Kind() == reflect.Array) {
+			elem = t.Elem()
+		}
+		for dec.More() {
+			if err := walkValue(dec, elem, depth+1); err != nil {
+				return err
+			}
+		}
+		if _, err := dec.Token(); err != nil {
+			return errStop
+		}
+		return nil
+	}
+	return walkObject(dec, t, depth+1)
+}
+
+// walkObject reads the keys and values of one object, the '{' already read.
+func walkObject(dec *json.Decoder, t reflect.Type, depth int) error {
+	var fields map[string]reflect.Type
+	var mapElem reflect.Type
+	if t != nil {
+		switch t.Kind() {
+		case reflect.Struct:
+			fields = fieldsOf(t)
+		case reflect.Map:
+			mapElem = t.Elem()
+		}
+	}
+	seen := map[string]string{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return errStop
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return errStop
+		}
+		folded := foldKey(key)
+		if first, ok := seen[folded]; ok {
+			if first == key {
+				return fmt.Errorf("key %q appears twice in an object at depth %d", key, depth)
+			}
+			return fmt.Errorf("key %q and key %q, the same under case folding, are both in an object at depth %d", first, key, depth)
+		}
+		seen[folded] = key
+		var elem reflect.Type
+		switch {
+		case fields != nil:
+			ft, exact := fields[key]
+			if !exact {
+				for name := range fields {
+					if strings.EqualFold(name, key) {
+						return fmt.Errorf("key %q matches the field %q only by case, in an object at depth %d", key, name, depth)
+					}
+				}
+			}
+			elem = ft
+		case mapElem != nil:
+			elem = mapElem
+		}
+		if err := walkValue(dec, elem, depth); err != nil {
+			return err
+		}
+	}
+	if _, err := dec.Token(); err != nil {
+		return errStop
+	}
+	return nil
+}
+
+// target is the type a value decodes into for the walk's purposes: through
+// any pointers, and nil for a type that decodes itself or an interface,
+// whose keys are not this walk's to match against fields.
+func target(t reflect.Type) reflect.Type {
+	for t != nil {
+		if t.Implements(unmarshaler) || reflect.PointerTo(t).Implements(unmarshaler) || t.Kind() == reflect.Interface {
+			return nil
+		}
+		if t.Kind() != reflect.Pointer {
+			return t
+		}
+		t = t.Elem()
+	}
+	return nil
+}
+
+// fieldsOf is the keys a struct decodes, by the name encoding/json gives
+// each: its tag's name, or the field's own, with an untagged embedded
+// struct's fields promoted, a field tagged "-" and an unexported one left
+// out.
+func fieldsOf(t reflect.Type) map[string]reflect.Type {
+	out := map[string]reflect.Type{}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := f.Tag.Get("json")
+		if tag == "-" {
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		if f.Anonymous && name == "" {
+			ft := f.Type
+			if ft.Kind() == reflect.Pointer {
+				ft = ft.Elem()
+			}
+			if ft.Kind() == reflect.Struct {
+				for k, v := range fieldsOf(ft) {
+					if _, ok := out[k]; !ok {
+						out[k] = v
+					}
+				}
+				continue
+			}
+		}
+		if !f.IsExported() {
+			continue
+		}
+		if name == "" {
+			name = f.Name
+		}
+		out[name] = f.Type
+	}
+	return out
+}
+
+// foldKey is a key with each rune replaced by the least rune of its case
+// folding orbit, so that two keys equal under strings.EqualFold have one
+// fold key and a map finds the pair at once. ToLower is not a fold: the
+// Kelvin sign lowers to k but is its own upper case.
+func foldKey(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		least := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			if f < least {
+				least = f
+			}
+		}
+		b.WriteRune(least)
+	}
+	return b.String()
 }

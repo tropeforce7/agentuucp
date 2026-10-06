@@ -860,3 +860,19 @@ func TestStopIsAnsweredBeforeItIsActedOn(t *testing.T) {
 	}
 	client.Close()
 }
+
+// TestAFrameRefusesEveryTrailingByte: a strict decode refused trailing data except the two bytes
+// json.Decoder.More does not see, a closing brace and a closing bracket
+// (ruling 56). The value is taken whole; with each of those after it, and
+// with a plain stray byte, it is refused in this reader's own words.
+func TestAFrameRefusesEveryTrailingByte(t *testing.T) {
+	if _, err := decodeRequest([]byte(`{"op":"status"}`)); err != nil {
+		t.Fatalf("the frame whole: %v", err)
+	}
+	for _, tail := range []string{"}", "]", "x"} {
+		_, err := decodeRequest([]byte(`{"op":"status"}` + tail))
+		if err == nil || err.Error() != "agent: bad request: trailing data" {
+			t.Errorf("%q after the frame: %v; want the trailing-data sentence", tail, err)
+		}
+	}
+}

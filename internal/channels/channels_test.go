@@ -525,3 +525,31 @@ func TestADirectoryCarriesNoSections(t *testing.T) {
 		}
 	}
 }
+
+// TestADirectoryRefusesEveryTrailingByte: a strict decode refused trailing data except the two bytes
+// json.Decoder.More does not see, a closing brace and a closing bracket
+// (ruling 56). The document is taken whole; with each of those after it,
+// and with a plain stray byte, it is refused in this reader's own words.
+func TestADirectoryRefusesEveryTrailingByte(t *testing.T) {
+	id := owner(t)
+	doc, sig, err := Sign(id, base(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(id.Public(), doc, sig); err != nil {
+		t.Fatalf("the document whole: %v", err)
+	}
+	for _, tail := range []string{"}", "]", "x"} {
+		with := append(append([]byte{}, doc...), tail...)
+		_, err := Verify(id.Public(), with, mustSign(t, id, signingBytes(with)))
+		if tail == "x" {
+			if !errors.Is(err, ErrForm) {
+				t.Errorf("%q after the document: %v; want ErrForm", tail, err)
+			}
+			continue
+		}
+		if !errors.Is(err, ErrForm) || err.Error() != "directory is malformed: trailing data after the document" {
+			t.Errorf("%q after the document: %v; want the trailing-data sentence", tail, err)
+		}
+	}
+}

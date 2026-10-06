@@ -1,7 +1,6 @@
 package store
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +11,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/regular"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // vouchesDir holds the vouches this identity keeps for its knocks: one file
@@ -84,10 +84,8 @@ func (s *Store) KeptVouch(voucher string) (message.Carried, error) {
 	if err != nil {
 		return message.Carried{}, err
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
 	var c message.Carried
-	if err := dec.Decode(&c); err != nil || dec.More() || len(c.Document) == 0 || len(c.Signature) == 0 {
+	if err := wire.Decode(data, &c); err != nil || len(c.Document) == 0 || len(c.Signature) == 0 {
 		return message.Carried{}, &damagedFile{msg: fmt.Sprintf("%s is not a kept vouch; delete it and ask for the vouch again", path)}
 	}
 	return c, nil

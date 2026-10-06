@@ -19,6 +19,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/relay"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/token"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // TLS modes. There is no acme: a relay's certificate comes from its own
@@ -541,20 +542,19 @@ func Load(path string) (Config, string, error) {
 		return cfg, "", fmt.Errorf("%s: %w", path, err)
 	}
 
-	dec := json.NewDecoder(bytes.NewReader(raw))
 	// A misspelled key is a silent misconfiguration otherwise, and the whole
-	// point of this file is to be the record of what the relay is doing.
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&cfg); err != nil {
+	// point of this file is to be the record of what the relay is doing: so
+	// is a key in another case, or one given twice, which encoding/json
+	// would take as the field or keep the last of.
+	if err := wire.Decode(raw, &cfg); errors.Is(err, wire.ErrTrailing) {
+		return cfg, "", fmt.Errorf("%s: trailing data after the JSON object", path)
+	} else if err != nil {
 		var syn *json.SyntaxError
 		if errors.As(err, &syn) {
 			return cfg, "", fmt.Errorf("%s: malformed JSON at byte %d: %w%s", path, syn.Offset, err,
 				trailingCommaHint(raw, syn.Offset))
 		}
 		return cfg, "", fmt.Errorf("%s: %w", path, err)
-	}
-	if dec.More() {
-		return cfg, "", fmt.Errorf("%s: trailing data after the JSON object", path)
 	}
 
 	// A relative path in the file is relative to the file, not to the

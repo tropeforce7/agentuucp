@@ -121,6 +121,13 @@ started the relay. The default when the file names no `db` at all follows
 the same rule, `relay.db` and `messages` beside the settings. A path given
 as a flag is the shell's, relative to the working directory as any flag is.
 
+The settings file is read strictly, and a file the relay would read two ways
+is refused at startup, naming the key. A key the relay does not have is
+refused. So is a key in another case than the table's (`"Listen"` for
+`listen`), which the JSON reader would otherwise take as that key, and a key
+given twice in one object, of which it would keep the last. Nothing may
+follow the closing brace but white space.
+
 Use `--print-config` to see exactly what the relay resolved, paths
 included. Its output is valid input for `--config`.
 

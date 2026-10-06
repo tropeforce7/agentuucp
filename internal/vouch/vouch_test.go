@@ -463,3 +463,31 @@ func TestAVouchCarriesNoSections(t *testing.T) {
 		}
 	}
 }
+
+// TestAVouchRefusesEveryTrailingByte: a strict decode refused trailing data except the two bytes
+// json.Decoder.More does not see, a closing brace and a closing bracket
+// (ruling 56). The document is taken whole; with each of those after it,
+// and with a plain stray byte, it is refused in this reader's own words.
+func TestAVouchRefusesEveryTrailingByte(t *testing.T) {
+	v, x := gen(t, "v"), gen(t, "x")
+	doc, sig, err := Sign(v, base(v, x), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(v.Public(), doc, sig, now); err != nil {
+		t.Fatalf("the document whole: %v", err)
+	}
+	for _, tail := range []string{"}", "]", "x"} {
+		with := append(append([]byte{}, doc...), tail...)
+		_, err := Verify(v.Public(), with, mustSign(t, v, signingBytes(with)), now)
+		if tail == "x" {
+			if !errors.Is(err, ErrForm) {
+				t.Errorf("%q after the document: %v; want ErrForm", tail, err)
+			}
+			continue
+		}
+		if !errors.Is(err, ErrForm) || err.Error() != "vouch is malformed: trailing data after the document" {
+			t.Errorf("%q after the document: %v; want the trailing-data sentence", tail, err)
+		}
+	}
+}

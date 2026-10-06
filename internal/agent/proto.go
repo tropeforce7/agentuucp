@@ -1,11 +1,10 @@
 package agent
 
 import (
-	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 	"io"
 )
 
@@ -122,14 +121,13 @@ func writeFrame(w io.Writer, body []byte) error {
 
 // decodeRequest parses a frame, refusing anything it does not know.
 func decodeRequest(frame []byte) (*request, error) {
-	dec := json.NewDecoder(bytes.NewReader(frame))
-	dec.DisallowUnknownFields()
 	var req request
-	if err := dec.Decode(&req); err != nil {
-		return nil, fmt.Errorf("agent: bad request: %v", err)
-	}
-	if dec.More() {
+	err := wire.Decode(frame, &req)
+	if errors.Is(err, wire.ErrTrailing) {
 		return nil, errors.New("agent: bad request: trailing data")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("agent: bad request: %v", err)
 	}
 	return &req, nil
 }

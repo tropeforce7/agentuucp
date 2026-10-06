@@ -24,6 +24,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 const (
@@ -275,13 +276,12 @@ func (u *Unverified) Verify(issuer *identity.Public, now time.Time, skew time.Du
 // decode reads a payload strictly. An unknown field is an error: a token is
 // not a place for extensions one side understands and the other ignores.
 func decode(payload []byte, c *Claims) error {
-	dec := json.NewDecoder(strings.NewReader(string(payload)))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(c); err != nil {
-		return fmt.Errorf("%w: %v", ErrForm, err)
-	}
-	if dec.More() {
+	err := wire.Decode(payload, c)
+	if errors.Is(err, wire.ErrTrailing) {
 		return fmt.Errorf("%w: trailing data after the payload object", ErrForm)
+	}
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrForm, err)
 	}
 	return nil
 }

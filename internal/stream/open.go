@@ -1,12 +1,10 @@
 package stream
 
 import (
-	"bytes"
 	"crypto/hpke"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +16,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // HeaderSize is what a receiver must read before it knows anything: the
@@ -93,13 +92,12 @@ func OpenManifest(self *identity.Identity, header, sealed []byte) (*Opened, erro
 	sig, manifestJSON := plaintext[:SigSize], plaintext[SigSize:]
 
 	var m Manifest
-	dec := json.NewDecoder(bytes.NewReader(manifestJSON))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&m); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrForm, err)
-	}
-	if dec.More() {
+	err = wire.Decode(manifestJSON, &m)
+	if errors.Is(err, wire.ErrTrailing) {
 		return nil, fmt.Errorf("%w: trailing data after the manifest", ErrForm)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrForm, err)
 	}
 	if err := m.Validate(); err != nil {
 		return nil, err

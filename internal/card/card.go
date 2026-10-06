@@ -20,7 +20,6 @@
 package card
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +28,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 const (
@@ -207,14 +207,13 @@ func signingBytes(doc []byte) []byte {
 // card is not a place for extensions one side understands and the other
 // ignores.
 func decode(doc []byte) (*Document, error) {
-	dec := json.NewDecoder(bytes.NewReader(doc))
-	dec.DisallowUnknownFields()
 	var d Document
-	if err := dec.Decode(&d); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrForm, err)
-	}
-	if dec.More() {
+	err := wire.Decode(doc, &d)
+	if errors.Is(err, wire.ErrTrailing) {
 		return nil, fmt.Errorf("%w: trailing data after the document", ErrForm)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrForm, err)
 	}
 	return &d, nil
 }

@@ -563,3 +563,41 @@ func TestATrailingCommaIsNamed(t *testing.T) {
 		})
 	}
 }
+
+// TestASettingsFileRefusesEveryTrailingByte: a strict decode refused trailing data except the two bytes
+// json.Decoder.More does not see, a closing brace and a closing bracket
+// (ruling 56). The value is taken whole; with each of those after it, and
+// with a plain stray byte, it is refused in this reader's own words.
+func TestASettingsFileRefusesEveryTrailingByte(t *testing.T) {
+	whole := `{"listen":":9443"}`
+	if _, _, err := Load(writeFile(t, whole)); err != nil {
+		t.Fatalf("the file whole: %v", err)
+	}
+	for _, tail := range []string{"}", "]", "x"} {
+		p := writeFile(t, whole+tail)
+		_, _, err := Load(p)
+		if err == nil || err.Error() != p+": trailing data after the JSON object" {
+			t.Errorf("%q after the settings: %v; want the trailing-data sentence", tail, err)
+		}
+	}
+}
+
+// TestASettingsFileThatReadsTwoWaysIsRefused: a key in another case than the
+// table's, and a key given twice, are each refused at startup naming the
+// key, where the JSON reader would take the first as the field and keep
+// the last of the second (ruling 57, and relay.md beside the paths).
+func TestASettingsFileThatReadsTwoWaysIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		content, want string
+	}{
+		{`{"Listen":":9443"}`, `key "Listen" matches the field "listen" only by case, in an object at depth 1`},
+		{`{"listen":":9443","listen":":9444"}`, `key "listen" appears twice in an object at depth 1`},
+		{`{"limits":{"posts_per_minute":5,"POSTS_PER_MINUTE":6}}`, `key "posts_per_minute" and key "POSTS_PER_MINUTE", the same under case folding, are both in an object at depth 2`},
+	} {
+		p := writeFile(t, tc.content)
+		_, _, err := Load(p)
+		if err == nil || err.Error() != p+": "+tc.want {
+			t.Errorf("%s: %v; want %q", tc.content, err, tc.want)
+		}
+	}
+}
