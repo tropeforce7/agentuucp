@@ -71,6 +71,12 @@ func quiet(t *testing.T, h *harness) {
 // sealedFor is an envelope addressed to a fingerprint, with ciphertext that
 // is not a real seal: this relay never opens one, and what these tests are
 // about is what it does with the bytes.
+// carried is an envelope as the relay reads it, for a test that built the
+// recipient's view and wants the relay's hash of it.
+func carried(env *envelope.Envelope) *relayapi.Carried {
+	return &relayapi.Carried{V: env.V, To: env.To, CT: env.CT, Ch: env.Ch}
+}
+
 func sealedFor(to string, ct string) *envelope.Envelope {
 	return &envelope.Envelope{V: envelope.Version, To: to, CT: []byte(ct)}
 }
@@ -246,9 +252,10 @@ func TestACourierCannotLeaveItsOwnHopOut(t *testing.T) {
 }
 
 // TestAnEnvelopeIsHeldToWhatThisRelayKnowsOfOne: parsed strictly, its version
-// this relay's, its recipient a fingerprint, and its ciphertext present —
+// 1 or more, its recipient a fingerprint, and its ciphertext present —
 // before anything is stored, so nothing is queued for a body that is not an
-// envelope.
+// envelope. A version this relay has never heard of is carried
+// (TestTheForwardRouteCarriesAnyVersion); one below 1 is no version.
 func TestAnEnvelopeIsHeldToWhatThisRelayKnowsOfOne(t *testing.T) {
 	h := peered(t, []string{"bar"}, nil, nil)
 	user := h.user(t, "alice")
@@ -261,7 +268,8 @@ func TestAnEnvelopeIsHeldToWhatThisRelayKnowsOfOne(t *testing.T) {
 		{"the field absent", ``, "carries no envelope"},
 		{"the field null", `null`, "carries no envelope"},
 		{"not an envelope", `{"nope":1}`, "malformed envelope"},
-		{"another version", `{"v":2,"to":"` + fp + `","ct":"YQ=="}`, "this relay carries 1"},
+		{"version 0", `{"v":0,"to":"` + fp + `","ct":"YQ=="}`, "a relay carries any version from 1"},
+		{"version -1", `{"v":-1,"to":"` + fp + `","ct":"YQ=="}`, "a relay carries any version from 1"},
 		{"to is not a fingerprint", `{"v":1,"to":"bob","ct":"YQ=="}`, "not a fingerprint"},
 		{"no ciphertext", `{"v":1,"to":"` + fp + `","ct":""}`, "no ciphertext"},
 	} {
@@ -466,16 +474,16 @@ func TestTheHashIsOverTheEnvelopeAndNotItsBytes(t *testing.T) {
 // one envelope once per channel name a liar chose.
 func TestTheChannelIsNotInTheHash(t *testing.T) {
 	to := strings.Repeat("a", 64)
-	first := &envelope.Envelope{V: 1, To: to, CT: []byte("ct"), Ch: "one"}
-	second := &envelope.Envelope{V: 1, To: to, CT: []byte("ct"), Ch: "two"}
+	first := &relayapi.Carried{V: 1, To: to, CT: []byte("ct"), Ch: "one"}
+	second := &relayapi.Carried{V: 1, To: to, CT: []byte("ct"), Ch: "two"}
 	if CarriedHash(first) != CarriedHash(second) {
 		t.Error("two channels made two hashes of one envelope")
 	}
 	// And the things that are in it are in it.
-	if CarriedHash(first) == CarriedHash(&envelope.Envelope{V: 1, To: to, CT: []byte("other")}) {
+	if CarriedHash(first) == CarriedHash(&relayapi.Carried{V: 1, To: to, CT: []byte("other")}) {
 		t.Error("two ciphertexts made one hash")
 	}
-	if CarriedHash(first) == CarriedHash(&envelope.Envelope{V: 1, To: strings.Repeat("b", 64), CT: []byte("ct")}) {
+	if CarriedHash(first) == CarriedHash(&relayapi.Carried{V: 1, To: strings.Repeat("b", 64), CT: []byte("ct")}) {
 		t.Error("two recipients made one hash")
 	}
 }
@@ -1328,8 +1336,8 @@ func TestTheQueuesArithmeticCannotWrap(t *testing.T) {
 // envelope whose fields are not fixed, and the property is worth a test
 // rather than a comment saying it holds.
 func TestTheHashesPartsCannotBeRunTogether(t *testing.T) {
-	first := CarriedHash(&envelope.Envelope{To: "aa", CT: []byte("bb")})
-	second := CarriedHash(&envelope.Envelope{To: "aab", CT: []byte("b")})
+	first := CarriedHash(&relayapi.Carried{To: "aa", CT: []byte("bb")})
+	second := CarriedHash(&relayapi.Carried{To: "aab", CT: []byte("b")})
 	if first == second {
 		t.Error("two envelopes whose fields run together made one hash")
 	}
@@ -1762,7 +1770,7 @@ func TestTheQueueRouteAnswersAtMostItsLimit(t *testing.T) {
 		}
 		row := &Outbound{
 			PosterFP: alice.Fingerprint(), Neighbour: "bar", ToFP: to,
-			Hash: CarriedHash(env), Kind: relayapi.KindEnvelope,
+			Hash: CarriedHash(carried(env)), Kind: relayapi.KindEnvelope,
 			Received: now, GivesUp: now.Add(time.Hour),
 		}
 		if _, err := h.store.Enqueue(row, raw, limits.Quotas(), now.Add(time.Hour)); err != nil {
@@ -1831,7 +1839,7 @@ func TestAQueuePageShowsWhatNeedsAnAnswerFirst(t *testing.T) {
 		}
 		id, err := h.store.Enqueue(&Outbound{
 			PosterFP: alice.Fingerprint(), Neighbour: "bar", ToFP: to,
-			Hash: CarriedHash(env), Kind: relayapi.KindEnvelope,
+			Hash: CarriedHash(carried(env)), Kind: relayapi.KindEnvelope,
 			Received: now, GivesUp: now.Add(time.Hour),
 		}, raw, limits.Quotas(), now.Add(time.Hour))
 		if err != nil {

@@ -625,7 +625,12 @@ refuses to start under receive scope and says so.
 What the relay stores for one message is three fields, and a fourth on a
 named channel. `v` is the format version. `to` is the recipient's
 fingerprint. `ct` is about 4 KiB of ciphertext for a short message. `ch` is
-the channel, omitted for the default one. Sealed inside `ct`, where the
+the channel, omitted for the default one. Those four fields are all a relay
+reads, and all there will ever be: a relay refuses a fifth, takes any
+version from 1, and stores and passes on the bytes it was given, since what
+a version means is between the sender and the recipient, and a relay on the
+path that refused one it did not know would bounce mail for a matter that
+is not its own. Sealed inside `ct`, where the
 relay cannot read a byte of it, are the Ed25519 signature, the sender's
 fingerprint and public keys, the subject, thread, message id and time, the
 text, and any attachments. Sign-then-encrypt, so the signature is inside

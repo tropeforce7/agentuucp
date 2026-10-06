@@ -1,7 +1,6 @@
 package auu
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // The outbox holds streams that have been sealed but not yet delivered.
@@ -128,9 +128,7 @@ func listPending(s *store.Store) ([]*pending, []string, error) {
 		// record does not (max_request), and would be resumed against a
 		// PUT it never had; it is broken by name and abandoned.
 		var p pending
-		dec := json.NewDecoder(bytes.NewReader(data))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&p); err != nil {
+		if err := wire.Decode(data, &p); err != nil {
 			broken = append(broken, strings.TrimSuffix(name, ".json"))
 			continue
 		}

@@ -3,7 +3,6 @@ package auu
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/agent"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // The split proxy: the same proxy as its own process, run as a second
@@ -66,9 +66,9 @@ func loadProxyFile(path string) (*proxyFile, error) {
 		return nil, err
 	}
 	f := &proxyFile{path: path}
-	dec := json.NewDecoder(strings.NewReader(string(data)))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(f); err != nil {
+	if err := wire.Decode(data, f); errors.Is(err, wire.ErrTrailing) {
+		return nil, usageErrf("%s: trailing data after the JSON object", path)
+	} else if err != nil {
 		return nil, usageErrf("%s: %v", path, err)
 	}
 	if f.V != 1 {

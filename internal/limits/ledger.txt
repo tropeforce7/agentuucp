@@ -366,6 +366,7 @@ internal/relayapi/relayapi.go AdminStatusResponse int MaxBytes int64 = >= 0 show
 internal/relayapi/relayapi.go AdminStatusResponse int QueuedBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go AdminStatusResponse int QueuedMessages int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go AdminStatusResponse int TokenMaxAgeSecs int64 = [0, 3153600000] shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go Carried int V int = >= 1 shown by TestLimitCarriedV
 internal/relayapi/relayapi.go ChannelsResponse int Queued map[string]int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go ForwardFailedRequest int ID int64 = > 0 shown by TestLimitAReportIsHeldToItsShape
 internal/relayapi/relayapi.go ForwardResponse int ID int64 = > 0 shown by TestLimitRelayAnswerIntegers

@@ -1,7 +1,6 @@
 package auu
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/store"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // serve.json: the table of what this machine answers for.
@@ -92,9 +92,9 @@ func loadServeConfig(path string) (*serveConfig, error) {
 		return nil, err
 	}
 	cfg := &serveConfig{path: path}
-	dec := json.NewDecoder(strings.NewReader(string(data)))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(cfg); err != nil {
+	if err := wire.Decode(data, cfg); errors.Is(err, wire.ErrTrailing) {
+		return nil, usageErrf("%s: trailing data after the JSON object", path)
+	} else if err != nil {
 		return nil, usageErrf("%s: %v", path, err)
 	}
 	if cfg.V != 1 {

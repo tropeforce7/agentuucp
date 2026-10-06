@@ -5,14 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
-	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // handleForward takes an envelope this relay is to carry to a neighbour.
@@ -192,7 +191,7 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, body []by
 // The answer goes back to the courier on this request: a delivery is done
 // when it is done, and the neighbour holding the row wants to know that it
 // may let go of it.
-func (s *Server) deliver(w http.ResponseWriter, r *http.Request, env *envelope.Envelope,
+func (s *Server) deliver(w http.ResponseWriter, r *http.Request, env *relayapi.Carried,
 	raw []byte, via, hash, callerFP, courierName string, isCourier bool) {
 
 	fp := env.To
@@ -649,29 +648,32 @@ func (s *Server) checkAddress(path, via []string) error {
 	return err
 }
 
-// parseForwarded reads the envelope out of a forward request and holds it to
-// what this relay knows about one: its version, and a recipient that is a
-// fingerprint.
-//
-// It is a strict decode of the bytes as they arrived, and those same bytes
-// are what is stored and forwarded, so a relay never passes on something
-// other than what it was given.
-func parseForwarded(raw []byte) (*envelope.Envelope, error) {
-	// An absent field and a null one are both no envelope. The second
-	// decodes to four bytes rather than none, and without this it would
-	// reach the strict decode and come back as an envelope whose version is
-	// zero, which is a sentence about a field nobody sent.
+// parseForwarded reads the envelope out of a forward request. An absent
+// field and a null one are both no envelope: the second decodes to four
+// bytes rather than none, and without this it would reach the strict decode
+// and come back as an envelope whose version is zero, which is a sentence
+// about a field nobody sent.
+func parseForwarded(raw []byte) (*relayapi.Carried, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, errors.New("forward request carries no envelope")
 	}
-	var env envelope.Envelope
-	dec := json.NewDecoder(strings.NewReader(string(raw)))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&env); err != nil {
+	return parseCarried(raw)
+}
+
+// parseCarried is how every route reads the outer envelope it is given:
+// strictly, the four fields of relayapi.Carried and no other, a version of 1
+// or more, a recipient that is a fingerprint and a ciphertext that is not
+// empty. It is the bytes as they arrived that are stored and passed on, never
+// these fields, so a relay never hands on something other than what it was
+// given, and the version is the two ends' business: this relay carries one
+// it has never heard of (D38).
+func parseCarried(raw []byte) (*relayapi.Carried, error) {
+	var env relayapi.Carried
+	if err := wire.Decode(raw, &env); err != nil {
 		return nil, fmt.Errorf("malformed envelope: %v", err)
 	}
-	if env.V != envelope.Version {
-		return nil, fmt.Errorf("envelope v is %d; this relay carries %d", env.V, envelope.Version)
+	if env.V < 1 {
+		return nil, fmt.Errorf("envelope v is %d; a relay carries any version from 1", env.V)
 	}
 	if !identity.ValidFingerprint(env.To) {
 		return nil, errors.New("envelope to is not a fingerprint")

@@ -64,7 +64,11 @@ does, with the worktree as the working directory. `auu serve check`
 prints every path as it resolved it.
 
 Unknown fields are refused by name: a misspelled one that silently did
-nothing would be a channel nobody was serving. `auu serve check` reads the
+nothing would be a channel nobody was serving. So is a field in another
+case than this guide's (`"Exec"` for `exec`), a field given twice, and
+anything after the closing brace, each of which the JSON reader would
+otherwise take without a word. The split proxy's own file is read the same
+way. `auu serve check` reads the
 file, checks every directory and program it names, and prints what it would
 serve, without touching a key, a relay or the network:
 

@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
@@ -79,7 +78,7 @@ const carriedDomain = "ccx-carried-v1"
 // The channel is left out on purpose. It is outside the seal, so a hop can
 // change it as freely as whitespace, and the same ciphertext is always the
 // same message however it is filed.
-func CarriedHash(env *envelope.Envelope) string {
+func CarriedHash(env *relayapi.Carried) string {
 	h := sha256.New()
 	for _, part := range [][]byte{[]byte(carriedDomain), []byte(env.To), env.CT} {
 		var n [8]byte

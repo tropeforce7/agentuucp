@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/clientca"
-	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/token"
@@ -1140,9 +1139,12 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 		return
 	}
 
-	var env envelope.Envelope
-	if err := json.Unmarshal(body, &env); err != nil {
-		s.fail(w, http.StatusBadRequest, "malformed envelope")
+	// The outer envelope as every route reads it (parseCarried): strictly,
+	// any version from 1, so that this relay never refuses mail for a
+	// version that is the two ends' business.
+	env, err := parseCarried(body)
+	if err != nil {
+		s.fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if env.To != fp {

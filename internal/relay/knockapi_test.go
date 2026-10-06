@@ -251,7 +251,8 @@ func TestAKnockIsJudgedBeforeTheCard(t *testing.T) {
 	status, body, _ = h.send(alice, "POST", "/v1/mailbox/"+fp+"/knock", sealedKnock(t, alice, boss.Public(), "", "hi"), nil)
 	refused("a knock addressed elsewhere", status, body, http.StatusBadRequest, "envelope is not addressed to this mailbox")
 	status, body, _ = h.send(alice, "POST", "/v1/mailbox/"+fp+"/knock", []byte("{not json"), nil)
-	refused("a body that is not an envelope", status, body, http.StatusBadRequest, "malformed envelope")
+	refused("a body that is not an envelope", status, body, http.StatusBadRequest,
+		"malformed envelope: invalid character 'n' looking for beginning of object key string")
 	nobody := ids(t, "nobody")[0]
 	status, body, _ = h.send(alice, "POST", "/v1/mailbox/"+nobody.Fingerprint()+"/knock", sealedKnock(t, alice, nobody.Public(), "", "hi"), nil)
 	refused("a knock to no mailbox", status, body, http.StatusNotFound, "no such mailbox")

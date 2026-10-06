@@ -242,6 +242,22 @@ type (
 		Path     []string        `json:"path"`
 		Via      []string        `json:"via"`
 	}
+	// Carried is the outer envelope as every relay on a path reads it, on
+	// the post, knock and forward routes alike: these four fields, for
+	// good. It is the same JSON as envelope.Envelope, which is the
+	// recipient's view of it, and a test holds the two to one shape. A
+	// relay reads it strictly, takes any version from 1, and stores and
+	// passes on the bytes it was given, never these fields: what a
+	// version means is between the two ends, and a relay in the middle
+	// that refused one it did not know would bounce newer mail for a
+	// matter that is not its own (D38). What is new goes inside the
+	// seal, in sections, and never out here.
+	Carried struct {
+		V  int    `json:"v"`
+		To string `json:"to"`
+		CT []byte `json:"ct"`
+		Ch string `json:"ch,omitempty"`
+	}
 	// ForwardResponse is the id of the row the relay queued, which the
 	// poster reads back in its own queue listing. A 409 carries an id too
 	// when the repeat is a retry after a lost answer: the caller's own row

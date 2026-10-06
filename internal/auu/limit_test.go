@@ -1283,3 +1283,106 @@ func TestLimitRmWholeIDOneShort(t *testing.T) {
 		t.Errorf("the record is still there: %v", err)
 	}
 }
+
+// TestTheLocalStrictFilesRefuseEveryTrailingByte: the serve settings, the
+// split proxy's settings and an outbox record were strict about fields and
+// said nothing about what followed the object, so a stray brace, bracket or
+// letter after one was read as if it were not there (ruling 58). Each now
+// goes through wire.Decode: the file whole is taken, and with each of those
+// after it is refused, the two settings files naming the path and the
+// outbox record broken by name, as every record that will not read is.
+func TestTheLocalStrictFilesRefuseEveryTrailingByte(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "checkout"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range []struct {
+		name, body string
+		load       func(string) error
+	}{
+		{"serve.json", `{"v":1,"channels":{"work":{"dir":"checkout","exec":"cat"}}}`,
+			func(p string) error { _, err := loadServeConfig(p); return err }},
+		{"proxy.json", `{"v":1,"key_file":"key","control":"run/control.sock"}`,
+			func(p string) error { _, err := loadProxyFile(p); return err }},
+	} {
+		path := filepath.Join(dir, file.name)
+		for _, tail := range []string{"", "}", "]", "x"} {
+			if err := os.WriteFile(path, []byte(file.body+tail), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err := file.load(path)
+			if tail == "" {
+				if err != nil {
+					t.Fatalf("%s whole: %v", file.name, err)
+				}
+				continue
+			}
+			if err == nil || err.Error() != path+": trailing data after the JSON object" {
+				t.Errorf("%s with %q after it: %v; want the trailing-data sentence", file.name, tail, err)
+			}
+		}
+	}
+
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(outboxDir(s), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	id := strings.Repeat("d", 32)
+	if err := os.WriteFile(streamPath(s, id), []byte("sealed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	whole, err := json.Marshal(pending{MessageID: id, To: strings.Repeat("c", 64), Relay: "relay", Started: time.Now(), ChunkSize: stream.DefaultChunkSize})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tail := range []string{"", "}", "]", "x"} {
+		if err := os.WriteFile(pendingPath(s, id), append(append([]byte{}, whole...), tail...), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		waiting, broken, err := listPending(s)
+		if tail == "" {
+			if err != nil || len(waiting) != 1 || len(broken) != 0 {
+				t.Fatalf("the outbox record whole: waiting %d, broken %v, %v", len(waiting), broken, err)
+			}
+			continue
+		}
+		if err != nil || len(waiting) != 0 || len(broken) != 1 || broken[0] != id {
+			t.Errorf("the outbox record with %q after it: waiting %d, broken %v, %v; want it broken", tail, len(waiting), broken, err)
+		}
+	}
+}
+
+// TestAServeFileThatReadsTwoWaysIsRefused: a field in another case and a
+// field given twice, which serve.md says are refused, are refused naming
+// the field, for the serve settings and the split proxy's alike.
+func TestAServeFileThatReadsTwoWaysIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "checkout"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, body, want string
+		load             func(string) error
+	}{
+		{"serve.json", `{"v":1,"channels":{"work":{"dir":"checkout","Exec":"cat"}}}`,
+			`key "Exec" matches the field "exec" only by case, in an object at depth 3`,
+			func(p string) error { _, err := loadServeConfig(p); return err }},
+		{"serve.json", `{"v":1,"v":1,"channels":{"work":{"dir":"checkout","exec":"cat"}}}`,
+			`key "v" appears twice in an object at depth 1`,
+			func(p string) error { _, err := loadServeConfig(p); return err }},
+		{"proxy.json", `{"v":1,"Key_File":"key","control":"run/control.sock"}`,
+			`key "Key_File" matches the field "key_file" only by case, in an object at depth 1`,
+			func(p string) error { _, err := loadProxyFile(p); return err }},
+	} {
+		path := filepath.Join(dir, tc.name)
+		if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := tc.load(path); err == nil || err.Error() != path+": "+tc.want {
+			t.Errorf("%s: %v; want %q", tc.body, err, tc.want)
+		}
+	}
+}
