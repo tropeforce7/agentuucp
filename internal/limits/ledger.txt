@@ -312,7 +312,8 @@ internal/client/client.go retryAfter int strconv.ParseInt(raw) = [0, 86400] show
 internal/client/shape.go (*Client).parseOffset int strconv.ParseInt(raw) = >= 0 shown by TestLimitUploadOffsetAnswer
 internal/clientca/csr.go cleanLabel string s[:len(s) - size] = local: size from DecodeLastRuneInString of s
 internal/dial/dial.go MachineLabel string host[:i] = local: i from IndexByte of "." in host, checked > 0
-internal/envelope/envelope.go Envelope int V int = [1, 1] shown by TestLimitEnvelopeV
+internal/envelope/envelope.go Envelope int V int = one of 1, 2 shown by TestLimitEnvelopeV
+internal/envelope/envelope.go Inner int V int = one of 1, 2 shown by TestLimitInnerV
 internal/envelope/envelope.go Open string plaintext[:sigLen] = local: len(plaintext) >= sigLen by the check before
 internal/envelope/envelope.go Open string plaintext[sigLen:] = local: len(plaintext) >= sigLen by the check before
 internal/identity/identity.go (*Public).Short string p.fp[:16] = local: Fingerprint writes 64 hex characters
@@ -446,7 +447,7 @@ internal/stream/stream.go Attachment int Size int64 = [0, 4611686018427387904] s
 internal/stream/stream.go Manifest int ChunkSize int = [4096, 16777216] shown by TestLimitManifestIntegers
 internal/stream/stream.go Manifest int Chunks int64 = > 0 shown by TestLimitManifestIntegers
 internal/stream/stream.go Manifest int PayloadBytes int64 = [0, 4611686018427387904] shown by TestLimitManifestIntegers
-internal/stream/stream.go Manifest int V int = [1, 1] shown by TestLimitManifestIntegers
+internal/stream/stream.go Manifest int V int = one of 1, 2 shown by TestLimitManifestIntegers
 internal/token/token.go Claims int NotAfter int64 = > 0 shown by TestLimitClaimsIntegers
 internal/token/token.go Claims int NotBefore int64 = > 0 shown by TestLimitClaimsIntegers
 internal/token/token.go Claims int Uses int = [1, 1000] shown by TestLimitClaimsIntegers

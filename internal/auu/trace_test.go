@@ -16,6 +16,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/relay"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // The adversarial trace of v0.8.1 (reviews/trace/): its client-side tests
@@ -242,5 +243,103 @@ func TestAnEmptyAttachmentIsDeliveredNotAckedAway(t *testing.T) {
 		if info.Size() != 0 {
 			t.Fatalf("%q: the empty attachment has %d bytes", subject, info.Size())
 		}
+	}
+}
+
+// TestAStreamThatNeedsANewerAuuDoesNotStopTheFetch: a stream whose signed
+// manifest carries a critical section this build does not know is one it
+// will never open. The manifest reader says so after the signature, and a
+// receiver that took that for a transport failure would leave it on the
+// relay unacknowledged with the cursor unmoved, so that every fetch stopped
+// at it and the message behind it never arrived: anyone the relay let post
+// a stream could close a mailbox with one, which a manifest carrying any
+// section was refused for, permanently, until the sections door opened.
+// It is kept and acknowledged, and the good message behind it delivered.
+func TestAStreamThatNeedsANewerAuuDoesNotStopTheFetch(t *testing.T) {
+	srv, st, _ := startRelayOnDisk(t, relay.Config{Limits: relay.DefaultLimits()})
+	alice := newUser(t, "alice", srv.URL)
+	bob := newUser(t, "bob", srv.URL)
+	alice.run("peers", "add", bob.exportLine())
+	bob.run("peers", "add", alice.exportLine())
+	alice.run("allow", "push")
+	bob.run("allow", "push")
+	bobFP := bob.exportFingerprint()
+
+	s, err := store.Open(alice.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.DefaultRelay()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := dial(s, id, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	to := mustParseBundle(t, mustBundle(t, bob))
+	payload := []byte("the payload of a stream nobody here can read")
+	sources := []stream.Source{{
+		Name: "later.bin", Media: "application/octet-stream", Size: int64(len(payload)),
+		Open: func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(payload)), nil },
+	}}
+	messageID, err := envelope.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := stream.BuildManifestSections(id, to, messageID,
+		stream.Body{Type: "ask", Thread: "0123456789abcdef0123456789abcdef", Subject: "from a newer build", Text: "streamed"},
+		sources, stream.DefaultChunkSize,
+		[]wire.Section{{Name: "must-know", Critical: true, Data: json.RawMessage(`{}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blob bytes.Buffer
+	if err := stream.Seal(&blob, id, to, m, sources); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	opened, err := c.OpenStream(ctx, bobFP, "", int64(blob.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PutStream(ctx, opened.Upload, 0, bytes.NewReader(blob.Bytes()), int64(blob.Len())); err != nil {
+		t.Fatal(err)
+	}
+	alice.run("send", "--to", "bob", "--subject", "the good one", "hello")
+	if queued, err := st.List(bobFP, 0, 10); err != nil || len(queued) != 2 {
+		t.Fatalf("queued %d (%v), want 2", len(queued), err)
+	}
+
+	var out string
+	var runErr error
+	stderr := captureStderr(t, func() { out, runErr = bob.tryRun("inbox", "--json") })
+	if runErr != nil {
+		t.Fatalf("a stream that needs a newer auu stopped the fetch: %v\nstdout: %s\nstderr: %s", runErr, out, stderr)
+	}
+	var inbox inboxJSON
+	if err := json.Unmarshal([]byte(out), &inbox); err != nil {
+		t.Fatalf("inbox --json: %v\n%s", err, out)
+	}
+	if inbox.Fetch.Delivered != 1 || inbox.Fetch.Unreadable != 1 {
+		t.Fatalf("fetch: %+v, want the good message delivered and the stream kept as unreadable", inbox.Fetch)
+	}
+	if !spoolHas(t, bob, store.Inbox, "the good one") {
+		t.Error("the good message behind the stream is not in the inbox")
+	}
+	stderr = captureStderr(t, func() { out, runErr = bob.tryRun("inbox", "--json") })
+	if runErr != nil {
+		t.Fatalf("the second inbox failed: %v\n%s", runErr, stderr)
+	}
+	var again inboxJSON
+	if err := json.Unmarshal([]byte(out), &again); err != nil {
+		t.Fatal(err)
+	}
+	if !again.Fetch.empty() {
+		t.Fatalf("the second fetch met the stream again: %+v", again.Fetch)
 	}
 }

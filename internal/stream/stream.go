@@ -29,12 +29,20 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 const (
 	// Version is the manifest version. The stream format as a whole is named
 	// by its info string, so an incompatible change moves that instead.
 	Version = 1
+
+	// VersionSections is a manifest that carries any section at all (D30).
+	// A reader from before the sections door decodes the manifest strictly
+	// and refuses one with a field it does not know, so a section of either
+	// kind already stops it; the version makes that refusal a rule a reader
+	// of this build checks both ways, rather than an accident.
+	VersionSections = 2
 
 	// infoDomain binds a stream to its recipient and separates it from an
 	// envelope: neither can be opened as the other.
@@ -62,11 +70,15 @@ const (
 	// FromBundle. A suite whose signatures are not this length therefore
 	// cannot be read by this format at all.
 	//
-	// Fixing it is a manifest version bump, not a constant: put the signature
-	// after the manifest rather than before it, so the JSON delimits itself
-	// and whatever remains is the signature of whatever length. Version 2 of
-	// this format should do that. Until then TestSignatureSizeMatchesTheDefaultSuite
-	// is what tells whoever adds a suite that this is waiting for them.
+	// Fixing it is a new stream format, not a constant and not a manifest
+	// version: the version is inside the manifest, which a reader cannot
+	// find until it has split chunk 0 at this offset, so nothing in the
+	// manifest can say where the split is. A new format under a new info
+	// string, whose chunk 0 puts the signature after the manifest so that
+	// the JSON delimits itself and whatever remains is the signature of
+	// whatever length, should do that. Until then
+	// TestSignatureSizeMatchesTheDefaultSuite is what tells whoever adds a
+	// suite that this is waiting for them.
 	SigSize = ed25519.SignatureSize
 
 	// MinChunk0 is a tag, a signature and an empty object: the smallest a
@@ -162,6 +174,10 @@ type Manifest struct {
 	// against what the relay says. The manifest is decoded strictly, so a
 	// name is one this build knows or the manifest is malformed.
 	Channel string `json:"channel,omitempty"`
+	// Sections is the one place something new may go (internal/wire),
+	// absent when there are none. A manifest that carries any is version
+	// VersionSections, and one that carries none is Version.
+	Sections []wire.Section `json:"sections,omitempty"`
 }
 
 // ChunkCount is how many chunks a payload of n bytes takes, including the
@@ -202,8 +218,19 @@ func info(toFP string) []byte { return []byte(infoDomain + toFP) }
 // when one is built and again when one is opened, because the second time it
 // has come from the wire.
 func (m *Manifest) Validate() error {
-	if m.V != Version {
+	if m.V != Version && m.V != VersionSections {
 		return fmt.Errorf("%w: unsupported manifest version %d", ErrForm, m.V)
+	}
+	// The list's shape, here with the rest of the shape and so before the
+	// signature; what is done with each section waits for the signature
+	// (R7). Then the version rule both ways (P4, R6): sections and
+	// version 2 go together, and a manifest with one and not the other is
+	// one no honest writer makes.
+	if err := wire.Check(m.Sections); err != nil {
+		return fmt.Errorf("%w: %v", ErrForm, err)
+	}
+	if has := len(m.Sections) > 0; has != (m.V == VersionSections) {
+		return fmt.Errorf("%w: manifest version %d with %d sections", ErrForm, m.V, len(m.Sections))
 	}
 	if message.ValidID(m.ID) != nil {
 		return fmt.Errorf("%w: id is not 32 lowercase hex characters", ErrForm)

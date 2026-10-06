@@ -2,7 +2,9 @@ package stream
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 	"math"
 	"strconv"
 	"strings"
@@ -43,12 +45,22 @@ func TestLimitManifestIntegers(t *testing.T) {
 	}
 
 	t.Run("v", func(t *testing.T) {
-		for _, v := range []int{0, 2, math.MinInt, math.MaxInt} {
+		for _, v := range []int{0, 3, -1, math.MinInt, math.MaxInt} {
 			m := fresh()
 			m.V = v
 			refused(t, "v "+itoa(int64(v)), m, "unsupported manifest version")
 		}
 		accepted(t, "v 1", fresh())
+		// 2 is a manifest with sections, and one without them is refused,
+		// as a version 1 manifest with them is (D30, R6).
+		m := fresh()
+		m.V = VersionSections
+		refused(t, "v 2 with no sections", m, "manifest version 2 with 0 sections")
+		m.Sections = []wire.Section{{Name: "later", Data: json.RawMessage(`{}`)}}
+		accepted(t, "v 2 with a section", m)
+		m = fresh()
+		m.Sections = []wire.Section{{Name: "later", Data: json.RawMessage(`{}`)}}
+		refused(t, "v 1 with a section", m, "manifest version 1 with 1 sections")
 	})
 
 	t.Run("chunk_size", func(t *testing.T) {

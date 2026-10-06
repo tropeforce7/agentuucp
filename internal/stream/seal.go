@@ -11,6 +11,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // Source is one attachment waiting to be sealed: its metadata, and something
@@ -49,9 +50,22 @@ func (s Source) Hash() (string, error) {
 // attachment costs one buffer.
 func BuildManifest(from *identity.Identity, to *identity.Public, id string,
 	body Body, sources []Source, chunkSize int) (*Manifest, error) {
+	return BuildManifestSections(from, to, id, body, sources, chunkSize, nil)
+}
 
+// BuildManifestSections is BuildManifest with sections: held to wire.Check
+// by Validate, and the manifest is VersionSections exactly when there is any
+// (D30).
+func BuildManifestSections(from *identity.Identity, to *identity.Public, id string,
+	body Body, sources []Source, chunkSize int, sections []wire.Section) (*Manifest, error) {
+
+	v := Version
+	if len(sections) > 0 {
+		v = VersionSections
+	}
 	m := &Manifest{
-		V:          Version,
+		V:          v,
+		Sections:   sections,
 		ID:         id,
 		From:       from.Fingerprint(),
 		FromBundle: from.Public().Bundle(),

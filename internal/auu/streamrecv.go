@@ -16,6 +16,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // Receiving a stream.
@@ -409,7 +410,11 @@ func isPermanent(err error) bool {
 	if isLocked(err) {
 		return false
 	}
+	// A stream that needs a newer auu is one this build will never open;
+	// left unacknowledged it would stop every fetch at it, and a sender
+	// the relay lets post a stream could close a mailbox with one.
 	return isGone(err) || isBeyondTheFile(err) ||
+		errors.Is(err, wire.ErrNeedsNewer) ||
 		errors.Is(err, stream.ErrForm) ||
 		errors.Is(err, stream.ErrSignature) ||
 		errors.Is(err, stream.ErrOpenFailed) ||

@@ -117,7 +117,7 @@ func TestADamagedMessageIsKeptWithItsCause(t *testing.T) {
 	// and signed by mallory, posted from alice's own client so that the
 	// relay's allow list lets it through. The wire constants are written
 	// here as literals, from outside the package that defines them.
-	inner, err := json.Marshal(&envelope.Inner{
+	inner, err := json.Marshal(&envelope.Inner{V: envelope.Version,
 		From: alice.exportFingerprint(), FromBundle: mustBundle(t, alice), To: bobFP,
 		ID:   "0123456789abcdef0123456789abcdef",
 		Body: message.Body{Type: message.TypeNote, Thread: "0123456789abcdef0123456789abcdef", Subject: "forged", Text: "not alice"},

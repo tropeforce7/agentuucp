@@ -836,16 +836,18 @@ func (nopWriteCloser) Close() error { return nil }
 // if the default suite ever signs with another the failure would be every
 // stream failing to open with a confusing form error.
 //
-// If this test fails, the fix is not to change the constant. It is manifest
-// version 2, with the signature after the manifest instead of before it, so
-// that the JSON delimits itself and the remainder is a signature of whatever
-// length. See the note on SigSize.
+// If this test fails, the fix is not to change the constant. It is a new
+// stream format under a new info string, with the signature after the
+// manifest instead of before it, so that the JSON delimits itself and the
+// remainder is a signature of whatever length. Not a manifest version: the
+// version is inside the manifest, which cannot be found until chunk 0 is
+// split. See the note on SigSize.
 func TestSignatureSizeMatchesTheDefaultSuite(t *testing.T) {
 	if got := identity.DefaultSuite().SignatureSize; got != SigSize {
 		t.Fatalf("the default identity suite signs with %d bytes but this format reserves %d.\n"+
 			"This format cannot carry a variable-length signature: chunk 0 is signature||manifest\n"+
-			"and the suite is named inside the manifest. Adding a suite means manifest version 2,\n"+
-			"with the signature moved after the manifest.", got, SigSize)
+			"and the suite is named inside the manifest. Adding a suite means a new stream format\n"+
+			"under a new info string, with the signature moved after the manifest.", got, SigSize)
 	}
 }
 
@@ -865,7 +867,8 @@ func TestEncapsulationSizeMatchesTheDefaultSuite(t *testing.T) {
 	}
 	if len(enc) != EncSize {
 		t.Fatalf("the default suite's KEM encapsulates to %d bytes but this format reserves %d.\n"+
-			"Adding a suite with another KEM means manifest version 2.", len(enc), EncSize)
+			"Adding a suite with another KEM means a new stream format under a new info string,\n"+
+			"since the encapsulation is read before anything that could name a version.", len(enc), EncSize)
 	}
 }
 

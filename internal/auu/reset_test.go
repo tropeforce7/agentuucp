@@ -935,7 +935,7 @@ func TestABrokenRecordIsSavedOverWhenServedAgain(t *testing.T) {
 // one who learned another message's id could seal it.
 func sealAs(t *testing.T, from *identity.Identity, to *identity.Public, id, subject string) []byte {
 	t.Helper()
-	inner := &envelope.Inner{From: from.Fingerprint(), FromBundle: from.Public().Bundle(), To: to.Fingerprint(),
+	inner := &envelope.Inner{V: envelope.Version, From: from.Fingerprint(), FromBundle: from.Public().Bundle(), To: to.Fingerprint(),
 		ID: id, Time: time.Now().UTC().Truncate(time.Second),
 		Body: message.Body{Type: message.TypeAsk, Thread: strings.Repeat("b", 32), Subject: subject, Text: "x"}}
 	raw, err := json.Marshal(sealInnerByHand(t, from, to, inner))

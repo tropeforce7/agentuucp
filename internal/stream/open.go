@@ -124,9 +124,17 @@ func OpenManifest(self *identity.Identity, header, sealed []byte) (*Opened, erro
 	}
 	// Names come from the local peer list, never from the wire.
 	sender.Name = ""
-	return &Opened{
+	opened := &Opened{
 		Manifest: &m, SealedManifestBytes: n, Sender: sender, recipient: recipient,
-	}, nil
+	}
+	// Only now, with the signature verified, is a section this build does
+	// not know judged: an unsigned manifest is never one that needs a newer
+	// auu (R7). The verified manifest comes back with the error, so the
+	// receiver can say whose stream it is and leave it where it is.
+	if _, _, err := wire.Sort(m.Sections); err != nil {
+		return opened, fmt.Errorf("stream: %w", err)
+	}
+	return opened, nil
 }
 
 // SpoolName is the file attachment i of a delivered stream is kept under

@@ -638,6 +638,20 @@ the box. The relay sees that you posted to Bob, and stores no sender —
 except on a knock, whose row names its knocker for as long as the row
 lives, which is the one exception above.
 
+**The version, outside and in.** A message is version 1, or version 2 when it
+carries a section its sender marked critical: a part a reader that does not
+understand it must not read past. A reader from before sections refuses any
+version but 1 before it decrypts anything, so it never reads such a message
+with that part silently dropped. That is a word to older readers and not a
+protection against a relay: the outer `v` is signed by nobody, and a relay
+can rewrite it. What holds for this build's readers is inside the seal. The
+sealed record carries its own version under the signature, the outer one
+must equal it, and a version 1 record with a critical section, or a version
+2 record without one, is malformed. So what a relay buys by rewriting the
+outer `v` is a message the recipient refuses, which it could already buy by
+garbling the ciphertext. A record from a build before the sealed version
+carries none, and is refused as malformed in those words.
+
 The message id, the thread and, on a reply, `in_reply_to` are each a
 message id. That is 32 lowercase hex characters, the id of the message that
 opened the thread or that is being answered. That is a rule of the format,

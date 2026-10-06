@@ -23,11 +23,22 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 const (
 	// Version is the only envelope version this build understands.
 	Version = 1
+
+	// VersionCritical is the version of a message that carries a section
+	// marked critical, and of no other (D30). To a reader that knows the
+	// sections door it says nothing the inner record does not; it is a
+	// word to a reader from before the door, which refuses any version but
+	// 1 before it decrypts, and so cannot silently drop a section the
+	// sender said it must not. It is not a protection against a relay: the
+	// outer version is signed by nobody, and what holds for this build's
+	// readers is the inner record's own v, which Open holds equal to it.
+	VersionCritical = 2
 
 	sigDomain  = "ccx-sig-v1"
 	infoDomain = "ccx-envelope-v1"
@@ -41,9 +52,10 @@ const (
 	//
 	// Unlike the stream format, this one can be extended without a
 	// chicken-and-egg problem, because Envelope.V is outside the ciphertext
-	// and is read before anything is decrypted. Version 2 should lay the
-	// plaintext out as inner || signature, so the JSON delimits itself and
-	// whatever remains is a signature of whatever length.
+	// and is read before anything is decrypted. Version 2 is taken, by a
+	// message with a critical section (VersionCritical); version 3 should
+	// lay the plaintext out as inner || signature, so the JSON delimits
+	// itself and whatever remains is a signature of whatever length.
 	// TestSignatureLengthMatchesTheDefaultSuite is what will tell whoever
 	// adds a suite that this is waiting for them.
 	sigLen = 64
@@ -121,6 +133,10 @@ type Envelope struct {
 
 // Inner is the authenticated plaintext record. Only the recipient sees it.
 type Inner struct {
+	// V is the version, under the signature, which the outer V must equal:
+	// a relay can rewrite the outer one, and what that buys it is a message
+	// the recipient refuses (ruling 60).
+	V          int          `json:"v"`
 	From       string       `json:"from"`
 	FromBundle []byte       `json:"from_bundle"`
 	To         string       `json:"to"`
@@ -131,6 +147,10 @@ type Inner struct {
 	// default; the receiver checks it against the outer Ch and the channel
 	// the relay listed the message under.
 	Channel string `json:"channel,omitempty"`
+	// Sections is the one place something new may go (internal/wire):
+	// absent when there are none, the sender's to leave out as it leaves
+	// out a default channel.
+	Sections []wire.Section `json:"sections,omitempty"`
 }
 
 // NewID returns a fresh random message id: 32 lowercase hex characters,
@@ -155,6 +175,18 @@ func Seal(sender *identity.Identity, recipient *identity.Public, body message.Bo
 // field is not set here; the client sets it when it posts, since that is
 // the one the relay reads.
 func SealFor(sender *identity.Identity, recipient *identity.Public, channel string, body message.Body) (*Envelope, *Inner, error) {
+	return SealSections(sender, recipient, channel, body, nil)
+}
+
+// SealSections is SealFor with sections. They are held to wire.Check before
+// anything is sealed, and the version is VersionCritical exactly when one of
+// them is critical, both outside and in the inner record (D30); a reader
+// refuses either version written the other way.
+func SealSections(sender *identity.Identity, recipient *identity.Public, channel string,
+	body message.Body, sections []wire.Section) (*Envelope, *Inner, error) {
+	if err := wire.Check(sections); err != nil {
+		return nil, nil, err
+	}
 	if err := body.Validate(); err != nil {
 		return nil, nil, err
 	}
@@ -170,7 +202,12 @@ func SealFor(sender *identity.Identity, recipient *identity.Public, channel stri
 		return nil, nil, err
 	}
 	toFP := recipient.Fingerprint()
+	v := Version
+	if anyCritical(sections) {
+		v = VersionCritical
+	}
 	inner := &Inner{
+		V:          v,
 		From:       sender.Fingerprint(),
 		FromBundle: sender.Public().Bundle(),
 		To:         toFP,
@@ -178,6 +215,7 @@ func SealFor(sender *identity.Identity, recipient *identity.Public, channel stri
 		Time:       time.Now().UTC().Truncate(time.Second),
 		Body:       body,
 		Channel:    channel,
+		Sections:   sections,
 	}
 
 	// Marshal exactly once: the bytes that are signed are the bytes that travel.
@@ -198,7 +236,17 @@ func SealFor(sender *identity.Identity, recipient *identity.Public, channel stri
 	if err != nil {
 		return nil, nil, err
 	}
-	return &Envelope{V: Version, To: toFP, CT: ct}, inner, nil
+	return &Envelope{V: v, To: toFP, CT: ct}, inner, nil
+}
+
+// anyCritical says whether a list holds a section marked critical.
+func anyCritical(sections []wire.Section) bool {
+	for _, s := range sections {
+		if s.Critical {
+			return true
+		}
+	}
+	return false
 }
 
 // Open decrypts and authenticates an envelope addressed to recipient. It returns
@@ -210,7 +258,7 @@ func Open(recipient *identity.Identity, env *Envelope) (*Inner, *identity.Public
 	if env == nil {
 		return nil, nil, fail(ErrMalformed, "nil envelope")
 	}
-	if env.V != Version {
+	if env.V != Version && env.V != VersionCritical {
 		return nil, nil, fail(ErrMalformed, "unsupported version %d", env.V)
 	}
 	selfFP := recipient.Fingerprint()
@@ -228,9 +276,33 @@ func Open(recipient *identity.Identity, env *Envelope) (*Inner, *identity.Public
 	sig := plaintext[:sigLen]
 	innerBytes := plaintext[sigLen:]
 
+	// Strictly (P1): a field the record does not have is refused, so that
+	// sections are the only place something new may go.
 	var inner Inner
-	if err := json.Unmarshal(innerBytes, &inner); err != nil {
+	if err := wire.Decode(innerBytes, &inner); err != nil {
 		return nil, nil, failWith(ErrMalformed, err, "inner json")
+	}
+	// The outer version is signed by nobody; the inner one is under the
+	// signature, and the two must agree (ruling 60).
+	// A record from a build before the inner version carries none, and
+	// is said so: that is what a reader meets in the window of an upgrade
+	// (D43).
+	if inner.V == 0 {
+		return nil, nil, fail(ErrMalformed, "the sealed record carries no version; the envelope says %d", env.V)
+	}
+	if inner.V != env.V {
+		return nil, nil, fail(ErrMalformed, "the envelope says version %d and the sealed record %d", env.V, inner.V)
+	}
+	// The list's shape, before the signature as the rest of the shape is;
+	// what is done with each section waits for the signature (R7).
+	if err := wire.Check(inner.Sections); err != nil {
+		return nil, nil, failWith(ErrMalformed, err, "sections")
+	}
+	// The version rule, checked by the reader both ways (P4, R6): a
+	// version 1 record with a critical section, or a version 2 record
+	// with none, is one no honest writer makes.
+	if critical := anyCritical(inner.Sections); critical != (inner.V == VersionCritical) {
+		return nil, nil, fail(ErrMalformed, "version %d with critical sections %v", inner.V, critical)
 	}
 	sender, err := identity.ParseBundle(inner.FromBundle)
 	if err != nil {
@@ -269,6 +341,13 @@ func Open(recipient *identity.Identity, env *Envelope) (*Inner, *identity.Public
 		return nil, nil, failWith(ErrMalformed, err, "body")
 	}
 	sender.Name = "" // names come from the local peer list, never from the wire
+	// Only now, with the signature verified, is a section this build does
+	// not know judged: an unsigned record is never one that needs a newer
+	// auu (R7). The record and its sender come back with the error, so the
+	// receiver can say whose message it is and keep it.
+	if _, _, err := wire.Sort(inner.Sections); err != nil {
+		return &inner, sender, &openError{cause: err}
+	}
 	return &inner, sender, nil
 }
 

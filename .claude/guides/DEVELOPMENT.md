@@ -89,11 +89,17 @@ part you cannot reach until you have split it. Adding an identity suite whose
 signatures are a different length therefore needs a format version, not a new
 constant. `TestSignatureLengthMatchesTheDefaultSuite` and
 `TestSignatureSizeMatchesTheDefaultSuite` fail loudly and say so. The envelope
-is the easy one: `Envelope.V` is outside the ciphertext, so version 2 can lay
+is the easy one: `Envelope.V` is outside the ciphertext, so version 3 can lay
 the plaintext out as `inner || signature` and a reader knows which to expect
-before decrypting. The stream is the hard one: its version is *inside* the
-sealed manifest, so version 2 has to find somewhere else to say so. The stream
-also fixes `EncSize`, so a suite with a different KEM needs the same bump.
+before decrypting. Version 2 is taken, by a message with a critical section,
+which a reader from before sections refuses unopened, and the inner record
+carries the version too, under the signature, which the outer one must equal. The stream is the hard one: its version is *inside* the
+sealed manifest, which a reader cannot find until it has split chunk 0, so no
+manifest version can say where the split is, and the manifest's version 2 is
+a manifest with sections. A new layout is a new stream format under a new
+info string, which is the lever `stream.go` names for any incompatible
+change. The stream also fixes `EncSize`, read before anything that could
+carry a version, so a suite with a different KEM needs the same new format.
 
 **Bind context into the HPKE `info` string, not into a separate AAD layer.**
 The recipient fingerprint lives in `info`; RFC 9180's key schedule already

@@ -171,7 +171,7 @@ func TestSignatureBundleMismatch(t *testing.T) {
 
 	// Mallory writes a message, swaps in alice's bundle, and keeps her own
 	// signature. Build the envelope by hand to simulate a hostile sender.
-	inner := &Inner{
+	inner := &Inner{V: Version,
 		From:       alice.Fingerprint(),
 		FromBundle: alice.Public().Bundle(),
 		To:         bob.Fingerprint(),
@@ -223,7 +223,7 @@ func TestUnsupportedVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, v := range []int{0, Version + 1, 99} {
+	for _, v := range []int{0, VersionCritical + 1, 99} {
 		env.V = v
 		if _, _, err := Open(bob, env); !errors.Is(err, ErrOpenFailed) {
 			t.Fatalf("accepted envelope version %d", v)
@@ -242,14 +242,15 @@ func TestSealRejectsInvalidBody(t *testing.T) {
 // the note on sigLen: this format splits the sealed plaintext at a fixed
 // offset, so it works for exactly one signature size.
 //
-// If it fails, the fix is envelope version 2 with the plaintext laid out as
-// inner || signature, not a change to the constant. Envelope.V is outside the
-// ciphertext, so a reader can tell the two layouts apart before decrypting —
-// which is what makes that a small change rather than a redesign.
+// If it fails, the fix is envelope version 3 with the plaintext laid out as
+// inner || signature, not a change to the constant (version 2 is a message
+// with a critical section). Envelope.V is outside the ciphertext, so a reader
+// can tell the two layouts apart before decrypting — which is what makes that
+// a small change rather than a redesign.
 func TestSignatureLengthMatchesTheDefaultSuite(t *testing.T) {
 	if got := identity.DefaultSuite().SignatureSize; got != sigLen {
 		t.Fatalf("the default identity suite signs with %d bytes but this format reserves %d.\n"+
-			"Adding a suite means envelope version 2, with the signature after the inner\n"+
+			"Adding a suite means envelope version 3, with the signature after the inner\n"+
 			"record instead of before it.", got, sigLen)
 	}
 }
@@ -343,7 +344,7 @@ func TestOpenSaysWhyInAWord(t *testing.T) {
 	innerFor := func(from *identity.Identity, to string) []byte {
 		t.Helper()
 		innerBytes, err := json.Marshal(&Inner{
-			From: from.Fingerprint(), FromBundle: from.Public().Bundle(), To: to,
+			V: Version, From: from.Fingerprint(), FromBundle: from.Public().Bundle(), To: to,
 			ID: "0123456789abcdef0123456789abcdef", Body: body(t),
 		})
 		if err != nil {
@@ -368,7 +369,7 @@ func TestOpenSaysWhyInAWord(t *testing.T) {
 		{"the inner record addressed to carol", handSealed(signedBy(alice, innerFor(alice, carol.Fingerprint()))), ErrNotForUs},
 		{"signed by mallory under alice's name", handSealed(signedBy(mallory, innerFor(alice, bob.Fingerprint()))), ErrBadSender},
 		{"a sender bundle that will not parse", handSealed(signedBy(alice, func() []byte {
-			b, _ := json.Marshal(&Inner{From: alice.Fingerprint(), FromBundle: []byte("not a bundle"), To: bob.Fingerprint(),
+			b, _ := json.Marshal(&Inner{V: Version, From: alice.Fingerprint(), FromBundle: []byte("not a bundle"), To: bob.Fingerprint(),
 				ID: "0123456789abcdef0123456789abcdef", Body: body(t)})
 			return b
 		}())), ErrBadSender},
@@ -502,7 +503,7 @@ func TestAnInnerStampedInTheFutureIsMalformed(t *testing.T) {
 	stamped := func(when time.Time) *Envelope {
 		t.Helper()
 		innerBytes, err := json.Marshal(&Inner{
-			From: alice.Fingerprint(), FromBundle: alice.Public().Bundle(), To: bob.Fingerprint(),
+			V: Version, From: alice.Fingerprint(), FromBundle: alice.Public().Bundle(), To: bob.Fingerprint(),
 			ID: "0123456789abcdef0123456789abcdef", Time: when, Body: body(t),
 		})
 		if err != nil {

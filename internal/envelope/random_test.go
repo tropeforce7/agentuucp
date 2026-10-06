@@ -201,7 +201,7 @@ func TestVandalisedInnerSignature(t *testing.T) {
 	r, seed := testutil.Seed(t)
 	alice, bob := pair(t)
 
-	inner := &Inner{
+	inner := &Inner{V: Version,
 		From:       alice.Fingerprint(),
 		FromBundle: alice.Public().Bundle(),
 		To:         bob.Fingerprint(),
@@ -255,7 +255,7 @@ func TestVandalisedRecipientField(t *testing.T) {
 func TestEnvelopeSignatureDomainIsSeparate(t *testing.T) {
 	alice, bob := pair(t)
 
-	inner := &Inner{
+	inner := &Inner{V: Version,
 		From:       alice.Fingerprint(),
 		FromBundle: alice.Public().Bundle(),
 		To:         bob.Fingerprint(),

@@ -61,7 +61,7 @@ func TestAThreadIDThatIsAPathNeverReachesServe(t *testing.T) {
 	root := filepath.Join(bob.home, "serve")
 	outside := filepath.Join(bob.home, "outside")
 
-	env := sealByHand(t, alice, bob.user, &envelope.Inner{
+	env := sealByHand(t, alice, bob.user, &envelope.Inner{V: envelope.Version,
 		ID: "0123456789abcdef0123456789abcdef", Time: time.Now().UTC(),
 		Body:    message.Body{Type: message.TypeAsk, Thread: "../../outside", Subject: "hello", Text: "please look"},
 		Channel: "jostle",

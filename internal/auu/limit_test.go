@@ -1072,7 +1072,7 @@ func aStreamExtractsUnderSafeUniqueNames(t *testing.T) {
 	if err := opened.ToDirectory(bytes.NewReader(full[stream.HeaderSize+n:]), dir); err != nil {
 		t.Fatalf("ToDirectory: %v", err)
 	}
-	inner := &envelope.Inner{From: alice.Fingerprint(), To: bob.Fingerprint(), ID: id, Time: time.Now().UTC(),
+	inner := &envelope.Inner{V: envelope.Version, From: alice.Fingerprint(), To: bob.Fingerprint(), ID: id, Time: time.Now().UTC(),
 		Body: message.Body{Type: message.TypeNote, Thread: id, Text: "odd names"}}
 	for _, a := range opened.Manifest.Attachments {
 		inner.Body.Attachments = append(inner.Body.Attachments, message.Attachment{Name: a.Name, Media: a.Media, Size: a.Size, SHA256: a.SHA256})

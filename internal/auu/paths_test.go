@@ -228,7 +228,7 @@ func TestLimitNothingTheNetworkNamesIsAPath(t *testing.T) {
 				if message.ValidID(v) == nil {
 					return ""
 				}
-				env := sealInnerByHand(t, alice, bob.Public(), &envelope.Inner{ID: v, Time: time.Now().UTC(), Body: body(anID)})
+				env := sealInnerByHand(t, alice, bob.Public(), &envelope.Inner{V: envelope.Version, ID: v, Time: time.Now().UTC(), Body: body(anID)})
 				if _, _, err := envelope.Open(bob, env); envelope.Cause(err) != envelope.ErrMalformed {
 					return ""
 				}
