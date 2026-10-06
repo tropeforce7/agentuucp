@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/regular"
@@ -37,6 +38,12 @@ var DamagedBudget int64 = 64 << 20
 
 // DamagedRecord is what is kept beside the bytes: which relay's message it
 // was, when that relay received it, and the cause in a word.
+// CauseNewer begins the cause of a message kept because it carries a
+// critical section this build does not know (D29): not damaged, and not the
+// sender's to send again, but one a newer auu will read. The fetch writes
+// it and the count of such messages reads it, so it is one constant.
+const CauseNewer = "newer"
+
 type DamagedRecord struct {
 	RelayID  int64     `json:"relay_id"`
 	Relay    string    `json:"relay"`
@@ -70,9 +77,10 @@ func recordPath(binPath string) string { return binPath[:len(binPath)-len(".bin"
 
 // kept is one message under damaged/, for counting and eviction.
 type kept struct {
-	bin  string
-	size int64
-	when time.Time
+	bin   string
+	size  int64
+	when  time.Time
+	cause string
 }
 
 // keptMessages lists what is under damaged/, oldest first: by the record's
@@ -108,6 +116,7 @@ func (s *Store) keptMessages() ([]kept, error) {
 			var rec DamagedRecord
 			if data, err := regular.ReadFile(recordPath(k.bin)); err == nil && json.Unmarshal(data, &rec) == nil && !rec.Received.IsZero() {
 				k.when = rec.Received
+				k.cause = rec.Cause
 			}
 			out = append(out, k)
 		}
@@ -184,6 +193,23 @@ func (s *Store) DamagedKept() (messages int, bytes int64, err error) {
 		bytes += k.size
 	}
 	return len(have), bytes, nil
+}
+
+// DamagedNeedingNewer is how many of the messages kept under damaged/ were
+// kept because they need a newer auu, by their records' cause, so that the
+// sentence about the rest can stop telling a person to ask for these again.
+func (s *Store) DamagedNeedingNewer() (int, error) {
+	have, err := s.keptMessages()
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, k := range have {
+		if k.cause == CauseNewer || strings.HasPrefix(k.cause, CauseNewer+":") {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // MiB says a byte count for a sentence: in mebibytes, whole when it is and

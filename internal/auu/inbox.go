@@ -28,6 +28,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
 	"github.com/tropeforce7/agentuucp/internal/term"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // fetchResult summarises one drain of a relay mailbox.
@@ -40,6 +41,10 @@ type fetchResult struct {
 	// claims a file that is not there.
 	Unreadable int `json:"unreadable"`
 	Kept       int `json:"kept"`
+	// Newer is the streams left on the relay for a newer auu (D42), by
+	// the critical section each carries, which a build that knows it
+	// fetches whole.
+	Newer []string `json:"newer,omitempty"`
 	// Gone counts the messages delivered under each channel that is no
 	// longer in this machine's directory: a channel deleted with mail
 	// still queued, which arrives as usual and is filed under its name.
@@ -51,6 +56,7 @@ func (f *fetchResult) add(o fetchResult) {
 	f.Quarantined += o.Quarantined
 	f.Unreadable += o.Unreadable
 	f.Kept += o.Kept
+	f.Newer = append(f.Newer, o.Newer...)
 	for name, n := range o.Gone {
 		if f.Gone == nil {
 			f.Gone = map[string]int{}
@@ -209,6 +215,10 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 	if err != nil {
 		return res, said, err
 	}
+	// A stream that waited on this relay for the build this now is.
+	if err := fetchKnownNow(ctx, s, id, c, r, settings, &res); err != nil {
+		return res, said, err
+	}
 	var (
 		// reset is the re-fetch from the relay's first id, while it runs;
 		// reckoned says the cursor has been held against the relay's span
@@ -315,6 +325,25 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 				// message stays queued for the next fetch.
 				return res, said, err
 			}
+			// A message with a critical section this build does not know,
+			// signed by the sender Open names: kept, said to be, and
+			// acknowledged, as a damaged message is, and told apart from
+			// one (D29, R8).
+			var newer *wire.NeedsNewerError
+			if errors.As(err, &newer) && sender != nil {
+				met.fresh++
+				if err := keepNewer(s, r, m.ID, m.Received, m.Raw, newer.Name, sender.Fingerprint(), &res); err != nil {
+					return res, said, err
+				}
+				if err := c.Ack(ctx, m.ID); err != nil {
+					return res, said, transportErr(err)
+				}
+				cursor = m.ID
+				if err := s.SetCursorFor(r, cursor); err != nil {
+					return res, said, err
+				}
+				continue
+			}
 			if err == nil {
 				meeting, err := met.meet(ctx, s, c, m, inner.ID, sender.Fingerprint())
 				if err != nil {
@@ -406,15 +435,20 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 			// against the relay's max_knocks_waiting for ever, closing
 			// the mailbox to every other knocker.
 			keep := keepFor(settings, channel) && inner.Body.Type != message.TypeKnock
+			// The sections it came with, kept as they came at or under the
+			// kept size and counted over it (D31).
+			var dropped int
+			inner.Sections, dropped = keptSections(inner.Sections)
 			stored := &store.Stored{
-				RelayID:    m.ID,
-				Relay:      r.Name,
-				Received:   m.Received,
-				RelaySize:  m.Size,
-				Inner:      inner,
-				SenderName: s.PeerName(sender.Fingerprint()),
-				Channel:    channel,
-				OnRelay:    keep,
+				DroppedSections: dropped,
+				RelayID:         m.ID,
+				Relay:           r.Name,
+				Received:        m.Received,
+				RelaySize:       m.Size,
+				Inner:           inner,
+				SenderName:      s.PeerName(sender.Fingerprint()),
+				Channel:         channel,
+				OnRelay:         keep,
 				// Where it has been, which only the person receiving it
 				// can judge, and which a reply goes back along. The
 				// client held these names to the relay-name rule before
@@ -487,6 +521,15 @@ type messageJSON struct {
 	// through, and PayloadOnRelay that a quarantined stream's body is.
 	OnRelay        bool `json:"on_relay,omitempty"`
 	PayloadOnRelay bool `json:"payload_on_relay,omitempty"`
+	// Newer names the critical section a stream carries that this build
+	// does not know, for a stream that waits on the relay for a newer auu
+	// (D42); nothing of what it carries is said beside it.
+	Newer string `json:"newer,omitempty"`
+	// IgnoredSections names the sections the message came with that this
+	// build does not know and kept as they came (D31), and DroppedSections
+	// counts those it did not keep for being over the kept size.
+	IgnoredSections []string `json:"ignored_sections,omitempty"`
+	DroppedSections int      `json:"dropped_sections,omitempty"`
 	// Vouch is a vouch message's judgement here: whether it counts and
 	// why not, and what it says when it does. On a vouch alone.
 	Vouch *vouchJSON `json:"vouch,omitempty"`
@@ -531,7 +574,14 @@ func toJSON(s *store.Store, box store.Box, m *store.Stored, includeText bool) me
 		k := judgeKnockVouches(s, m, time.Now())
 		out.Vouches = &knockVouchesJSON{By: k.Held, NotVerifying: k.Bad, Unknown: k.Unknown}
 	}
-	if includeText {
+	out.Newer = m.Newer
+	out.DroppedSections = m.DroppedSections
+	for _, sec := range m.Inner.Sections {
+		if !wire.Known(sec.Name) {
+			out.IgnoredSections = append(out.IgnoredSections, sec.Name)
+		}
+	}
+	if includeText && m.Newer == "" {
 		out.Text = m.Inner.Body.Text
 	}
 	for _, a := range m.Inner.Body.Attachments {
@@ -709,6 +759,13 @@ func cmdInbox(args []string) error {
 	if res.Quarantined > 0 {
 		fmt.Printf("Unknown senders are held back: %s quarantine ls\n", prog)
 	}
+	// What waits on a relay for a newer auu is said every time, as what is
+	// under damaged/ is: it stays until a build that knows its section
+	// fetches it, and the point of the record is that a person knows.
+	if waiting := waitingForNewer(s); len(waiting) > 0 {
+		fmt.Printf("%d stream(s) wait on the relay for a newer auu (section %s); update auu to fetch them\n",
+			len(waiting), strings.Join(waiting, ", "))
+	}
 	// What each relay is still holding, which with a channel set to keep
 	// is the mail already read: the count is the relay's own, and 'auu
 	// rm' is what brings it down.
@@ -759,7 +816,16 @@ func cmdInbox(args []string) error {
 	// kept: it stays until a person removes it, and the point of keeping
 	// it is that a person knows it is there.
 	if kept, _, err := s.DamagedKept(); err == nil && kept > 0 {
-		fmt.Printf("%d damaged message(s) kept under %s; ask their senders to send them again\n", kept, s.DamagedDir())
+		newer, err := s.DamagedNeedingNewer()
+		if err != nil {
+			newer = 0
+		}
+		if newer > 0 {
+			fmt.Printf("%d message(s) kept under %s need a newer auu; update auu to read them\n", newer, s.DamagedDir())
+		}
+		if rest := kept - newer; rest > 0 {
+			fmt.Printf("%d damaged message(s) kept under %s; ask their senders to send them again\n", rest, s.DamagedDir())
+		}
 	}
 	return nil
 }
@@ -827,6 +893,8 @@ func printInboxLine(s *store.Store, m *store.Stored) {
 // has the body to give.
 func whereElse(m *store.Stored) string {
 	switch {
+	case m.Newer != "":
+		return fmt.Sprintf("  needs a newer auu (section %q)", m.Newer)
 	case m.PayloadOnRelay && m.PayloadGone:
 		return "  body not fetched, and gone from the relay"
 	case m.OnRelay && m.PayloadOnRelay:
@@ -857,6 +925,13 @@ func cmdRead(args []string) error {
 	if err != nil {
 		return usageErrf("%v", err)
 	}
+	if m.Newer != "" {
+		if *asJSON {
+			return printJSON(toJSON(s, box, m, false))
+		}
+		fmt.Println(waitsForNewer(m))
+		return nil
+	}
 	if err := s.MarkRead(box, m.Inner.ID); err != nil {
 		return err
 	}
@@ -865,6 +940,35 @@ func cmdRead(args []string) error {
 	}
 	printMessage(s, box, m)
 	return nil
+}
+
+// waitingForNewer is each stream recorded as waiting on a relay for a
+// newer auu, in the inbox and the quarantine, by its section's name quoted,
+// leaving out one whose payload is gone, which was said when it went.
+func waitingForNewer(s *store.Store) []string {
+	var out []string
+	for _, box := range []store.Box{store.Inbox, store.Quarantine} {
+		msgs, err := s.ListQuietly(box)
+		if err != nil {
+			continue
+		}
+		for _, m := range msgs {
+			if m.Newer != "" && !m.PayloadGone {
+				out = append(out, fmt.Sprintf("%q", m.Newer))
+			}
+		}
+	}
+	return out
+}
+
+// waitsForNewer is the one sentence for a stream that waits on the relay
+// for a newer auu (D42): read, reply and the quarantine's show and trust
+// each say it and nothing of what the stream carries, since this build has
+// not read it. The section's name passed the name rule; it is quoted all
+// the same.
+func waitsForNewer(m *store.Stored) string {
+	return fmt.Sprintf("message %s waits on the relay for a newer auu (section %q); update auu to fetch it",
+		m.Inner.ID[:12], m.Newer)
 }
 
 // threadSubject is the subject the thread was opened with, which is the
@@ -1001,6 +1105,9 @@ func cmdExtract(args []string) error {
 	}
 	if m.PayloadGone {
 		return bodyGone(m)
+	}
+	if m.Newer != "" {
+		return usageErrf("%s", waitsForNewer(m))
 	}
 	if m.PayloadOnRelay {
 		return usageErrf("message %s is from somebody you have not added as a peer, so its "+
@@ -1596,6 +1703,13 @@ func cmdQuarantine(args []string) error {
 			}
 			m = found
 		}
+		if m.Newer != "" {
+			if *asJSON {
+				return printJSON(toJSON(s, store.Quarantine, m, false))
+			}
+			fmt.Println(waitsForNewer(m))
+			return nil
+		}
 		if *asJSON {
 			return printJSON(wholeMessage(s, store.Quarantine, m))
 		}
@@ -1612,6 +1726,9 @@ func cmdQuarantine(args []string) error {
 		}
 		if box != store.Quarantine {
 			return usageErrf("message %s is not in quarantine", rest[0])
+		}
+		if m.Newer != "" {
+			return usageErrf("%s", waitsForNewer(m))
 		}
 		pub, err := identity.ParseBundle(m.Inner.FromBundle)
 		if err != nil {

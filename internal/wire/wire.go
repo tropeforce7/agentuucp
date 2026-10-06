@@ -131,6 +131,24 @@ var known = map[string]bool{}
 // Known says whether this build understands the named section.
 func Known(name string) bool { return known[name] }
 
+// Register says this build understands the named section. A feature calls it
+// from its package's init, once, with a name of its own choosing; a name that
+// is not a name, or one registered twice, is a mistake in the program and
+// never input, so it panics rather than return an error nobody could act
+// on. It returns a function that takes the name out again, for a test in
+// another package to put the registry back as it found it; a feature's init
+// ignores it. Nothing in this release calls it.
+func Register(name string) (unregister func()) {
+	if err := ValidName(name); err != nil {
+		panic(fmt.Sprintf("wire.Register: %v", err))
+	}
+	if known[name] {
+		panic(fmt.Sprintf("wire.Register: section %q registered twice", name))
+	}
+	known[name] = true
+	return func() { delete(known, name) }
+}
+
 // Sort splits a list that has passed Check into the sections this build
 // knows and the ones it ignores. A section it does not know that is critical
 // stops the sort: the error is a *NeedsNewerError naming the first such

@@ -27,7 +27,10 @@ import (
 )
 
 const (
-	// Version is the only envelope version this build understands.
+	// Version is the version of a message with no critical section, and
+	// the one every reader since the first has understood. A reader of this
+	// build takes it and VersionCritical, and refuses any other before it
+	// decrypts.
 	Version = 1
 
 	// VersionCritical is the version of a message that carries a section

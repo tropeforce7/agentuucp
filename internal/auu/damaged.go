@@ -89,6 +89,43 @@ func keepDamaged(s *store.Store, r *store.Relay, id int64, received time.Time, d
 	return nil
 }
 
+// keepNewer keeps a message that carries a critical section this build
+// does not know (D29): under damaged/, with the cause newer and the
+// section's name, acknowledged as every kept message is. It is not damaged
+// and not its sender's to send again: the sentence names the sender as the
+// quarantine does, the peer's name for somebody admitted and the start of
+// the fingerprint for anybody else, and says to update auu. The sender is
+// the one Open verified, since nothing unsigned is ever kept as newer (R7).
+func keepNewer(s *store.Store, r *store.Relay, id int64, received time.Time, data []byte,
+	section, senderFP string, res *fetchResult) error {
+	cause := fmt.Sprintf("%s: section %q", store.CauseNewer, section)
+	kept, _, err := s.KeepDamaged(store.DamagedRecord{
+		RelayID: id, Relay: r.Name, Received: received, Cause: cause,
+	}, data)
+	if err != nil {
+		return fmt.Errorf("keeping relay message %d under %s: %w", id, s.DamagedDir(), err)
+	}
+	res.Unreadable++
+	from := "an unknown sender, " + senderFP[:16]
+	if s.IsAuthorized(senderFP) {
+		from = identity.Printable(s.PeerName(senderFP))
+	}
+	if !kept {
+		fmt.Fprintf(os.Stderr, "warning: relay message %d from %s needs a newer auu (section %q); it is %s and was not kept, "+
+			"since %s holds at most %s\n",
+			id, from, section, store.MiB(int64(len(data))), s.DamagedDir(), store.MiB(store.DamagedBudget))
+		return nil
+	}
+	res.Kept++
+	path, err := s.DamagedPath(r.Name, id)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "warning: relay message %d from %s needs a newer auu (section %q) and was kept as %s; "+
+		"update auu to read it\n", id, from, section, path)
+	return nil
+}
+
 // filedUnder settles which channel a message is filed under, and whether
 // the relay filed it where it was sealed for. sealed is the name inside the
 // signature (the inner record's, or the manifest's), outer the name on the

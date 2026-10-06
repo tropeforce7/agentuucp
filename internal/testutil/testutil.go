@@ -9,10 +9,13 @@ package testutil
 import (
 	crand "crypto/rand"
 	"encoding/binary"
+	"encoding/json"
 	"math/rand/v2"
 	"os"
 	"strconv"
 	"testing"
+
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // SeedEnv names the environment variable that pins a run's seed.
@@ -99,4 +102,28 @@ func Lengths(cap, block int) []int {
 		out = append(out, n)
 	}
 	return out
+}
+
+// MadeUpSection is a section no build knows, drawn from r, for a round trip
+// to carry so that the path a reader takes past what it does not know runs
+// on every build and not only when a feature happens to use it (D35). It is
+// never critical, so the message is read; its name is a valid one no
+// feature will choose, and its body a JSON string from two bytes to one
+// over the size a reader keeps, so a run meets both sides of that edge.
+func MadeUpSection(r *rand.Rand) wire.Section {
+	const letters = "abcdefghijklmnopqrstuvwxyz"
+	name := []byte("made-up-")
+	for range 1 + r.IntN(16) {
+		name = append(name, letters[r.IntN(len(letters))])
+	}
+	size := 2 + r.IntN(wire.MaxKeptBytes)
+	if r.IntN(4) == 0 {
+		size = wire.MaxKeptBytes + r.IntN(2)
+	}
+	body := make([]byte, size)
+	body[0], body[size-1] = '"', '"'
+	for i := 1; i < size-1; i++ {
+		body[i] = letters[r.IntN(len(letters))]
+	}
+	return wire.Section{Name: string(name), Critical: false, Data: json.RawMessage(body)}
 }

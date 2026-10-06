@@ -248,13 +248,12 @@ func TestAnEmptyAttachmentIsDeliveredNotAckedAway(t *testing.T) {
 
 // TestAStreamThatNeedsANewerAuuDoesNotStopTheFetch: a stream whose signed
 // manifest carries a critical section this build does not know is one it
-// will never open. The manifest reader says so after the signature, and a
+// cannot open yet. The manifest reader says so after the signature, and a
 // receiver that took that for a transport failure would leave it on the
-// relay unacknowledged with the cursor unmoved, so that every fetch stopped
-// at it and the message behind it never arrived: anyone the relay let post
-// a stream could close a mailbox with one, which a manifest carrying any
-// section was refused for, permanently, until the sections door opened.
-// It is kept and acknowledged, and the good message behind it delivered.
+// relay with the cursor unmoved, so that every fetch stopped at it and the
+// message behind it never arrived: anyone the relay let post a stream could
+// close a mailbox with one. It waits on the relay, recorded, with the
+// cursor past it (D42), and the good message behind it is delivered.
 func TestAStreamThatNeedsANewerAuuDoesNotStopTheFetch(t *testing.T) {
 	srv, st, _ := startRelayOnDisk(t, relay.Config{Limits: relay.DefaultLimits()})
 	alice := newUser(t, "alice", srv.URL)
@@ -325,8 +324,8 @@ func TestAStreamThatNeedsANewerAuuDoesNotStopTheFetch(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &inbox); err != nil {
 		t.Fatalf("inbox --json: %v\n%s", err, out)
 	}
-	if inbox.Fetch.Delivered != 1 || inbox.Fetch.Unreadable != 1 {
-		t.Fatalf("fetch: %+v, want the good message delivered and the stream kept as unreadable", inbox.Fetch)
+	if inbox.Fetch.Delivered != 1 || inbox.Fetch.Unreadable != 0 || len(inbox.Fetch.Newer) != 1 {
+		t.Fatalf("fetch: %+v, want the good message delivered and the stream waiting on the relay", inbox.Fetch)
 	}
 	if !spoolHas(t, bob, store.Inbox, "the good one") {
 		t.Error("the good message behind the stream is not in the inbox")

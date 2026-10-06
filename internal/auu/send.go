@@ -227,6 +227,9 @@ func cmdReply(args []string) error {
 		}
 		box, original, viaThread = tbox, latest, true
 	}
+	if original.Newer != "" {
+		return usageErrf("%s", waitsForNewer(original))
+	}
 	if box == store.Sent && !viaThread {
 		return usageErrf("%s is a message you sent; reply to one you received, or to its thread %s",
 			target, original.Inner.Body.Thread[:12])

@@ -338,3 +338,29 @@ func TestTheWalkKnowsTheFieldsJSONDoes(t *testing.T) {
 		t.Errorf("an untagged field by another case: %v", err)
 	}
 }
+
+// Register adds a name to what this build knows, once, and refuses a name
+// that is not one and a name twice by panicking, since either is the
+// program's own mistake at init.
+func TestRegisterAddsANameOnce(t *testing.T) {
+	unregister := Register("a-feature")
+	if !Known("a-feature") {
+		t.Fatal("a registered name is not known")
+	}
+	t.Cleanup(func() {
+		unregister()
+		if Known("a-feature") {
+			t.Error("the name is still known after its unregister ran")
+		}
+	})
+	for _, name := range []string{"a-feature", "Not-A-Name", ""} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("Register(%q) did not panic", name)
+				}
+			}()
+			Register(name)
+		}()
+	}
+}

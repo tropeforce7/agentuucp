@@ -297,11 +297,16 @@ func (r *serveRun) round(ctx context.Context, backlog, longRun bool) error {
 	} else {
 		r.unreachable = false
 	}
+	// Whether this is a first start is settled before anything is looked
+	// at: pending writes a waiting stream's reason into the ledger, and a
+	// ledger once written exists, which would make a first start look
+	// like a later round and answer the old mail it must leave alone.
+	first := !r.led.existed
 	pending, err := r.pending()
 	if err != nil {
 		return err
 	}
-	if !r.led.existed {
+	if first {
 		// A first start does not answer old mail: an expert set up today
 		// must not reply to a year of it at once. Every message in the
 		// inbox is written down as skipped, so that a channel added to the
@@ -369,6 +374,12 @@ func (r *serveRun) pending() ([]*store.Stored, error) {
 	}
 	var out []*store.Stored
 	for _, m := range msgs {
+		if m.Newer != "" {
+			if err := r.waitsForNewer(m); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if e, ok := r.led.Messages[m.Inner.ID]; ok && e.settled() {
 			continue
 		}
@@ -392,6 +403,31 @@ func (r *serveRun) pending() ([]*store.Stored, error) {
 		}
 	})
 	return out, nil
+}
+
+// waitsForNewer writes down, once, that a message on a served channel is a
+// stream waiting on the relay for a newer auu: pending with that reason, and
+// neither skipped, answered nor counted as a turn, so that the round after
+// the upgrade, which finds it delivered, answers it.
+func (r *serveRun) waitsForNewer(m *store.Stored) error {
+	if r.channelFor(m) == nil {
+		return nil
+	}
+	e := r.led.entry(m.Inner.ID, m.Inner.Body.Thread, channelOf(m))
+	if e.Newer == m.Newer {
+		return nil
+	}
+	e.Newer = m.Newer
+	fmt.Fprintf(os.Stderr, "%s: %s from %s waits on the relay for a newer auu (section %q); left pending\n",
+		prog, shortID(m.Inner.ID), orNone(identity.Printable(m.SenderName)), m.Newer)
+	// On a first start the ledger is not written here: a file written
+	// before the first start's own record of the backlog would make the
+	// next start, after a crash between the two, take itself for a later
+	// one and answer the old mail. The backlog's save writes this too.
+	if !r.led.existed {
+		return nil
+	}
+	return r.led.save()
 }
 
 // channelFor is the channel whose handler answers a message, or nil for one
@@ -477,6 +513,11 @@ func (r *serveRun) recordBacklog(backlog bool) (int, error) {
 	n := 0
 	for _, m := range msgs {
 		if _, ok := r.led.Messages[m.Inner.ID]; ok {
+			continue
+		}
+		// A stream waiting for a newer auu is never backlog: the round
+		// after the upgrade is when it arrives.
+		if m.Newer != "" {
 			continue
 		}
 		if backlog && r.answerable(m) {
@@ -759,6 +800,7 @@ func (r *serveRun) settle(m *store.Stored, ch *serveChannel, replyID string) err
 	e.Handled = time.Now().UTC().Truncate(time.Second)
 	e.Tried = e.Handled
 	e.Reply = replyID
+	e.Newer = ""
 	if err := r.led.save(); err != nil {
 		return err
 	}

@@ -13,6 +13,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/testutil"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // aeadTagSize is the AES-256-GCM tag appended by the AEAD.
@@ -89,13 +90,19 @@ func TestRoundTripRandom(t *testing.T) {
 			Attachments: attachments,
 		}
 
-		env, _, err := Seal(alice, bob.Public(), in)
+		// A made-up section rides on every round trip (D35): the reader
+		// goes past what it does not know on every build.
+		madeUp := testutil.MadeUpSection(r)
+		env, _, err := SealSections(alice, bob.Public(), "", in, []wire.Section{madeUp})
 		if err != nil {
 			t.Fatalf("seed %d: sealing %d bytes of text: %v", seed, n, err)
 		}
 		out, sender, err := Open(bob, env)
 		if err != nil {
 			t.Fatalf("seed %d: opening %d bytes of text: %v", seed, n, err)
+		}
+		if len(out.Sections) != 1 || out.Sections[0].Name != madeUp.Name || !bytes.Equal(out.Sections[0].Data, madeUp.Data) {
+			t.Fatalf("seed %d: the made-up section %q did not survive", seed, madeUp.Name)
 		}
 		if out.Body.Text != in.Text || out.Body.Subject != in.Subject {
 			t.Fatalf("seed %d: body did not survive at length %d", seed, n)

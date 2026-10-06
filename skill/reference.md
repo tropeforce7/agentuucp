@@ -328,7 +328,8 @@ own line for each round that did something, and nothing for a quiet one.
 `turns`, `last` and `worktree` (a side-copy thread's own).
 
 `auu inbox --json`: `fetch` with `delivered`, `quarantined`, `unreadable`,
-`kept` and `channels_gone` (when set); `relays`, a list of `relay`, `url`,
+`kept`, `newer` (when set: the critical section each stream left waiting on
+the relay for a newer auu carries) and `channels_gone` (when set); `relays`, a list of `relay`, `url`,
 the same fetch counts, `queued` (what that relay still holds), `first`
 and `last` (the lowest and highest message ids it holds for you, both 0
 when it holds nothing), `allow`
@@ -348,7 +349,11 @@ of its own), `text` (only where the whole message is printed), `attachments` of 
 `media`, `size`, `sha256`, `channel`, `via` (when the message came through
 another relay: the relays it crossed, nearest the sender first, joined by
 `!`), `on_relay` (when set),
-`payload_on_relay` (when set) and `vouch` (on a message of type `vouch`
+`payload_on_relay` (when set), `newer` (when set: a stream waiting on the
+relay for a newer auu, by its critical section, with nothing of what it
+carries beside it), `ignored_sections` (when set: the sections this build
+did not know, kept with the message) and `dropped_sections` (when set: how
+many were too large to keep), and `vouch` (on a message of type `vouch`
 alone: `counts`, and when it does not, `why`; when it does, `voucher` and
 `subject` (fingerprints), `name` (the voucher's label for the subject, a
 suggestion and never a label here), `issued`, `known_as` (when the subject
@@ -543,6 +548,20 @@ Anywhere:
   reporting and needs nothing.
 - `nothing happened in 10m0s` — a `watch` that timed out, exit 3.
 - `no reply on thread T after 10m0s` — a `wait` that timed out, exit 3.
+
+On stderr while `auu inbox` fetches, for a message from a newer build:
+
+- `warning: relay message N from NAME needs a newer auu (section "S") and
+  was kept as PATH; update auu to read it`: a message with a critical
+  section this build does not know, from a peer by name or from `an unknown
+  sender, FP16`; the user updates auu, and nobody resends.
+
+And on standard output: `N stream(s) wait on the relay for a newer auu
+(section "S"); update auu to fetch them`, and `N message(s) kept under DIR
+need a newer auu; update auu to read them`, every run until an updated auu
+reads them. `auu read`, `auu reply` and the quarantine's `show` and `trust`
+answer a waiting stream with `message ID waits on the relay for a newer auu
+(section "S"); update auu to fetch it`.
 
 On stderr after the messages of `auu inbox` or `auu wait`, once per run,
 about your own allow list on one relay; the exit code is the run's own:

@@ -133,8 +133,14 @@ func cmdRm(args []string) error {
 				results = append(results, res)
 				continue
 			}
-			// The record stays, and no longer claims to be anywhere else.
-			m.OnRelay, m.PayloadOnRelay = false, false
+			// The record stays, and no longer claims to be anywhere else. A
+			// stream that waited for a newer auu keeps that it did, with
+			// the payload it waited on gone, so nothing asks for it again.
+			if m.Newer != "" {
+				m.OnRelay, m.PayloadGone = false, true
+			} else {
+				m.OnRelay, m.PayloadOnRelay = false, false
+			}
 			if err := s.Save(box, m); err != nil {
 				return err
 			}

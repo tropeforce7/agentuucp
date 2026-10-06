@@ -11,9 +11,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/client"
-	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
-	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
 	"github.com/tropeforce7/agentuucp/internal/wire"
@@ -48,6 +46,12 @@ func fetchManifest(ctx context.Context, c *client.Client, id *identity.Identity,
 	}
 	read := append(append([]byte{}, header...), chunk0...)
 	opened, err := stream.OpenManifest(id, header, chunk0)
+	if errors.Is(err, wire.ErrNeedsNewer) {
+		// The manifest verified and names a critical section this build
+		// does not know: the caller needs its sender and its id to leave
+		// the stream waiting on the relay (D42).
+		return opened, read, err
+	}
 	if err != nil {
 		return nil, read, err
 	}
@@ -192,31 +196,19 @@ func deliverStream(ctx context.Context, s *store.Store, id *identity.Identity, c
 		return err
 	}
 
-	// The local record mirrors an envelope's, with the attachment metadata
-	// pointing at the directory rather than carrying the bytes.
-	inner := &envelope.Inner{
-		From: m.From, FromBundle: m.FromBundle, To: m.To, ID: m.ID, Time: m.Time,
-		Body: message.Body{
-			Type: m.Body.Type, Subject: m.Body.Subject, Thread: m.Body.Thread,
-			InReplyTo: m.Body.InReplyTo, Text: m.Body.Text,
-		},
-	}
-	for _, a := range m.Attachments {
-		inner.Body.Attachments = append(inner.Body.Attachments, message.Attachment{
-			Name: a.Name, Media: a.Media, Size: a.Size, SHA256: a.SHA256,
-		})
-	}
-	inner.Channel = m.Channel
+	// The local record mirrors an envelope's.
+	inner, dropped := innerFromManifest(m)
 	return s.Save(box, &store.Stored{
-		RelayID:    relayID,
-		Relay:      r.Name,
-		Received:   listed.Received,
-		RelaySize:  listed.Size,
-		Inner:      inner,
-		SenderName: s.PeerName(m.From),
-		Streamed:   true,
-		Channel:    storedChannel(m.Channel),
-		OnRelay:    keep,
+		RelayID:         relayID,
+		Relay:           r.Name,
+		Received:        listed.Received,
+		RelaySize:       listed.Size,
+		Inner:           inner,
+		SenderName:      s.PeerName(m.From),
+		Streamed:        true,
+		Channel:         storedChannel(m.Channel),
+		OnRelay:         keep,
+		DroppedSections: dropped,
 	})
 }
 
@@ -226,29 +218,33 @@ func deliverStream(ctx context.Context, s *store.Store, id *identity.Identity, c
 // if the recipient later decides to trust the sender. A stranger cannot make
 // anyone download anything.
 func quarantineStream(s *store.Store, r *store.Relay, listed relayCopy, opened *stream.Opened) error {
+	return waitingStream(s, store.Quarantine, r, listed, opened, "")
+}
+
+// waitingStream records a stream whose payload is left on the relay: a
+// stranger's, in the quarantine, until a person decides; or one with a
+// critical section this build does not know, in the box its sender's mail
+// goes to, marked with the section, until a build that knows it fetches it
+// whole (D42). Nothing of the payload is fetched and nothing acknowledged.
+func waitingStream(s *store.Store, box store.Box, r *store.Relay, listed relayCopy, opened *stream.Opened, newer string) error {
 	m := opened.Manifest
-	inner := &envelope.Inner{
-		From: m.From, FromBundle: m.FromBundle, To: m.To, ID: m.ID, Time: m.Time,
-		Body: message.Body{
-			Type: m.Body.Type, Subject: m.Body.Subject, Thread: m.Body.Thread,
-			InReplyTo: m.Body.InReplyTo, Text: m.Body.Text,
-		},
+	inner, dropped := innerFromManifest(m)
+	name := ""
+	if box == store.Inbox {
+		name = s.PeerName(m.From)
 	}
-	for _, a := range m.Attachments {
-		inner.Body.Attachments = append(inner.Body.Attachments, message.Attachment{
-			Name: a.Name, Media: a.Media, Size: a.Size, SHA256: a.SHA256,
-		})
-	}
-	inner.Channel = m.Channel
-	return s.Save(store.Quarantine, &store.Stored{
-		RelayID:        listed.ID,
-		Relay:          r.Name,
-		Received:       listed.Received,
-		RelaySize:      listed.Size,
-		Inner:          inner,
-		Streamed:       true,
-		PayloadOnRelay: true,
-		Channel:        storedChannel(m.Channel),
+	return s.Save(box, &store.Stored{
+		RelayID:         listed.ID,
+		Relay:           r.Name,
+		Received:        listed.Received,
+		RelaySize:       listed.Size,
+		Inner:           inner,
+		SenderName:      name,
+		Streamed:        true,
+		PayloadOnRelay:  true,
+		Channel:         storedChannel(m.Channel),
+		Newer:           newer,
+		DroppedSections: dropped,
 	})
 }
 
@@ -268,6 +264,38 @@ func fetchOneStream(ctx context.Context, s *store.Store, id *identity.Identity, 
 
 	relayID := m.ID
 	opened, manifest, err := fetchManifest(ctx, c, id, relayID)
+	// A stream with a critical section this build does not know waits on
+	// the relay, unacknowledged, with a record of it in the box its
+	// sender's mail goes to, and the fetch goes on past it: a build that
+	// knows the section fetches it whole, since the payload is still
+	// there (D42). Its sender is the one the manifest's signature named.
+	var newer *wire.NeedsNewerError
+	if errors.As(err, &newer) && opened != nil {
+		meeting, err := met.meet(ctx, s, c, m, opened.Manifest.ID, opened.Sender.Fingerprint())
+		if err != nil {
+			return err
+		}
+		if meeting == collided {
+			met.fresh++
+			if err := keepCollided(s, r, relayID, m.Received, manifest, res); err != nil {
+				return err
+			}
+			return c.Ack(ctx, relayID)
+		}
+		if meeting == metHeld {
+			return nil
+		}
+		met.fresh++
+		box := store.Quarantine
+		if s.IsAuthorized(opened.Sender.Fingerprint()) {
+			box = store.Inbox
+		}
+		if err := waitingStream(s, box, r, relayCopy{relayID, m.Received, m.Size}, opened, newer.Name); err != nil {
+			return err
+		}
+		res.Newer = append(res.Newer, newer.Name)
+		return nil
+	}
 	if err != nil {
 		if isGone(err) {
 			return droppedOnRelay(relayID, res)
@@ -410,11 +438,7 @@ func isPermanent(err error) bool {
 	if isLocked(err) {
 		return false
 	}
-	// A stream that needs a newer auu is one this build will never open;
-	// left unacknowledged it would stop every fetch at it, and a sender
-	// the relay lets post a stream could close a mailbox with one.
 	return isGone(err) || isBeyondTheFile(err) ||
-		errors.Is(err, wire.ErrNeedsNewer) ||
 		errors.Is(err, stream.ErrForm) ||
 		errors.Is(err, stream.ErrSignature) ||
 		errors.Is(err, stream.ErrOpenFailed) ||

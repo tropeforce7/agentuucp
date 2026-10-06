@@ -16,6 +16,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/testutil"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 func pair(t *testing.T) (from *identity.Identity, to *identity.Identity) {
@@ -44,12 +45,18 @@ func body() Body {
 // build seals a stream and returns its bytes and its manifest.
 func build(t *testing.T, from, to *identity.Identity, chunkSize int, files map[string][]byte) ([]byte, *Manifest) {
 	t.Helper()
+	return buildWith(t, from, to, chunkSize, files, nil)
+}
+
+// buildWith is build with sections in the manifest.
+func buildWith(t *testing.T, from, to *identity.Identity, chunkSize int, files map[string][]byte, sections []wire.Section) ([]byte, *Manifest) {
+	t.Helper()
 	var sources []Source
 	// Deterministic order: the manifest is the framing, so order matters.
 	for _, name := range sortedNames(files) {
 		sources = append(sources, source(name, files[name]))
 	}
-	m, err := BuildManifest(from, to.Public(), strings.Repeat("a", 32), body(), sources, chunkSize)
+	m, err := BuildManifestSections(from, to.Public(), strings.Repeat("a", 32), body(), sources, chunkSize, sections)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,11 +149,16 @@ func TestRoundTripRandom(t *testing.T) {
 			files["one.bin"] = testutil.Bytes(r, n-cs)
 			files["two.bin"] = testutil.Bytes(r, cs)
 		}
-		blob, _ := build(t, from, to, cs, files)
+		// A made-up section rides on every round trip (D35).
+		madeUp := testutil.MadeUpSection(r)
+		blob, _ := buildWith(t, from, to, cs, files, []wire.Section{madeUp})
 
 		o, out, err := openAll(t, to, blob)
 		if err != nil {
 			t.Fatalf("seed %d: payload %d bytes: %v", seed, n, err)
+		}
+		if len(o.Manifest.Sections) != 1 || o.Manifest.Sections[0].Name != madeUp.Name || !bytes.Equal(o.Manifest.Sections[0].Data, madeUp.Data) {
+			t.Fatalf("seed %d: the made-up section %q did not survive", seed, madeUp.Name)
 		}
 		if o.Sender.Fingerprint() != from.Fingerprint() {
 			t.Fatalf("seed %d: wrong sender", seed)

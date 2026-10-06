@@ -223,7 +223,12 @@ the sender should send it again. `damaged/` is not yours to clean up, open, or
 retry: the bytes are kept for a person to decide about. One cause word is
 different: `misfiled` means the relay listed a message under a channel it
 was not sealed for, and the warning names the relay; tell the user that,
-and not that the sender should resend.
+and not that the sender should resend. And one more: `newer` means the
+message carries a part a newer auu understands and this one does not.
+Tell the user who it is from, as the warning names them, and that updating
+auu is what reads it; nobody needs to send it again. A stream marked
+`needs a newer auu` in the inbox waits on the relay the same way: `auu read`
+says so and shows nothing of it, so do not try to read it another way.
 
 Every message carries `channel` in `--json`, `default` when the sender named
 none, and `auu inbox --channel NAME` lists one channel without changing the

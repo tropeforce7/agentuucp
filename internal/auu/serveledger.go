@@ -60,6 +60,12 @@ type ledgerEntry struct {
 	// before serve ever ran here.
 	GaveUp  bool `json:"gave_up,omitempty"`
 	Skipped bool `json:"skipped,omitempty"`
+	// Newer is why a message is pending and not answered: a stream that
+	// waits on the relay for a newer auu (D42), by the section it needs.
+	// It is never settled, skipped or counted as a turn for it; a round
+	// after the upgrade finds the message delivered and answers it, and
+	// the reason goes when it does.
+	Newer string `json:"newer,omitempty"`
 }
 
 // last is when this message was last touched at all.

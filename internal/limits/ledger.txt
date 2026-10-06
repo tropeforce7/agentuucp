@@ -183,6 +183,7 @@ internal/auu/cursor.go cursorJSON int First *int64 = output
 internal/auu/cursor.go cursorJSON int Last *int64 = output
 internal/auu/cursor.go cursorJSON int Queued *int64 = output
 internal/auu/cursor.go cursorReset int strconv.ParseInt(*toText) = >= 0 shown by TestLimitCursorResetTo
+internal/auu/damaged.go keepNewer string senderFP[:16] = local: Fingerprint writes 64 hex characters
 internal/auu/enrol.go fetchAnchor string got[:16] = local: SPKI writes 64 hex characters
 internal/auu/enrol.go fetchAnchor string want[:16] = local: isAnchor at Validate shown by TestLimitAnchorClaimOneShort
 internal/auu/identity_cmds.go cmdInit string (*anchor)[:16] = local: ValidFingerprint at cmdInit shown by TestLimitAnchorArgsOneShort
@@ -201,6 +202,7 @@ internal/auu/inbox.go cmdExtract string m.Inner.ID[:12] = local: ValidID at Load
 internal/auu/inbox.go cmdQuarantine string m.Inner.ID[:12] #2 = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go cmdQuarantine string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go cmdQuarantine string pub.Fingerprint()[:16] = local: Fingerprint writes 64 hex characters
+internal/auu/inbox.go messageJSON int DroppedSections int = output
 internal/auu/inbox.go printQuarantineLine string m.Inner.From[:16] #2 = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go printQuarantineLine string m.Inner.From[:16] = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go printQuarantineLine string m.Inner.ID[:12] #2 = local: ValidID at Load shown by TestLimitStoredRecordShapes
@@ -221,6 +223,7 @@ internal/auu/inbox.go fallbackName string fp[:8] = local: fp is Fingerprint of a
 internal/auu/inbox.go relayFetch int First int64 = output
 internal/auu/inbox.go relayFetch int Last int64 = output
 internal/auu/inbox.go relayFetch int Queued int64 = output
+internal/auu/inbox.go waitsForNewer string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/auu/knock.go cmdKnock string takenBy[:identity.ShortIDLen] = local: Fingerprint of a resolved peer at suggestedName, 64 hex characters
 internal/auu/knock.go knockFits string body.Vouches[:n] = local: n from len(body.Vouches) down to 0 by the loop
 internal/auu/knock.go knockJSON int RelayID int64 = output
@@ -228,6 +231,7 @@ internal/auu/listed.go listedJSON int Dropped int = output
 internal/auu/lookup.go knownAs string fp[:identity.ShortIDLen] = local: equal to Fingerprint of the resolved key, checked at knownAs
 internal/auu/lookup.go lookupJSON int PQCategory int = output
 internal/auu/lookup.go lookupJSON int SuiteID int = output
+internal/auu/newer.go fetchKnownNow string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/auu/outbox.go pending int Bytes int64 = >= 0 shown by TestLimitPendingRecordIntegers
 internal/auu/prompt.go promptName string fp[:16] = local: fp is Fingerprint of a parsed bundle at every caller, 64 hex characters
 internal/auu/outbox.go pending int ChunkSize int = [4096, 16777216] shown by TestLimitPendingRecordIntegers
@@ -427,6 +431,7 @@ internal/store/store.go (*Store).RemoveByID.struct int RelayID int64 = > 0 shown
 internal/store/store.go (*Store).RemovePeer string kept[:n - 1] = local: n-1 of kept, with n > 0 by the check before
 internal/store/store.go Config int ChunkSize int = 0 or [4096, 16777216] shown by TestLimitStreamSettings
 internal/store/store.go Config int StreamThreshold int64 = 0 or >= 4096 shown by TestLimitStreamSettings
+internal/store/store.go Stored int DroppedSections int = >= 0 shown by TestLimitStoredDroppedSections
 internal/store/store.go Stored int RelayID int64 = >= 0 shown by TestLimitStoredRelayID
 internal/store/store.go Stored int RelaySize int64 = >= 0 shown by TestLimitStoredRelaySize
 internal/store/store.go readCursor int strconv.ParseInt(text) = >= 0 shown by TestLimitCursor

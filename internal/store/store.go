@@ -23,6 +23,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/regular"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 const (
@@ -768,6 +769,18 @@ type Stored struct {
 	// hop's queue rather than a message in a mailbox, and it is the number
 	// an undeliverable coming back will name.
 	Path string `json:"path,omitempty"`
+	// Newer names the critical section this build does not know that a
+	// stream carries, which is why it waits on the relay rather than being
+	// here (D42): PayloadOnRelay is true beside it, nothing of the body is
+	// here, and a build that knows the section fetches it whole. Empty, the
+	// value the key is left out for, is every other message.
+	Newer string `json:"newer,omitempty"`
+	// DroppedSections counts the sections, none of them critical and none
+	// this build knew, that were over wire.MaxKeptBytes and so not kept
+	// with the message (D31); the ones at or under it are kept in
+	// Inner.Sections as they came. Zero, the value the key is left out
+	// for, is a message that lost none.
+	DroppedSections int `json:"dropped_sections,omitempty"`
 }
 
 // Box names a spool directory.
@@ -870,6 +883,29 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	if err := m.Inner.Body.ValidShape(); err != nil {
 		return nil, fmt.Errorf("the record's message: %v", err)
 	}
+	// What a message kept of its sections was held to wire.Check by Open,
+	// and each it did not know to wire.MaxKeptBytes by the fetch, a known
+	// section's size being its own rule's: a record that says otherwise
+	// was not written by this program.
+	if err := wire.Check(m.Inner.Sections); err != nil {
+		return nil, fmt.Errorf("the record's sections: %v", err)
+	}
+	for _, sec := range m.Inner.Sections {
+		if !wire.Known(sec.Name) && len(sec.Data) > wire.MaxKeptBytes {
+			return nil, fmt.Errorf("the record's section %q is %d bytes, over the %d kept", sec.Name, len(sec.Data), wire.MaxKeptBytes)
+		}
+	}
+	if m.DroppedSections < 0 {
+		return nil, fmt.Errorf("the record's dropped section count %d is negative", m.DroppedSections)
+	}
+	if m.Newer != "" {
+		if err := wire.ValidName(m.Newer); err != nil {
+			return nil, fmt.Errorf("the record's newer section: %v", err)
+		}
+		if !m.PayloadOnRelay {
+			return nil, errors.New("the record waits for a newer auu but says its payload is not on the relay")
+		}
+	}
 	return &m, nil
 }
 
@@ -892,6 +928,19 @@ func (s *Store) warnUnreadable(box Box, name string, err error) {
 
 // List returns every message in a spool directory, oldest first.
 func (s *Store) List(box Box) ([]*Stored, error) {
+	return s.list(box, true)
+}
+
+// ListQuietly is List for a look at a box that is not the box's own
+// listing: the fetch's look for streams that wait for a newer auu, and the
+// count of them. A record that will not read is left out without a word,
+// since the warning says it "is not listed", which is the box's own listing
+// to say, once, when a person asks for it.
+func (s *Store) ListQuietly(box Box) ([]*Stored, error) {
+	return s.list(box, false)
+}
+
+func (s *Store) list(box Box, warn bool) ([]*Stored, error) {
 	entries, err := os.ReadDir(s.path(string(box)))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -912,7 +961,9 @@ func (s *Store) List(box Box) ([]*Stored, error) {
 			// file per command, since a listing is read more than once
 			// in one. The container suite's M09 found a flipped record
 			// simply absent.
-			s.warnUnreadable(box, e.Name(), err)
+			if warn {
+				s.warnUnreadable(box, e.Name(), err)
+			}
 			continue
 		}
 		out = append(out, m)

@@ -652,10 +652,33 @@ narrows the listing without narrowing the fetch. `auu read` prints
 `channel:` always, and `--json` carries `channel` on every message. Mail
 queued under a channel you have since deleted still arrives, filed under that
 name. The summary says `N message(s) arrived for channels no longer in
-your directory: "bug reports"`. Quarantine files the same way. A manifest
-is read strictly. So a stream whose manifest carries a field this build
-does not know is refused as malformed and kept under `damaged/`. That is
-what a peer running something other than this `auu` looks like from here.
+your directory: "bug reports"`. Quarantine files the same way. A message
+and a stream's manifest are read strictly. So one that carries a field this
+build does not know is refused as malformed and kept under `damaged/`. That
+is what a peer running something other than this `auu` looks like from here.
+
+*From a newer build.* A newer `auu` may add a section to a message: a part
+with a name, which this build may not know. A section it does not know and
+was not told it must is passed over, and the message is read as usual. The
+section is kept with the message as it came, up to 16 KiB, so a later `auu`
+on this machine can read it, and `--json` names it in `ignored_sections`. A
+larger one is not kept, and `dropped_sections` counts it. A section the
+sender marked critical is one this build must not read past:
+
+- A message is kept under `damaged/` with the cause `newer` and the
+  section's name, and acknowledged. The warning names the sender, your
+  peer's name or "an unknown sender" and the start of the fingerprint, and
+  says to update `auu`. It never says to ask the sender to send it again.
+  `auu inbox` says every time how many are kept so.
+- A stream waits on the relay, unacknowledged, with a record of it in your
+  inbox, or in the quarantine if the sender is not your peer, marked
+  `needs a newer auu` with the section's name. `auu read` and `auu reply`
+  say so and show nothing of it, the quarantine's `show` and `trust` do the
+  same, and `auu inbox` says every time how many wait. Once `auu` is updated
+  to a build that knows the section, the next fetch fetches the stream whole
+  from the relay into the box it waited in, and a stranger's stream waits on
+  in the quarantine as any stranger's does. If the relay no longer holds it
+  by then, the fetch says so once.
 
 *When the relay's numbering restarts.* The relay numbers the mail it holds,
 and your cursor, `relays/<name>/cursor`, is the number of the last message
@@ -1144,7 +1167,7 @@ Go's file modes say nothing about who can read.
 | `inbox/`, `sent/`, `quarantine/` | the message spool, one JSON file each; a record that will not read is said to be, once, and left out of the listing |
 | `inbox/<id>.d/` | a large message's files, written straight to disk |
 | `outbox/` | streams sealed but not yet delivered, waiting for `auu send --resume` |
-| `damaged/<relay>/<id>.bin`, `.json` | a message your key could not open, as the relay served it, with a record of which relay's message it was, when, and why in a word — `did not decrypt`, `not addressed to this key`, `sender signature failed`, `malformed`, or `misfiled` for a message the relay listed under a channel it was not sealed for, or listed as a kind its sealed record is not — a knock that is not one inside, or one that is inside a row listed as an ordinary envelope; a stream keeps its manifest chunk only. `auu inbox` says how many are there until you remove them; the directory holds at most 64 MiB, the oldest going first, and a message that alone exceeds that is not kept, which the warning says |
+| `damaged/<relay>/<id>.bin`, `.json` | a message your key could not open, as the relay served it, with a record of which relay's message it was, when, and why in a word — `did not decrypt`, `not addressed to this key`, `sender signature failed`, `malformed`, `newer: section "NAME"` for a message with a critical section this build does not know, which an updated `auu` reads, or `misfiled` for a message the relay listed under a channel it was not sealed for, or listed as a kind its sealed record is not — a knock that is not one inside, or one that is inside a row listed as an ordinary envelope; a stream keeps its manifest chunk only. `auu inbox` says how many are there until you remove them; the directory holds at most 64 MiB, the oldest going first, and a message that alone exceeds that is not kept, which the warning says |
 
 `authorized_peers` is the file that matters. Nothing on the network can add to
 it. Back it up alongside `identity.json`. Back up `home.key` and

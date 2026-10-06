@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // aSigner is a fingerprint, as a record's signer and a left-behind entry's
@@ -739,4 +740,87 @@ func TestLimitRemoveByIDRelayFields(t *testing.T) {
 		t.Errorf("RemoveByID of an id no box holds: %v; want ErrNotExist", err)
 	}
 	outsideUntouched(t, outside, witness, "RemoveByID")
+}
+
+// TestLimitStoredDroppedSections: the count of sections a message lost for
+// being over the kept size is zero or more, and a record saying otherwise
+// was not written by this program.
+func TestLimitStoredDroppedSections(t *testing.T) {
+	s := newStore(t)
+	m := stored("00000000000000000000000000000002", time.Now().UTC().Truncate(time.Second))
+	if err := s.Save(Inbox, m); err != nil {
+		t.Fatal(err)
+	}
+	path := s.msgPath(Inbox, m.Inner.ID)
+	write := func(t *testing.T, n int) {
+		t.Helper()
+		m.DroppedSections = n
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, n := range []int{-1, math.MinInt} {
+		write(t, n)
+		if _, err := s.Load(Inbox, m.Inner.ID); err == nil || !strings.Contains(err.Error(), "dropped section count "+strconv.Itoa(n)+" is negative") {
+			t.Errorf("dropped %d: %v; want the refusal naming it", n, err)
+		}
+	}
+	for _, n := range []int{0, 1, math.MaxInt} {
+		write(t, n)
+		if got, err := s.Load(Inbox, m.Inner.ID); err != nil || got.DroppedSections != n {
+			t.Errorf("dropped %d: %v", n, err)
+		}
+	}
+}
+
+// TestAStoredRecordsSectionsAreHeldAtLoad: what a record kept of its
+// sections is held at Load to the rule Open and the fetch held it to: the
+// list's shape, each section at or under the kept size, and a stream's
+// newer mark a name beside a payload on the relay.
+func TestAStoredRecordsSectionsAreHeldAtLoad(t *testing.T) {
+	s := newStore(t)
+	m := stored("00000000000000000000000000000003", time.Now().UTC().Truncate(time.Second))
+	if err := s.Save(Inbox, m); err != nil {
+		t.Fatal(err)
+	}
+	path := s.msgPath(Inbox, m.Inner.ID)
+	at := func(n int) json.RawMessage { return json.RawMessage(`"` + strings.Repeat("a", n-2) + `"`) }
+	for _, tc := range []struct {
+		name     string
+		sections []wire.Section
+		newer    string
+		payload  bool
+		want     string
+	}{
+		{"a section at the kept size", []wire.Section{{Name: "later", Data: at(wire.MaxKeptBytes)}}, "", false, ""},
+		{"one over it", []wire.Section{{Name: "later", Data: at(wire.MaxKeptBytes + 1)}}, "", false, "over the 16384 kept"},
+		{"a name that is not one", []wire.Section{{Name: "Later", Data: json.RawMessage(`1`)}}, "", false, "the record's sections"},
+		{"a name twice", []wire.Section{{Name: "a", Data: json.RawMessage(`1`)}, {Name: "a", Data: json.RawMessage(`2`)}}, "", false, "appears twice"},
+		{"a newer mark beside its payload", nil, "must-know", true, ""},
+		{"a newer mark with no payload on the relay", nil, "must-know", false, "says its payload is not on the relay"},
+		{"a newer mark that is not a name", nil, "Must Know", true, "the record's newer section"},
+	} {
+		m.Inner.Sections, m.Newer, m.PayloadOnRelay = tc.sections, tc.newer, tc.payload
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.Load(Inbox, m.Inner.ID)
+		if tc.want == "" {
+			if err != nil {
+				t.Errorf("%s: %v; want it read", tc.name, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v; want %q", tc.name, err, tc.want)
+		}
+	}
 }
