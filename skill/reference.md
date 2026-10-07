@@ -614,8 +614,13 @@ And about your own card there, in the same place and the same way:
 
 Certificates, when a relay requires them:
 
-- `this relay requires a client certificate and this machine's is expired
-  T: run 'auu register --token TOKEN' with a token from an administrator`.
+- `this relay requires a client certificate and this machine's is STATE:
+  run 'auu register --token TOKEN' with a token from an administrator`,
+  STATE being `missing`, `not accepted`, `not known`, `revoked`, `expired
+  T` or `for another identity`. `missing` means this machine holds no
+  certificate for the relay that refused, whatever it holds for others,
+  and the command names that relay as `--relay NAME` when it is not the
+  default.
 - `this identity already holds a live certificate on another machine, so
   adding this one needs a certificate token: ask the administrator for one
   issued with '--use cert --for' FINGERPRINT`.

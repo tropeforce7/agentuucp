@@ -229,6 +229,19 @@ func run(args []string) error {
 	return adviseCert(err)
 }
 
+// relayAt is the relay in this home at base, the URL a client was given,
+// found as a person's typed URL is, or nil.
+func relayAt(s *store.Store, base string) *store.Relay {
+	if base == "" {
+		return nil
+	}
+	r, err := s.Relay(base)
+	if err != nil {
+		return nil
+	}
+	return r
+}
+
 // adviseCert turns a relay's certificate refusal into the one thing the user
 // can do about it.
 //
@@ -240,9 +253,19 @@ func adviseCert(err error) error {
 	if err == nil {
 		return nil
 	}
-	have := false
-	if s, openErr := store.OpenDefault(); openErr == nil {
-		have = s.HasAnyCert()
+	// Missing or not accepted is decided by the certificate this machine
+	// holds for the relay that refused, never for any relay: a machine
+	// enrolled on one relay asking another holds nothing that one could
+	// have been offered, and is told to enrol there (ruling 70).
+	have, name := false, ""
+	var httpErr *client.HTTPError
+	if s, openErr := store.OpenDefault(); openErr == nil && errors.As(err, &httpErr) {
+		if r := relayAt(s, httpErr.Relay); r != nil {
+			have = s.HasCertFor(r)
+			if def, err := s.DefaultRelay(); err != nil || def.Name != r.Name {
+				name = r.Name
+			}
+		}
 	}
 	// errors.As, not a type switch on what ClassifyCertError returns. The
 	// client works one of these out for itself when a refusal arrives with
@@ -252,7 +275,7 @@ func adviseCert(err error) error {
 	classified := client.ClassifyCertError(err, have)
 	var problem *client.CertProblem
 	if errors.As(classified, &problem) {
-		return &exitError{code: exitTransport, err: errors.New(problem.Advice(prog))}
+		return &exitError{code: exitTransport, err: errors.New(problem.AdviceFor(prog, name))}
 	}
 	var refused *client.CertRefused
 	if errors.As(classified, &refused) {

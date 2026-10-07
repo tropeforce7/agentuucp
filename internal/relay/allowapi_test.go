@@ -280,8 +280,23 @@ func TestOnlyTheOwnerPushesAnAllowlist(t *testing.T) {
 		t.Fatalf("the same list again: %d %s", status, body)
 	}
 	status, body, _ = h.pushAllow(bob, bob, at.Add(-time.Second), alice.Fingerprint())
-	if status != http.StatusConflict || errorText(t, body) != "a newer allow list is already there (issued 2026-09-17T10:04:00Z)" {
+	const heldIssued = "2026-09-17T10:04:00Z"
+	if status != http.StatusConflict || errorText(t, body) != "a newer allow list is already there (issued "+heldIssued+")" {
 		t.Fatalf("an older list: %d %s", status, body)
+	}
+	// A client decides on the code and shows the time from at, never from
+	// the sentence, so both are held here: the time parsed from this test's
+	// own expectation, not read back out of the body's words.
+	var conflict relayapi.ErrorResponse
+	if err := json.Unmarshal(body, &conflict); err != nil {
+		t.Fatalf("an older list: the 409 is not an error body: %v: %s", err, body)
+	}
+	wantAt, err := time.Parse(time.RFC3339, heldIssued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conflict.Code != relayapi.CodeNewerAllowList || !conflict.At.Equal(wantAt) {
+		t.Errorf("an older list: code %q at %v, want %q at %v", conflict.Code, conflict.At, relayapi.CodeNewerAllowList, wantAt)
 	}
 	status, body, _ = h.pushAllow(bob, bob, at)
 	if status != http.StatusConflict {

@@ -40,7 +40,10 @@ func quote(s string) string { return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"
 
 func TestCertProblemAdviceNamesWhatIsWrongAndWhatToDo(t *testing.T) {
 	// The whole value of these messages is that somebody reading one knows
-	// the next command to type, so the exact words are pinned.
+	// the next command to type, so the exact words are pinned. A test pins
+	// what the advice should say, never what the code happens to say: a row
+	// that pinned "not accepted" for a relay the machine held no certificate
+	// for would have kept advice that sends a person to the wrong command.
 	// Each refusal as the relay writes it, its code and its sentence one
 	// value (ruling 68); the classifier reads the code.
 	for _, tc := range []struct {

@@ -311,6 +311,10 @@ type HTTPError struct {
 	// or with one that fails wire.ValidName, keeps its status and says so
 	// in place of the relay's sentence.
 	Code string
+	// Relay is the base URL of the relay that refused, as this client was
+	// given it, for advice given where the command that failed is no longer
+	// in hand. It is the client's own word, never the relay's.
+	Relay string
 	// At is the time the refusal is about, for the codes whose sentence
 	// names one (relayapi.ErrorResponse.At); zero when it names none. A
 	// caller shows it from here, in local time, and never from the
@@ -676,7 +680,9 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 		return c.redirected(method, path, resp.StatusCode)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return httpError(resp, respBody)
+		he := httpError(resp, respBody)
+		he.Relay = c.base
+		return he
 	}
 	if out == nil || len(respBody) == 0 {
 		return nil

@@ -376,8 +376,23 @@ func TestOnlyTheOwnerPushesACard(t *testing.T) {
 		t.Fatalf("the same card again: %d %s", status, body)
 	}
 	status, body, _ = h.pushCard(bob, bob, at.Add(-time.Second), true, false)
-	if status != http.StatusConflict || errorText(t, body) != "a newer card is already there (issued 2026-09-22T10:04:00Z)" {
+	const heldIssued = "2026-09-22T10:04:00Z"
+	if status != http.StatusConflict || errorText(t, body) != "a newer card is already there (issued "+heldIssued+")" {
 		t.Fatalf("an older card: %d %s", status, body)
+	}
+	// A client decides on the code and shows the time from at, never from
+	// the sentence, so both are held here: the time parsed from this test's
+	// own expectation, not read back out of the body's words.
+	var conflict relayapi.ErrorResponse
+	if err := json.Unmarshal(body, &conflict); err != nil {
+		t.Fatalf("an older card: the 409 is not an error body: %v: %s", err, body)
+	}
+	wantAt, err := time.Parse(time.RFC3339, heldIssued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conflict.Code != relayapi.CodeNewerCard || !conflict.At.Equal(wantAt) {
+		t.Errorf("an older card: code %q at %v, want %q at %v", conflict.Code, conflict.At, relayapi.CodeNewerCard, wantAt)
 	}
 	status, body, _ = h.pushCard(bob, bob, at, false, false)
 	if status != http.StatusConflict {

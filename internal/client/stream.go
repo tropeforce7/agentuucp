@@ -99,6 +99,7 @@ func (c *Client) PutStream(ctx context.Context, upload string, offset int64, bod
 		return 0, c.redirected("PUT", "/v1/uploads/"+upload, resp.StatusCode)
 	}
 	httpErr := httpError(resp, payload)
+	httpErr.Relay = c.base
 	// A conflict carries the truth about where the upload actually is, which
 	// is what makes it resumable rather than fatal.
 	if resp.StatusCode == http.StatusConflict {
@@ -195,7 +196,9 @@ func (c *Client) Blob(ctx context.Context, fp string, id int64, from, to int64) 
 		if resp.StatusCode >= 300 && resp.StatusCode <= 399 {
 			return nil, 0, c.redirected("GET", path, resp.StatusCode)
 		}
-		return nil, 0, httpError(resp, payload)
+		he := httpError(resp, payload)
+		he.Relay = c.base
+		return nil, 0, he
 	}
 	return &stallBody{ReadCloser: resp.Body, watch: watch}, resp.ContentLength, nil
 }

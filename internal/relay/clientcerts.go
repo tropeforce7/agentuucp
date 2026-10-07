@@ -51,17 +51,19 @@ func (s *Server) clientCert(w http.ResponseWriter, r *http.Request) (*CertRow, b
 	if !s.clientCerts() {
 		return nil, true
 	}
-	leaf, err := s.presentedCert(r)
-	if err != nil {
-		s.certRefused(w, r, err)
-		return nil, false
-	}
+	leaf := s.presentedCert(r)
 	if leaf == nil {
 		s.certFailed(w, r, relayapi.RefusalCertRequired)
 		return nil, false
 	}
 	// The subject is the identity the relay named when it issued. A
 	// certificate naming anything else is not one of ours whatever signed it.
+	// This is the second line, not the first: the shipped listener's
+	// handshake (clientca.Verifier.TLSConfig) ends in the same check
+	// (internal/clientca/issuer.go:114) and refuses such a leaf before any
+	// request is read. It stays for a listener configured otherwise, and
+	// TestACertificateThatCannotBeReadIsRefusedUnderItsOwnCode reaches it
+	// through one.
 	if err := clientca.Subject(leaf); err != nil {
 		s.certRefused(w, r, err)
 		return nil, false
@@ -108,11 +110,11 @@ func (s *Server) clientCert(w http.ResponseWriter, r *http.Request) (*CertRow, b
 // or nil. crypto/tls has already verified the chain and the key usage
 // against this relay's authority; there is no other way a certificate
 // arrives, since the relay terminates TLS itself.
-func (s *Server) presentedCert(r *http.Request) (*x509.Certificate, error) {
+func (s *Server) presentedCert(r *http.Request) *x509.Certificate {
 	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-		return r.TLS.PeerCertificates[0], nil
+		return r.TLS.PeerCertificates[0]
 	}
-	return nil, nil
+	return nil
 }
 
 // certMatches checks that the certificate and the signature name the same

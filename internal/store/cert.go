@@ -222,22 +222,6 @@ func (s *Store) HasCertFor(r *Relay) bool {
 	return err == nil
 }
 
-// HasAnyCert reports whether this machine holds a certificate for any relay.
-// It is for advice at the single exit, where the command that failed is no
-// longer in hand.
-func (s *Store) HasAnyCert() bool {
-	relays, err := s.Relays()
-	if err != nil {
-		return false
-	}
-	for _, r := range relays {
-		if s.HasCertFor(r) {
-			return true
-		}
-	}
-	return false
-}
-
 // sameRelay compares two relay URLs the way a person would, ignoring a
 // trailing slash. It uses the same normalisation a token's audience gets, so
 // one URL cannot be two things in one program.

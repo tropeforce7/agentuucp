@@ -27,9 +27,17 @@ func (e *CertProblem) Error() string { return e.Err.Error() }
 func (e *CertProblem) Unwrap() error { return e.Err }
 
 // Advice is what to tell the user, given the name the program was invoked as.
-func (e *CertProblem) Advice(prog string) string {
+func (e *CertProblem) Advice(prog string) string { return e.AdviceFor(prog, "") }
+
+// AdviceFor is Advice for a relay that is not the default, named so that
+// the command it gives enrols on that relay and not on another.
+func (e *CertProblem) AdviceFor(prog, relay string) string {
+	register := prog + " register"
+	if relay != "" {
+		register += " --relay " + relay
+	}
 	return fmt.Sprintf("this relay requires a client certificate and this machine's is %s: "+
-		"run '%s register --token TOKEN' with a token from an administrator", e.State, prog)
+		"run '%s --token TOKEN' with a token from an administrator", e.State, register)
 }
 
 // CertRefused is the relay rejecting this machine's certificate in the
