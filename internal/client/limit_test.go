@@ -72,7 +72,7 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 		return func(n int64) any {
 			m := relayapi.MailboxRecord{FP: fp, Name: "alice", Allow: relayapi.AllowSigned}
 			set(&m, n)
-			return m
+			return relayapi.MailboxAnswer{Mailbox: m}
 		}
 	}
 	callMailbox := func(c *Client) error { _, err := c.AdminMailbox(context.Background(), fp); return err }
@@ -175,11 +175,11 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 	mldsa := []shape{
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.MLDSA = int(n) }), callStatus},
 		{"/v1/health", func(n int64) any {
-			return relayapi.HealthResponse{OK: true, MLDSA: int(n), MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}
+			return relayapi.HealthResponse{OK: true, MLDSA: int(n), MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen, WireLevel: relayapi.WireLevel}
 		},
 			func(c *Client) error { _, err := c.MLDSA(context.Background()); return err }},
 		{"/v1/health", func(n int64) any {
-			return relayapi.HealthResponse{OK: true, MLDSA: int(n), MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}
+			return relayapi.HealthResponse{OK: true, MLDSA: int(n), MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen, WireLevel: relayapi.WireLevel}
 		},
 			func(c *Client) error { return c.Health(context.Background()) }},
 	}
@@ -189,13 +189,13 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 	// what the client will hold of a page by it (TestLimitAnAnswerIsHeldToWhatItsRouteHolds).
 	maxBytes := []shape{
 		{"/v1/health", func(n int64) any {
-			return relayapi.HealthResponse{OK: true, MaxBytes: n, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}
+			return relayapi.HealthResponse{OK: true, MaxBytes: n, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen, WireLevel: relayapi.WireLevel}
 		},
 			func(c *Client) error { return c.Health(context.Background()) }},
 		// knock_max_bytes, held to the same range: what a knock is sealed
 		// against before it is sent, zero refused as the absent field.
 		{"/v1/health", func(n int64) any {
-			return relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: n, Registration: relayapi.RegistrationOpen}
+			return relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: n, Registration: relayapi.RegistrationOpen, WireLevel: relayapi.WireLevel}
 		},
 			func(c *Client) error { return c.Health(context.Background()) }},
 	}
@@ -262,6 +262,29 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 			}
 		})
 	}
+	// The health answer's wire_level: 1 or more, with no ceiling, since a
+	// level rises with what a relay can do; zero, which is what an absent
+	// field decodes to, is refused by name, and the client keeps the level
+	// it was given (D40).
+	t.Run("wire_level", func(t *testing.T) {
+		level := shape{"/v1/health", func(n int64) any {
+			return relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes,
+				Registration: relayapi.RegistrationOpen, WireLevel: int(n)}
+		}, func(c *Client) error { return c.Health(context.Background()) }}
+		for _, n := range []int64{0, -1, math.MinInt} {
+			refused(t, level, n)
+		}
+		for _, n := range []int64{1, 2, math.MaxInt} {
+			srv := fakeRelay(t, map[string]any{level.path: level.answer(n)})
+			c, err := New(srv.URL, alice, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Health(context.Background()); err != nil || int64(c.WireLevel()) != n {
+				t.Errorf("wire_level %d: %v, kept %d", n, err, c.WireLevel())
+			}
+		}
+	})
 	for i, sh := range mldsa {
 		t.Run("mldsa "+strconv.Itoa(i), func(t *testing.T) {
 			for _, n := range []int64{-1, 1, 43, 45, 64, 66, 86, 88, math.MinInt, math.MaxInt} {
@@ -397,7 +420,7 @@ func TestLimitAnswerShapesOneShort(t *testing.T) {
 			func(c *Client) error { _, err := c.AdminMailboxes(context.Background(), "", 0); return err }},
 		{"/v1/admin/mailboxes", "next", relayapi.MailboxListResponse{Next: shortFP},
 			func(c *Client) error { _, err := c.AdminMailboxes(context.Background(), "", 0); return err }},
-		{"/v1/admin/mailboxes/" + fp, "fp", relayapi.MailboxRecord{FP: shortFP},
+		{"/v1/admin/mailboxes/" + fp, "fp", relayapi.MailboxAnswer{Mailbox: relayapi.MailboxRecord{FP: shortFP}},
 			func(c *Client) error { _, err := c.AdminMailbox(context.Background(), fp); return err }},
 		{"/v1/admin/blocks", "fp", relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{{FP: shortFP, ByFP: fp}}},
 			func(c *Client) error { _, err := c.AdminBlocks(context.Background()); return err }},

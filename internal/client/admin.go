@@ -55,10 +55,11 @@ func (c *Client) AdminMailboxes(ctx context.Context, after string, limit int) (*
 
 // AdminMailbox returns one mailbox.
 func (c *Client) AdminMailbox(ctx context.Context, fp string) (*relayapi.MailboxRecord, error) {
-	var out relayapi.MailboxRecord
-	if err := c.do(ctx, "GET", "/v1/admin/mailboxes/"+fp, nil, &out, nil); err != nil {
+	var answer relayapi.MailboxAnswer
+	if err := c.do(ctx, "GET", "/v1/admin/mailboxes/"+fp, nil, &answer, nil); err != nil {
 		return nil, err
 	}
+	out := answer.Mailbox
 	if err := c.checkMailbox("the mailbox", &out); err != nil {
 		return nil, err
 	}
@@ -99,11 +100,12 @@ func (c *Client) AdminUnblock(ctx context.Context, fp string) error {
 
 // AdminAddToken registers an enrolment token this identity signed.
 func (c *Client) AdminAddToken(ctx context.Context, tok string) (*relayapi.TokenRecord, error) {
-	var out relayapi.TokenRecord
+	var answer relayapi.TokenAnswer
 	if err := c.do(ctx, "POST", "/v1/admin/tokens",
-		relayapi.RegisterTokenRequest{Token: tok}, &out, nil); err != nil {
+		relayapi.RegisterTokenRequest{Token: tok}, &answer, nil); err != nil {
 		return nil, err
 	}
+	out := answer.Token
 	if err := c.checkToken("the registered token", &out); err != nil {
 		return nil, err
 	}

@@ -525,6 +525,15 @@ A refused send names what to change, and nothing was queued:
   from before, so `auu` refuses the answer whole rather than reading the
   absence as an older relay. What is at URL is not this relay, or is
   damaged; its operator looks.
+- `malformed answer: the relay at URL answered METHOD PATH in a shape this
+  build cannot read: ...` — the answer carries a field this `auu` does not
+  know outside its `sections`; the same advice as the line above.
+- `... answered METHOD PATH with a section it must not be read without
+  (section "S"); update auu` — the relay is newer than this `auu` and says
+  something it must understand; the user updates auu. Exit 2.
+- `the relay at URL refused METHOD PATH (STATUS) in words this build cannot
+  read` — a refusal whose sentence this `auu` cannot read; the status is
+  what is known. Updating auu reads it.
 
 Anywhere:
 

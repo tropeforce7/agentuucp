@@ -40,6 +40,13 @@ const (
 	// Nothing here enforces it: Check and Sort read no body, and the reader
 	// that keeps an ignored section holds it to this as it keeps it.
 	MaxKeptBytes = 16 << 10
+
+	// MaxAPISectionBytes is the most the sections of one request or answer
+	// body to or from a relay may come to together, encoded, held by both
+	// ends (R4). D32's bounds are for what a message reader keeps; this is
+	// the API's, and it fits inside every hold a client keeps of an answer
+	// and every cap a relay reads a body under, with room.
+	MaxAPISectionBytes = 16 << 10
 )
 
 // Section is one entry of a list. All three fields are always written. A

@@ -1048,7 +1048,7 @@ func TestAShortFieldInAnAnswerIsRefusedNotSliced(t *testing.T) {
 		{[]string{"status"}, "/v1/admin/status", "ca_fingerprint", relayapi.AdminStatusResponse{CAFingerprint: "ab", Registration: relayapi.RegistrationOpen, ClientCerts: relayapi.ClientCertsOff}},
 		{[]string{"status"}, "/v1/admin/status", "token_max_age_seconds", relayapi.AdminStatusResponse{TokenMaxAgeSecs: relayapi.MaxDurationSeconds + 1, Registration: relayapi.RegistrationOpen, ClientCerts: relayapi.ClientCertsOff}},
 		{[]string{"mailboxes", "ls"}, "/v1/admin/mailboxes", "fp", relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{{FP: "ab"}}}},
-		{[]string{"mailboxes", "show", fp}, "/v1/admin/mailboxes/" + fp, "fp", relayapi.MailboxRecord{FP: "ab"}},
+		{[]string{"mailboxes", "show", fp}, "/v1/admin/mailboxes/" + fp, "fp", relayapi.MailboxAnswer{Mailbox: relayapi.MailboxRecord{FP: "ab"}}},
 		{[]string{"blocks", "ls"}, "/v1/admin/blocks", "by_fp", relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{{FP: fp, ByFP: "ab"}}}},
 		{[]string{"token", "ls"}, "/v1/admin/tokens", "id", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: "ab", Issuer: fp}}}},
 		{[]string{"token", "ls"}, "/v1/admin/tokens", "subject", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: strings.Repeat("7", 32), Issuer: fp, Subject: "ab"}}}},
@@ -1178,7 +1178,7 @@ func TestMailboxListingHoldsTheCardWordToItsSet(t *testing.T) {
 	rec := relayapi.MailboxRecord{FP: fp, Name: "alice", Card: "signed" + escapeSeq, CardListed: true}
 	srv := fakeRelay(t, map[string]any{
 		"/v1/admin/mailboxes":       relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{rec}},
-		"/v1/admin/mailboxes/" + fp: rec,
+		"/v1/admin/mailboxes/" + fp: relayapi.MailboxAnswer{Mailbox: rec},
 	})
 	p := newPersona(t, "boss", srv.URL)
 	for _, args := range [][]string{{"mailboxes", "ls"}, {"mailboxes", "show", fp}} {
@@ -1201,7 +1201,7 @@ func TestMailboxListingHoldsTheDirectoryWordToItsSet(t *testing.T) {
 	rec := relayapi.MailboxRecord{FP: fp, Name: "alice", Directory: "signed" + escapeSeq, Channels: 3}
 	srv := fakeRelay(t, map[string]any{
 		"/v1/admin/mailboxes":       relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{rec}},
-		"/v1/admin/mailboxes/" + fp: rec,
+		"/v1/admin/mailboxes/" + fp: relayapi.MailboxAnswer{Mailbox: rec},
 	})
 	p := newPersona(t, "boss", srv.URL)
 	for _, args := range [][]string{{"mailboxes", "ls"}, {"mailboxes", "show", fp}} {
@@ -1224,7 +1224,7 @@ func TestMailboxListingHoldsTheAllowWordToItsSet(t *testing.T) {
 	rec := relayapi.MailboxRecord{FP: fp, Name: "alice", Allow: "signed" + escapeSeq, AllowlistSize: 2}
 	srv := fakeRelay(t, map[string]any{
 		"/v1/admin/mailboxes":       relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{rec}},
-		"/v1/admin/mailboxes/" + fp: rec,
+		"/v1/admin/mailboxes/" + fp: relayapi.MailboxAnswer{Mailbox: rec},
 	})
 	p := newPersona(t, "boss", srv.URL)
 	for _, args := range [][]string{{"mailboxes", "ls"}, {"mailboxes", "show", fp}} {

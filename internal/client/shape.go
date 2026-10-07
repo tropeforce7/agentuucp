@@ -43,6 +43,7 @@ func (c *Client) malformed(answer, field, want string) error {
 
 const (
 	wantMaxBytes    = "the relay's max_bytes (from 1 to 1073741824; a health answer without it is refused)"
+	wantWireLevel   = "the relay's wire level (1 or more; a health answer without it is refused)"
 	wantKnockMax    = "the relay's knock cap (from 1 to 1073741824; a health answer without it is refused)"
 	wantFingerprint = "a fingerprint (64 lowercase hex characters)"
 	wantSerial      = "a certificate serial"
@@ -166,6 +167,14 @@ func (c *Client) checkHealth(h *relayapi.HealthResponse) error {
 	if !oneOf(h.Registration, registrations) {
 		return c.malformed("the health answer", "registration", wantOneOf(registrations))
 	}
+	// The wire level says what the relay can do that a client may depend
+	// on (D40). It is 1 or more; one left out decodes to 0 and is refused
+	// by the same check, by name. It is kept for the first feature that
+	// depends on a level to read; nothing compares it in this release.
+	if h.WireLevel < 1 {
+		return c.malformed("the health answer", "wire_level", wantWireLevel)
+	}
+	c.wireLevel.Store(int64(h.WireLevel))
 	return nil
 }
 

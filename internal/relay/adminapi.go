@@ -229,7 +229,7 @@ func (s *Server) handleAdminMailbox(w http.ResponseWriter, r *http.Request, body
 		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
 		return
 	}
-	s.writeJSON(w, http.StatusOK, record)
+	s.writeJSON(w, http.StatusOK, relayapi.MailboxAnswer{Mailbox: *record})
 }
 
 func (s *Server) handleAdminDeregister(w http.ResponseWriter, r *http.Request, body []byte, adminFP string) {
@@ -418,7 +418,7 @@ func (s *Server) handleAdminAddToken(w http.ResponseWriter, r *http.Request, bod
 		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
 		return
 	}
-	s.writeJSON(w, http.StatusCreated, record.Wire(now))
+	s.writeJSON(w, http.StatusCreated, relayapi.TokenAnswer{Token: record.Wire(now)})
 }
 
 func (s *Server) handleAdminTokens(w http.ResponseWriter, r *http.Request, body []byte, adminFP string) {

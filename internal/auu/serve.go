@@ -301,6 +301,14 @@ func (r *serveRun) round(ctx context.Context, backlog, longRun bool) error {
 	// at: pending writes a waiting stream's reason into the ledger, and a
 	// ledger once written exists, which would make a first start look
 	// like a later round and answer the old mail it must leave alone.
+	//
+	// It is one of two guards on that rule, and both stay. The other is
+	// waitsForNewer, which writes nothing on a first start, so that a crash
+	// between it and the backlog's save cannot leave a ledger behind. Each
+	// alone holds the rule today, and a reviewer's break of this one passed
+	// for that reason; the two cover different faults, an order inside one
+	// round and a file across two runs, and a change to either should not
+	// rest on the other.
 	first := !r.led.existed
 	pending, err := r.pending()
 	if err != nil {

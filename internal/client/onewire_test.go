@@ -54,7 +54,7 @@ func TestAnAnswerWithoutARequiredFieldIsRefusedByName(t *testing.T) {
 		}
 		return m
 	}
-	status := map[string]any{"ok": true, "registration": "open", "client_certs": "off",
+	status := map[string]any{"registration": "open", "client_certs": "off",
 		"limits": map[string]any{}, "max_bytes": relayapi.DefaultMaxBytes, "token_max_age_seconds": 3600}
 	without := func(m map[string]any, field string) map[string]any {
 		out := map[string]any{}
@@ -66,7 +66,7 @@ func TestAnAnswerWithoutARequiredFieldIsRefusedByName(t *testing.T) {
 		return out
 	}
 	keys := map[string]any{"bundle": bundle, "name": "alice", "created": "2026-09-20T01:19:29Z"}
-	health := map[string]any{"ok": true, "max_bytes": relayapi.DefaultMaxBytes, "knock_max_bytes": relayapi.DefaultMaxBytes, "registration": "open"}
+	health := map[string]any{"ok": true, "max_bytes": relayapi.DefaultMaxBytes, "knock_max_bytes": relayapi.DefaultMaxBytes, "registration": "open", "wire_level": 1}
 	cardAnswer := map[string]any{"document": nil, "signature": nil, "state": "none"}
 	over := func(m map[string]any, field string, v any) map[string]any {
 		out := map[string]any{}

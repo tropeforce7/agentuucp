@@ -35,7 +35,7 @@ func TestARelayWithoutMaxBytesIsRefusedByName(t *testing.T) {
 func TestARelayWithoutAKnockCapIsRefusedByName(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"ok": true, "max_bytes": 16777216, "registration": "open"})
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "max_bytes": 16777216, "registration": "open", "wire_level": 1})
 	}))
 	defer srv.Close()
 	alice := &user{t: t, home: t.TempDir()}

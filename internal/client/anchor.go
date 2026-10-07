@@ -4,15 +4,16 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/pki"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // Anchor is the trust anchor a machine pins for one relay, and what it
@@ -95,7 +96,7 @@ func FetchTrustAnchor(ctx context.Context, base string) (*x509.Certificate, stri
 	transport.TLSClientConfig = tlsCfg
 	boundTransport(transport)
 
-	c := &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	c := relayHTTP(transport, 30*time.Second)
 	resp, err := c.Do(req)
 	if err != nil {
 		if pinnedHandshakeRefused(err) {
@@ -120,12 +121,19 @@ func FetchTrustAnchor(ctx context.Context, base string) (*x509.Certificate, stri
 		return nil, "", fmt.Errorf("this relay does not use a private trust anchor, " +
 			"so there is nothing to pin; its certificate must verify on its own")
 	}
+	if resp.StatusCode >= 300 && resp.StatusCode <= 399 {
+		return nil, "", fmt.Errorf("the relay answered its trust anchor with a redirect (%d), which this build does not follow; nothing of the answer was used", resp.StatusCode)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("fetching the relay's trust anchor: %s", resp.Status)
+		// The reason phrase is the relay's own words, escaped like any.
+		return nil, "", fmt.Errorf("fetching the relay's trust anchor: %s", identity.PrintableText(resp.Status))
 	}
 	var out relayapi.TrustAnchorResponse
-	if err := json.Unmarshal(body, &out); err != nil {
+	if err := wire.Decode(body, &out); err != nil {
 		return nil, "", fmt.Errorf("the relay's trust anchor is not readable: %w", err)
+	}
+	if err := sectionsProblem(out.Sections.Sections); err != nil {
+		return nil, "", fmt.Errorf("the relay answered its trust anchor %v", err)
 	}
 	cert, err := x509.ParseCertificate(out.TrustAnchor)
 	if err != nil {

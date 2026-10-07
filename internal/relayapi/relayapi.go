@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 const (
@@ -66,6 +67,7 @@ const (
 // Wire types.
 type (
 	ErrorResponse struct {
+		Sections
 		Error string `json:"error"`
 	}
 	RegisterRequest struct {
@@ -78,6 +80,7 @@ type (
 		CSR []byte `json:"csr,omitempty"`
 	}
 	RegisterResponse struct {
+		Sections
 		FP string `json:"fp"`
 		// Cert, CA and NotAfter are present when the relay issued a client
 		// certificate. A relay with client certificates off returns none of
@@ -91,6 +94,7 @@ type (
 	// trust anchor; a client checks the bundle's own fingerprint against
 	// what it asked for.
 	KeysResponse struct {
+		Sections
 		Bundle []byte `json:"bundle"`
 		Name   string `json:"name"`
 		// Created is when the mailbox was registered. Always sent; a
@@ -112,6 +116,7 @@ type (
 	// owner's own key, and State, one of the Allow* words, which is the
 	// relay's own reading and is not to be trusted over the pair.
 	AllowResponse struct {
+		Sections
 		Document  []byte `json:"document"`
 		Signature []byte `json:"signature"`
 		State     string `json:"state"`
@@ -131,6 +136,7 @@ type (
 	// and is not to be trusted over the pair. Always sent; a client
 	// refuses an answer without it by name.
 	CardResponse struct {
+		Sections
 		Document  []byte `json:"document"`
 		Signature []byte `json:"signature"`
 		State     string `json:"state"`
@@ -156,6 +162,7 @@ type (
 	// past the end, and a page with more entries than the limit asked
 	// for is a relay that ignored the parameter, refused by name.
 	ListedResponse struct {
+		Sections
 		Entries []ListedEntry `json:"entries"`
 		Listed  int64         `json:"listed"`
 	}
@@ -194,6 +201,7 @@ type (
 	// anybody holding a fingerprint, and this answers nobody who is not
 	// registered here.
 	CouriersResponse struct {
+		Sections
 		Couriers []Courier `json:"couriers"`
 	}
 	// ChannelsRequest carries an owner's channel directory: the document
@@ -212,11 +220,13 @@ type (
 	// something about the owner, so a sender's view is the signed document
 	// and nothing else.
 	ChannelsResponse struct {
+		Sections
 		Document  []byte           `json:"document"`
 		Signature []byte           `json:"signature"`
 		Queued    map[string]int64 `json:"queued,omitempty"`
 	}
 	PostResponse struct {
+		Sections
 		ID int64 `json:"id"`
 	}
 	// ForwardRequest carries a sealed envelope to a relay that is not the
@@ -265,6 +275,7 @@ type (
 	// last hop, so that the retry learns the id its first attempt was
 	// given. A loop coming back has neither and is answered bare.
 	ForwardResponse struct {
+		Sections
 		ID int64 `json:"id"`
 		// Code and Said are present only on a 409, and only when the id
 		// is the caller's own row and that row has ended: the code it
@@ -334,9 +345,11 @@ type (
 	// QueueResponse is a poster's own queue, oldest first, at most
 	// MaxQueueLimit rows.
 	QueueResponse struct {
+		Sections
 		Queued []QueuedMessage `json:"queued"`
 	}
 	ListResponse struct {
+		Sections
 		Messages []StoredMessage `json:"messages"`
 		// Queued is how many messages the mailbox holds in all, whatever
 		// the page: the messages the page is drawn from, less any the
@@ -383,6 +396,7 @@ type (
 		Directory string `json:"directory"`
 	}
 	HealthResponse struct {
+		Sections
 		OK bool `json:"ok"`
 		// MaxBytes is the relay's max_bytes: the largest envelope it takes
 		// and the budget a listing page follows, so a client can size what
@@ -410,8 +424,48 @@ type (
 		// does not match whatever it says here, so nothing can be talked
 		// into a weaker key by a wrong answer.
 		MLDSA int `json:"mldsa,omitempty"`
+		// WireLevel is the relay's WireLevel, so a client can say a relay
+		// is too old for something before it asks (D40). Always sent; a
+		// health answer without it, or with one below 1, is refused by
+		// name.
+		WireLevel int `json:"wire_level"`
 	}
 )
+
+// Sections is the one place in a relay's answer, and in a request to a
+// relay, where something new may go (D28, D37): every answer body embeds it,
+// so the key sits at the top of the body, and no row inside a list does,
+// since a fact about a row that a newer build alone could read would stop
+// the whole page (R3). A reader decodes everything else strictly, holds the
+// list to wire.Check and to wire.MaxAPISectionBytes, ignores a section it
+// does not know, and refuses the body, by the section's name, for one marked
+// critical. Left out when there are none, which in this release is always.
+type Sections struct {
+	Sections []wire.Section `json:"sections,omitempty"`
+}
+
+// SectionList is the list, for a reader that holds an answer only as an
+// interface.
+func (s *Sections) SectionList() []wire.Section { return s.Sections }
+
+// WireLevel is what this build of the relay can do that a client may
+// depend on (D40): it rises by one in the change that gives a relay
+// something new, and never otherwise. 1 is v0.15.0, the floor (P5).
+const WireLevel = 1
+
+// MailboxAnswer and TokenAnswer are a mailbox and a token as whole answers,
+// GET /v1/admin/mailboxes/{fp} and POST /v1/admin/tokens. The record inside
+// is the row a list carries, and a row carries no sections (R3); the answer
+// around it is a body, and does.
+type MailboxAnswer struct {
+	Sections
+	Mailbox MailboxRecord `json:"mailbox"`
+}
+
+type TokenAnswer struct {
+	Sections
+	Token TokenRecord `json:"token"`
+}
 
 // Registration modes. They govern who may create a mailbox; an existing
 // mailbox may always re-register, which is only a change of display name.
@@ -436,6 +490,7 @@ const MaxDurationSeconds int64 = 100 * 365 * 24 * 3600
 type (
 	// AdminStatusResponse is what one relay is doing right now.
 	AdminStatusResponse struct {
+		Sections
 		Registration    string     `json:"registration"`
 		PublicURL       string     `json:"public_url"`
 		Uptime          string     `json:"uptime"`
@@ -529,6 +584,7 @@ type (
 		Blocked  bool  `json:"blocked"`
 	}
 	MailboxListResponse struct {
+		Sections
 		Mailboxes []MailboxRecord `json:"mailboxes"`
 		// Next is the value to pass as ?after= for the following page, or
 		// empty when this is the last one.
@@ -553,12 +609,14 @@ type (
 		Current bool `json:"current,omitempty"`
 	}
 	CertsResponse struct {
+		Sections
 		Certs []CertRecord `json:"certs"`
 	}
 	// TrustAnchorResponse is the root a machine pins at enrolment. It is
 	// fetched over a connection nothing has verified yet, and checked
 	// against the hash in an enrolment token before it is believed.
 	TrustAnchorResponse struct {
+		Sections
 		TrustAnchor []byte `json:"trust_anchor"`
 		SPKI        string `json:"spki"`
 	}
@@ -571,6 +629,7 @@ type (
 	// CertResponse is a freshly issued certificate and the authority that
 	// signed it, both DER.
 	CertResponse struct {
+		Sections
 		Cert     []byte    `json:"cert"`
 		CA       []byte    `json:"ca"`
 		NotAfter time.Time `json:"not_after"`
@@ -579,6 +638,7 @@ type (
 		Reason string `json:"reason"`
 	}
 	RevokeCertResponse struct {
+		Sections
 		Revoked bool `json:"revoked"`
 	}
 
@@ -592,6 +652,7 @@ type (
 		Reason string `json:"reason"`
 	}
 	BlocksResponse struct {
+		Sections
 		Blocks []BlockRecord `json:"blocks"`
 	}
 
@@ -621,6 +682,7 @@ type (
 		State string `json:"state"`
 	}
 	TokenListResponse struct {
+		Sections
 		Tokens []TokenRecord `json:"tokens"`
 	}
 )
@@ -974,6 +1036,7 @@ type (
 		Channel string `json:"channel,omitempty"`
 	}
 	OpenStreamResponse struct {
+		Sections
 		Upload  string    `json:"upload"`
 		Expires time.Time `json:"expires"`
 		// ResumeThreshold is the least the relay must hold of the stream,
@@ -987,6 +1050,7 @@ type (
 	// PutStreamResponse is the 201 that ends an attempt which reached the
 	// end: the message's id in the recipient's mailbox.
 	PutStreamResponse struct {
+		Sections
 		ID int64 `json:"id"`
 	}
 )

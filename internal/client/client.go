@@ -20,12 +20,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/clientca"
 	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // Retry policy for a relay that is refusing work rather than failing. A 429 or
@@ -60,7 +62,11 @@ type Client struct {
 	// fetched once on the first listing and kept: what a listing page is
 	// sized to, and so what the client will hold of one. Zero until then.
 	maxBytes int64
-	mu       sync.Mutex
+	// wireLevel is the relay's wire level as its last health answer said
+	// it, zero until one has been read. Atomic, since a health answer is
+	// checked both under mu (a listing's) and outside it.
+	wireLevel atomic.Int64
+	mu        sync.Mutex
 	// transport is the one carrying the client certificate, kept so a
 	// renewal can drop the connections using the old one.
 	transport *http.Transport
@@ -105,12 +111,11 @@ func NewWithAnchor(base string, id *identity.Identity, cert *tls.Certificate, an
 	// than the hybrid. A pin in a helper is a pin only where every path
 	// reaches the helper.
 	transport := transportFor(cert, anchor)
-	httpClient := &http.Client{Timeout: 2 * time.Minute, Transport: transport}
 	c := &Client{
 		base:      strings.TrimSuffix(base, "/"),
 		id:        id,
-		http:      httpClient,
-		stream:    &http.Client{Transport: transport},
+		http:      relayHTTP(transport, 2*time.Minute),
+		stream:    relayHTTP(transport, 0),
 		stall:     relayapi.ResumeWindow,
 		transport: transport,
 		sleep:     sleep,
@@ -125,9 +130,34 @@ func NewWithAnchor(base string, id *identity.Identity, cert *tls.Certificate, an
 		if probe.TLSClientConfig != nil {
 			probe.TLSClientConfig.VerifyConnection = nil
 		}
-		c.certless = &http.Client{Transport: probe, Timeout: 2 * time.Minute}
+		c.certless = relayHTTP(probe, 2*time.Minute)
 	}
 	return c, nil
+}
+
+// relayHTTP is the one way this package builds an http.Client, and it
+// follows no redirect: every client it returns hands a 3xx back as the
+// answer, and the caller refuses it. A relay API has no reason to
+// redirect; the signed request header is not one Go strips on a redirect
+// to another host, so following one would hand it to whoever the Location
+// named; and a URL the relay chose would be the request a sentence then
+// names. Like transportFor, it is a rule only where every path reaches it,
+// and a test holds that none builds a client any other way.
+func relayHTTP(transport http.RoundTripper, timeout time.Duration) *http.Client {
+	return &http.Client{
+		Transport: transport,
+		Timeout:   timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
+// redirected is the refusal of a 3xx answer, which this build does not
+// follow. The Location is not repeated, the relay having chosen it.
+func (c *Client) redirected(method, path string, status int) error {
+	return fmt.Errorf("%w: the relay at %s answered %s %s with a redirect (%d), which this build does not follow; nothing of the answer was used",
+		ErrMalformedAnswer, c.base, method, path, status)
 }
 
 // transportFor is the process's transport with what this relay needs added:
@@ -284,38 +314,107 @@ type HTTPError struct {
 // ASCII is unchanged, so a caller that looks for a known sentence in the
 // message still finds it.
 func httpError(resp *http.Response, body []byte) *HTTPError {
+	he := &HTTPError{Status: resp.StatusCode, RetryAfter: retryAfter(resp.Header)}
+	// Every refusal is read strictly (P1), as an error body, or on the
+	// forward route's 409 as the row the relay already holds. One that is
+	// neither keeps its status and says, with the route, that its words
+	// could not be read, so a newer relay's refusal is never an empty
+	// sentence; and one with a section it must not be read without says
+	// that, with the section's name.
 	var e relayapi.ErrorResponse
-	_ = json.Unmarshal(body, &e)
-	// A 409 on the forward route carries the id of the row the relay
-	// already holds. It is read here rather than by the caller because this
-	// is the one place an answer becomes an error, and a caller cannot
-	// reach the body afterwards. Any other answer has no such field and
-	// leaves it zero.
-	//
-	// It is held to the shape every id from a relay is held to, since it
-	// comes from one and goes into a row: a relay that answers zero, a
-	// negative or nothing at all leaves it zero, which already means "no
-	// row of this caller's to name". The 201's own id goes through
-	// checkID on the way out of Forward; this is that check for the other
-	// answer, at the one place this one can be read.
 	var fwd relayapi.ForwardResponse
-	if resp.StatusCode == http.StatusConflict {
-		_ = json.Unmarshal(body, &fwd)
-		if fwd.ID <= 0 {
-			fwd = relayapi.ForwardResponse{}
+	var sections []wire.Section
+	switch {
+	case wire.Decode(body, &e) == nil:
+		he.Message = identity.PrintableText(e.Error)
+		sections = e.Sections.Sections
+	case resp.StatusCode == http.StatusConflict && wire.Decode(body, &fwd) == nil:
+		// A 409 on the forward route carries the id of the row the relay
+		// already holds. It is read here rather than by the caller because
+		// this is the one place an answer becomes an error, and a caller
+		// cannot reach the body afterwards.
+		//
+		// It is held to the shape every id from a relay is held to, since
+		// it comes from one and goes into a row: a relay that answers
+		// zero, a negative or nothing at all leaves it zero, which already
+		// means "no row of this caller's to name". The 201's own id goes
+		// through checkID on the way out of Forward; this is that check
+		// for the other answer, at the one place this one can be read.
+		if fwd.ID > 0 {
+			he.ForwardID = fwd.ID
+			if fwd.Code == relayapi.CodeRefused || fwd.Code == relayapi.CodeGaveUp {
+				he.ForwardCode, he.ForwardSaid = fwd.Code, identity.PrintableText(fwd.Said)
+			}
 		}
-		if fwd.Code != relayapi.CodeRefused && fwd.Code != relayapi.CodeGaveUp {
-			fwd.Code, fwd.Said = "", ""
-		}
+		sections = fwd.Sections.Sections
+	default:
+		he.Message = fmt.Sprintf("the relay at %s refused %s (%d) in words this build cannot read",
+			relayOf(resp), routeOf(resp), resp.StatusCode)
+		return he
 	}
-	return &HTTPError{
-		Status:      resp.StatusCode,
-		ForwardID:   fwd.ID,
-		ForwardCode: fwd.Code,
-		ForwardSaid: identity.PrintableText(fwd.Said),
-		Message:     identity.PrintableText(e.Error),
-		RetryAfter:  retryAfter(resp.Header),
+	if err := sectionsProblem(sections); err != nil {
+		he.Message = fmt.Sprintf("the relay at %s refused %s (%d) %s",
+			relayOf(resp), routeOf(resp), resp.StatusCode, err)
 	}
+	return he
+}
+
+// relayOf and routeOf name the relay and the request a refusal answered,
+// for a sentence about a refusal whose own words could not be read. Both
+// are escaped: after a redirect resp.Request is the last request, whose
+// URL the relay chose, and a path decodes %1b to the byte itself.
+func relayOf(resp *http.Response) string {
+	if resp.Request == nil || resp.Request.URL == nil {
+		return "the relay"
+	}
+	return identity.PrintableText(resp.Request.URL.Scheme + "://" + resp.Request.URL.Host)
+}
+
+func routeOf(resp *http.Response) string {
+	if resp.Request == nil || resp.Request.URL == nil {
+		return "the request"
+	}
+	return identity.PrintableText(resp.Request.Method + " " + resp.Request.URL.Path)
+}
+
+// sectionsProblem is what is wrong with a body's sections, or nil (D28, R4):
+// the list held to wire.Check, then to wire.MaxAPISectionBytes as this build
+// encodes it compactly (the body's own hold has already bounded what
+// arrived), and then sorted, a section this build does not know ignored and
+// one marked critical refusing the body by its name.
+func sectionsProblem(list []wire.Section) error {
+	if len(list) == 0 {
+		return nil
+	}
+	if err := wire.Check(list); err != nil {
+		return fmt.Errorf("with sections that are not a list of sections (%v)", err)
+	}
+	encoded, err := json.Marshal(list)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > wire.MaxAPISectionBytes {
+		return fmt.Errorf("with sections of %d bytes, over the %d an answer may carry", len(encoded), wire.MaxAPISectionBytes)
+	}
+	var newer *wire.NeedsNewerError
+	if _, _, err := wire.Sort(list); errors.As(err, &newer) {
+		return fmt.Errorf("with a section it must not be read without (section %q); update auu", newer.Name)
+	}
+	return nil
+}
+
+// checkSections holds an answer's sections to sectionsProblem: one that
+// fails makes the whole answer a malformed answer, said with the relay and
+// the request, and nothing of it is used.
+func (c *Client) checkSections(method, path string, out any) error {
+	sl, ok := out.(interface{ SectionList() []wire.Section })
+	if !ok {
+		return nil
+	}
+	if err := sectionsProblem(sl.SectionList()); err != nil {
+		return fmt.Errorf("%w: the relay at %s answered %s %s %v", ErrMalformedAnswer, c.base, method, path, err)
+	}
+	return nil
 }
 
 func (e *HTTPError) Error() string {
@@ -523,14 +622,30 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 	if int64(len(respBody)) > hold {
 		return fmt.Errorf("%w: %w", errOverHold, c.malformed("the answer", "the body", fmt.Sprintf("under %d bytes, the most this route holds", hold)))
 	}
+	if resp.StatusCode >= 300 && resp.StatusCode <= 399 {
+		return c.redirected(method, path, resp.StatusCode)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return httpError(resp, respBody)
 	}
 	if out == nil || len(respBody) == 0 {
 		return nil
 	}
-	return json.Unmarshal(respBody, out)
+	// Strictly (P1): a field the answer does not have is refused, so that
+	// sections are the only place something new may go. The decoder's
+	// words are escaped, since encoding/json names a map key the relay
+	// chose in a type error.
+	if err := wire.Decode(respBody, out); err != nil {
+		return fmt.Errorf("%w: the relay at %s answered %s %s in a shape this build cannot read: %s",
+			ErrMalformedAnswer, c.base, method, path, identity.PrintableText(err.Error()))
+	}
+	return c.checkSections(method, path, out)
 }
+
+// WireLevel is the relay's wire level as its last health answer said it
+// (D40), zero before one has been read. A feature that depends on what a
+// relay can do reads it; nothing in this release does.
+func (c *Client) WireLevel() int { return int(c.wireLevel.Load()) }
 
 // Health checks that the relay is reachable.
 func (c *Client) Health(ctx context.Context) error {

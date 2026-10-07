@@ -1108,6 +1108,30 @@ forget — and a name, a label and a sentence each have a form:
 `Printable` for a name with a rule, `PrintableText` for a sentence (space
 and tab kept, quotes and backslashes too), `PrintableLines` for prose.
 
+**The client follows no redirect, and builds every `http.Client` in one
+place.** `relayHTTP` is the only constructor in `internal/client`, and its
+`CheckRedirect` returns `http.ErrUseLastResponse`. A 3xx is therefore an
+answer like any other, refused as malformed and naming its status, and
+the `Location` is never fetched. A test walks the package's source and
+fails on `http.Client` named anywhere outside the helper other than
+behind a pointer (a literal, `new`, a declared value), on
+`http.DefaultClient` and the package functions that use it (`Get`,
+`Post`, `Head`, `PostForm`), on an assignment to `CheckRedirect` outside
+it, and on `net/http` imported under another name, since a rule in a helper holds only where every path reaches the
+helper. It does not see a copy made through a pointer (`cp := *c.http`),
+and none is made. A relay API has no reason to
+redirect. The signed request header is not one Go strips on a redirect
+to another host, so following one would hand it to whoever the Location
+named. And the sentence the client builds about a refusal names the
+request it answered. Until PLAN-SECTIONS commit 5, the client followed
+redirects under Go's default policy. `resp.Request` was then the last
+request, whose URL the relay chose, and `url.Parse` decodes `%1b` in a
+path to ESC itself. A relay answering `302` to `/%1b]0;x%07%1b[2J`, then
+`404` with words this build could not read, drove the terminal through
+"refused GET … in words this build cannot read". The second reader found
+it before it shipped. The sentence's relay and route are escaped as well,
+for whatever names a request next.
+
 **A string from the network is never sliced before its rule has run.**
 `m.FP[:16]`, `cert.Serial[:16]`, `t.ID[:12]` and `t.Subject[:8]` in
 `auu-admin` and `auu` sliced fingerprints, serials and token ids straight

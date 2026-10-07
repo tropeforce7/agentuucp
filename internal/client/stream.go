@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // The stream half of the relay API.
@@ -84,13 +84,19 @@ func (c *Client) PutStream(ctx context.Context, upload string, offset int64, bod
 
 	if resp.StatusCode == http.StatusCreated {
 		var out relayapi.PutStreamResponse
-		if err := json.Unmarshal(payload, &out); err != nil {
+		if err := wire.Decode(payload, &out); err != nil {
 			return 0, c.malformed("the placed stream", "body", "JSON")
+		}
+		if err := c.checkSections("PUT", "/v1/uploads/"+upload, &out); err != nil {
+			return 0, err
 		}
 		if err := c.checkID("the placed stream", out.ID); err != nil {
 			return 0, err
 		}
 		return out.ID, nil
+	}
+	if resp.StatusCode >= 300 && resp.StatusCode <= 399 {
+		return 0, c.redirected("PUT", "/v1/uploads/"+upload, resp.StatusCode)
 	}
 	httpErr := httpError(resp, payload)
 	// A conflict carries the truth about where the upload actually is, which
@@ -185,6 +191,9 @@ func (c *Client) Blob(ctx context.Context, fp string, id int64, from, to int64) 
 		payload, _ := io.ReadAll(io.LimitReader(resp.Body, streamAnswerHold+1))
 		if int64(len(payload)) > streamAnswerHold {
 			return nil, 0, c.malformed("the answer", "the body", fmt.Sprintf("under %d bytes, the most this route holds", streamAnswerHold))
+		}
+		if resp.StatusCode >= 300 && resp.StatusCode <= 399 {
+			return nil, 0, c.redirected("GET", path, resp.StatusCode)
 		}
 		return nil, 0, httpError(resp, payload)
 	}

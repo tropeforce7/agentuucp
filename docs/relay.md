@@ -435,7 +435,19 @@ Three replies say the relay is refusing rather than failing:
 | `507` | the recipient's mailbox, or the relay, is full — including a disk that fills part way through an upload | the recipient runs `auu rm` on mail they have read, or the operator makes room; retrying will not help, and the sealed copy waits in `outbox/` for `auu send --resume`, which resumes what the relay kept or opens anew |
 
 `GET /v1/health` is exempt from all of it, so monitoring does not flap while
-the relay is under attack.
+the relay is under attack. Its answer says the relay's `max_bytes`,
+`knock_max_bytes`, registration mode and `wire_level`: a whole number that
+rises when a release gives the relay something a client may depend on. It
+is 1 from v0.15.0. `auu` refuses a relay's health answer without it.
+
+Every answer the relay sends may carry a `sections` key at its top: the one
+place a newer relay may say something an older `auu` does not know. This
+release sends none. `auu` reads every answer strictly, ignores a section it
+does not know, and refuses an answer with a section marked critical,
+naming it and saying to update `auu`. A refusal whose words it cannot
+read is said with its status and the request. All of a body's sections
+together are held to 16 KiB, and a listing page counts them within
+`max_bytes`.
 
 The HTTP layer has bounds of its own, none of them settings:
 
@@ -1250,6 +1262,12 @@ auu-admin token ls [--all]
 auu-admin token revoke ID
 auu-admin token show TOKEN         # offline, reads a token without asking a relay
 ```
+
+Read with `curl`, the relay's answer to `mailboxes show` is the mailbox
+under a `mailbox` key, and its answer to a token added (`token issue`) is
+the token under a `token` key: a whole answer wraps its record, so that
+the answer may carry sections and the record, which is also a row in a
+list, never does.
 
 Every command takes `--json`, and `--relay NAME|URL` to choose which relay to
 administer. That is a name from `auu relay ls`, or a URL. The URL may be one

@@ -12,6 +12,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // The listing's hold. GET /v1/mailbox/{fp}?wait=D asks the relay to hold
@@ -197,7 +198,10 @@ func (s *Server) listing(w http.ResponseWriter, r *http.Request, fp string, afte
 func (s *Server) look(fp string, after int64, limit int, stubs bool, peers map[string]time.Time) (resp relayapi.ListResponse, found bool, err error) {
 	// A page follows max_bytes: as many envelopes as fit the budget, and
 	// one at least, so a client sized to the relay's max_bytes holds it.
-	listing, err := s.store.ListingWithin(fp, after, limit, stubs, s.cfg.MaxBytes)
+	// What the page says in its sections comes out of the same budget, so
+	// a full page and its sections together are never over what an older
+	// client holds (R4).
+	listing, err := s.store.ListingWithin(fp, after, limit, stubs, pageBudget(s.cfg.MaxBytes, listingSections))
 	if err != nil {
 		return resp, false, err
 	}
@@ -262,6 +266,7 @@ func (s *Server) look(fp string, after int64, limit int, stubs bool, peers map[s
 	// posted later is numbered after what is held, not after the cursor,
 	// so nothing would ever be listed after it, and the client that asked
 	// learns from the span that its cursor is past everything here.
+	resp.Sections.Sections = listingSections
 	return resp, len(resp.Messages) > 0 || len(resp.DirectoriesChanged) > 0 || after > listing.Last, nil
 }
 
@@ -271,4 +276,26 @@ func (s *Server) listingFailed(w http.ResponseWriter, err error) {
 		return
 	}
 	s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+}
+
+// listingSections is what a listing page says in its sections. This
+// release says nothing there; a feature that adds a section to the listing
+// sets it, and a test sets it to show the page's budget counting it.
+var listingSections []wire.Section
+
+// pageBudget is max_bytes less the sections' bytes as this build encodes
+// them, and never below one, so that a page still carries its first
+// envelope; zero, no budget, stays zero.
+func pageBudget(maxBytes int64, sections []wire.Section) int64 {
+	if maxBytes == 0 || len(sections) == 0 {
+		return maxBytes
+	}
+	encoded, err := json.Marshal(sections)
+	if err != nil {
+		return maxBytes
+	}
+	if budget := maxBytes - int64(len(encoded)); budget > 0 {
+		return budget
+	}
+	return 1
 }

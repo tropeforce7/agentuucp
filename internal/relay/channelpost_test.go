@@ -390,10 +390,11 @@ func TestTheAdministratorCountsChannelsAndNeverNamesThem(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("mailbox: %d %s", status, body)
 	}
-	var rec relayapi.MailboxRecord
-	if err := json.Unmarshal(body, &rec); err != nil {
+	var answer relayapi.MailboxAnswer
+	if err := json.Unmarshal(body, &answer); err != nil {
 		t.Fatal(err)
 	}
+	rec := answer.Mailbox
 	if rec.Channels != 2 {
 		t.Fatalf("bob's record counts %d channels, want 2: %s", rec.Channels, body)
 	}
@@ -414,10 +415,11 @@ func TestTheAdministratorCountsChannelsAndNeverNamesThem(t *testing.T) {
 	}
 	// A record of its own: a field that is absent leaves whatever the
 	// last unmarshal put there, and the directory's word is absent here.
-	var hers relayapi.MailboxRecord
-	if err := json.Unmarshal(body, &hers); err != nil {
+	var herAnswer relayapi.MailboxAnswer
+	if err := json.Unmarshal(body, &herAnswer); err != nil {
 		t.Fatal(err)
 	}
+	hers := herAnswer.Mailbox
 	if hers.Channels != 0 || !strings.Contains(string(body), `"channels":0`) {
 		t.Fatalf("alice's record, with no directory: %s", body)
 	}

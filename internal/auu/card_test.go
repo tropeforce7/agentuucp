@@ -327,7 +327,7 @@ func TestARelayWithoutARegistrationModeIsRefusedByName(t *testing.T) {
 		{"with a fourth word", "invite"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			answer := map[string]any{"ok": true, "max_bytes": relayapi.DefaultMaxBytes, "knock_max_bytes": relayapi.DefaultMaxBytes}
+			answer := map[string]any{"ok": true, "max_bytes": relayapi.DefaultMaxBytes, "knock_max_bytes": relayapi.DefaultMaxBytes, "wire_level": 1}
 			if tc.mode != nil {
 				answer["registration"] = tc.mode
 			}

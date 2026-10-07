@@ -125,7 +125,7 @@ func TestRetriesRateLimitThenSucceeds(t *testing.T) {
 func TestRetriesServiceUnavailable(t *testing.T) {
 	rec := &recorder{replies: []reply{
 		{status: http.StatusServiceUnavailable, retryAfter: "1", body: relayapi.ErrorResponse{Error: "relay is busy"}},
-		{status: http.StatusOK, body: relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}},
+		{status: http.StatusOK, body: relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen, WireLevel: relayapi.WireLevel}},
 	}}
 	c, slept := newTestClient(t, rec)
 	if err := c.Health(t.Context()); err != nil {
@@ -202,7 +202,7 @@ func TestA429WithoutRetryAfterIsFinal(t *testing.T) {
 	// A 503 with no Retry-After is unchanged: retried at the shortest wait.
 	rec = &recorder{replies: []reply{
 		{status: http.StatusServiceUnavailable, body: relayapi.ErrorResponse{Error: "relay is busy"}},
-		{status: http.StatusOK, body: relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}},
+		{status: http.StatusOK, body: relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen, WireLevel: relayapi.WireLevel}},
 	}}
 	c, slept = newTestClient(t, rec)
 	if err := c.Health(t.Context()); err != nil {
@@ -539,8 +539,8 @@ func TestTheClientSignsOnlyWhatTheRelayVerifies(t *testing.T) {
 	// decoded loosely; max_bytes is held to its range now), the key, the
 	// listing, the post, and the registration appended below.
 	rec := &recorder{replies: []reply{
-		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}},
-		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}},
+		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen, WireLevel: relayapi.WireLevel}},
+		{status: 200, body: relayapi.HealthResponse{OK: true, MLDSA: 65, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen, WireLevel: relayapi.WireLevel}},
 		{status: 200, body: relayapi.KeysResponse{Bundle: id.Public().Bundle(), Name: "peer", Created: time.Now()}},
 		{status: 200, body: relayapi.ListResponse{First: new(int64), Last: new(int64), Allow: relayapi.AllowNone, Card: relayapi.CardNone, Directory: relayapi.DirectoryNone}},
 		{status: 200, body: relayapi.PostResponse{ID: 1}},
@@ -686,7 +686,7 @@ func fakeRelay(t *testing.T, answers map[string]any) *httptest.Server {
 		if !ok && r.URL.Path == "/v1/health" {
 			// A listing asks the relay's max_bytes first; a fake that was
 			// not asked to say otherwise answers the default.
-			body, ok = relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen}, true
+			body, ok = relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen, WireLevel: relayapi.WireLevel}, true
 		}
 		if !ok {
 			http.NotFound(w, r)
@@ -720,7 +720,7 @@ func TestAnAnswerIsCheckedForShapeBeforeItIsReturned(t *testing.T) {
 			Registration: relayapi.RegistrationToken, ClientCerts: relayapi.ClientCertsRequired},
 		"/v1/admin/mailboxes": relayapi.MailboxListResponse{
 			Mailboxes: []relayapi.MailboxRecord{{FP: fp, Name: "alice", Allow: relayapi.AllowSigned}}, Next: fp},
-		"/v1/admin/mailboxes/" + fp:    relayapi.MailboxRecord{FP: fp, Name: "alice"},
+		"/v1/admin/mailboxes/" + fp:    relayapi.MailboxAnswer{Mailbox: relayapi.MailboxRecord{FP: fp, Name: "alice"}},
 		"/v1/admin/blocks":             relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{{FP: fp, ByFP: fp}}},
 		"/v1/admin/tokens":             relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: tokenID, Issuer: fp, Subject: fp, Use: token.UseRegister, State: relayapi.TokenLive}}},
 		"/v1/admin/certs":              relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: serial, FP: fp}}},
@@ -758,7 +758,7 @@ func TestAnAnswerIsCheckedForShapeBeforeItIsReturned(t *testing.T) {
 		{"/v1/admin/status", "cert_lifetime_seconds", relayapi.AdminStatusResponse{CertLifetimeSecs: -1, Registration: relayapi.RegistrationOpen, ClientCerts: relayapi.ClientCertsOff}},
 		{"/v1/admin/mailboxes", "fp", relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{{FP: "ab"}}}},
 		{"/v1/admin/mailboxes", "next", relayapi.MailboxListResponse{Next: "ab"}},
-		{"/v1/admin/mailboxes/" + fp, "fp", relayapi.MailboxRecord{FP: "ab"}},
+		{"/v1/admin/mailboxes/" + fp, "fp", relayapi.MailboxAnswer{Mailbox: relayapi.MailboxRecord{FP: "ab"}}},
 		{"/v1/admin/blocks", "fp", relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{{FP: "ab", ByFP: fp}}}},
 		{"/v1/admin/blocks", "by_fp", relayapi.BlocksResponse{Blocks: []relayapi.BlockRecord{{FP: fp, ByFP: "ab"}}}},
 		{"/v1/admin/tokens", "id", relayapi.TokenListResponse{Tokens: []relayapi.TokenRecord{{ID: "ab", Issuer: fp, Use: token.UseRegister, State: relayapi.TokenLive}}}},
@@ -769,11 +769,11 @@ func TestAnAnswerIsCheckedForShapeBeforeItIsReturned(t *testing.T) {
 		{"/v1/admin/status", "registration", relayapi.AdminStatusResponse{Registration: "open\x1b", ClientCerts: relayapi.ClientCertsOff}},
 		{"/v1/admin/status", "client_certs", relayapi.AdminStatusResponse{Registration: relayapi.RegistrationOpen, ClientCerts: "off\x1b"}},
 		{"/v1/admin/mailboxes", "allow", relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{{FP: fp, Allow: "signed\x1b"}}}},
-		{"/v1/admin/mailboxes/" + fp, "allow", relayapi.MailboxRecord{FP: fp, Allow: "broken\x1b"}},
+		{"/v1/admin/mailboxes/" + fp, "allow", relayapi.MailboxAnswer{Mailbox: relayapi.MailboxRecord{FP: fp, Allow: "broken\x1b"}}},
 		{"/v1/admin/mailboxes", "card", relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{{FP: fp, Card: "signed\x1b"}}}},
-		{"/v1/admin/mailboxes/" + fp, "card", relayapi.MailboxRecord{FP: fp, Card: "broken\x1b"}},
+		{"/v1/admin/mailboxes/" + fp, "card", relayapi.MailboxAnswer{Mailbox: relayapi.MailboxRecord{FP: fp, Card: "broken\x1b"}}},
 		{"/v1/admin/mailboxes", "directory", relayapi.MailboxListResponse{Mailboxes: []relayapi.MailboxRecord{{FP: fp, Directory: "signed\x1b"}}}},
-		{"/v1/admin/mailboxes/" + fp, "directory", relayapi.MailboxRecord{FP: fp, Directory: "broken\x1b"}},
+		{"/v1/admin/mailboxes/" + fp, "directory", relayapi.MailboxAnswer{Mailbox: relayapi.MailboxRecord{FP: fp, Directory: "broken\x1b"}}},
 		{"/v1/admin/certs", "serial", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: "ab", FP: fp}}}},
 		{"/v1/admin/certs", "fp", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: serial, FP: "ab"}}}},
 		{"/v1/admin/certs", "fp", relayapi.CertsResponse{Certs: []relayapi.CertRecord{{Serial: serial}}}},

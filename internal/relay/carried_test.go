@@ -10,12 +10,14 @@ import (
 	"net/http"
 	"reflect"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // postBytes sends a body exactly as given, signed over those bytes, so that
@@ -269,5 +271,63 @@ func TestLimitCarriedV(t *testing.T) {
 		if err == nil {
 			t.Errorf("v %s: carried; want it refused", text)
 		}
+	}
+}
+
+// R4: what a listing page says in its sections comes out of the page's own
+// budget, so a full page and its sections together are never over what an
+// older client holds. pageBudget is max_bytes less the sections as this
+// build encodes them, never below one, and no budget stays none.
+func TestAListingPagesBudgetCountsItsSections(t *testing.T) {
+	sections := []wire.Section{{Name: "later", Data: json.RawMessage(`"` + strings.Repeat("a", 100) + `"`)}}
+	encoded, err := json.Marshal(sections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := int64(len(encoded))
+	for _, tc := range []struct {
+		maxBytes, want int64
+		sections       []wire.Section
+	}{
+		{1000, 1000, nil},
+		{1000, 1000 - n, sections},
+		{n + 1, 1, sections},
+		{n, 1, sections},
+		{0, 0, sections},
+	} {
+		if got := pageBudget(tc.maxBytes, tc.sections); got != tc.want {
+			t.Errorf("pageBudget(%d, %d sections) = %d, want %d", tc.maxBytes, len(tc.sections), got, tc.want)
+		}
+	}
+
+	// Through a listing: two envelopes that fit max_bytes exactly fit one
+	// page, and with the sections said beside them the second is the
+	// next page's.
+	h := newHarness(t, Config{})
+	people := ids(t, "alice", "bob")
+	alice, bob := people[0], people[1]
+	for _, id := range people {
+		h.register(id)
+	}
+	for _, text := range []string{"one", "two"} {
+		if status, body := h.do(alice, "POST", "/v1/mailbox/"+bob.Fingerprint(), sealed(t, alice, bob.Public(), text), nil); status != http.StatusOK {
+			t.Fatalf("post: %d %s", status, body)
+		}
+	}
+	rows := h.stored(t, bob.Fingerprint())
+	if len(rows) != 2 {
+		t.Fatalf("stored %d", len(rows))
+	}
+	h.server.cfg.MaxBytes = rows[0].Size + rows[1].Size
+	page, _, err := h.server.look(bob.Fingerprint(), 0, 10, false, nil)
+	if err != nil || len(page.Messages) != 2 || len(page.Sections.Sections) != 0 {
+		t.Fatalf("without sections: %d messages, %v", len(page.Messages), err)
+	}
+	listingSections = sections
+	t.Cleanup(func() { listingSections = nil })
+	page, _, err = h.server.look(bob.Fingerprint(), 0, 10, false, nil)
+	if err != nil || len(page.Messages) != 1 || len(page.Sections.Sections) != 1 {
+		t.Fatalf("with sections: %d messages and %d sections, %v; want the second message left for the next page",
+			len(page.Messages), len(page.Sections.Sections), err)
 	}
 }

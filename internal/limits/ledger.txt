@@ -378,6 +378,7 @@ internal/relayapi/relayapi.go ForwardResponse int ID int64 = > 0 shown by TestLi
 internal/relayapi/relayapi.go HealthResponse int KnockMaxBytes int64 = [1, 1073741824] shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go HealthResponse int MLDSA int = one of 0, 44, 65, 87 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go HealthResponse int MaxBytes int64 = [1, 1073741824] shown by TestLimitRelayAnswerIntegers
+internal/relayapi/relayapi.go HealthResponse int WireLevel int = >= 1 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int KnockMaxBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int KnocksPerHour int64 = >= 0 shown by TestLimitRelayAnswerIntegers
 internal/relayapi/relayapi.go LimitsView int MailboxMaxBytes int64 = >= 0 shown by TestLimitRelayAnswerIntegers

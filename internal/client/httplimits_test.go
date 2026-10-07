@@ -47,7 +47,7 @@ func TestTheClientSpeaksHTTP11Alone(t *testing.T) {
 	}
 	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Proto", r.Proto)
-		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"knock_max_bytes":16777216,"registration":"open"}`))
+		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"knock_max_bytes":16777216,"registration":"open","wire_level":1}`))
 	}))
 	// The server offers h2 first and serves it when negotiated (EnableHTTP2
 	// installs the handler); a client offering http/1.1 alone is answered
@@ -112,7 +112,7 @@ func TestLimitResponseHeadersAreCapped(t *testing.T) {
 			w.Header().Set("X-Junk", strings.Repeat("j", int(n)))
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"knock_max_bytes":16777216,"registration":"open"}`))
+		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"knock_max_bytes":16777216,"registration":"open","wire_level":1}`))
 	}))
 	t.Cleanup(srv.Close)
 	c, err := New(srv.URL, testIdentity(t, "alice"), nil)
@@ -152,10 +152,10 @@ func TestLimitAnAnswerIsHeldToWhatItsRouteHolds(t *testing.T) {
 		if r.URL.Path == "/v1/health" {
 			healths.Add(1)
 			if n := healthSize.Load(); n > 0 {
-				w.Write(paddedJSON(fmt.Sprintf(`{"ok":true,"max_bytes":%d,"knock_max_bytes":16777216,"registration":"open"`, maxBytes), n))
+				w.Write(paddedJSON(fmt.Sprintf(`{"ok":true,"max_bytes":%d,"knock_max_bytes":16777216,"registration":"open","wire_level":1`, maxBytes), n))
 				return
 			}
-			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: maxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen})
+			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: maxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen, WireLevel: relayapi.WireLevel})
 			return
 		}
 		// A listing of one envelope whose ct is page bytes of base64.
@@ -222,7 +222,7 @@ func TestARaisedMaxBytesIsLearnedWhenAPageIsRefusedForItsSize(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/v1/health" {
 			healths.Add(1)
-			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: maxBytes.Load(), KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen})
+			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: maxBytes.Load(), KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen, WireLevel: relayapi.WireLevel})
 			return
 		}
 		listings.Add(1)
@@ -292,16 +292,18 @@ func TestARaisedMaxBytesIsLearnedWhenAPageIsRefusedForItsSize(t *testing.T) {
 	}
 }
 
-// paddedJSON is an object that begins with head, an object's opening and
-// its first members without the closing brace, padded with one more
-// member to exactly n bytes.
+// paddedJSON is an answer of exactly n bytes: head, an object left open,
+// then spaces and the closing brace. The padding is white space, which JSON
+// allows between any two tokens and a strict decode takes, rather than a
+// field: a field the answer does not have is refused now (P1), and a
+// section, the one place something new may go, is held to 16 KiB (R4),
+// far under the holds these tests reach.
 func paddedJSON(head string, n int64) []byte {
-	const frame = `,"pad":""}`
-	pad := int(n) - len(head) - len(frame)
+	pad := int(n) - len(head) - 1
 	if pad < 0 {
-		panic(fmt.Sprintf("paddedJSON: %d bytes is under the frame", n))
+		panic(fmt.Sprintf("paddedJSON: %d bytes is under the head", n))
 	}
-	return []byte(head + `,"pad":"` + strings.Repeat("A", pad) + `"}`)
+	return []byte(head + strings.Repeat(" ", pad) + "}")
 }
 
 // TestLimitAStreamAnswerIsHeldTo64KiB: the two stream routes' answers —
@@ -641,7 +643,7 @@ func TestAHeldListingCompletes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.URL.Path == "/v1/health" {
-			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen})
+			json.NewEncoder(w).Encode(relayapi.HealthResponse{OK: true, MaxBytes: relayapi.DefaultMaxBytes, KnockMaxBytes: relayapi.DefaultMaxBytes, Registration: relayapi.RegistrationOpen, WireLevel: relayapi.WireLevel})
 			return
 		}
 		time.Sleep(relayapi.MaxWait)
