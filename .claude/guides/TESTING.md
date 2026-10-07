@@ -628,6 +628,33 @@ and not only the old one. A reader that keeps its own trailing-data
 sentence tells `wire.ErrTrailing` apart. Whoever writes a decode of their
 own copies the rule rather than the call, and says so.
 
+**A section, an answer type, a request type and a refusal code each come
+with the tests that hold the door open.** The door is `sections`, and a
+thing that goes through it, or that it is built into, is not done until:
+
+- a new section has a round trip on every path that carries one, with a
+  made-up section of its kind riding beside it from the seed (D35:
+  `testutil.MadeUpSection`), the kept size at 16 KiB and one byte over, and
+  the critical refusal, with the sentence a person reads;
+- a new answer type is placed by the relayapi walk, which fails on a body
+  type in no set, and has the four rows of
+  `TestEveryAnswerTakesNothingNewButSections`: whole and taken, a field it
+  does not have refused by name, a section it does not know ignored, and a
+  critical one refusing the answer by its name;
+- a new request type has the same four rows through its real route and
+  signature (`TestEveryRequestTakesNothingNewButSections`), the row that a
+  refused request spends no nonce it would not have spent and writes
+  nothing, and its decode inside `decodeRequest`, which a walk holds;
+- a new refusal code has a row pair, the code present and acted on and the
+  same sentence under a code nobody knows and not acted on, and a row
+  through a real relay that fails if the relay writes the sentence without
+  the code. A handler that answers with the code proves the client and not
+  the relay; 6b's no-knocks row did, and a break at the courier's site went
+  unseen until the real-relay row was added.
+
+A test pins what the code should say, never what it happens to say. A row
+for advice the code gives that is wrong is the bug's test, and it fails.
+
 **Nothing on this machine is from before, and every refusal of a file
 from before has a test that makes the file in its old form.** A file a
 version from before a rule wrote is refused by name, never migrated (the
@@ -1605,6 +1632,18 @@ half a token a second. Forty-five at once did.
 row that edited an attachment's digest found the first sixty-four hex
 characters in the file, which were the sender's fingerprint, and the
 extract succeeded; nothing re-verifies a stored message. Navigate the JSON.
+
+**From v0.16.0, the suite runs against the previous release too (D41).**
+v0.15.0 is the first kept version of the wire, and from the next release
+the container suite runs each party as the previous release's real
+binaries as well as this one's: an old relay with new clients, a new relay
+with old clients, and two clients a release apart. A promise that an older
+build ignores or refuses by name what a newer one adds is tested by the
+older build itself, never by a fake of it; there is no fake old relay in
+the tree, and this is why. Until there is a release before the one being
+tested, the rule has nothing to run against, and v0.15.0's own suite
+proves the door from the new side only: family U has a build from the
+future sealed by `forge seal`.
 
 ## Manual verification
 

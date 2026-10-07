@@ -336,33 +336,108 @@ already refuses every sender to a mailbox — malformed authentication data
 has no state here that means "not yet". The owner is told by the word on
 their listing and by what auu inbox prints, and their push is the repair.
 
-**Nothing on the wire is from before.** Every released version is
-retracted and no peer from before this batch is supported, so every
-tolerance for one is a path nobody tests and a place a wrong answer
-hides. A field an end always sends has no
-`omitempty` and is required by the other end, refused by name when it is
-absent, with nothing of the answer used: `queued`, `allow`, and each row's
-`kind` (one of `envelope`, `stream` and `knock`, a fourth refused by
-name) and `channel` on a listing, `created` on a lookup, `registration`
-and `client_certs` on the status answer, `max_bytes` and `knock_max_bytes` on health; a stubs
-listing whose row carries an envelope is a relay that ignored the
-parameter, refused the same way. A count whose zero is a value the relay
-sends, `queued`, stays an `int64`: absent and zero are one number, and
-the code that runs for it is the code that runs for a real zero. Neither
-end carries a branch for an older peer — the client's `kind == ""` read
-as envelope, its `ChannelKnown` filing by the sealed record, the allow
-list's plain array sent beside the document for a relay that read the
-array, the `ccxt1` token and the `ccx1` export line still read — each
-went, and the fake old relay with them. A plain refusal that tells a
-person what happened may stay as a sentence: the legacy token header's
-`400`, the allow request with no document's `400`, the `ccxt1` and `ccx1`
-refusals that say what to do; a tolerance that changes behaviour goes.
-The fields a sender may leave out — the outer `ch`, the inner `channel`,
-the manifest's, the open-stream request's — are the other rule: absent
-means `default`, the sender's own word, and a message for `default`
-carries no name. Keep the two apart: one is about what an end always
-sends, the other about what a sender may leave out, and a test marshals
-the zero value to prove the tag.
+**Nothing on the wire is from before, and one door is for what comes
+after.** v0.15.0 is the floor: everything was upgraded to it once,
+together, and nothing from before it is supported, so every tolerance for
+an older peer is a path nobody tests and a place a wrong answer hides. A
+field an end always sends has no `omitempty` and is required by the other
+end, refused by name when it is absent, with nothing of the answer used:
+`queued`, `allow`, and each row's `kind` (one of `envelope`, `stream` and
+`knock`, a fourth refused by name) and `channel` on a listing, `created`
+on a lookup, `registration` and `client_certs` on the status answer,
+`max_bytes`, `knock_max_bytes` and `wire_level` on health, and `code` on
+every refusal; a stubs listing whose row carries an envelope is a relay
+that ignored the parameter, refused the same way. A count whose zero is a
+value the relay sends, `queued`, stays an `int64`: absent and zero are one
+number, and the code that runs for it is the code that runs for a real
+zero. Neither end carries a branch for an older peer. Before the floor a
+client read absence as a relay from before the field and filed by the
+sealed record, defaulted `kind` to envelope, or said nothing; the
+client's `kind == ""` read as envelope, its `ChannelKnown` filing by the
+sealed record, the allow list's plain array sent beside the document for
+a relay that read the array, the `ccxt1` token and the `ccx1` export line
+still read — each went, and the fake old relay with them. A plain refusal
+that tells a person what happened may stay as a sentence: the legacy
+token header's `400`, the allow request with no document's `400`, the
+`ccxt1` and `ccx1` refusals that say what to do; a tolerance that changes
+behaviour goes. The fields a sender may leave out — the outer `ch`, the
+inner `channel`, the manifest's, the open-stream request's — are the
+other rule: absent means `default`, the sender's own word, and a message
+for `default` carries no name. Keep the two apart: one is about what an
+end always sends, the other about what a sender may leave out, and a
+test marshals the zero value to prove the tag. What comes after the floor
+does not come as a tolerance: a newer build says what an older one does
+not understand through the one door below, which an older one was built
+to read, so "no field but the declared ones" holds because `sections` is
+one of them.
+
+**There is one door, and it is `sections`.** Every answer body and every
+request body embeds `relayapi.Sections`, and no row inside a list does
+(R3): a fact about a row is never critical, because a critical section on
+a page refuses the whole page, and a page one newer row refuses is a
+mailbox that does not drain on that machine. Everything from the wire is
+read through `wire.Decode`, so a field nobody declared is refused by name,
+and a body's sections are held to `wire.CheckBody` at both ends: the
+list's shape, then 16 KiB as this build encodes them, then the sort, a
+section this build does not know ignored and one marked critical refusing
+the body by its name. A sealed message and a stream's manifest carry
+sections under their signature, and a section is sorted only once that
+signature has verified (R7), so that nothing unsigned is ever kept as
+needing a newer build or puts "update auu" in front of a person. A request
+to a relay is sorted where its body was always decoded, after the request's
+signature on every route that has one and before it on registration,
+where the key is in the body: there the relay keeps nothing and advises
+nobody, and the one thing it tells an unauthenticated caller, its wire
+level, the health answer tells everyone. Two walks hold the door's reach:
+one over `relayapi`, which fails on a body without it and a row with it,
+and one over the relay's source, which fails on any decode of a request
+outside `decodeRequest`.
+
+**The outer envelope is four fields, for good, and a relay carries any
+version of it.** `v`, `to`, `ct` and `ch`, read strictly on the post, knock
+and forward routes, `v` any integer from 1 up. What a version means is
+between the sender and the recipient: the forward route used to refuse an
+envelope whose version was not its own, so a relay on the path that had
+not been upgraded would have bounced newer mail for a matter that was not
+its own. The bytes a relay stores and hands on are the bytes it was given.
+
+**A grant document changes by its format version, never through the
+door.** A token, an allow list, a card, a channel directory and a vouch
+stay strict: a `sections` field under a good signature is refused, and
+each has a test that says so (`TestATokenCarriesNoSections` and its four
+siblings). A change to one is a new format version read beside the old,
+and a writer uses the oldest that says what it means. A document whose
+meaning grants something is not a place for a reader to skip what it does
+not understand.
+
+**The relay says what it can do as a wire level.** `wire_level` on the
+health answer is a whole number, 1 from v0.15.0, that rises when a release
+gives the relay something a client may depend on, and never falls. A
+client keeps it and refuses a health answer without it; nothing compares
+it yet, and the first feature that depends on a relay's ability reads it
+and says "this relay is too old for that" before it tries.
+
+**A client decides on a refusal's code and status, never its sentence.**
+Every refusal is `{"error", "code"}`, the code always written, empty for a
+refusal of no particular kind and shaped like a section's name otherwise.
+A fixed sentence and its code are one `relayapi.Refusal` value the relay
+writes whole, so a change to the words cannot part them; a sentence that
+carries a value is written with its code beside it at its one site; a
+refusal about a time carries it in `at`, and a client shows that time and
+never reads one out of a sentence. A code a client does not know is shown
+as the relay's sentence and acted on no further, so a later release adds
+codes freely; a refusal no client may act on without understanding it is
+a critical section, not a code. The error body's fields are frozen after
+`code` and `at`: a later one goes in a section. The failure that taught
+it: the certificate classifier matched fragments of the relay's words, so
+a certificate refused for a reason that happened to say "has expired"
+would have been read as an expired one, and every 507 that was not the
+relay's own was read as a full mailbox. A walk over the client, `auu` and
+the commands refuses a comparison with a refusal's sentence, a `strings`
+function given one, and a sentence handed to anything but what shows it;
+another holds that every code is written by some route; and each code has
+a test through a real relay that fails if the relay writes the sentence
+without it.
 
 **Nothing on this machine is from before.** The same reasoning, for the
 files a version from before a rule wrote: there are no users, so a file

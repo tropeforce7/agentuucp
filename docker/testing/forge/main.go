@@ -9,6 +9,10 @@
 // real clock in the relay and the clients exactly as one that had aged
 // would. Nothing here is a construction of its own, and nothing here is
 // built by make build: the image for the suite is the only place it goes.
+//
+// forge seal (seal.go) is the other thing no shipped binary does: a message
+// or a stream carrying a section of a build from the future, sealed and
+// posted with the library calls auu makes.
 package main
 
 import (
@@ -30,10 +34,17 @@ Usage:
   forge init  --dir DIR --name NAME --passphrase-file PATH --at RFC3339 [--mldsa 44|65|87]
   forge relay --dir DIR --host NAME [--host ...] --passphrase-file PATH --at RFC3339
               --out FILE [--years 1]
+  forge seal  --home DIR --to PEER --section NAME [--critical] [--stream]
+              [--subject TEXT] [--text TEXT]
 
 --at is the moment the certificates are issued: their validity starts an
 hour before it and runs the usual lifetime from it. Everything else is what
 auu-ca does.
+
+seal sends, from the identity in --home through its default relay, one
+message (or with --stream one small stream) to a peer, carrying one section
+of the given name with {} for its data, as a newer build would; it prints
+the relay's id for it.
 `
 
 // hosts collects a repeatable --host.
@@ -53,6 +64,8 @@ func main() {
 		err = cmdInit(os.Args[2:])
 	case "relay":
 		err = cmdRelay(os.Args[2:])
+	case "seal":
+		err = cmdSeal(os.Args[2:])
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return

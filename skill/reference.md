@@ -541,6 +541,9 @@ A refused send names what to change, and nothing was queued:
   something the relay cannot read. The relay's operator updates it; the
   user waits or uses another relay. A message forwarded through a relay
   that refuses this way comes back as undeliverable in the same words.
+  N is the relay's `wire_level`, which its health answer carries: 1 from
+  v0.15.0, rising when a relay can do something new, and required, so a
+  health answer without it is refused as malformed.
 - `the relay at URL refused METHOD PATH (STATUS) in an error body without
   its "code"`, or `with an error code that is not one` — the relay is
   older than this `auu`, or what is at URL is not a relay of this

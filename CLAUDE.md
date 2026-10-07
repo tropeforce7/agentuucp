@@ -61,6 +61,15 @@ design decisions in a section 0, and those are not to be re-opened:
   every post.
 - `PLAN-PROXY.md`, implemented: the key-holding proxy in `auu serve`, in
   process and as an account of its own.
+- `PLAN-KEYSHARE.md`, implemented, with `PLAN-KEYSHARE-TAIL.md`: cards,
+  the listing and the knock.
+- `PLAN-ROUTE.md`, implemented: relay-to-relay mail by bang path, couriers.
+- `PLAN-VOUCH.md`, implemented: one peer vouching for another's key.
+- `PLAN-CURSOR.md`, implemented: a cursor past the relay's mail, `auu
+  cursor`.
+- `PLAN-SECTIONS.md`, implemented: v0.15.0, the floor; one door,
+  `sections`, in messages, manifests, answers and requests; refusal codes;
+  the wire level. `docs/releases/v0.15.0.md` gives the upgrade order.
 
 ## Rules for every change
 

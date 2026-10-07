@@ -64,6 +64,7 @@ reports`, is snapshotted for the matrix.
 | F      | mail across peered relays, on `relay`, `relay-b` and `relay-c` with `dave` at the far end: a message across two relays and the reply back along the way it came, the middle relay stopped and its queue drained when it returns, a forward carrying a return path refused by a relay that no longer admits its courier, a loop, and an undeliverable unwinding two hops |
 | G      | a database an older release wrote: relay A stopped, its database replaced by one built from schema 11's text with one mailbox in it, owned and moded as the unit's files are, and the relay started, which keeps a copy readable by its user alone, carries the database to this schema, says so, and serves the mailbox; the snapshot is put back after |
 | V      | one peer vouching for another, across alice, bob and a fresh carol: an introduction carol adds on alice's word, with the comment saying whose word it was; a question about a key that alice answers by hand, nothing answering it by itself; and a vouch alice gives carol that carol's knock on bob carries, which bob's quarantine names as alice's word before it asks him anything |
+| U      | mail from a build from the future, sealed on alice's machine by `forge seal`: a message with a critical section bob's build does not know, kept under `damaged/` with the cause `newer: section "S"` and said to need a newer auu, by name, and counted apart from damaged mail; the same as a stream, which waits on the relay unacknowledged, marked in the listing and counted every run, with `read` and `reply` answering in one sentence; and a section bob need not know, which is ignored and named in `--json` as the message is read |
 
 Each family restores every machine from the snapshot before it starts, and
 each row undoes its own fault, so a row runs alone:
@@ -116,6 +117,19 @@ eleven years ago, or a bundle whose signing intermediates run out a hundred
 seconds from now, then meets the real clock in the relay and the clients
 exactly as one that had aged would. It is built into the image and never by
 `make build`, and it adds no construction and no dependency.
+
+`forge seal` is the other thing no shipped binary does: it sends what a
+newer build would. From the identity in a home, through that home's default
+relay, it seals one message to a peer, or with `--stream` one small stream,
+carrying one section of a name the test chooses, critical with
+`--critical`, and prints the relay's id for it:
+
+    forge seal --home ~/.auu --to bob --section from-the-future --critical [--stream]
+
+The sealing is `envelope.SealSections` and `stream.BuildManifestSections`
+and the posting `internal/dial`'s client, the same calls
+`internal/auu/sections_test.go` makes in process; family U is the same
+thing through a real relay.
 
 `upstream/main.go` is the other program the image carries for the tests
 alone: a stand-in for api.anthropic.com on loopback that records the method,

@@ -434,6 +434,14 @@ Three replies say the relay is refusing rather than failing:
 | `503` | too many requests at once | the same, it clears on its own |
 | `507` | the recipient's mailbox, or the relay, is full — including a disk that fills part way through an upload | the recipient runs `auu rm` on mail they have read, or the operator makes room; retrying will not help, and the sealed copy waits in `outbox/` for `auu send --resume`, which resumes what the relay kept or opens anew |
 
+**Compatibility.** A relay and the clients that use it go to v0.15.0
+once, together, the relay first, and after that versions may differ: a
+relay carries any envelope version, ignores a section in a request it does
+not know and refuses one marked critical with `needs-newer`, and says what
+it can do as `wire_level`. v0.14.0 and before are not supported. The
+release note, [`docs/releases/v0.15.0.md`](releases/v0.15.0.md), gives the
+order.
+
 `GET /v1/health` is exempt from all of it, so monitoring does not flap while
 the relay is under attack. Its answer says the relay's `max_bytes`,
 `knock_max_bytes`, registration mode and `wire_level`: a whole number that

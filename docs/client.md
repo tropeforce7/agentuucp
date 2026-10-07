@@ -658,6 +658,18 @@ and a stream's manifest are read strictly. So one that carries a field this
 build does not know is refused as malformed and kept under `damaged/`. That
 is what a peer running something other than this `auu` looks like from here.
 
+*Compatibility.* Everything you use, your `auu`, your peers' and the
+relays, goes to v0.15.0 once, together, and after that versions may differ.
+v0.14.0 and before are not supported. The break runs one way: v0.14.0
+reads what v0.15.0 sends, but v0.15.0 refuses a message v0.14.0 sealed,
+other than a stream, as malformed and keeps it under `damaged/`. The
+release note ([`docs/releases/v0.15.0.md`](releases/v0.15.0.md)) gives the
+order to upgrade in. From v0.15.0 on, a newer build adds what it adds through
+sections in messages and in what relays and clients send each other, and
+through refusal codes; an older build ignores what it may and refuses by
+name what it must, and never reads a newer message with a part dropped.
+A relay's `wire_level` says what it can do.
+
 *From a newer build.* A newer `auu` may add a section to a message: a part
 with a name, which this build may not know. A section it does not know and
 was not told it must is passed over, and the message is read as usual. The

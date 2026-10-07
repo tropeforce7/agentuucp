@@ -920,16 +920,33 @@ where the relay acts on it and a broken one refuses something on the
 owner's behalf that they would otherwise learn of only from silence: a
 broken allow list every sender, a broken card every knock, a broken
 directory every post. **Nothing on the wire
-is from before.** Every released version is retracted and no peer from
-before this batch is supported. So a field one end always sends is
+is from before, and what comes after has one door.** v0.15.0 is the
+floor: everything is upgraded to it once, together, and nothing from
+before it is supported. So a field one end always sends is
 required by the other and refused by name when it is absent, with nothing
 of the answer used, rather than read as a peer from before the field. A
 listing without `channel`, `kind`, `allow` or `card`, a health answer
-without `max_bytes`, `knock_max_bytes` or `registration`, a card answer without `state`, a
-lookup without `created`, and a status without `registration` or
-`client_certs` are each refused so. Neither end carries
-a branch for an older peer. The wire has one version, this one, and a peer
-from before it is refused by name at the first exchange. **Nothing on this
+without `max_bytes`, `knock_max_bytes`, `registration` or `wire_level`, a
+card answer without `state`, a lookup without `created`, a status without
+`registration` or `client_certs`, and a refusal without `code` are each
+refused so. Neither end carries a branch for an older peer. What a newer
+build adds after the floor goes through `sections`, which every message,
+manifest, answer and request carries and every reader of this build was
+written to read: a part it does not know it ignores, and a part marked
+critical it refuses by name, saying that the reader, this machine or the
+relay, needs a newer auu, rather than read the rest with that part
+dropped. A message that
+needs a newer auu is kept under `damaged/` with the cause `newer` and the
+section's name, and is not deleted: updating auu and reading it again is
+what to do about it, and asking the sender to send it again is not. The
+outer envelope a relay reads is four fields for good, and a relay carries
+an envelope whose version it does not know, since what the version means
+is between the sender and the recipient. The relay's `wire_level` on its
+health answer says what it can do. And a refusal is told apart by its
+`code`, never by its words, so a relay may change its words and add codes
+without a client misreading either. [`docs/client.md`](client.md) says
+what this means for a person upgrading, and the release note
+[`docs/releases/v0.15.0.md`](releases/v0.15.0.md) gives the order. **Nothing on this
 machine is from before** either. A file a version from before a rule wrote
 is refused by name with a sentence saying what to do, never migrated and
 never read under the old rule. A relay's database from before schema 11,
