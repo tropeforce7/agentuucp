@@ -66,7 +66,7 @@ func (s *Server) handleKnock(w http.ResponseWriter, r *http.Request, body []byte
 	}
 	exists, blocked, err := s.store.MailboxState(fp)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if !exists {
@@ -89,19 +89,19 @@ func (s *Server) handleKnock(w http.ResponseWriter, r *http.Request, body []byte
 	// as a mailbox whose allow list named nobody would, so on none of the
 	// four routes does an answer say which relays this one peers with.
 	if s.isCourierMailbox(fp) {
-		s.fail(w, http.StatusForbidden, relayapi.MsgNoKnocks)
+		s.refuse(w, http.StatusForbidden, relayapi.RefusalNoKnocks)
 		return
 	}
 	takes, err := s.store.TakesKnocks(fp)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	// One sentence for no card, a card that says no and a card that does
 	// not verify: the state of somebody else's card is not a stranger's
 	// to learn.
 	if !takes {
-		s.fail(w, http.StatusForbidden, relayapi.MsgNoKnocks)
+		s.refuse(w, http.StatusForbidden, relayapi.RefusalNoKnocks)
 		return
 	}
 	if ok, retry := s.lim.knocks.Allow(callerFP); !ok {
@@ -123,17 +123,17 @@ func (s *Server) handleKnock(w http.ResponseWriter, r *http.Request, body []byte
 		return
 	case errors.Is(err, ErrMailboxFull):
 		setLimit(w, limitMailboxFull)
-		s.fail(w, http.StatusInsufficientStorage, relayapi.MsgMailboxFull)
+		s.refuse(w, http.StatusInsufficientStorage, relayapi.RefusalMailboxFull)
 		return
 	case errors.Is(err, ErrRelayFull):
 		setLimit(w, limitRelayFull)
-		s.fail(w, http.StatusInsufficientStorage, relayapi.MsgRelayFull)
+		s.refuse(w, http.StatusInsufficientStorage, relayapi.RefusalRelayFull)
 		return
 	case errors.Is(err, ErrNoMailbox):
 		s.fail(w, http.StatusNotFound, "no such mailbox")
 		return
 	case err != nil:
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	s.notify.Wake(mailKey(fp))

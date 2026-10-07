@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -170,6 +169,3 @@ func (a *adminSet) warn(msg string, err error) {
 
 // AdminFileMode is the loosest mode an admin file may have.
 const AdminFileMode fs.FileMode = 0o755
-
-// errNoAdmins is the answer when a relay was started without an admin file.
-var errNoAdmins = errors.New("this relay has no administrators")

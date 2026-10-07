@@ -171,7 +171,7 @@ func transportErr(err error) error {
 func storageFaultHint(err error) error {
 	var httpErr *client.HTTPError
 	if !errors.As(err, &httpErr) || httpErr.Status != http.StatusInternalServerError ||
-		httpErr.Message != relayapi.MsgStorageError {
+		httpErr.Code != relayapi.CodeStorageError {
 		return err
 	}
 	return &storageFault{err}

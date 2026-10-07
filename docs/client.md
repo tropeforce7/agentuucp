@@ -444,7 +444,8 @@ the one channel, default; drop --channel`. When you named nothing and they
 have removed `default`, it says `bob has removed their default channel;
 choose one with --channel:` and the list. A channel outside its period is refused with
 the relay's own sentence, `channel "cfp" is not open: opens T` or `closed
-T`, with the time in your zone. Each is exit 2, as a refused allow list is,
+T` with T in UTC, followed by the same time in your zone, `(T here)`,
+when your zone reads it otherwise. Each is exit 2, as a refused allow list is,
 and nothing was queued.
 
 `auu channel keep NAME off` says that mail fetched from that channel is

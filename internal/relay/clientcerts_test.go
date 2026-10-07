@@ -310,8 +310,8 @@ func TestMailboxRoutesRefuseWithoutACertificate(t *testing.T) {
 			if status != http.StatusUnauthorized {
 				t.Fatalf("%s without a certificate: %d, want 401: %s", tc.name, status, body)
 			}
-			if got := errorText(t, body); got != msgCertRequired {
-				t.Errorf("error %q, want %q", got, msgCertRequired)
+			if got := errorText(t, body); got != relayapi.MsgCertRequired {
+				t.Errorf("error %q, want %q", got, relayapi.MsgCertRequired)
 			}
 			// And the same request with one succeeds, so the refusal is
 			// about the certificate and nothing else.
@@ -364,8 +364,8 @@ func TestTheCertificateIsCheckedBeforeTheBodyIsRead(t *testing.T) {
 			if status != http.StatusUnauthorized {
 				t.Fatalf("an over-bound body from a caller with no certificate: %d, want 401 before the body is read: %s", status, body)
 			}
-			if got := errorText(t, body); got != msgCertRequired {
-				t.Errorf("error %q, want %q", got, msgCertRequired)
+			if got := errorText(t, body); got != relayapi.MsgCertRequired {
+				t.Errorf("error %q, want %q", got, relayapi.MsgCertRequired)
 			}
 		})
 	}
@@ -384,8 +384,8 @@ func TestACertificateForAnotherIdentityIsRefused(t *testing.T) {
 	if status != http.StatusUnauthorized {
 		t.Fatalf("a certificate for another identity: %d, want 401: %s", status, body)
 	}
-	if got := errorText(t, body); got != msgCertMismatch {
-		t.Errorf("error %q, want %q", got, msgCertMismatch)
+	if got := errorText(t, body); got != relayapi.MsgCertMismatch {
+		t.Errorf("error %q, want %q", got, relayapi.MsgCertMismatch)
 	}
 }
 
@@ -408,8 +408,8 @@ func TestARevokedCertificateStopsWorkingImmediately(t *testing.T) {
 	if status != http.StatusUnauthorized {
 		t.Fatalf("after revocation: %d, want 401: %s", status, body)
 	}
-	if got := errorText(t, body); got != msgCertRevoked {
-		t.Errorf("error %q, want %q", got, msgCertRevoked)
+	if got := errorText(t, body); got != relayapi.MsgCertRevoked {
+		t.Errorf("error %q, want %q", got, relayapi.MsgCertRevoked)
 	}
 	// Revoking twice is not a change.
 	if status, _, _ := h.send(h.admin, "DELETE", "/v1/admin/certs/"+m.serial, nil, nil); status != http.StatusNotFound {
@@ -438,8 +438,8 @@ func TestAnUnknownSerialIsRefused(t *testing.T) {
 	if status != http.StatusUnauthorized {
 		t.Fatalf("a certificate with no row: %d, want 401: %s", status, body)
 	}
-	if got := errorText(t, body); got != msgCertUnknown {
-		t.Errorf("error %q, want %q", got, msgCertUnknown)
+	if got := errorText(t, body); got != relayapi.MsgCertUnknown {
+		t.Errorf("error %q, want %q", got, relayapi.MsgCertUnknown)
 	}
 }
 
@@ -457,8 +457,8 @@ func TestAnExpiredRowIsRefused(t *testing.T) {
 	if status != http.StatusUnauthorized {
 		t.Fatalf("an expired row: %d, want 401: %s", status, body)
 	}
-	if got := errorText(t, body); got != msgCertExpired {
-		t.Errorf("error %q, want %q", got, msgCertExpired)
+	if got := errorText(t, body); got != relayapi.MsgCertExpired {
+		t.Errorf("error %q, want %q", got, relayapi.MsgCertExpired)
 	}
 }
 
@@ -923,8 +923,8 @@ func TestAStolenSigningKeyMintsNothingTheRelayHonours(t *testing.T) {
 	if status != http.StatusUnauthorized {
 		t.Fatalf("a forged leaf with a fresh serial: %d, want 401: %s", status, body)
 	}
-	if got := errorText(t, body); got != msgCertUnknown {
-		t.Errorf("error %q, want %q", got, msgCertUnknown)
+	if got := errorText(t, body); got != relayapi.MsgCertUnknown {
+		t.Errorf("error %q, want %q", got, relayapi.MsgCertUnknown)
 	}
 
 	// The real serial and the real subject, under the attacker's own key.
@@ -937,8 +937,8 @@ func TestAStolenSigningKeyMintsNothingTheRelayHonours(t *testing.T) {
 	if status != http.StatusUnauthorized {
 		t.Fatalf("a forged leaf reusing a real serial: %d, want 401: %s", status, body)
 	}
-	if got := errorText(t, body); got != msgCertUnknown {
-		t.Errorf("error %q, want %q", got, msgCertUnknown)
+	if got := errorText(t, body); got != relayapi.MsgCertUnknown {
+		t.Errorf("error %q, want %q", got, relayapi.MsgCertUnknown)
 	}
 
 	// And the genuine certificate still works, so the check is about the

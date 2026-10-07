@@ -40,12 +40,12 @@ func (s *Server) handleSetChannels(w http.ResponseWriter, r *http.Request, body 
 	// there; anything else is the store's trouble.
 	mb, err := s.store.Mailbox(fp)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	pub, err := identity.ParseBundle(mb.Bundle)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	d, err := channels.Verify(pub, req.Document, req.Signature)
@@ -80,7 +80,7 @@ func (s *Server) handleSetChannels(w http.ResponseWriter, r *http.Request, body 
 		s.fail(w, http.StatusNotFound, "no such mailbox")
 		return
 	case err != nil:
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	// Only for a directory that replaced the stored one: a push of what
@@ -104,7 +104,7 @@ func (s *Server) handleGetChannels(w http.ResponseWriter, r *http.Request, body 
 	fp := r.PathValue("fp")
 	exists, blocked, err := s.store.MailboxState(fp)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if !exists {
@@ -117,7 +117,7 @@ func (s *Server) handleGetChannels(w http.ResponseWriter, r *http.Request, body 
 	}
 	allowed, err := s.store.MayPost(fp, callerFP)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if !allowed {
@@ -126,18 +126,18 @@ func (s *Server) handleGetChannels(w http.ResponseWriter, r *http.Request, body 
 	}
 	doc, sig, found, err := s.store.Directory(fp)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if !found {
-		s.fail(w, http.StatusNotFound, relayapi.MsgNoDirectory)
+		s.refuse(w, http.StatusNotFound, relayapi.RefusalNoDirectory)
 		return
 	}
 	resp := relayapi.ChannelsResponse{Document: doc, Signature: sig}
 	if callerFP == fp {
 		counts, err := s.store.ChannelCounts(fp)
 		if err != nil {
-			s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+			s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 			return
 		}
 		// Every listed channel is in the map, at zero when nothing waits,
@@ -146,7 +146,7 @@ func (s *Server) handleGetChannels(w http.ResponseWriter, r *http.Request, body 
 		// read here only for its names.
 		var d channels.Directory
 		if err := json.Unmarshal(doc, &d); err != nil {
-			s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+			s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 			return
 		}
 		for _, ch := range d.Channels {
@@ -180,15 +180,26 @@ func (s *Server) channelForPost(w http.ResponseWriter, fp, name string) (string,
 	}
 	exists, ch, err := s.store.ChannelState(fp, name)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return "", false
 	}
 	if !exists {
-		s.fail(w, http.StatusNotFound, fmt.Sprintf("no such channel %q", name))
+		s.failCode(w, http.StatusNotFound, relayapi.CodeNoSuchChannel, fmt.Sprintf("no such channel %q", name))
 		return "", false
 	}
-	if open, why := ch.OpenAt(s.cfg.Now()); !open {
-		s.fail(w, http.StatusForbidden, fmt.Sprintf("channel %q %s: %s", name, relayapi.MsgChannelClosed, why))
+	now := s.cfg.Now()
+	if open, why := ch.OpenAt(now); !open {
+		// The bound the sentence names, as data: the start for a channel
+		// whose period has not begun, the end for one whose has ended.
+		at := time.Time{}
+		switch {
+		case ch.NotBefore != nil && now.Before(*ch.NotBefore):
+			at = *ch.NotBefore
+		case ch.NotAfter != nil:
+			at = *ch.NotAfter
+		}
+		s.failAt(w, http.StatusForbidden, relayapi.CodeChannelClosed,
+			fmt.Sprintf("channel %q %s: %s", name, relayapi.MsgChannelClosed, why), at)
 		return "", false
 	}
 	return name, true

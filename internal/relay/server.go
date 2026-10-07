@@ -523,8 +523,29 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
+// fail writes a refusal of no particular kind: a sentence and an empty
+// code. A refusal a client acts on goes through refuse, failCode or failAt,
+// so that its code travels with it.
 func (s *Server) fail(w http.ResponseWriter, status int, msg string) {
 	s.writeJSON(w, status, relayapi.ErrorResponse{Error: msg})
+}
+
+// refuse writes one of relayapi's fixed refusals, its sentence and its code
+// as the one value they are (ruling 68).
+func (s *Server) refuse(w http.ResponseWriter, status int, r relayapi.Refusal) {
+	s.writeJSON(w, status, relayapi.ErrorResponse{Error: r.Msg, Code: r.Code})
+}
+
+// failCode writes a refusal a client acts on whose sentence carries a value,
+// with its code beside it at its one site.
+func (s *Server) failCode(w http.ResponseWriter, status int, code, msg string) {
+	s.writeJSON(w, status, relayapi.ErrorResponse{Error: msg, Code: code})
+}
+
+// failAt is failCode for the refusals about a time, which the answer
+// carries as data beside the sentence that also names it.
+func (s *Server) failAt(w http.ResponseWriter, status int, code, msg string, at time.Time) {
+	s.writeJSON(w, status, relayapi.ErrorResponse{Error: msg, Code: code, At: at.UTC()})
 }
 
 // hasOldKey reports whether a body is a JSON object with key at its top,
@@ -579,6 +600,13 @@ func (s *Server) decodeRequest(w http.ResponseWriter, body []byte, req interface
 // rateLimited answers a request that ran out of budget. detail is appended to
 // the error text when there is something useful to say beyond the limit's name.
 func (s *Server) rateLimited(w http.ResponseWriter, which string, retryAfter time.Duration, detail string) {
+	s.rateLimitedCode(w, which, retryAfter, detail, "")
+}
+
+// rateLimitedCode is rateLimited with a code, for the one 429 a client acts
+// on beyond waiting: a post or a stream bigger than a sender's whole budget,
+// which no wait lets through (CodeOverBudget).
+func (s *Server) rateLimitedCode(w http.ResponseWriter, which string, retryAfter time.Duration, detail, code string) {
 	setLimit(w, which)
 	seconds := int64(retryAfter / time.Second)
 	if seconds < 1 {
@@ -587,7 +615,7 @@ func (s *Server) rateLimited(w http.ResponseWriter, which string, retryAfter tim
 	// Always an integer number of seconds, never a date: the client turns this
 	// straight into a sleep.
 	w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
-	s.fail(w, http.StatusTooManyRequests, "rate limited: "+which+detail)
+	s.failCode(w, http.StatusTooManyRequests, code, "rate limited: "+which+detail)
 }
 
 // readBody drains the request under the route's cap, so an oversize body
@@ -718,7 +746,7 @@ var errUnauthorized = errors.New("unauthorized")
 func (s *Server) authFailed(w http.ResponseWriter, r *http.Request, err error) {
 	if !errors.Is(err, errUnauthorized) {
 		s.log.Error("authentication could not be completed", "err", err)
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if ok, retry := s.lim.unauthenticated.Allow(s.clientIP(r)); !ok {
@@ -907,7 +935,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 	exists, blocked, err := s.store.MailboxState(fp)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	// Blocks and the mailbox cap apply in every registration mode, and both
@@ -957,7 +985,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		// there is no token-free path.
 		live, err := s.store.Certs(fp, false, opt.Now)
 		if err != nil {
-			s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+			s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 			return
 		}
 		uses := []string{token.UseCert}
@@ -1000,7 +1028,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, ErrTokenWrongUse):
 			s.fail(w, http.StatusForbidden, msgTokenWrongUse)
 		default:
-			s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+			s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 			outcome = "error"
 		}
 		if enrolling != nil {
@@ -1158,7 +1186,7 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, http.StatusBadRequest, "more than one mailbox begins with that short id; use the full fingerprint")
 		return
 	case err != nil:
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	s.writeJSON(w, http.StatusOK, relayapi.KeysResponse{Bundle: mb.Bundle, Name: mb.Name, Created: mb.Created})
@@ -1184,6 +1212,8 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 			detail = fmt.Sprintf("; this message is %d bytes and a sender's whole "+
 				"post_bytes_per_hour budget is %d, so %s",
 				size, burst, relayapi.MsgWaitingWillNotHelp)
+			s.rateLimitedCode(w, limitPostBytes, retry, detail, relayapi.CodeOverBudget)
+			return
 		}
 		s.rateLimited(w, limitPostBytes, retry, detail)
 		return
@@ -1203,7 +1233,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 	exists, blocked, err := s.store.MailboxState(fp)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if !exists {
@@ -1234,7 +1264,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 	allowed, err := s.store.MayPost(fp, callerFP)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if !allowed {
@@ -1253,17 +1283,17 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 		// Not the sender's fault and not something they can retry around: the
 		// recipient has to collect their mail.
 		setLimit(w, limitMailboxFull)
-		s.fail(w, http.StatusInsufficientStorage, relayapi.MsgMailboxFull)
+		s.refuse(w, http.StatusInsufficientStorage, relayapi.RefusalMailboxFull)
 		return
 	case errors.Is(err, ErrRelayFull):
 		setLimit(w, limitRelayFull)
-		s.fail(w, http.StatusInsufficientStorage, relayapi.MsgRelayFull)
+		s.refuse(w, http.StatusInsufficientStorage, relayapi.RefusalRelayFull)
 		return
 	case errors.Is(err, ErrNoMailbox):
 		s.fail(w, http.StatusNotFound, "no such mailbox")
 		return
 	case err != nil:
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	// After the store has the row, so a listing woken by this finds it.
@@ -1320,7 +1350,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request, body []byt
 	}
 	deleted, err := s.store.Delete(fp, id)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if !deleted {

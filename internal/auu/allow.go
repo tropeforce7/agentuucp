@@ -101,14 +101,13 @@ func cmdAllow(args []string) error {
 			return err
 		}
 		err = c.SetAllowlist(ctx(), doc, sig)
-		var httpErr *client.HTTPError
-		if errors.As(err, &httpErr) && httpErr.Status == http.StatusConflict {
+		if httpErr, ok := newerHeld(err, relayapi.CodeNewerAllowList); ok {
 			// Another machine of this identity pushed a list issued later
 			// than now, by its clock. There is nothing to pull: the list is
 			// the peer list, and that machine's differs.
 			return &exitError{code: exitTransport, err: fmt.Errorf(
 				"%s: holds a newer allow list, %s, from another machine of yours; '%s allow show --relay %s' shows it",
-				r.Name, issuedFrom(httpErr.Message), prog, r.Name)}
+				r.Name, issuedWhen(httpErr), prog, r.Name)}
 		}
 		if err != nil {
 			return transportErr(fmt.Errorf("%s: %w", r.Name, err))
@@ -257,11 +256,10 @@ func pushAllowTo(s *store.Store, id *identity.Identity, r *store.Relay) (signedC
 		return 0, 0, err
 	}
 	if err := c.SetAllowlist(ctx(), doc, sig); err != nil {
-		var httpErr *client.HTTPError
-		if errors.As(err, &httpErr) && httpErr.Status == http.StatusConflict {
+		if httpErr, ok := newerHeld(err, relayapi.CodeNewerAllowList); ok {
 			return 0, 0, &exitError{code: exitTransport, err: fmt.Errorf(
 				"%s: holds a newer allow list, %s, from another machine of yours; '%s allow show --relay %s' shows it",
-				r.Name, issuedFrom(httpErr.Message), prog, r.Name)}
+				r.Name, issuedWhen(httpErr), prog, r.Name)}
 		}
 		return 0, 0, transportErr(fmt.Errorf("%s: %w", r.Name, err))
 	}
@@ -273,20 +271,24 @@ func pushAllowTo(s *store.Store, id *identity.Identity, r *store.Relay) (signedC
 	return len(fps), signedCouriers(fps, couriers), nil
 }
 
-// issuedFrom takes "issued T" out of the relay's 409 sentence, "a newer
-// allow list is already there (issued T)", and says it in this zone; a
-// sentence without it is passed as it came.
-func issuedFrom(msg string) string {
-	const mark = "(issued "
-	i := strings.LastIndex(msg, mark)
-	if i < 0 || !strings.HasSuffix(msg, ")") {
-		return msg
+// newerHeld is the relay's 409 for a push of an allow list or a card when
+// it holds one issued later, known by its code (ruling 68): another machine
+// of this identity pushed it, and there is nothing to pull.
+func newerHeld(err error, code string) (*client.HTTPError, bool) {
+	var httpErr *client.HTTPError
+	ok := errors.As(err, &httpErr) && httpErr.Status == http.StatusConflict && httpErr.Code == code
+	return httpErr, ok
+}
+
+// issuedWhen says when the newer allow list or card a relay holds was
+// issued, in this zone, from the time its 409 carries as data; a refusal
+// without one is said in the relay's own sentence. Nothing is read out of
+// the sentence (ruling 68).
+func issuedWhen(httpErr *client.HTTPError) string {
+	if httpErr.At.IsZero() {
+		return httpErr.Message
 	}
-	t, err := time.Parse(time.RFC3339, msg[i+len(mark):len(msg)-1])
-	if err != nil {
-		return msg
-	}
-	return "issued " + stampLocal(t)
+	return "issued " + stampLocal(httpErr.At)
 }
 
 // allowShowJSON is 'auu allow show --json' for one relay.

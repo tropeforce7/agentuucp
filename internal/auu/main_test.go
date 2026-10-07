@@ -17,6 +17,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/client"
 	"github.com/tropeforce7/agentuucp/internal/relay"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
 
@@ -561,7 +562,7 @@ func TestAdviceSurvivesBeingWrapped(t *testing.T) {
 	// failed in the name of the relay it failed at. The advice has to come
 	// out of either shape, or somebody is shown an errno and told nothing.
 	refused := &client.CertRefused{Inferred: true, Err: errors.New("write: broken pipe")}
-	expired := &client.HTTPError{Status: 401, Message: "client certificate has expired"}
+	expired := &client.HTTPError{Status: 401, Message: relayapi.MsgCertExpired, Code: relayapi.CodeCertExpired}
 
 	for _, tc := range []struct {
 		name string

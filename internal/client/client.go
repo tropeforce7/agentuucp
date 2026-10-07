@@ -311,6 +311,11 @@ type HTTPError struct {
 	// or with one that fails wire.ValidName, keeps its status and says so
 	// in place of the relay's sentence.
 	Code string
+	// At is the time the refusal is about, for the codes whose sentence
+	// names one (relayapi.ErrorResponse.At); zero when it names none. A
+	// caller shows it from here, in local time, and never from the
+	// sentence.
+	At time.Time
 }
 
 // ErrRelayNeedsNewer is what errors.Is finds on a 400 whose code is
@@ -342,8 +347,16 @@ func httpError(resp *http.Response, body []byte) *HTTPError {
 	var e relayapi.ErrorResponse
 	var fwd relayapi.ForwardResponse
 	var sections []wire.Section
+	var badTime *time.ParseError
+	decodeErr := wire.Decode(body, &e)
 	switch {
-	case wire.Decode(body, &e) == nil:
+	case errors.As(decodeErr, &badTime):
+		// The one field whose value has a reader of its own: a time that
+		// is not one is said by the field's name, never its value.
+		he.Message = fmt.Sprintf("the relay at %s refused %s (%d) with an \"at\" that is not a time",
+			relayOf(resp), routeOf(resp), resp.StatusCode)
+		return he
+	case decodeErr == nil:
 		// The code is required: encoding/json leaves an absent string
 		// empty, so its presence is asked of the body, which the strict
 		// decode has already read whole.
@@ -365,6 +378,7 @@ func httpError(resp *http.Response, body []byte) *HTTPError {
 		}
 		he.Message = identity.PrintableText(e.Error)
 		he.Code = e.Code
+		he.At = e.At
 		sections = e.Sections.Sections
 	case resp.StatusCode == http.StatusConflict && wire.Decode(body, &fwd) == nil:
 		// A 409 on the forward route carries the id of the row the relay
@@ -395,6 +409,7 @@ func httpError(resp *http.Response, body []byte) *HTTPError {
 		he.Message = fmt.Sprintf("the relay at %s refused %s (%d) %s",
 			relayOf(resp), routeOf(resp), resp.StatusCode, err)
 		he.Code = ""
+		he.At = time.Time{}
 	}
 	return he
 }
@@ -548,7 +563,7 @@ func (c *Client) doWithin(ctx context.Context, method, path string, payload any,
 		if !errors.As(err, &httpErr) || !retryable(httpErr) || attempt >= maxRetries {
 			return err
 		}
-		if strings.Contains(httpErr.Message, relayapi.MsgWaitingWillNotHelp) {
+		if httpErr.Status == http.StatusTooManyRequests && httpErr.Code == relayapi.CodeOverBudget {
 			// The relay has said this request is refused for its size, not for
 			// its timing. Sleeping through the remaining attempts would only
 			// make the same answer take a minute and a half to arrive.
@@ -901,7 +916,7 @@ func (c *Client) Directory(ctx context.Context, fp string) (*DirectoryResult, er
 	err := c.do(ctx, "GET", "/v1/mailbox/"+fp+"/channels", nil, &resp, nil)
 	var httpErr *HTTPError
 	if errors.As(err, &httpErr) && httpErr.Status == http.StatusNotFound &&
-		httpErr.Message == relayapi.MsgNoDirectory {
+		httpErr.Code == relayapi.CodeNoDirectory {
 		return &DirectoryResult{None: true}, nil
 	}
 	if err != nil {

@@ -65,7 +65,7 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 
 	exists, blocked, err := s.store.MailboxState(fp)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if !exists {
@@ -87,7 +87,7 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 	}
 	allowed, err := s.store.MayPost(fp, callerFP)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if !allowed {
@@ -116,6 +116,8 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 			detail = fmt.Sprintf("; this stream is %d bytes and a sender's whole "+
 				"post_bytes_per_hour budget is %d, so %s",
 				req.Size, burst, relayapi.MsgWaitingWillNotHelp)
+			s.rateLimitedCode(w, limitPostBytes, retry, detail, relayapi.CodeOverBudget)
+			return
 		}
 		s.rateLimited(w, limitPostBytes, retry, detail)
 		return
@@ -123,7 +125,7 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 
 	id, err := NewUploadID()
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	// The server's clock, which is also the one the expiry is read by: an
@@ -171,17 +173,17 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 		return
 	case errors.Is(err, ErrMailboxFull):
 		setLimit(w, limitMailboxFull)
-		s.fail(w, http.StatusInsufficientStorage, relayapi.MsgMailboxFull)
+		s.refuse(w, http.StatusInsufficientStorage, relayapi.RefusalMailboxFull)
 		return
 	case errors.Is(err, ErrRelayFull):
 		setLimit(w, limitRelayFull)
-		s.fail(w, http.StatusInsufficientStorage, relayapi.MsgRelayFull)
+		s.refuse(w, http.StatusInsufficientStorage, relayapi.RefusalRelayFull)
 		return
 	case errors.Is(err, ErrNoMailbox):
 		s.fail(w, http.StatusNotFound, "no such mailbox")
 		return
 	default:
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 
@@ -215,6 +217,12 @@ func (s *Server) refuseUnread(w http.ResponseWriter, status int, msg string) {
 	s.fail(w, status, msg)
 }
 
+// refuseUnreadWith is refuseUnread for one of relayapi's fixed refusals.
+func (s *Server) refuseUnreadWith(w http.ResponseWriter, status int, r relayapi.Refusal) {
+	w.Header().Set("Connection", "close")
+	s.refuse(w, status, r)
+}
+
 // msgNoUpload is the answer for an upload id the relay does not hold: never
 // opened, aborted, completed, or purged.
 const msgNoUpload = "no such upload"
@@ -242,7 +250,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, callerFP string)
 		return nil, false
 	}
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return nil, false
 	}
 	if u.From != callerFP {
@@ -256,7 +264,7 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, callerFP string)
 			s.returnUnheld(gone)
 		}
 		if err != nil {
-			s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+			s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 			return nil, false
 		}
 		s.fail(w, http.StatusGone, fmt.Sprintf(
@@ -400,7 +408,7 @@ func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerF
 		return
 	case errors.Is(err, ErrRelayFull):
 		setLimit(w, limitRelayFull)
-		s.refuseUnread(w, http.StatusInsufficientStorage, relayapi.MsgRelayFull)
+		s.refuseUnreadWith(w, http.StatusInsufficientStorage, relayapi.RefusalRelayFull)
 		return
 	case errors.Is(err, ErrShortAttempt):
 		// The sender stopped, or the stall deadline ended it; either way
@@ -417,7 +425,7 @@ func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerF
 			"the attempt stopped short at %d of %d bytes and nothing is kept; open a new stream", offset, u.Size))
 		return
 	}
-	s.refuseUnread(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+	s.refuseUnreadWith(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 }
 
 // deadlineReader is a request body whose every delivering read moves the
@@ -485,7 +493,7 @@ func (s *Server) handleAbortStream(w http.ResponseWriter, r *http.Request, calle
 		s.returnUnheld(gone)
 	}
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -510,7 +518,7 @@ func (s *Server) handleBlob(w http.ResponseWriter, r *http.Request, body []byte,
 		return
 	}
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if kind != relayapi.KindStream {
@@ -519,14 +527,14 @@ func (s *Server) handleBlob(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 	f, err := s.store.OpenMessage(fp, id)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
 		s.store.fault(f.Name(), err)
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if info.Size() != size {
@@ -540,7 +548,7 @@ func (s *Server) handleBlob(w http.ResponseWriter, r *http.Request, body []byte,
 		// left to ask for the same range at every fetch.
 		f.Close()
 		if _, err := s.store.Delete(fp, id); err != nil {
-			s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+			s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 			return
 		}
 		// The owner is the caller on this route, and the minimal access log

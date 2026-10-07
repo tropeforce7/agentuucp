@@ -464,10 +464,38 @@ since the key is in the body, so it spends no nonce there.
 
 Every refusal's body is `{"error": …, "code": …}`, the code always present,
 empty for a refusal of no particular kind, and shaped like a section's
-name. `auu` knows `needs-newer` by its code, never by its sentence. A
-code it does not know is shown as the relay's sentence and acted on no
-further, so a later relay may add codes. A refusal without a code, or
-with one of another shape, is said by its status and the request.
+name. `auu` decides on a refusal's code and status and never on its
+sentence, which it only shows. A code it does not know is shown as the
+relay's sentence and acted on no further, so a later relay may add codes.
+A refusal without a code, or with one of another shape, is said by its
+status and the request. The codes this release writes:
+
+| code | status | refusal |
+|---|---|---|
+| `needs-newer` | 400 | a request with a critical section the relay does not know |
+| `over-budget` | 429 | a post or stream bigger than a sender's whole `post_bytes_per_hour` |
+| `no-directory` | 404 | the mailbox has no channel directory, only `default` |
+| `no-knocks` | 403 | the recipient takes no knocks |
+| `no-such-channel` | 404 | no channel of that name |
+| `channel-closed` | 403 | the channel is outside its period; `at` is when it opens or closed |
+| `no-neighbour` | 404 | the forward route names a neighbour this relay does not have |
+| `relay-full` | 507 | the relay's storage is full |
+| `mailbox-full` | 507 | the recipient's mailbox is full |
+| `storage-error` | 500 | the relay could not store or read |
+| `newer-allow-list` | 409 | a list issued later is held; `at` is when |
+| `newer-card` | 409 | a card issued later is held; `at` is when |
+| `cert-required` | 401 | no client certificate was presented |
+| `cert-unknown` | 401 | the certificate is not one this relay issued |
+| `cert-revoked` | 401 | the certificate has been revoked |
+| `cert-expired` | 401 | the certificate has expired |
+| `cert-mismatch` | 401 | the certificate names another identity |
+| `cert-refused` | 401 | the certificate could not be read as this relay's, with the reason |
+| `no-administrators` | 403 | the relay has no administrators |
+
+`at`, an RFC 3339 time, comes with the three refusals about one. Left
+out, it means none. The sentence names the same time for a person reading
+the answer by hand; `auu` shows `at` in the reader's zone and never reads
+a time out of a sentence.
 
 The HTTP layer has bounds of its own, none of them settings:
 

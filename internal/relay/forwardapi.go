@@ -115,7 +115,7 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, body []by
 	next := req.Path[0]
 	neighbour, ok := s.courier.Neighbour(next)
 	if !ok {
-		s.fail(w, http.StatusNotFound, fmt.Sprintf("%s %q on this relay", relayapi.MsgNoNeighbour, next))
+		s.failCode(w, http.StatusNotFound, relayapi.CodeNoNeighbour, fmt.Sprintf("%s %q on this relay", relayapi.MsgNoNeighbour, next))
 		return
 	}
 	now := s.cfg.Now()
@@ -158,7 +158,7 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, body []by
 		// other route that writes answers it; a 500 would send the sender
 		// looking for a fault of their own.
 		setLimit(w, limitRelayFull)
-		s.fail(w, http.StatusInsufficientStorage, relayapi.MsgRelayFull)
+		s.refuse(w, http.StatusInsufficientStorage, relayapi.RefusalRelayFull)
 		return
 	case err != nil:
 		s.storageFault(w, r, err)
@@ -261,11 +261,11 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, env *relayapi.C
 		// courier's doing nor something it can retry around; its row waits
 		// and its own forward_ttl ends it if nobody does.
 		setLimit(w, limitMailboxFull)
-		s.fail(w, http.StatusInsufficientStorage, relayapi.MsgMailboxFull)
+		s.refuse(w, http.StatusInsufficientStorage, relayapi.RefusalMailboxFull)
 		return
 	case errors.Is(err, ErrRelayFull):
 		setLimit(w, limitRelayFull)
-		s.fail(w, http.StatusInsufficientStorage, relayapi.MsgRelayFull)
+		s.refuse(w, http.StatusInsufficientStorage, relayapi.RefusalRelayFull)
 		return
 	case errors.Is(err, ErrNoMailbox):
 		s.fail(w, http.StatusNotFound, "no such mailbox")
@@ -696,5 +696,5 @@ func (s *Server) wake(neighbour string) { s.workers.wake(neighbour) }
 // minute per path for the operator, as every storage fault is answered.
 func (s *Server) storageFault(w http.ResponseWriter, r *http.Request, err error) {
 	s.store.faults.note(r.URL.Path, err)
-	s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+	s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 }

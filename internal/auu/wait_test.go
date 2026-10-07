@@ -183,7 +183,8 @@ func (g *waitGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(rec.Code)
 		w.Write(rec.Body.Bytes())
 	default:
-		// A status, and after a space the body to answer it with.
+		// A status, and after a space the body to answer it with: a
+		// sentence, or a refusal's code and sentence as CODE|SENTENCE.
 		code, body, _ := strings.Cut(mode, " ")
 		status, err := strconv.Atoi(code)
 		if err != nil {
@@ -194,7 +195,11 @@ func (g *waitGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		json.NewEncoder(w).Encode(relayapi.ErrorResponse{Error: body})
+		refusalCode, sentence, coded := strings.Cut(body, "|")
+		if !coded {
+			refusalCode, sentence = "", body
+		}
+		json.NewEncoder(w).Encode(relayapi.ErrorResponse{Error: sentence, Code: refusalCode})
 	}
 }
 
@@ -310,7 +315,7 @@ func TestWaitOutlastsATransportFailure(t *testing.T) {
 		// The one 500 the relay actually produces, which auu turns into
 		// a sentence: the sentence must keep the status beneath it, or a
 		// wait would end on the very failure it is meant to outlast.
-		{"the relay's storage failing", "500 " + relayapi.MsgStorageError,
+		{"the relay's storage failing", "500 " + relayapi.CodeStorageError + "|" + relayapi.MsgStorageError,
 			"the relay could not store or read a message (storage error); whoever runs it needs to look at its log"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

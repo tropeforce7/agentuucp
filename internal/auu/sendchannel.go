@@ -42,21 +42,22 @@ func channelSuffix(channel string) string {
 	return fmt.Sprintf(" to channel %q", channel)
 }
 
-// channelHint rewrites the relay's two channel refusals. A 404 that begins
-// "no such channel" becomes the recipient's channels, fetched from the
-// relay and verified against the key held for them, so the sender can pick
-// one; a 403 for a channel outside its period becomes the relay's own
-// sentence with the time in local form. Anything else passes through.
+// channelHint rewrites the relay's two channel refusals, known by their
+// codes. A no-such-channel 404 becomes the recipient's channels, fetched
+// from the relay and verified against the key held for them, so the sender
+// can pick one; a channel-closed 403 becomes the relay's own sentence with
+// the time it carries said in local form beside it, where that reads
+// otherwise than the UTC the sentence names. Anything else passes through.
 func channelHint(err error, s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay, recipient peerish, channel string) error {
 	var httpErr *client.HTTPError
 	if !errors.As(err, &httpErr) {
 		return err
 	}
 	switch {
-	case httpErr.Status == http.StatusNotFound && strings.HasPrefix(httpErr.Message, "no such channel"):
+	case httpErr.Status == http.StatusNotFound && httpErr.Code == relayapi.CodeNoSuchChannel:
 		return noSuchChannel(s, id, c, r, recipient, channel)
-	case httpErr.Status == http.StatusForbidden && strings.Contains(httpErr.Message, relayapi.MsgChannelClosed):
-		return errors.New(localTime(httpErr.Message))
+	case httpErr.Status == http.StatusForbidden && httpErr.Code == relayapi.CodeChannelClosed && !httpErr.At.IsZero():
+		return errors.New(closedSentence(httpErr, time.Local))
 	}
 	return err
 }
@@ -131,8 +132,13 @@ func noSuchChannel(s *store.Store, id *identity.Identity, c *client.Client, r *s
 	now := time.Now()
 	for _, ch := range d.Channels {
 		state := "open"
-		if open, why := ch.OpenAt(now); !open {
-			state = localTime(why)
+		if open, _ := ch.OpenAt(now); !open {
+			// The bound itself, from the verified directory, in this zone.
+			if ch.NotBefore != nil && now.Before(*ch.NotBefore) {
+				state = "opens " + stampLocal(*ch.NotBefore)
+			} else if ch.NotAfter != nil {
+				state = "closed " + stampLocal(*ch.NotAfter)
+			}
 		}
 		if ch.Description == "" {
 			fmt.Fprintf(&b, "\n  %s (%s)", ch.Name, state)
@@ -143,18 +149,16 @@ func noSuchChannel(s *store.Store, id *identity.Identity, c *client.Client, r *s
 	return errors.New(b.String())
 }
 
-// localTime rewrites the RFC 3339 time a sentence ends with into the
-// reader's zone, and leaves a sentence that does not end with one alone.
-func localTime(sentence string) string {
-	i := strings.LastIndexByte(sentence, ' ')
-	if i < 0 {
-		return sentence
+// closedSentence is a channel-closed refusal as a person in zone reads it.
+// The relay's sentence names the time in UTC, for a person reading the
+// answer by hand; the time itself comes as data and is said beside it in
+// zone, never read out of the sentence, where zone reads it otherwise.
+func closedSentence(httpErr *client.HTTPError, zone *time.Location) string {
+	utc := httpErr.At.UTC().Format(time.RFC3339)
+	if here := httpErr.At.In(zone).Format(time.RFC3339); here != utc {
+		return fmt.Sprintf("%s (%s here)", httpErr.Message, here)
 	}
-	t, err := time.Parse(time.RFC3339, sentence[i+1:])
-	if err != nil {
-		return sentence
-	}
-	return sentence[:i+1] + t.Local().Format(time.RFC3339)
+	return httpErr.Message
 }
 
 // streamChannelHint is channelHint for a stream, whose recipient is the

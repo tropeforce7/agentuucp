@@ -23,8 +23,10 @@ func TestEveryBodyCarriesSectionsAndNoRowDoes(t *testing.T) {
 		"LimitsView": true,
 	}
 	// Neither a body nor a row: the door itself, the auth header's fields,
-	// and the outer envelope, which is frozen at four fields (D38).
-	other := map[string]bool{"Sections": true, "Auth": true, "Carried": true}
+	// the outer envelope, which is frozen at four fields (D38), and a
+	// refusal's code and sentence as the relay holds them, written as an
+	// ErrorResponse (ruling 68).
+	other := map[string]bool{"Sections": true, "Auth": true, "Carried": true, "Refusal": true}
 
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "relayapi.go", nil, 0)

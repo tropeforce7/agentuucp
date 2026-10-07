@@ -431,9 +431,9 @@ func TestStorageFaultHintIsOnlyForTheStorage500(t *testing.T) {
 		err    error
 		hinted bool
 	}{
-		{"the storage 500", &client.HTTPError{Status: 500, Message: relayapi.MsgStorageError}, true},
-		{"a 507 for the relay", &client.HTTPError{Status: 507, Message: relayapi.MsgRelayFull}, false},
-		{"a 507 for the mailbox", &client.HTTPError{Status: 507, Message: relayapi.MsgMailboxFull}, false},
+		{"the storage 500", &client.HTTPError{Status: 500, Message: relayapi.MsgStorageError, Code: relayapi.CodeStorageError}, true},
+		{"a 507 for the relay", &client.HTTPError{Status: 507, Message: relayapi.MsgRelayFull, Code: relayapi.CodeRelayFull}, false},
+		{"a 507 for the mailbox", &client.HTTPError{Status: 507, Message: relayapi.MsgMailboxFull, Code: relayapi.CodeMailboxFull}, false},
 		{"the other 500", &client.HTTPError{Status: 500, Message: "could not issue a certificate"}, false},
 		{"a 404", &client.HTTPError{Status: 404, Message: "no such mailbox"}, false},
 		{"not the relay's at all", errors.New("dial tcp: connection refused"), false},

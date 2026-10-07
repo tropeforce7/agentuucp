@@ -452,7 +452,8 @@ A refused send names what to change, and nothing was queued:
   not one they publish.
 - `X's mailbox has the one channel, default; drop --channel`.
 - `X has removed their default channel; choose one with --channel:`.
-- `channel "y" is not open: opens T` or `closed T` — outside its period.
+- `channel "y" is not open: opens T` or `closed T` — outside its period;
+  T is UTC, followed by `(T here)` in the user's zone when that differs.
 - `sender is not on the recipient's allow list` — they have not admitted
   you; ask them to add you and run `auu allow push`.
 - `X's mailbox on the relay is full; they need to run 'auu rm' to make

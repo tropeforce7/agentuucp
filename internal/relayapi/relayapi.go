@@ -79,6 +79,15 @@ type (
 		// refusal no client may act on without understanding it carries
 		// a critical section instead.
 		Code string `json:"code"`
+		// At is the time a refusal is about, for the three whose sentence
+		// names one: CodeChannelClosed (when the channel opens or closed),
+		// CodeNewerAllowList and CodeNewerCard (when the one held was
+		// issued). Left out, it means no time. A client shows it in local
+		// time from here and never parses it out of the sentence, which
+		// keeps the time for a person reading the answer by hand. With
+		// Code, it is one of the two fields this release adds to an error
+		// body; a later one adds a field as a section.
+		At time.Time `json:"at,omitzero"`
 	}
 	RegisterRequest struct {
 		Sections
@@ -472,6 +481,66 @@ const WireLevel = 1
 // critical section the relay does not know (D37), and MsgNeedsNewer its one
 // sentence, with the relay's own wire level and the section's name, which
 // has passed wire.ValidName. A client reads the code, never the sentence.
+// The codes of the refusals a client acts on (ruling 68). Each is written
+// with its sentence, never instead of it, and a client decides on the code
+// and the status and shows the sentence; a code it does not know it shows
+// and acts on no further (ruling 67).
+const (
+	CodeOverBudget       = "over-budget"
+	CodeNoDirectory      = "no-directory"
+	CodeNoKnocks         = "no-knocks"
+	CodeNoSuchChannel    = "no-such-channel"
+	CodeChannelClosed    = "channel-closed"
+	CodeNoNeighbour      = "no-neighbour"
+	CodeRelayFull        = "relay-full"
+	CodeMailboxFull      = "mailbox-full"
+	CodeStorageError     = "storage-error"
+	CodeNewerAllowList   = "newer-allow-list"
+	CodeNewerCard        = "newer-card"
+	CodeCertRequired     = "cert-required"
+	CodeCertUnknown      = "cert-unknown"
+	CodeCertRevoked      = "cert-revoked"
+	CodeCertExpired      = "cert-expired"
+	CodeCertMismatch     = "cert-mismatch"
+	CodeCertRefused      = "cert-refused"
+	CodeNoAdministrators = "no-administrators"
+)
+
+// The client-certificate refusals and the administrators' one, whose words
+// the relay writes and no client reads.
+const (
+	MsgCertRequired     = "this relay requires a client certificate"
+	MsgCertUnknown      = "client certificate is not known to this relay"
+	MsgCertRevoked      = "client certificate has been revoked"
+	MsgCertExpired      = "client certificate has expired"
+	MsgCertMismatch     = "client certificate does not belong to the signing identity"
+	MsgCertRefused      = "client certificate was refused"
+	MsgNoAdministrators = "this relay has no administrators"
+)
+
+// Refusal is a fixed sentence and its code as one value, so that the two
+// cannot part: the relay writes one whole, and a change to the words leaves
+// the code where it was. A sentence that carries a value is written with
+// its code beside it at its one site instead.
+type Refusal struct {
+	Code string
+	Msg  string
+}
+
+var (
+	RefusalNoDirectory      = Refusal{CodeNoDirectory, MsgNoDirectory}
+	RefusalNoKnocks         = Refusal{CodeNoKnocks, MsgNoKnocks}
+	RefusalRelayFull        = Refusal{CodeRelayFull, MsgRelayFull}
+	RefusalMailboxFull      = Refusal{CodeMailboxFull, MsgMailboxFull}
+	RefusalStorageError     = Refusal{CodeStorageError, MsgStorageError}
+	RefusalCertRequired     = Refusal{CodeCertRequired, MsgCertRequired}
+	RefusalCertUnknown      = Refusal{CodeCertUnknown, MsgCertUnknown}
+	RefusalCertRevoked      = Refusal{CodeCertRevoked, MsgCertRevoked}
+	RefusalCertExpired      = Refusal{CodeCertExpired, MsgCertExpired}
+	RefusalCertMismatch     = Refusal{CodeCertMismatch, MsgCertMismatch}
+	RefusalNoAdministrators = Refusal{CodeNoAdministrators, MsgNoAdministrators}
+)
+
 const (
 	CodeNeedsNewer = "needs-newer"
 	MsgNeedsNewer  = "this relay (wire level %d) does not know section %q, which this request must not be read without; the relay needs a newer auu"

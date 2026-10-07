@@ -25,6 +25,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/buildinfo"
 	"github.com/tropeforce7/agentuucp/internal/client"
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/token"
 )
@@ -280,7 +281,7 @@ func adminErr(c *common, err error) error {
 	if errors.As(err, &httpErr) {
 		switch httpErr.Status {
 		case http.StatusUnauthorized, http.StatusForbidden:
-			if strings.Contains(httpErr.Message, "no administrators") ||
+			if httpErr.Code == relayapi.CodeNoAdministrators ||
 				httpErr.Status == http.StatusUnauthorized {
 				return transportErr(fmt.Errorf(
 					"you are not an administrator of %s; an administrator's export line "+

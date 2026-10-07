@@ -191,13 +191,16 @@ func TestARefusedChannelIsSaidToBe(t *testing.T) {
 		}
 	}
 
-	// A closed channel: the relay's sentence, its time in local form.
+	// A closed channel: the relay's sentence, which names the time in UTC,
+	// and the time it carries as data said beside it in local form.
 	opens := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
 	bob.run("channel", "create", "cfp", "--not-before", opens.Format(time.RFC3339))
-	refused(`channel "cfp" is not open: opens `+opens.Local().Format(time.RFC3339),
-		"send", "--to", "bob", "--channel", "cfp", "--subject", "s", "x")
-	refused(`channel "cfp" is not open: opens `+opens.Local().Format(time.RFC3339),
-		"send", "--to", "bob", "--channel", "cfp", "--subject", "s", "--attach", big, "x")
+	closed := `channel "cfp" is not open: opens ` + opens.Format(time.RFC3339)
+	if local := opens.Local().Format(time.RFC3339); local != opens.Format(time.RFC3339) {
+		closed += ` (` + local + ` here)`
+	}
+	refused(closed, "send", "--to", "bob", "--channel", "cfp", "--subject", "s", "x")
+	refused(closed, "send", "--to", "bob", "--channel", "cfp", "--subject", "s", "--attach", big, "x")
 	// The listing says the state in the same words, in the reader's zone.
 	refused("bob has no channel \"nope\"; their channels are:\n  default (open)\n  bug reports: One bug per message (open)\n  cfp (opens "+opens.Local().Format(time.RFC3339)+")",
 		"send", "--to", "bob", "--channel", "nope", "--subject", "s", "x")

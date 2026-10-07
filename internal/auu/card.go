@@ -4,7 +4,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"time"
 
@@ -113,13 +112,12 @@ func cmdCard(args []string) error {
 			return err
 		}
 		err = c.SetCard(ctx(), doc, sig)
-		var httpErr *client.HTTPError
-		if errors.As(err, &httpErr) && httpErr.Status == http.StatusConflict {
+		if httpErr, ok := newerHeld(err, relayapi.CodeNewerCard); ok {
 			// Another machine of this identity pushed a card issued later
 			// than now, by its clock.
 			return &exitError{code: exitTransport, err: fmt.Errorf(
 				"%s: holds a newer card, %s, from another machine of yours; '%s card show --relay %s' shows it",
-				r.Name, issuedFrom(httpErr.Message), prog, r.Name)}
+				r.Name, issuedWhen(httpErr), prog, r.Name)}
 		}
 		if err != nil {
 			return transportErr(fmt.Errorf("%s: %w", r.Name, err))

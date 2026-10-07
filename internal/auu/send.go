@@ -649,7 +649,7 @@ func replyCannotGoBack(err error, mode sendMode) error {
 		return err
 	}
 	var he *client.HTTPError
-	if !errors.As(err, &he) || !strings.Contains(he.Message, relayapi.MsgNoNeighbour) {
+	if !errors.As(err, &he) || he.Status != http.StatusNotFound || he.Code != relayapi.CodeNoNeighbour {
 		return err
 	}
 	return fmt.Errorf("%w\n\nthat message came by %s, and this relay cannot send back the way it "+
@@ -776,14 +776,18 @@ func streamFullHint(err error, label string) error {
 	if !errors.As(err, &httpErr) || httpErr.Status != http.StatusInsufficientStorage {
 		return err
 	}
-	if httpErr.Message == relayapi.MsgRelayFull {
+	switch httpErr.Code {
+	case relayapi.CodeRelayFull:
 		return fmt.Errorf("the relay is out of storage; whoever runs it needs to make room")
+	case relayapi.CodeMailboxFull:
+		// Reading the mail is no longer what makes room: with a channel
+		// set to keep, which is the default, mail stays queued after it is
+		// fetched until its owner removes it.
+		return fmt.Errorf("%s's mailbox on the relay is full; they need to run '%s rm' to make room",
+			label, prog)
 	}
-	// Reading the mail is no longer what makes room: with a channel set to
-	// keep, which is the default, mail stays queued after it is fetched
-	// until its owner removes it.
-	return fmt.Errorf("%s's mailbox on the relay is full; they need to run '%s rm' to make room",
-		label, prog)
+	// A 507 of another kind is the relay's own sentence.
+	return err
 }
 
 // isStorageFull reports a 507 from the relay: the mailbox or the relay has

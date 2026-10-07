@@ -1637,7 +1637,7 @@ func relayAskedToWait(err error) (time.Duration, bool) {
 	if httpErr.Status != http.StatusTooManyRequests && httpErr.Status != http.StatusServiceUnavailable {
 		return 0, false
 	}
-	if strings.Contains(httpErr.Message, relayapi.MsgWaitingWillNotHelp) {
+	if httpErr.Status == http.StatusTooManyRequests && httpErr.Code == relayapi.CodeOverBudget {
 		return 0, false
 	}
 	return httpErr.RetryAfter, true

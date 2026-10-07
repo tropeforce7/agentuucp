@@ -477,7 +477,7 @@ func (f *fullDisk) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.inner.ServeHTTP(&swallowed{w: w}, r)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusInsufficientStorage)
-	json.NewEncoder(w).Encode(relayapi.ErrorResponse{Error: relayapi.MsgRelayFull})
+	json.NewEncoder(w).Encode(relayapi.ErrorResponse{Error: relayapi.MsgRelayFull, Code: relayapi.CodeRelayFull})
 }
 
 func (f *fullDisk) open() {

@@ -30,15 +30,9 @@ type ClientCertPolicy struct {
 	Lifetime time.Duration
 }
 
-// Refusals a client turns into advice, so their exact words are pinned by
-// tests on both sides.
+// The refusals a client turns into advice are relayapi's, each with its
+// code (ruling 68); these are the relay's own.
 const (
-	msgCertRequired     = "this relay requires a client certificate"
-	msgCertUnknown      = "client certificate is not known to this relay"
-	msgCertRevoked      = "client certificate has been revoked"
-	msgCertExpired      = "client certificate has expired"
-	msgCertMismatch     = "client certificate does not belong to the signing identity"
-	msgCertRefused      = "client certificate was refused"
 	msgNoTokenOnRenewal = "a renewal carries no token"
 	msgNoTrustAnchor    = "this relay does not use a private trust anchor"
 )
@@ -59,17 +53,17 @@ func (s *Server) clientCert(w http.ResponseWriter, r *http.Request) (*CertRow, b
 	}
 	leaf, err := s.presentedCert(r)
 	if err != nil {
-		s.certFailed(w, r, msgCertRefused+": "+err.Error())
+		s.certRefused(w, r, err)
 		return nil, false
 	}
 	if leaf == nil {
-		s.certFailed(w, r, msgCertRequired)
+		s.certFailed(w, r, relayapi.RefusalCertRequired)
 		return nil, false
 	}
 	// The subject is the identity the relay named when it issued. A
 	// certificate naming anything else is not one of ours whatever signed it.
 	if err := clientca.Subject(leaf); err != nil {
-		s.certFailed(w, r, msgCertRefused+": "+err.Error())
+		s.certRefused(w, r, err)
 		return nil, false
 	}
 	serial := clientca.FormatSerial(leaf.SerialNumber)
@@ -79,22 +73,22 @@ func (s *Server) clientCert(w http.ResponseWriter, r *http.Request) (*CertRow, b
 	switch {
 	case err == nil:
 	case errors.Is(err, ErrNoCert):
-		s.certFailed(w, r, msgCertUnknown)
+		s.certFailed(w, r, relayapi.RefusalCertUnknown)
 		return nil, false
 	case errors.Is(err, ErrCertRevoked):
-		s.certFailed(w, r, msgCertRevoked)
+		s.certFailed(w, r, relayapi.RefusalCertRevoked)
 		return nil, false
 	case errors.Is(err, ErrCertExpired):
-		s.certFailed(w, r, msgCertExpired)
+		s.certFailed(w, r, relayapi.RefusalCertExpired)
 		return nil, false
 	default:
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return nil, false
 	}
 	// Belt and braces: the row and the certificate must agree about who this
 	// is, or the relay would trust a subject it did not write.
 	if row.FP != leaf.Subject.CommonName {
-		s.certFailed(w, r, msgCertUnknown)
+		s.certFailed(w, r, relayapi.RefusalCertUnknown)
 		return nil, false
 	}
 	// And about which key. The row records the key the certificate was
@@ -104,7 +98,7 @@ func (s *Server) clientCert(w http.ResponseWriter, r *http.Request) (*CertRow, b
 	// that a stolen signing key mints nothing the relay honours: a fresh
 	// serial has no row, and a known serial has the wrong key.
 	if row.SPKI != clientca.SPKI(leaf) {
-		s.certFailed(w, r, msgCertUnknown)
+		s.certFailed(w, r, relayapi.RefusalCertUnknown)
 		return nil, false
 	}
 	return row, true
@@ -127,17 +121,29 @@ func (s *Server) certMatches(w http.ResponseWriter, r *http.Request, cert *CertR
 	if cert == nil || cert.FP == fp {
 		return true
 	}
-	s.certFailed(w, r, msgCertMismatch)
+	s.certFailed(w, r, relayapi.RefusalCertMismatch)
 	return false
 }
 
 // certFailed answers a certificate refusal, charged to the address.
-func (s *Server) certFailed(w http.ResponseWriter, r *http.Request, msg string) {
+func (s *Server) certFailed(w http.ResponseWriter, r *http.Request, refusal relayapi.Refusal) {
 	if ok, retry := s.lim.unauthenticated.Allow(s.clientIP(r)); !ok {
 		s.rateLimited(w, limitUnauthenticated, retry, "")
 		return
 	}
-	s.fail(w, http.StatusUnauthorized, msg)
+	s.refuse(w, http.StatusUnauthorized, refusal)
+}
+
+// certRefused is certFailed for a certificate that could not be read as one
+// of this relay's, with the reason, under its own code: the reason is never
+// read for one of the other five, as a reason that said "has expired" once
+// would have been.
+func (s *Server) certRefused(w http.ResponseWriter, r *http.Request, err error) {
+	if ok, retry := s.lim.unauthenticated.Allow(s.clientIP(r)); !ok {
+		s.rateLimited(w, limitUnauthenticated, retry, "")
+		return
+	}
+	s.failCode(w, http.StatusUnauthorized, relayapi.CodeCertRefused, relayapi.MsgCertRefused+": "+err.Error())
 }
 
 // issueCert signs a certificate for a parsed request. The subject is fp,
@@ -254,7 +260,7 @@ func (s *Server) handleIssueCert(w http.ResponseWriter, r *http.Request, body []
 	}
 	if err := s.store.RenewCert(callerFP, old, NewCertRow(issued, callerFP, now), now); err != nil {
 		s.log.Error("recording a renewed certificate", "err", err)
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	s.audit("cert renew", "", callerFP, "ok", "serial", issued.Serial, "replaced", old)
@@ -273,7 +279,7 @@ func (s *Server) handleListCerts(w http.ResponseWriter, r *http.Request, _ []byt
 	}
 	rows, err := s.store.Certs(callerFP, true, time.Now())
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	out := make([]relayapi.CertRecord, 0, len(rows))
@@ -304,7 +310,7 @@ func (s *Server) handleAdminCerts(w http.ResponseWriter, r *http.Request, _ []by
 		rows, err = s.store.AllCerts(all, now)
 	}
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	out := make([]relayapi.CertRecord, 0, len(rows))
@@ -352,13 +358,13 @@ func (s *Server) handleAdminRevokeCert(w http.ResponseWriter, r *http.Request, b
 		return
 	}
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	revoked, err := s.store.RevokeCert(serial, adminFP, reason, time.Now())
 	if err != nil {
 		s.audit("cert.revoke", adminFP, row.FP, "error", "serial", serial)
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if !revoked {

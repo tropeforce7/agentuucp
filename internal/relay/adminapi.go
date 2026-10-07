@@ -21,7 +21,7 @@ import (
 func (s *Server) adminAuthed(fn func(w http.ResponseWriter, r *http.Request, body []byte, adminFP string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.admins.enabled() {
-			s.fail(w, http.StatusForbidden, errNoAdmins.Error())
+			s.refuse(w, http.StatusForbidden, relayapi.RefusalNoAdministrators)
 			return
 		}
 		// The header and the administrator before the body, the one order
@@ -107,12 +107,12 @@ func (s *Server) handleAdminStatus(w http.ResponseWriter, r *http.Request, body 
 	now := time.Now()
 	counts, err := s.store.Counts(now)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	usage, err := s.store.RelayUsage()
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	// The authority an operator would have to rotate, and when. Rotating it
@@ -200,7 +200,7 @@ func (s *Server) handleAdminMailboxes(w http.ResponseWriter, r *http.Request, bo
 	}
 	boxes, err := s.store.Mailboxes(after, int(limit))
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	resp := relayapi.MailboxListResponse{Mailboxes: boxes}
@@ -225,7 +225,7 @@ func (s *Server) handleAdminMailbox(w http.ResponseWriter, r *http.Request, body
 		return
 	}
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	s.writeJSON(w, http.StatusOK, relayapi.MailboxAnswer{Mailbox: *record})
@@ -239,7 +239,7 @@ func (s *Server) handleAdminDeregister(w http.ResponseWriter, r *http.Request, b
 	removed, err := s.store.Deregister(fp)
 	if err != nil {
 		s.audit("mailbox.remove", adminFP, fp, "error")
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if !removed {
@@ -258,7 +258,7 @@ func (s *Server) handleAdminPurge(w http.ResponseWriter, r *http.Request, body [
 	purged, err := s.store.PurgeMailbox(fp)
 	if err != nil {
 		s.audit("mailbox.purge", adminFP, fp, "error")
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if !purged {
@@ -272,7 +272,7 @@ func (s *Server) handleAdminPurge(w http.ResponseWriter, r *http.Request, body [
 func (s *Server) handleAdminBlocks(w http.ResponseWriter, r *http.Request, body []byte, adminFP string) {
 	blocks, err := s.store.Blocks()
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	resp := relayapi.BlocksResponse{Blocks: make([]relayapi.BlockRecord, 0, len(blocks))}
@@ -301,7 +301,7 @@ func (s *Server) handleAdminBlock(w http.ResponseWriter, r *http.Request, body [
 	}
 	if err := s.store.SetBlock(fp, reason, adminFP, time.Now()); err != nil {
 		s.audit("block.add", adminFP, fp, "error")
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	s.audit("block.add", adminFP, fp, "ok")
@@ -316,7 +316,7 @@ func (s *Server) handleAdminUnblock(w http.ResponseWriter, r *http.Request, body
 	removed, err := s.store.RemoveBlock(fp)
 	if err != nil {
 		s.audit("block.remove", adminFP, fp, "error")
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if !removed {
@@ -347,7 +347,7 @@ func (s *Server) handleAdminAddToken(w http.ResponseWriter, r *http.Request, bod
 	}
 	issuer, ok := s.admins.lookup(adminFP)
 	if !ok {
-		s.fail(w, http.StatusForbidden, errNoAdmins.Error())
+		s.refuse(w, http.StatusForbidden, relayapi.RefusalNoAdministrators)
 		return
 	}
 	now := time.Now()
@@ -404,7 +404,7 @@ func (s *Server) handleAdminAddToken(w http.ResponseWriter, r *http.Request, bod
 			return
 		}
 		s.audit("token.issue", adminFP, claims.ID, "error")
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	s.audit("token.issue", adminFP, claims.ID, "ok",
@@ -412,7 +412,7 @@ func (s *Server) handleAdminAddToken(w http.ResponseWriter, r *http.Request, bod
 
 	record, err := s.store.Token(claims.ID)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	s.writeJSON(w, http.StatusCreated, relayapi.TokenAnswer{Token: record.Wire(now)})
@@ -423,7 +423,7 @@ func (s *Server) handleAdminTokens(w http.ResponseWriter, r *http.Request, body 
 	now := time.Now()
 	records, err := s.store.Tokens(all, now)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	resp := relayapi.TokenListResponse{Tokens: make([]relayapi.TokenRecord, 0, len(records))}
@@ -442,7 +442,7 @@ func (s *Server) handleAdminRevokeToken(w http.ResponseWriter, r *http.Request, 
 	revoked, err := s.store.RevokeToken(id)
 	if err != nil {
 		s.audit("token.revoke", adminFP, id, "error")
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	if !revoked {

@@ -41,12 +41,12 @@ func (s *Server) handleSetCard(w http.ResponseWriter, r *http.Request, body []by
 	// there; anything else is the store's trouble.
 	mb, err := s.store.Mailbox(fp)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	pub, err := identity.ParseBundle(mb.Bundle)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	d, err := card.Verify(pub, req.Document, req.Signature)
@@ -74,14 +74,14 @@ func (s *Server) handleSetCard(w http.ResponseWriter, r *http.Request, body []by
 	_, err = s.store.SetCard(fp, d, req.Document, req.Signature)
 	switch {
 	case errors.As(err, &older):
-		s.fail(w, http.StatusConflict, fmt.Sprintf("a newer card is already there (issued %s)",
-			older.Issued.UTC().Format(time.RFC3339)))
+		s.failAt(w, http.StatusConflict, relayapi.CodeNewerCard, fmt.Sprintf("a newer card is already there (issued %s)",
+			older.Issued.UTC().Format(time.RFC3339)), older.Issued)
 		return
 	case errors.Is(err, ErrNoMailbox):
 		s.fail(w, http.StatusNotFound, "no such mailbox")
 		return
 	case err != nil:
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -98,7 +98,7 @@ func (s *Server) handleGetCard(w http.ResponseWriter, r *http.Request, body []by
 	}
 	doc, sig, state, _, err := s.store.Card(fp)
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	s.writeJSON(w, http.StatusOK, relayapi.CardResponse{Document: doc, Signature: sig, State: state})
@@ -125,7 +125,7 @@ func (s *Server) handleListed(w http.ResponseWriter, r *http.Request, callerFP s
 	}
 	entries, total, err := s.store.ListedCards(after, int(limit))
 	if err != nil {
-		s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	s.writeJSON(w, http.StatusOK, relayapi.ListedResponse{Entries: entries, Listed: total})

@@ -53,7 +53,7 @@ func TestListCarriesTheChannelTheRelayNamed(t *testing.T) {
 func TestDirectoryTellsNoDirectoryFromNoMailbox(t *testing.T) {
 	fp := strings.Repeat("ab", 32)
 	rec := &recorder{replies: []reply{
-		{status: http.StatusNotFound, body: relayapi.ErrorResponse{Error: relayapi.MsgNoDirectory}},
+		{status: http.StatusNotFound, body: relayapi.ErrorResponse{Error: relayapi.MsgNoDirectory, Code: relayapi.CodeNoDirectory}},
 		{status: http.StatusNotFound, body: relayapi.ErrorResponse{Error: "no such mailbox"}},
 		{status: http.StatusForbidden, body: relayapi.ErrorResponse{Error: "sender is not on the recipient's allow list"}},
 		{status: http.StatusOK, body: relayapi.ChannelsResponse{Document: []byte(`{"v":1}`), Signature: []byte("sig"),

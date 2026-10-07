@@ -21,6 +21,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/allowlist"
 	"github.com/tropeforce7/agentuucp/internal/card"
 	"github.com/tropeforce7/agentuucp/internal/channels"
+	"github.com/tropeforce7/agentuucp/internal/client"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/keyfile"
 	"github.com/tropeforce7/agentuucp/internal/relay"
@@ -1359,5 +1360,23 @@ func TestTokenShowEscapesAnUnverifiedTokensWords(t *testing.T) {
 	}
 	if c, found := controlBytes(out); found {
 		t.Errorf("token show printed byte %#x:\n%q", c, out)
+	}
+}
+
+// no-administrators is known by its code (ruling 68): a 403 under it is
+// advice to be made an administrator, and the same sentence under a code
+// this build does not know is said as it came.
+func TestTheNoAdministratorsCodeIsAdvised(t *testing.T) {
+	t.Setenv("AUU_HOME", t.TempDir())
+	relayName := ""
+	asJSON := false
+	c := &common{relay: &relayName, asJSON: &asJSON}
+	coded := &client.HTTPError{Status: http.StatusForbidden, Code: relayapi.CodeNoAdministrators, Message: relayapi.MsgNoAdministrators}
+	if got := adminErr(c, coded); !strings.Contains(got.Error(), "not an administrator") {
+		t.Errorf("no-administrators: %v; want the advice", got)
+	}
+	later := &client.HTTPError{Status: http.StatusForbidden, Code: "later-kind", Message: relayapi.MsgNoAdministrators}
+	if got := adminErr(c, later); strings.Contains(got.Error(), "not an administrator") || !errors.Is(got, later) {
+		t.Errorf("another code with the same sentence: %v; want it as it came", got)
 	}
 }

@@ -118,7 +118,7 @@ func (s *Server) watchParams(w http.ResponseWriter, r *http.Request, callerFP st
 	for _, e := range entries {
 		exists, blocked, err := s.store.MailboxState(e.fp)
 		if err != nil {
-			s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+			s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 			return 0, nil, false
 		}
 		if !exists || blocked {
@@ -126,7 +126,7 @@ func (s *Server) watchParams(w http.ResponseWriter, r *http.Request, callerFP st
 		}
 		allowed, err := s.store.MayPost(e.fp, callerFP)
 		if err != nil {
-			s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+			s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 			return 0, nil, false
 		}
 		if !allowed {
@@ -275,7 +275,7 @@ func (s *Server) listingFailed(w http.ResponseWriter, err error) {
 		s.fail(w, http.StatusNotFound, "no such mailbox")
 		return
 	}
-	s.fail(w, http.StatusInternalServerError, relayapi.MsgStorageError)
+	s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 }
 
 // listingSections is what a listing page says in its sections. This

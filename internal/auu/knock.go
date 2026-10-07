@@ -295,15 +295,14 @@ func knockHint(err error, pub *identity.Public, r *store.Relay) error {
 		err, pub.Short(), r.Name, prog)
 }
 
-// isNoKnocks reports whether a refusal is the relay's one sentence for a
-// mailbox that takes no knocks. The status and the sentence together: the
-// relay sends it on no other route, and a 403 with another sentence is
-// something else.
+// isNoKnocks reports whether a refusal is the relay's for a mailbox that
+// takes no knocks. The status and the code together (ruling 68): a 403 of
+// another kind is something else.
 func isNoKnocks(err error) bool {
 	var httpErr *client.HTTPError
 	return errors.As(err, &httpErr) &&
 		httpErr.Status == http.StatusForbidden &&
-		httpErr.Message == relayapi.MsgNoKnocks
+		httpErr.Code == relayapi.CodeNoKnocks
 }
 
 // carriedVouches reads the vouch kept from each peer named, and refuses any

@@ -9,17 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
-)
 
-// The relay's refusals, as a client must recognise them. They are constants
-// here and in internal/relay, and a test in each package pins them, because
-// what the user is told to do next depends on telling them apart.
-const (
-	certRequired = "requires a client certificate"
-	certUnknown  = "not known to this relay"
-	certRevoked  = "has been revoked"
-	certExpired  = "has expired"
-	certMismatch = "does not belong to the signing identity"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 // CertProblem is a relay refusing this machine's client certificate, or the
@@ -193,17 +184,19 @@ func ClassifyCertError(err error, haveCert bool) error {
 	if !errors.As(err, &httpErr) || httpErr.Status != 401 {
 		return err
 	}
-	msg := httpErr.Message
-	switch {
-	case strings.Contains(msg, certUnknown):
+	// Known by the refusal's code, never its words: a certificate refused
+	// with a reason that happened to say "has expired" is not an expired
+	// one, and is said as the relay said it (ruling 68).
+	switch httpErr.Code {
+	case relayapi.CodeCertUnknown:
 		return &CertProblem{State: "not known", Err: err}
-	case strings.Contains(msg, certRevoked):
+	case relayapi.CodeCertRevoked:
 		return &CertProblem{State: "revoked", Err: err}
-	case strings.Contains(msg, certExpired):
+	case relayapi.CodeCertExpired:
 		return &CertProblem{State: "expired", Err: err}
-	case strings.Contains(msg, certMismatch):
+	case relayapi.CodeCertMismatch:
 		return &CertProblem{State: "for another identity", Err: err}
-	case strings.Contains(msg, certRequired):
+	case relayapi.CodeCertRequired:
 		if haveCert {
 			// We hold one and the relay saw none. That is what a certificate
 			// from another authority looks like: the handshake completed and

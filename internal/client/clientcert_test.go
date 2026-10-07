@@ -21,15 +21,16 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/keyfile"
 	"github.com/tropeforce7/agentuucp/internal/pki"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 // refusing serves one 401 with the given message, as the relay would.
-func refusing(t *testing.T, message string) *httptest.Server {
+func refusing(t *testing.T, code, message string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"code":"","error":` + quote(message) + `}`))
+		_, _ = w.Write([]byte(`{"code":` + quote(code) + `,"error":` + quote(message) + `}`))
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -40,22 +41,23 @@ func quote(s string) string { return `"` + strings.ReplaceAll(s, `"`, `\"`) + `"
 func TestCertProblemAdviceNamesWhatIsWrongAndWhatToDo(t *testing.T) {
 	// The whole value of these messages is that somebody reading one knows
 	// the next command to type, so the exact words are pinned.
+	// Each refusal as the relay writes it, its code and its sentence one
+	// value (ruling 68); the classifier reads the code.
 	for _, tc := range []struct {
 		name     string
-		message  string
+		refusal  relayapi.Refusal
 		haveCert bool
 		state    string
 	}{
-		{"no certificate at all", "this relay requires a client certificate", false, "missing"},
-		{"one we hold was not offered", "this relay requires a client certificate", true, "not accepted"},
-		{"unknown", "client certificate is not known to this relay", true, "not known"},
-		{"revoked", "client certificate has been revoked", true, "revoked"},
-		{"expired", "client certificate has expired", true, "expired"},
-		{"another identity", "client certificate does not belong to the signing identity", true,
-			"for another identity"},
+		{"no certificate at all", relayapi.RefusalCertRequired, false, "missing"},
+		{"one we hold was not offered", relayapi.RefusalCertRequired, true, "not accepted"},
+		{"unknown", relayapi.RefusalCertUnknown, true, "not known"},
+		{"revoked", relayapi.RefusalCertRevoked, true, "revoked"},
+		{"expired", relayapi.RefusalCertExpired, true, "expired"},
+		{"another identity", relayapi.RefusalCertMismatch, true, "for another identity"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := refusing(t, tc.message)
+			srv := refusing(t, tc.refusal.Code, tc.refusal.Msg)
 			id := testIdentity(t, "alice")
 			c, err := New(srv.URL, id, nil)
 			if err != nil {
@@ -64,7 +66,7 @@ func TestCertProblemAdviceNamesWhatIsWrongAndWhatToDo(t *testing.T) {
 			err = ClassifyCertError(c.Health(t.Context()), tc.haveCert)
 			var problem *CertProblem
 			if !errors.As(err, &problem) {
-				t.Fatalf("%q was not classified as a certificate problem: %v", tc.message, err)
+				t.Fatalf("%q was not classified as a certificate problem: %v", tc.refusal.Msg, err)
 			}
 			if problem.State != tc.state {
 				t.Errorf("state = %q, want %q", problem.State, tc.state)
