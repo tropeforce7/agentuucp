@@ -33,8 +33,7 @@ func (s *Server) handleSetChannels(w http.ResponseWriter, r *http.Request, body 
 		return
 	}
 	var req relayapi.ChannelsRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		s.fail(w, http.StatusBadRequest, "malformed channels request")
+	if !s.decodeRequest(w, body, &req, "channels request") {
 		return
 	}
 	// The caller has just authenticated as this mailbox, so the bundle is

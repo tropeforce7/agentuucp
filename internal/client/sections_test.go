@@ -159,11 +159,11 @@ func TestARefusalThisBuildCannotReadKeepsItsStatus(t *testing.T) {
 		body []byte
 		want string
 	}{
-		{"a refusal whole", []byte(`{"error":"no such mailbox"}`), "no such mailbox"},
-		{"a field it does not have", []byte(`{"error":"no such mailbox","colour":"blue"}`), "refused GET /v1/x (404) in words this build cannot read"},
+		{"a refusal whole", []byte(`{"code":"","error":"no such mailbox"}`), "no such mailbox"},
+		{"a field it does not have", []byte(`{"code":"","error":"no such mailbox","colour":"blue"}`), "refused GET /v1/x (404) in words this build cannot read"},
 		{"not JSON at all", []byte(`404 page not found`), "refused GET /v1/x (404) in words this build cannot read"},
-		{"a section not critical", []byte(`{"error":"no such mailbox","sections":[{"name":"later","critical":false,"data":1}]}`), "no such mailbox"},
-		{"a critical section", []byte(`{"error":"no such mailbox","sections":[{"name":"must-know","critical":true,"data":1}]}`),
+		{"a section not critical", []byte(`{"code":"","error":"no such mailbox","sections":[{"name":"later","critical":false,"data":1}]}`), "no such mailbox"},
+		{"a critical section", []byte(`{"code":"","error":"no such mailbox","sections":[{"name":"must-know","critical":true,"data":1}]}`),
 			`refused GET /v1/x (404) with a section it must not be read without (section "must-know"); update auu`},
 	} {
 		c := answering(t, http.StatusNotFound, tc.body)
@@ -476,5 +476,85 @@ func TestTheWireLevelIsReadAndWrittenWithoutARace(t *testing.T) {
 	<-done
 	if got := c.WireLevel(); got != relayapi.WireLevel {
 		t.Errorf("WireLevel() = %d, want %d", got, relayapi.WireLevel)
+	}
+}
+
+// Ruling 66 (e): an error body's code is required and held to the codes
+// this build knows, and a 400 whose code is needs-newer is
+// ErrRelayNeedsNewer to errors.Is, with the relay's own sentence as the
+// message. No client ever matches the sentence.
+func TestARefusalsCodeIsRequiredAndReadNotItsSentence(t *testing.T) {
+	newer := fmt.Sprintf(relayapi.MsgNeedsNewer, relayapi.WireLevel, "must-know")
+	for _, tc := range []struct {
+		name       string
+		status     int
+		body       string
+		want       string
+		code       string
+		needsNewer bool
+	}{
+		{"the code present and empty", 404, `{"error":"no such mailbox","code":""}`, "no such mailbox", "", false},
+		{"needs-newer on a 400", 400, `{"error":` + jsonQuote(newer) + `,"code":"needs-newer"}`, newer, relayapi.CodeNeedsNewer, true},
+		{"needs-newer on another status", 404, `{"error":"no such mailbox","code":"needs-newer"}`, "no such mailbox", relayapi.CodeNeedsNewer, false},
+		{"the code absent from the JSON", 400, `{"error":"no such mailbox"}`,
+			`refused GET /v1/x (400) in an error body without its "code"`, "", false},
+		// Ruling 67: a code this build does not know is a sentence to it,
+		// acted on no further, so a later relay may add codes.
+		{"a code this build does not know", 400, `{"error":"no such mailbox","code":"later-kind"}`,
+			"no such mailbox", "later-kind", false},
+		{"a code that is not one", 400, `{"error":"no such mailbox","code":"Later Kind!"}`,
+			"refused GET /v1/x (400) with an error code that is not one", "", false},
+		{"needs-newer with a section it must not be read without", 400,
+			`{"error":"x","code":"needs-newer","sections":[{"name":"must-know","critical":true,"data":1}]}`,
+			`(section "must-know"); update auu`, "", false},
+	} {
+		err := answering(t, tc.status, []byte(tc.body)).do(context.Background(), "GET", "/v1/x", nil, nil, nil)
+		var he *HTTPError
+		if !errors.As(err, &he) || he.Status != tc.status || !strings.Contains(he.Message, tc.want) || he.Code != tc.code {
+			t.Errorf("%s: %v (code %q); want %d, %q and code %q", tc.name, err, codeOf(he), tc.status, tc.want, tc.code)
+		}
+		if got := errors.Is(err, ErrRelayNeedsNewer); got != tc.needsNewer {
+			t.Errorf("%s: errors.Is(err, ErrRelayNeedsNewer) = %v, want %v", tc.name, got, tc.needsNewer)
+		}
+		if strings.Contains(tc.name, "not one") && strings.Contains(he.Message, "Later") {
+			t.Errorf("%s: %q repeats the code it could not read", tc.name, he.Message)
+		}
+	}
+}
+
+func codeOf(he *HTTPError) string {
+	if he == nil {
+		return ""
+	}
+	return he.Code
+}
+
+func jsonQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// A refusal's Retry-After is read from the header, before and whatever the
+// body says, so a 429 whose body has no code still says how long to wait.
+func TestATooManyRequestsWithoutACodeKeepsItsRetryAfter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "7")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"rate limited: requests"}`))
+	}))
+	t.Cleanup(srv.Close)
+	c, err := New(srv.URL, testIdentity(t, "alice"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.sleep = func(context.Context, time.Duration) error { return nil }
+	err = c.do(context.Background(), "GET", "/v1/x", nil, nil, nil)
+	var he *HTTPError
+	if !errors.As(err, &he) || he.Status != http.StatusTooManyRequests || he.RetryAfter != 7*time.Second {
+		t.Fatalf("a 429 without a code: %v; want 429 and Retry-After 7s", err)
+	}
+	if !strings.Contains(he.Message, `in an error body without its "code"`) {
+		t.Errorf("a 429 without a code: %q; want the missing code said", he.Message)
 	}
 }

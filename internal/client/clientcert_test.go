@@ -29,7 +29,7 @@ func refusing(t *testing.T, message string) *httptest.Server {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"error":` + quote(message) + `}`))
+		_, _ = w.Write([]byte(`{"code":"","error":` + quote(message) + `}`))
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -98,7 +98,7 @@ func TestOtherFailuresAreNotCertificateProblems(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(tc.status)
-				_, _ = w.Write([]byte(`{"error":` + quote(tc.message) + `}`))
+				_, _ = w.Write([]byte(`{"code":"","error":` + quote(tc.message) + `}`))
 			}))
 			defer srv.Close()
 			c, err := New(srv.URL, testIdentity(t, "alice"), nil)

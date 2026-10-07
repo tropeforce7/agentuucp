@@ -321,7 +321,7 @@ func TestLimitAStreamAnswerIsHeldTo64KiB(t *testing.T) {
 			w.Write(paddedJSON(`{"id":7`, size.Load()))
 		case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/blob"):
 			w.WriteHeader(http.StatusNotFound)
-			w.Write(paddedJSON(`{"error":"no such message"`, size.Load()))
+			w.Write(paddedJSON(`{"code":"","error":"no such message"`, size.Load()))
 		default:
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 		}

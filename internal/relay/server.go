@@ -18,6 +18,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/token"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // Config configures a relay server.
@@ -526,6 +527,55 @@ func (s *Server) fail(w http.ResponseWriter, status int, msg string) {
 	s.writeJSON(w, status, relayapi.ErrorResponse{Error: msg})
 }
 
+// hasOldKey reports whether a body is a JSON object with key at its top,
+// for the allow route, which keeps a named sentence for the unsigned list
+// an older client sent (R2, ruling 67): it looks for the old key before the
+// strict decode would refuse it as a field the request does not have. It
+// reads nothing but the key's presence.
+func hasOldKey(body []byte, key string) bool {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(body, &top) != nil {
+		return false
+	}
+	_, ok := top[key]
+	return ok
+}
+
+// decodeRequest is the one way a route reads a request body (D37, P1): the
+// strict decode, so a field the request does not have is refused by name,
+// then the body's sections held to wire.CheckBody. A section this relay does
+// not know is ignored; one marked critical is refused with the code and
+// sentence a client acts on, naming the section and this relay's wire level.
+// It writes the 400 itself and reports whether the route may go on. what
+// names the request in the sentence.
+//
+// It runs where each route decoded before, so the order of checks is as it
+// was: on every authenticated route after the signature, the nonce and the
+// charge, exactly where a malformed body was refused; on register before
+// the signature, since the key that verifies it is in the body, so that
+// refusal spends no nonce and tells an unauthenticated caller only the wire
+// level, which the health answer tells everyone. Nothing is written first.
+func (s *Server) decodeRequest(w http.ResponseWriter, body []byte, req interface{ SectionList() []wire.Section }, what string) bool {
+	if err := wire.Decode(body, req); err != nil {
+		s.fail(w, http.StatusBadRequest, fmt.Sprintf("malformed %s: %v", what, err))
+		return false
+	}
+	err := wire.CheckBody(req.SectionList())
+	var newer *wire.NeedsNewerError
+	switch {
+	case err == nil:
+		return true
+	case errors.As(err, &newer):
+		s.writeJSON(w, http.StatusBadRequest, relayapi.ErrorResponse{
+			Error: fmt.Sprintf(relayapi.MsgNeedsNewer, relayapi.WireLevel, newer.Name),
+			Code:  relayapi.CodeNeedsNewer,
+		})
+	default:
+		s.fail(w, http.StatusBadRequest, fmt.Sprintf("malformed %s: %v", what, err))
+	}
+	return false
+}
+
 // rateLimited answers a request that ran out of budget. detail is appended to
 // the error text when there is something useful to say beyond the limit's name.
 func (s *Server) rateLimited(w http.ResponseWriter, which string, retryAfter time.Duration, detail string) {
@@ -820,8 +870,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Del("Connection")
 	var req relayapi.RegisterRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		s.fail(w, http.StatusBadRequest, "malformed register request")
+	if !s.decodeRequest(w, body, &req, "register request") {
 		return
 	}
 	pub, err := identity.ParseBundle(req.Bundle)

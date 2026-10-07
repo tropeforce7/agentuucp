@@ -420,7 +420,7 @@ func TestAFailedRenewalWarnsAndTheCommandStillRuns(t *testing.T) {
 	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/certs") {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"error":"relay is busy"}`))
+			_, _ = w.Write([]byte(`{"code":"","error":"relay is busy"}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"ok":true,"max_bytes":16777216,"knock_max_bytes":16777216,"registration":"open","wire_level":1}`))

@@ -1,6 +1,7 @@
 package relayapi
 
 import (
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -9,12 +10,12 @@ import (
 	"testing"
 )
 
-// Every body a relay answers with carries sections, and no row inside a
-// list does (D28, R3): the walk reads this package's own source, finds
-// every struct type, and holds each to the set it is in. A type in no set
+// Every body a relay answers with or is sent carries sections, and no row
+// inside a list does (D28, D37, R3): the walk reads this package's own
+// source, finds every struct type, and holds each to the set it is in. A type in no set
 // fails by name, since a list of exceptions that goes stale passes the next
 // type by.
-func TestEveryAnswerBodyCarriesSectionsAndNoRowDoes(t *testing.T) {
+func TestEveryBodyCarriesSectionsAndNoRowDoes(t *testing.T) {
 	// Rows: what a list holds, and a nested object that is no body.
 	rows := map[string]bool{
 		"ListedEntry": true, "Courier": true, "StoredMessage": true, "QueuedMessage": true,
@@ -31,6 +32,7 @@ func TestEveryAnswerBodyCarriesSectionsAndNoRowDoes(t *testing.T) {
 		t.Fatal(err)
 	}
 	found := map[string]bool{}
+	requests := 0
 	var unplaced []string
 	ast.Inspect(file, func(n ast.Node) bool {
 		spec, ok := n.(*ast.TypeSpec)
@@ -55,10 +57,10 @@ func TestEveryAnswerBodyCarriesSectionsAndNoRowDoes(t *testing.T) {
 				t.Errorf("answer body %s does not embed Sections", name)
 			}
 		case strings.HasSuffix(name, "Request"):
-			// Requests take the door in the next commit (D37); until then
-			// none carries it.
-			if embeds {
-				t.Errorf("request %s embeds Sections before requests take the door", name)
+			// Every request body has the door too (D37).
+			requests++
+			if !embeds {
+				t.Errorf("request body %s does not embed Sections", name)
 			}
 		case rows[name] || other[name]:
 			if embeds {
@@ -78,7 +80,31 @@ func TestEveryAnswerBodyCarriesSectionsAndNoRowDoes(t *testing.T) {
 			t.Errorf("row %s is no longer in relayapi.go; take it out of the list", name)
 		}
 	}
+	// The eleven of the pre-check (ruling 66); a twelfth is placed here
+	// by changing the number, which is the point of counting.
+	if requests != 11 {
+		t.Errorf("the walk found %d request bodies, want 11", requests)
+	}
 	if len(found) < 40 {
 		t.Fatalf("the walk found %d struct types; it is not reading the file", len(found))
+	}
+}
+
+// A request from this build carries no sections, and the key is left out
+// rather than written empty, so every body a client signs is the bytes it
+// signed before requests took the door (D37).
+func TestARequestFromThisBuildWritesNoSectionsKey(t *testing.T) {
+	for _, req := range []any{
+		RegisterRequest{}, AllowRequest{}, CardRequest{}, ChannelsRequest{}, ForwardRequest{},
+		ForwardFailedRequest{}, CertRequest{}, RevokeCertRequest{}, BlockRequest{},
+		RegisterTokenRequest{}, OpenStreamRequest{},
+	} {
+		raw, err := json.Marshal(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), `"sections"`) {
+			t.Errorf("%T writes %s; want no sections key", req, raw)
+		}
 	}
 }

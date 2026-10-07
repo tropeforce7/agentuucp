@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -52,8 +51,7 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, body []by
 	}
 
 	var req relayapi.ForwardRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		s.fail(w, http.StatusBadRequest, "malformed forward request")
+	if !s.decodeRequest(w, body, &req, "forward request") {
 		return
 	}
 	// A user writing via would be forging a return path, and a user with an
@@ -316,8 +314,7 @@ func (s *Server) handleFailed(w http.ResponseWriter, r *http.Request, body []byt
 		return
 	}
 	var req relayapi.ForwardFailedRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		s.fail(w, http.StatusBadRequest, "malformed report")
+	if !s.decodeRequest(w, body, &req, "report") {
 		return
 	}
 	if req.ID <= 0 {

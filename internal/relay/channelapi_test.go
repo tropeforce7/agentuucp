@@ -79,7 +79,7 @@ func TestOnlyTheOwnerPushesADirectory(t *testing.T) {
 
 	// A body that is not a channels request.
 	status, body = h.do(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/channels", []byte(`[1,2]`), nil)
-	if status != http.StatusBadRequest || errorText(t, body) != "malformed channels request" {
+	if status != http.StatusBadRequest || !strings.HasPrefix(errorText(t, body), "malformed channels request: ") {
 		t.Fatalf("a malformed body: %d %s", status, body)
 	}
 

@@ -179,6 +179,42 @@ func Sort(sections []Section) (knownSections, ignored []Section, err error) {
 	return knownSections, ignored, nil
 }
 
+// SizeError is a body's sections over MaxAPISectionBytes, as this build
+// encodes them compactly.
+type SizeError struct{ Bytes int }
+
+func (e *SizeError) Error() string {
+	return fmt.Sprintf("sections of %d bytes, over the %d a body may carry", e.Bytes, MaxAPISectionBytes)
+}
+
+// CheckBody is the one rule for the sections of a request or an answer
+// body between a client and a relay, or between two relays (D37, R4), run
+// by both ends: the list held to Check, then to MaxAPISectionBytes as this
+// build encodes it compactly (the body's own cap has already bounded what
+// arrived), and then sorted. It returns nil, an error wrapping ErrForm, a
+// *SizeError, or the *NeedsNewerError of the first critical section this
+// build does not know; each caller says it in its own words. A body is
+// sorted here before anything else in it is read, since a body is either
+// already authenticated by its request's signature or keeps nothing and
+// advises nobody when refused.
+func CheckBody(list []Section) error {
+	if len(list) == 0 {
+		return nil
+	}
+	if err := Check(list); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(list)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > MaxAPISectionBytes {
+		return &SizeError{Bytes: len(encoded)}
+	}
+	_, _, err = Sort(list)
+	return err
+}
+
 // ErrTrailing is a value with something after it but white space. Decode
 // returns it bare, so that each reader can say it in its own words.
 var ErrTrailing = errors.New("trailing data after the value")

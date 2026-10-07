@@ -2,7 +2,6 @@ package relay
 
 import (
 	"crypto/x509"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -189,8 +188,7 @@ func (s *Server) handleTrustAnchor(w http.ResponseWriter, r *http.Request) {
 // own refusal. wantToken says whether one may carry an enrolment token.
 func (s *Server) readCSR(w http.ResponseWriter, body []byte, wantToken bool) (*clientca.Request, bool) {
 	var req relayapi.CertRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		s.fail(w, http.StatusBadRequest, "malformed certificate request")
+	if !s.decodeRequest(w, body, &req, "certificate request") {
 		return nil, false
 	}
 	return s.parseCSR(w, req.CSR, wantToken)
@@ -331,8 +329,7 @@ func (s *Server) handleAdminRevokeCert(w http.ResponseWriter, r *http.Request, b
 	}
 	var req relayapi.RevokeCertRequest
 	if len(body) > 0 {
-		if err := json.Unmarshal(body, &req); err != nil {
-			s.fail(w, http.StatusBadRequest, "malformed revoke request")
+		if !s.decodeRequest(w, body, &req, "revoke request") {
 			return
 		}
 	}

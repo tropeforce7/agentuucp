@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -35,8 +34,7 @@ func (s *Server) handleSetCard(w http.ResponseWriter, r *http.Request, body []by
 		return
 	}
 	var req relayapi.CardRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		s.fail(w, http.StatusBadRequest, "malformed card request")
+	if !s.decodeRequest(w, body, &req, "card request") {
 		return
 	}
 	// The caller has just authenticated as this mailbox, so the bundle is

@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -291,8 +290,7 @@ func (s *Server) handleAdminBlock(w http.ResponseWriter, r *http.Request, body [
 		return
 	}
 	var req relayapi.BlockRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		s.fail(w, http.StatusBadRequest, "malformed block request")
+	if !s.decodeRequest(w, body, &req, "block request") {
 		return
 	}
 	reason := strings.TrimSpace(req.Reason)
@@ -335,8 +333,7 @@ func (s *Server) handleAdminUnblock(w http.ResponseWriter, r *http.Request, body
 // anyone with admin access put a colleague's name on an invitation.
 func (s *Server) handleAdminAddToken(w http.ResponseWriter, r *http.Request, body []byte, adminFP string) {
 	var req relayapi.RegisterTokenRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		s.fail(w, http.StatusBadRequest, "malformed token request")
+	if !s.decodeRequest(w, body, &req, "token request") {
 		return
 	}
 	u, err := token.Parse(req.Token)

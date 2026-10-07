@@ -449,6 +449,26 @@ read is said with its status and the request. All of a body's sections
 together are held to 16 KiB, and a listing page counts them within
 `max_bytes`.
 
+Every request body may carry `sections` the same way, and so may what one
+relay sends another: a hand-over on `POST /v1/forward` and a report on
+`POST /v1/forward/failed`. This release sends none. The relay reads every
+request body strictly, so a field the request does not have is refused
+`400` by name, and it ignores a section it does not know. It refuses a
+section marked critical with `400`, code `needs-newer` and the sentence
+`this relay (wire level N) does not know section "S", which this request
+must not be read without; the relay needs a newer auu`. A refused
+hand-over is reported back to the sender in those words and never
+retried. The refusal comes where a malformed body's always did: after the
+signature on every route that has one, and on registration before it,
+since the key is in the body, so it spends no nonce there.
+
+Every refusal's body is `{"error": …, "code": …}`, the code always present,
+empty for a refusal of no particular kind, and shaped like a section's
+name. `auu` knows `needs-newer` by its code, never by its sentence. A
+code it does not know is shown as the relay's sentence and acted on no
+further, so a later relay may add codes. A refusal without a code, or
+with one of another shape, is said by its status and the request.
+
 The HTTP layer has bounds of its own, none of them settings:
 
 | bound | value | what it does |

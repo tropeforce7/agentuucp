@@ -304,6 +304,24 @@ type HTTPError struct {
 	// identity.PrintableText as Message does.
 	ForwardCode string
 	ForwardSaid string
+	// Code is the error body's code, empty for a refusal of no particular
+	// kind. A caller acts on the codes it knows and otherwise shows the
+	// sentence, so a code a later relay adds is a sentence to an older
+	// client and never a break (ruling 67). An error body without a code,
+	// or with one that fails wire.ValidName, keeps its status and says so
+	// in place of the relay's sentence.
+	Code string
+}
+
+// ErrRelayNeedsNewer is what errors.Is finds on a 400 whose code is
+// relayapi.CodeNeedsNewer: the relay does not know a critical section of the
+// request, and needs a newer auu before it can take it. The client reads the
+// code and never the sentence; the sentence is the message a person reads.
+var ErrRelayNeedsNewer = errors.New("the relay needs a newer auu for this request")
+
+// Is makes errors.Is(err, ErrRelayNeedsNewer) true of a needs-newer refusal.
+func (e *HTTPError) Is(target error) bool {
+	return target == ErrRelayNeedsNewer && e.Status == http.StatusBadRequest && e.Code == relayapi.CodeNeedsNewer
 }
 
 // httpError is the one place an HTTPError is made from a relay's answer.
@@ -326,7 +344,27 @@ func httpError(resp *http.Response, body []byte) *HTTPError {
 	var sections []wire.Section
 	switch {
 	case wire.Decode(body, &e) == nil:
+		// The code is required: encoding/json leaves an absent string
+		// empty, so its presence is asked of the body, which the strict
+		// decode has already read whole.
+		var present struct {
+			Code *string `json:"code"`
+		}
+		_ = json.Unmarshal(body, &present)
+		switch {
+		case present.Code == nil:
+			he.Message = fmt.Sprintf("the relay at %s refused %s (%d) in an error body without its \"code\"",
+				relayOf(resp), routeOf(resp), resp.StatusCode)
+			return he
+		case e.Code != "" && wire.ValidName(e.Code) != nil:
+			// A code has the shape of a section's name; one that has not
+			// is no code, and the body is not one this build can read.
+			he.Message = fmt.Sprintf("the relay at %s refused %s (%d) with an error code that is not one",
+				relayOf(resp), routeOf(resp), resp.StatusCode)
+			return he
+		}
 		he.Message = identity.PrintableText(e.Error)
+		he.Code = e.Code
 		sections = e.Sections.Sections
 	case resp.StatusCode == http.StatusConflict && wire.Decode(body, &fwd) == nil:
 		// A 409 on the forward route carries the id of the row the relay
@@ -353,8 +391,10 @@ func httpError(resp *http.Response, body []byte) *HTTPError {
 		return he
 	}
 	if err := sectionsProblem(sections); err != nil {
+		// Nothing of the body is used, its code included.
 		he.Message = fmt.Sprintf("the relay at %s refused %s (%d) %s",
 			relayOf(resp), routeOf(resp), resp.StatusCode, err)
+		he.Code = ""
 	}
 	return he
 }
@@ -383,24 +423,19 @@ func routeOf(resp *http.Response) string {
 // arrived), and then sorted, a section this build does not know ignored and
 // one marked critical refusing the body by its name.
 func sectionsProblem(list []wire.Section) error {
-	if len(list) == 0 {
+	err := wire.CheckBody(list)
+	var size *wire.SizeError
+	var newer *wire.NeedsNewerError
+	switch {
+	case err == nil:
 		return nil
-	}
-	if err := wire.Check(list); err != nil {
+	case errors.As(err, &size):
+		return fmt.Errorf("with sections of %d bytes, over the %d an answer may carry", size.Bytes, wire.MaxAPISectionBytes)
+	case errors.As(err, &newer):
+		return fmt.Errorf("with a section it must not be read without (section %q); update auu", newer.Name)
+	default:
 		return fmt.Errorf("with sections that are not a list of sections (%v)", err)
 	}
-	encoded, err := json.Marshal(list)
-	if err != nil {
-		return err
-	}
-	if len(encoded) > wire.MaxAPISectionBytes {
-		return fmt.Errorf("with sections of %d bytes, over the %d an answer may carry", len(encoded), wire.MaxAPISectionBytes)
-	}
-	var newer *wire.NeedsNewerError
-	if _, _, err := wire.Sort(list); errors.As(err, &newer) {
-		return fmt.Errorf("with a section it must not be read without (section %q); update auu", newer.Name)
-	}
-	return nil
 }
 
 // checkSections holds an answer's sections to sectionsProblem: one that

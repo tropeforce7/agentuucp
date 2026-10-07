@@ -331,7 +331,7 @@ func TestLimitUploadOffsetAnswer(t *testing.T) {
 	}
 	ctx := context.Background()
 	put := func() (int64, error) { return c.PutStream(ctx, "u", 7, strings.NewReader("x"), 1) }
-	status, body = http.StatusConflict, `{"error":"upload is at offset 3, not 7"}`
+	status, body = http.StatusConflict, `{"code":"","error":"upload is at offset 3, not 7"}`
 	for _, h := range []string{"-1", strconv.FormatInt(math.MinInt64, 10), "9223372036854775808", "", "\u0661", "1-2"} {
 		header = h
 		_, err := put()

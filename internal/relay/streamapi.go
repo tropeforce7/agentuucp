@@ -2,7 +2,6 @@ package relay
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -38,8 +37,7 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 	}
 	fp := r.PathValue("fp")
 	var req relayapi.OpenStreamRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		s.fail(w, http.StatusBadRequest, "malformed stream request")
+	if !s.decodeRequest(w, body, &req, "stream request") {
 		return
 	}
 	if req.Size <= 0 {

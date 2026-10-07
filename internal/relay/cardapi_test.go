@@ -251,20 +251,27 @@ func TestOnlyTheOwnerPushesACard(t *testing.T) {
 
 	// A body that is not a card request.
 	status, body = h.do(bob, "PUT", "/v1/mailbox/"+fp+"/card", []byte(`[1,2]`), nil)
-	if status != http.StatusBadRequest || errorText(t, body) != "malformed card request" {
+	if status != http.StatusBadRequest || !strings.HasPrefix(errorText(t, body), "malformed card request: ") {
 		t.Fatalf("a malformed body: %d %s", status, body)
 	}
-	// A request with no document: an empty object, and one with a field
-	// the request does not have. Each is refused as a signature that does
-	// not verify, since there is none, and nothing is stored.
-	for _, req := range []string{`{}`, `{"listed":true}`} {
-		status, body = h.do(bob, "PUT", "/v1/mailbox/"+fp+"/card", []byte(req), nil)
-		if status != http.StatusUnauthorized || errorText(t, body) != "card signature does not verify" {
-			t.Fatalf("a request with no document, %s: %d %s", req, status, body)
-		}
-		if stored() {
-			t.Fatalf("a request with no document, %s, was stored", req)
-		}
+	// A request with no document is refused as a signature that does not
+	// verify, since there is none, and nothing is stored.
+	status, body = h.do(bob, "PUT", "/v1/mailbox/"+fp+"/card", []byte(`{}`), nil)
+	if status != http.StatusUnauthorized || errorText(t, body) != "card signature does not verify" {
+		t.Fatalf("a request with no document: %d %s", status, body)
+	}
+	if stored() {
+		t.Fatal("a request with no document was stored")
+	}
+	// A field the request does not have is refused by name (P1). The card
+	// was signed from its first commit, so no client ever sent its words
+	// loose; R2's old-shape sentence is the allow list's alone (ruling 67).
+	status, body = h.do(bob, "PUT", "/v1/mailbox/"+fp+"/card", []byte(`{"listed":true}`), nil)
+	if status != http.StatusBadRequest || errorText(t, body) != `malformed card request: json: unknown field "listed"` {
+		t.Fatalf("a field the request does not have: %d %s", status, body)
+	}
+	if stored() {
+		t.Fatal("a request with a field it does not have was stored")
 	}
 
 	// Signed for bob's mailbox but under alice's key.

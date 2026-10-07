@@ -69,8 +69,19 @@ type (
 	ErrorResponse struct {
 		Sections
 		Error string `json:"error"`
+		// Code says what kind of refusal this is, for a client that acts
+		// on the kind, so that the client need not match the sentence. It
+		// is always written, empty for a refusal of no particular kind,
+		// and has the shape of a section's name (wire.ValidName). A client
+		// refuses an error body without it or with a code of another
+		// shape, acts on the codes it knows, and shows the sentence for
+		// one it does not, so a later release may add codes freely. A
+		// refusal no client may act on without understanding it carries
+		// a critical section instead.
+		Code string `json:"code"`
 	}
 	RegisterRequest struct {
+		Sections
 		Bundle []byte `json:"bundle"`
 		Name   string `json:"name"`
 		// CSR is the machine's certificate request. It carries the
@@ -108,6 +119,7 @@ type (
 	// no document is refused with MsgNeedSignedAllowlist and nothing is
 	// stored.
 	AllowRequest struct {
+		Sections
 		Document  []byte `json:"document,omitempty"`
 		Signature []byte `json:"signature,omitempty"`
 	}
@@ -127,6 +139,7 @@ type (
 	// registered bundle and stores verbatim. A request with no document
 	// is one whose signature does not verify, and is refused as such.
 	CardRequest struct {
+		Sections
 		Document  []byte `json:"document,omitempty"`
 		Signature []byte `json:"signature,omitempty"`
 	}
@@ -211,6 +224,7 @@ type (
 	// back the same way, so a sender verifies what the owner signed and
 	// never what the relay says.
 	ChannelsRequest struct {
+		Sections
 		Document  []byte `json:"document"`
 		Signature []byte `json:"signature"`
 	}
@@ -248,6 +262,7 @@ type (
 	// Path of at least one name and no Via, since a user writing one
 	// would be forging a return path.
 	ForwardRequest struct {
+		Sections
 		Envelope json.RawMessage `json:"envelope"`
 		Path     []string        `json:"path"`
 		Via      []string        `json:"via"`
@@ -453,6 +468,15 @@ func (s *Sections) SectionList() []wire.Section { return s.Sections }
 // something new, and never otherwise. 1 is v0.15.0, the floor (P5).
 const WireLevel = 1
 
+// CodeNeedsNewer is the error code of a refusal of a body that carries a
+// critical section the relay does not know (D37), and MsgNeedsNewer its one
+// sentence, with the relay's own wire level and the section's name, which
+// has passed wire.ValidName. A client reads the code, never the sentence.
+const (
+	CodeNeedsNewer = "needs-newer"
+	MsgNeedsNewer  = "this relay (wire level %d) does not know section %q, which this request must not be read without; the relay needs a newer auu"
+)
+
 // MailboxAnswer and TokenAnswer are a mailbox and a token as whole answers,
 // GET /v1/admin/mailboxes/{fp} and POST /v1/admin/tokens. The record inside
 // is the row a list carries, and a row carries no sections (R3); the answer
@@ -624,6 +648,7 @@ type (
 	// CSR carries the machine's key, its label, and at enrolment the
 	// enrolment token, all under one signature.
 	CertRequest struct {
+		Sections
 		CSR []byte `json:"csr"`
 	}
 	// CertResponse is a freshly issued certificate and the authority that
@@ -635,6 +660,7 @@ type (
 		NotAfter time.Time `json:"not_after"`
 	}
 	RevokeCertRequest struct {
+		Sections
 		Reason string `json:"reason"`
 	}
 	RevokeCertResponse struct {
@@ -649,6 +675,7 @@ type (
 		ByFP    string    `json:"by_fp"`
 	}
 	BlockRequest struct {
+		Sections
 		Reason string `json:"reason"`
 	}
 	BlocksResponse struct {
@@ -659,6 +686,7 @@ type (
 	// RegisterTokenRequest hands a signed token to the relay that will honour
 	// it. Only the administrator who signed it may register it.
 	RegisterTokenRequest struct {
+		Sections
 		Token string `json:"token"`
 	}
 	// TokenRecord is a registered token. The token string itself is never
@@ -1030,6 +1058,7 @@ type (
 	// that much quota before a byte is uploaded, so a stream that cannot fit
 	// is refused before the work rather than after it.
 	OpenStreamRequest struct {
+		Sections
 		Size int64 `json:"size"`
 		// Channel is the recipient's channel the stream is for, checked at
 		// open exactly as an envelope's is at post. Absent means default.
@@ -1124,6 +1153,7 @@ const MaxSaid = 512
 // id. Code is one of CodeRefused or CodeGaveUp. Said is the sentence the
 // failing relay gave, at most MaxSaid bytes and one line.
 type ForwardFailedRequest struct {
+	Sections
 	ID   int64  `json:"id"`
 	Code string `json:"code"`
 	Said string `json:"said"`

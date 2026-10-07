@@ -534,6 +534,16 @@ A refused send names what to change, and nothing was queued:
 - `the relay at URL refused METHOD PATH (STATUS) in words this build cannot
   read` — a refusal whose sentence this `auu` cannot read; the status is
   what is known. Updating auu reads it.
+- `relay returned 400: this relay (wire level N) does not know section "S",
+  which this request must not be read without; the relay needs a newer
+  auu` — this `auu` is newer than the relay and the request needs
+  something the relay cannot read. The relay's operator updates it; the
+  user waits or uses another relay. A message forwarded through a relay
+  that refuses this way comes back as undeliverable in the same words.
+- `the relay at URL refused METHOD PATH (STATUS) in an error body without
+  its "code"`, or `with an error code that is not one` — the relay is
+  older than this `auu`, or what is at URL is not a relay of this
+  protocol; the status is what is known.
 
 Anywhere:
 

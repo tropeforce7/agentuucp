@@ -164,7 +164,7 @@ func TestOnlyTheOwnerPushesAnAllowlist(t *testing.T) {
 
 	// A body that is not an allow request.
 	status, body = h.do(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow", []byte(`[1,2]`), nil)
-	if status != http.StatusBadRequest || errorText(t, body) != "malformed allow request" {
+	if status != http.StatusBadRequest || !strings.HasPrefix(errorText(t, body), "malformed allow request: ") {
 		t.Fatalf("a malformed body: %d %s", status, body)
 	}
 
@@ -242,8 +242,9 @@ func TestOnlyTheOwnerPushesAnAllowlist(t *testing.T) {
 		t.Fatal("a refused list was stored")
 	}
 
-	// The good one, stored verbatim; a field the request does not have,
-	// an array of senders beside the pair, is not read.
+	// A field the request does not have, an array of senders beside the
+	// pair, is refused by name (P1) and nothing is stored: a body with a
+	// document is no older client's, so the old key's sentence is not it.
 	req := h.allowReqAt(bob, at, alice.Fingerprint())
 	withArray, err := json.Marshal(map[string]any{
 		"allow": []string{strings.Repeat("f", 64)}, "document": req.Document, "signature": req.Signature})
@@ -251,6 +252,15 @@ func TestOnlyTheOwnerPushesAnAllowlist(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, body = h.do(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow", withArray, nil)
+	if status != http.StatusBadRequest || errorText(t, body) != `malformed allow request: json: unknown field "allow"` {
+		t.Fatalf("a field the request does not have, beside the pair: %d %s", status, body)
+	}
+	if stored() {
+		t.Fatal("a request with a field it does not have was stored")
+	}
+
+	// The good one, stored verbatim.
+	status, body = h.do(bob, "PUT", "/v1/mailbox/"+bob.Fingerprint()+"/allow", req, nil)
 	if status != http.StatusNoContent {
 		t.Fatalf("the owner's push: %d %s", status, body)
 	}

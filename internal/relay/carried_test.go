@@ -199,9 +199,17 @@ func TestTheForwardRouteCarriesAnyVersion(t *testing.T) {
 			// are where trailing data is refused.
 			continue
 		}
+		want := tc.want
+		if tc.name == "a field twice" {
+			// The request's own strict decode walks every key at every
+			// depth, the envelope's among them, so on this route a key
+			// given twice is refused as the request, before the envelope
+			// is read as one.
+			want = `malformed forward request: key "v" appears twice in an object at depth 2`
+		}
 		status, body := h.postSigned(t, user, "/v1/forward", []byte(fmt.Sprintf(`{"envelope":%s,"path":["bar"],"via":[]}`, tc.raw)))
-		if status != http.StatusBadRequest || errorText(t, body) != tc.want {
-			t.Errorf("%s: %d %s; want 400 %q", tc.name, status, body, tc.want)
+		if status != http.StatusBadRequest || errorText(t, body) != want {
+			t.Errorf("%s: %d %s; want 400 %q", tc.name, status, body, want)
 		}
 	}
 	if n := h.outboundRows(t); n != 4 {

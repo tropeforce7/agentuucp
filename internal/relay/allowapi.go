@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -27,18 +26,26 @@ import (
 // signature must verify under the mailbox's own key, the document must
 // pass every rule, its owner must be this mailbox, and only then is the
 // store asked, which refuses a list no newer than the one it holds. The
-// request carries the document and the signature and nothing else; a
-// field the decoder does not know is ignored, and a request of only such
-// fields is one with no document.
+// request carries the document, the signature and sections, and nothing
+// else: a field it does not have is refused by name (P1), except the old
+// "allow" key without a document, which is told it carries no document.
 func (s *Server) handleSetAllow(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {
 	fp := r.PathValue("fp")
 	if fp != callerFP {
 		s.fail(w, http.StatusForbidden, "not your mailbox")
 		return
 	}
+	// The shape an older client sent, an unsigned list under "allow" and
+	// no document, keeps its sentence (R2), looked for before the strict
+	// decode would refuse the key as a field the request does not have. A
+	// body with a document as well is no older client's, and the strict
+	// decode refuses the stray key by name.
+	if hasOldKey(body, "allow") && !hasOldKey(body, "document") {
+		s.fail(w, http.StatusBadRequest, relayapi.MsgNeedSignedAllowlist)
+		return
+	}
 	var req relayapi.AllowRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		s.fail(w, http.StatusBadRequest, "malformed allow request")
+	if !s.decodeRequest(w, body, &req, "allow request") {
 		return
 	}
 	if len(req.Document) == 0 && len(req.Signature) == 0 {

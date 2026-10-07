@@ -364,3 +364,60 @@ func TestRegisterAddsANameOnce(t *testing.T) {
 		}()
 	}
 }
+
+// CheckBody is the one rule for a body's sections at both ends (D37, R4):
+// the list's shape first, then its size as this build encodes it, then the
+// sort. Each edge is one step apart, and the order is shown by a list that
+// breaks two rules at once.
+func TestLimitCheckBody(t *testing.T) {
+	sized := func(n int) []Section {
+		empty, _ := json.Marshal([]Section{{Name: "later", Data: json.RawMessage(`""`)}})
+		return []Section{{Name: "later", Data: json.RawMessage(`"` + strings.Repeat("a", n-len(empty)) + `"`)}}
+	}
+	for _, n := range []int{MaxAPISectionBytes - 1, MaxAPISectionBytes} {
+		if err := CheckBody(sized(n)); err != nil {
+			t.Errorf("%d bytes: %v; want them taken", n, err)
+		}
+	}
+	var size *SizeError
+	if err := CheckBody(sized(MaxAPISectionBytes + 1)); !errors.As(err, &size) || size.Bytes != MaxAPISectionBytes+1 {
+		t.Errorf("%d bytes: %v; want a SizeError of that many", MaxAPISectionBytes+1, err)
+	}
+	if err := CheckBody(nil); err != nil {
+		t.Errorf("no sections: %v", err)
+	}
+
+	count := func(n int) []Section {
+		out := make([]Section, n)
+		for i := range out {
+			out[i] = section(fmt.Sprintf("s%d", i), false)
+		}
+		return out
+	}
+	if err := CheckBody(count(MaxSections)); err != nil {
+		t.Errorf("%d sections: %v; want them taken", MaxSections, err)
+	}
+	if err := CheckBody(count(MaxSections + 1)); !errors.Is(err, ErrForm) {
+		t.Errorf("%d sections: %v; want ErrForm", MaxSections+1, err)
+	}
+
+	// The shape before the sort: a critical section first and a bad name
+	// after it is a list that is not one, never a body that needs a newer
+	// build, so nothing unread is advised about.
+	twoWrong := []Section{section("must-know", true), section("Bad", false)}
+	if err := CheckBody(twoWrong); !errors.Is(err, ErrForm) || errors.Is(err, ErrNeedsNewer) {
+		t.Errorf("a critical section then a bad name: %v; want ErrForm and not ErrNeedsNewer", err)
+	}
+	// The size before the sort: a critical section in a list over the size.
+	big := append(sized(MaxAPISectionBytes), section("must-know", true))
+	if err := CheckBody(big); !errors.As(err, &size) {
+		t.Errorf("a critical section in a list over the size: %v; want a SizeError", err)
+	}
+	var newer *NeedsNewerError
+	if err := CheckBody([]Section{section("later", false), section("must-know", true)}); !errors.As(err, &newer) || newer.Name != "must-know" {
+		t.Errorf("a critical section this build does not know: %v; want NeedsNewerError naming it", err)
+	}
+	if err := CheckBody([]Section{section("later", false)}); err != nil {
+		t.Errorf("a section this build does not know, not critical: %v; want it ignored", err)
+	}
+}
