@@ -233,7 +233,16 @@ internal/auu/lookup.go knownAs string fp[:identity.ShortIDLen] = local: equal to
 internal/auu/lookup.go lookupJSON int PQCategory int = output
 internal/auu/lookup.go lookupJSON int SuiteID int = output
 internal/auu/newer.go fetchKnownNow string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/outbox.go copyStem string to[:identity.ShortIDLen] = local: ValidFingerprint at listPending shown by TestLimitPendingRecordShapes
 internal/auu/outbox.go pending int Bytes int64 = >= 0 shown by TestLimitPendingRecordIntegers
+internal/auu/outbox.go pending int RecipientCount int = 0 or [2, 32] shown by TestLimitPendingRecordIntegers
+internal/auu/outboxcopy.go keptSentence string s[:n] = local: n walks back from relayapi.MaxSaid, which len(s) is over, to a rune boundary
+internal/auu/outboxcopy.go outboxDrop string hits[0].MessageID[:12] = local: ValidID at listPending shown by TestLimitPendingRecordShapes
+internal/auu/outboxcopy.go outboxDrop string p.MessageID[:12] = local: ValidID at listPending shown by TestLimitPendingRecordShapes
+internal/auu/outboxcopy.go outboxDrop string p.MessageID[:12] #2 = local: ValidID at listPending shown by TestLimitPendingRecordShapes
+internal/auu/outboxcopy.go outboxJSON int Bytes int64 = output
+internal/auu/outboxcopy.go outboxLine string p.MessageID[:12] = local: ValidID at listPending shown by TestLimitPendingRecordShapes
+internal/auu/outboxcopy.go writeCopies string p.To[:identity.ShortIDLen] = local: ValidFingerprint at SealMany shown by TestLimitPendingRecordShapes
 internal/auu/prompt.go promptName string fp[:16] = local: fp is Fingerprint of a parsed bundle at every caller, 64 hex characters
 internal/auu/outbox.go pending int ChunkSize int = [4096, 16777216] shown by TestLimitPendingRecordIntegers
 internal/auu/outbox.go pending int Chunks int64 = >= 0 shown by TestLimitPendingRecordIntegers
@@ -279,9 +288,8 @@ internal/auu/serveproxycontrol.go (*controlSource).mint string rest[strings.Last
 internal/auu/serveproxycontrol.go parseGid int strconv.Atoi(text) = >= 0 shown by TestLimitGroupID
 internal/auu/serveproxycontrol.go proxyFile int V int = [1, 1] shown by TestLimitProxyFileV
 internal/auu/stream.go (*pending).label string p.To[:12] = local: ValidFingerprint at listPending shown by TestLimitPendingRecordShapes
-internal/auu/stream.go resumeStreams string p.MessageID[:12] #2 = local: ValidID at listPending shown by TestLimitPendingRecordShapes
-internal/auu/stream.go resumeStreams string p.MessageID[:12] #3 = local: ValidID at listPending shown by TestLimitPendingRecordShapes
-internal/auu/stream.go resumeStreams string p.MessageID[:12] = local: ValidID at listPending shown by TestLimitPendingRecordShapes
+internal/auu/stream.go resumePending string p.MessageID[:12] = local: ValidID at listPending shown by TestLimitPendingRecordShapes
+internal/auu/stream.go resumePending string p.MessageID[:12] #2 = local: ValidID at listPending shown by TestLimitPendingRecordShapes
 internal/auu/streamrecv.go readBlobRange string buf[:n] = local: n from ReadFull into buf, at most len(buf)
 internal/auu/vouch.go answerAsks string about[:identity.ShortIDLen] = local: equal to a resolved peer's fingerprint, 64 hex characters, by the check before
 internal/auu/vouch.go answerAsks string about[:identity.ShortIDLen] #2 = local: equal to a resolved peer's fingerprint, 64 hex characters, by the check before

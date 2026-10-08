@@ -71,7 +71,9 @@ auu send --to NAME|self [--subject S] [--channel NAME] [--attach FILE]... TEXT
 auu send --to NAME --body-file FILE                # or - to read the body from stdin
 auu send --to 'bar!bob' TEXT                       # somebody on a relay yours peers with
 auu send --to bob --via bar TEXT                   # the same address, no bang to quote
-auu send --resume                                  # finish an interrupted upload: from the relay's partial, or anew
+auu send --resume                                  # finish what the outbox holds: from the relay's partial, or anew
+auu outbox [--json]                                # what waits in the outbox to be sent
+auu outbox drop ID [PEER] [--json]                 # give one up; PEER says whose, when one id has several waiting
 auu reply MESSAGE-ID|THREAD-ID [--subject S] [--channel NAME] [--attach FILE]... TEXT
 ```
 

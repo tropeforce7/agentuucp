@@ -120,7 +120,7 @@ func n01(t *testing.T) {
 		t.Fatalf("no sealed stream in the outbox:\n%s", ls.stdout)
 	}
 	r = alice.auu("send", "--to", "bob", "--subject", "meanwhile", "a small one")
-	expectSays(t, r, 0, "sent to bob", "warning: 1 unfinished stream in the outbox; finish with 'auu send --resume'")
+	expectSays(t, r, 0, "sent to bob", "warning: 1 unfinished message in the outbox (1 stream); finish with 'auu send --resume' or give one up with 'auu outbox drop ID'")
 	// The first attempt stopped past max_bytes, so the relay kept it for
 	// the window, which the resume is well inside: its first PUT from zero
 	// on the same id is answered 409 with the relay's offset, and the next

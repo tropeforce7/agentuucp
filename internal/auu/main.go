@@ -95,7 +95,9 @@ Usage:
   auu send --to NAME|self [--subject S] [--channel NAME] [--attach FILE]... [TEXT | --body-file F | - | --edit]
   auu send --to 'bar!bob' TEXT        # somebody on a relay yours peers with; --via bar is the same
   auu reply MESSAGE-ID|THREAD-ID [--channel NAME] [--attach FILE]... [TEXT | --body-file F | - | --edit]
-  auu send --resume
+  auu send --resume                   # finish what the outbox holds
+  auu outbox [--json]                 # what waits in the outbox to be sent
+  auu outbox drop ID [PEER] [--json]  # give one up; PEER says whose, when one id has several waiting
 
   auu inbox [--json] [--no-fetch] [--channel NAME]
   auu read MESSAGE-ID [--json]
@@ -341,6 +343,8 @@ func dispatch(args []string) error {
 		return cmdSend(rest)
 	case "reply":
 		return cmdReply(rest)
+	case "outbox":
+		return cmdOutbox(rest)
 	case "inbox":
 		return cmdInbox(rest)
 	case "read":

@@ -16,6 +16,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/term"
@@ -56,7 +57,7 @@ func cmdSend(args []string) error {
 	asJSON := fs.Bool("json", false, "machine readable output")
 	forceStream := fs.Bool("stream", false, "send as a chunked stream whatever the size")
 	forceInline := fs.Bool("inline", false, "send as a single envelope, failing if it is too large")
-	resume := fs.Bool("resume", false, "finish any stream left unsent in the outbox, and send nothing new")
+	resume := fs.Bool("resume", false, "finish any message left unsent in the outbox, and send nothing new")
 	edit := fs.Bool("edit", false, "compose the message in your editor, starting from any text given")
 	channel := channelFlag(fs)
 	relay := relayFlag(fs)
@@ -74,7 +75,7 @@ func cmdSend(args []string) error {
 		if err != nil {
 			return err
 		}
-		return resumeStreams(s, id, *asJSON, *relay)
+		return resumePending(s, id, *asJSON, *relay)
 	}
 	if *to == "" {
 		return usageErrf("--to is required")
@@ -455,6 +456,10 @@ type sendMode struct {
 	// so that a refusal of it is explained as a reply's and not handed back
 	// as though the person had written the address.
 	reply bool
+	// recipients is how many the message went to when this is a copy of a
+	// message to several, said to the first relay on a forward so that it
+	// can hold the sender to its max_recipients; zero for a message to one.
+	recipients int
 }
 
 // sealAndSend is the common tail of send and reply: the message sent, and
@@ -684,10 +689,19 @@ func postOrForward(c *client.Client, env *envelope.Envelope, mode sendMode) (int
 	if err != nil {
 		return 0, err
 	}
+	// A copy of a message to several says how many it went to, for the
+	// first relay to hold to its max_recipients; a message to one says
+	// nothing, and its request is the bytes it always was. A plain post
+	// above carries no count: its body is the envelope alone (D54).
+	count, err := recipients.CountSection(mode.recipients)
+	if err != nil {
+		return 0, err
+	}
 	// Via is empty and always present: the hops so far are the relays'
 	// to write, and a sender that wrote one would be forging a return
 	// path, which the route refuses by name.
 	id, err := c.Forward(ctx(), &relayapi.ForwardRequest{
+		Sections: relayapi.Sections{Sections: count},
 		Envelope: raw,
 		Path:     mode.path,
 		Via:      []string{},

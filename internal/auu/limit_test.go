@@ -21,6 +21,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
 )
@@ -261,6 +262,46 @@ func TestLimitPendingRecordIntegers(t *testing.T) {
 			t.Errorf("%s: waiting %d, broken %v, %v; want the record read", tc.name, len(waiting), broken, err)
 		}
 	}
+	// A copy's recipient_count: 2 to 32, and none on a stream to one.
+	// The copy's record is beside an .env under the copy's name.
+	to := strings.Repeat("c", 64)
+	stem := copyStem(id, to)
+	if err := os.WriteFile(envPath(s, stem), []byte("sealed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeCopy := func(t *testing.T, count int) {
+		t.Helper()
+		os.Remove(pendingPath(s, id))
+		p := pending{MessageID: id, To: to, Relay: "relay", Started: time.Now(), RecipientCount: count}
+		data, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(pendingPath(s, stem), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, n := range []int{0, 1, relayapi.MaxRecipients + 1, -1, math.MinInt, math.MaxInt} {
+		writeCopy(t, n)
+		waiting, broken, err := listPending(s)
+		if err != nil || len(waiting) != 0 || len(broken) != 1 || broken[0] != stem {
+			t.Errorf("a copy counting %d: waiting %d, broken %v, %v; want the record broken", n, len(waiting), broken, err)
+		}
+	}
+	for _, n := range []int{2, relayapi.MaxRecipients} {
+		writeCopy(t, n)
+		waiting, broken, err := listPending(s)
+		if err != nil || len(waiting) != 1 || len(broken) != 0 || waiting[0].kind != kindEnvelope {
+			t.Errorf("a copy counting %d: waiting %d, broken %v, %v; want the copy read", n, len(waiting), broken, err)
+		}
+	}
+	os.Remove(pendingPath(s, stem))
+	os.Remove(envPath(s, stem))
+	write(t, pending{Bytes: 5000, Chunks: 2, ChunkSize: stream.DefaultChunkSize, RecipientCount: 2})
+	if waiting, broken, err := listPending(s); err != nil || len(waiting) != 0 || len(broken) != 1 {
+		t.Errorf("a stream to one with a count: waiting %d, broken %v, %v; want the record broken", len(waiting), broken, err)
+	}
+
 	// A record from before: the old wire's max_request in it.
 	old := `{"message_id":"` + id + `","to":"` + strings.Repeat("c", 64) + `","started":"2026-09-19T00:00:00Z","time":"2026-09-19T00:00:00Z","body":{"type":"note","thread":"` + id + `","text":"x"},"bytes":5000,"chunks":2,"chunk_size":` + strconv.Itoa(stream.DefaultChunkSize) + `,"max_request":1048576,"upload":"u"}`
 	if err := os.WriteFile(pendingPath(s, id), []byte(old), 0o600); err != nil {
@@ -474,12 +515,120 @@ func TestLimitPendingRecordShapes(t *testing.T) {
 	if waiting, broken, err := listPending(s); err != nil || len(waiting) != 1 || len(broken) != 0 {
 		t.Errorf("as written: waiting %d, broken %v, %v; want the record read", len(waiting), broken, err)
 	}
+	// A stream to one with both kinds of sealed file beside it is not one
+	// this program wrote: which one would be uploaded is not the record's
+	// to say.
+	if err := os.WriteFile(envPath(s, fullID), []byte("sealed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if waiting, broken, err := listPending(s); err != nil || len(waiting) != 0 || len(broken) != 1 || broken[0] != fullID {
+		t.Errorf("a stream with an .env beside it too: waiting %d, broken %v, %v; want the record broken", len(waiting), broken, err)
+	}
+	os.Remove(envPath(s, fullID))
+	// A record whose id is a message id, and not its file's: the upload
+	// would point at somebody else's bytes.
+	otherID := strings.Repeat("f", 32)
+	asWritten, err := os.ReadFile(pendingPath(s, fullID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pendingPath(s, otherID), asWritten, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(streamPath(s, otherID), []byte("sealed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if waiting, broken, err := listPending(s); err != nil || len(waiting) != 1 || len(broken) != 1 || broken[0] != otherID {
+		t.Errorf("a record under another id's name: waiting %d, broken %v, %v; want it broken by its file's name", len(waiting), broken, err)
+	}
+	os.Remove(pendingPath(s, otherID))
+	os.Remove(streamPath(s, otherID))
 	data, err := json.Marshal(&pending{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(data), `"relay":""`) {
 		t.Errorf("the zero record marshals without its relay key: %s", data)
+	}
+	os.Remove(pendingPath(s, fullID))
+	os.Remove(streamPath(s, fullID))
+
+	// A copy of a message to several: named by the id and the first
+	// sixteen of its recipient, an .env beside it, a count, no upload's
+	// numbers, and a kept refusal held to a line of relayapi.MaxSaid and
+	// a code to the name rule.
+	to := strings.Repeat("c", 64)
+	good := pending{MessageID: fullID, To: to, Relay: "relay", Started: time.Now(), RecipientCount: 2}
+	writeCopy := func(t *testing.T, stem string, p pending, sealed ...string) {
+		t.Helper()
+		entries, _ := os.ReadDir(outboxDir(s))
+		for _, e := range entries {
+			os.Remove(filepath.Join(outboxDir(s), e.Name()))
+		}
+		if len(sealed) == 0 {
+			sealed = []string{".env"}
+		}
+		for _, ext := range sealed {
+			if err := os.WriteFile(filepath.Join(outboxDir(s), stem+ext), []byte("sealed"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		data, err := json.Marshal(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(pendingPath(s, stem), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stem := copyStem(fullID, to)
+	with := func(change func(p *pending)) pending {
+		p := good
+		change(&p)
+		return p
+	}
+	for _, tc := range []struct {
+		name   string
+		stem   string
+		p      pending
+		sealed []string
+	}{
+		{"a stem whose suffix is not its recipient's", fullID + "-" + strings.Repeat("d", 16), good, nil},
+		{"a stem one short of the recipient's sixteen", fullID + "-" + strings.Repeat("c", 15), good, nil},
+		{"a copy named as a stream to one", fullID, good, nil},
+		{"both kinds beside it", stem, good, []string{".env", ".stream"}},
+		{"neither kind beside it", stem, good, []string{".txt"}},
+		{"a copy with an upload", stem, with(func(p *pending) { p.Upload = "u" }), nil},
+		{"a copy with a chunk size", stem, with(func(p *pending) { p.ChunkSize = stream.DefaultChunkSize }), nil},
+		{"a copy with no count", stem, with(func(p *pending) { p.RecipientCount = 0 }), nil},
+		{"a path that is not an address", stem, with(func(p *pending) { p.Path = "bar!!baz" }), nil},
+		{"a path that repeats a relay", stem, with(func(p *pending) { p.Path = "bar!bar" }), nil},
+		{"a code that is not a name", stem, with(func(p *pending) { p.RefusedCode = "Not A Code" }), nil},
+		{"a recipient's name that is not a name", stem, with(func(p *pending) { p.ToName = "b\x1bob" }), nil},
+		{"a refusal of two lines", stem, with(func(p *pending) { p.Refused = "one\ntwo" }), nil},
+		{"a refusal with an ESC", stem, with(func(p *pending) { p.Refused = "a\x1bb" }), nil},
+		{"a refusal one byte over", stem, with(func(p *pending) { p.Refused = strings.Repeat("a", relayapi.MaxSaid+1) }), nil},
+	} {
+		writeCopy(t, tc.stem, tc.p, tc.sealed...)
+		if waiting, broken, err := listPending(s); err != nil || len(waiting) != 0 || len(broken) != 1 || broken[0] != tc.stem {
+			t.Errorf("%s: waiting %d, broken %v, %v; want the record broken by its name", tc.name, len(waiting), broken, err)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		p    pending
+	}{
+		{"as written", good},
+		{"by a path", with(func(p *pending) { p.Path = "bar!baz" })},
+		{"refused, at the edge", with(func(p *pending) {
+			p.RefusedCode = relayapi.CodeMailboxFull
+			p.Refused = strings.Repeat("a", relayapi.MaxSaid)
+		})},
+	} {
+		writeCopy(t, stem, tc.p)
+		if waiting, broken, err := listPending(s); err != nil || len(waiting) != 1 || len(broken) != 0 || waiting[0].kind != kindEnvelope {
+			t.Errorf("%s: waiting %d, broken %v, %v; want the copy read", tc.name, len(waiting), broken, err)
+		}
 	}
 }
 
@@ -769,6 +918,16 @@ func TestLimitOutboxDirectoryEntries(t *testing.T) {
 	if err := os.WriteFile(streamPath(s, good), []byte("sealed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The second kind's strays: an .env with no record, a record named
+	// as a copy whose sixteen are not hex, and a directory named as one.
+	copyID := strings.Repeat("e", 32)
+	if err := os.WriteFile(envPath(s, copyID+"-"+strings.Repeat("c", 16)), []byte("sealed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	record(copyID+"-zzzz.json", copyID)
+	if err := os.MkdirAll(filepath.Join(dir, copyID+"-"+strings.Repeat("c", 16)+".json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	record("CON.json", "CON")
 	record("com1.json", "../x")
 	record(strings.Repeat("a", 32)+".json", "..")
@@ -783,7 +942,7 @@ func TestLimitOutboxDirectoryEntries(t *testing.T) {
 		t.Errorf("waiting %d; want the one record this program wrote", len(waiting))
 	}
 	sort.Strings(broken)
-	if want := []string{"CON", strings.Repeat("a", 32), "com1"}; strings.Join(broken, ",") != strings.Join(want, ",") {
+	if want := []string{"CON", strings.Repeat("a", 32), "com1", copyID + "-zzzz"}; strings.Join(broken, ",") != strings.Join(want, ",") {
 		t.Errorf("broken %q; want %q, each by its file's name", broken, want)
 	}
 	entries, err := os.ReadDir(scratch)

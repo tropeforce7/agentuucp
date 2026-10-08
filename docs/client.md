@@ -341,6 +341,18 @@ The download of a stream on the receiving side runs under the same rule,
 and resumes by range from where it stood. Every other request to the
 relay is answered within two minutes or fails.
 
+`auu outbox` lists what is sealed and waiting in `outbox/`, each with its
+recipient, its relay and its size, and, for one a relay refused, the
+relay's code and words, escaped. `auu outbox drop ID [PEER]` gives one up,
+removing its record and its sealed file; the id may be four or more of its
+first characters, and `PEER`, a peer's name or eight or more characters of
+their fingerprint, says whose it is when one id has more than one thing
+waiting. It does not ask first, as `auu rm` does not, since a message given
+up can be sent again. A stream dropped part way leaves the relay to let its
+part go when the sixty seconds end. Every command that sends says, once,
+what waits: `warning: 1 unfinished message in the outbox (1 stream); finish
+with 'auu send --resume' or give one up with 'auu outbox drop ID'`.
+
 A note to yourself needs no peer at all:
 
 *Listing 1.3b*
@@ -1179,7 +1191,7 @@ Go's file modes say nothing about who can read.
 | `relays/<name>/fetch.lock` | held while a fetch from that relay runs, so two `auu inbox` at once take turns; the second waits up to a minute and then says so |
 | `inbox/`, `sent/`, `quarantine/` | the message spool, one JSON file each; a record that will not read is said to be, once, and left out of the listing |
 | `inbox/<id>.d/` | a large message's files, written straight to disk |
-| `outbox/` | streams sealed but not yet delivered, waiting for `auu send --resume` |
+| `outbox/` | what is sealed but not yet delivered, waiting for `auu send --resume`; `auu outbox` lists it |
 | `damaged/<relay>/<id>.bin`, `.json` | a message your key could not open, as the relay served it, with a record of which relay's message it was, when, and why in a word — `did not decrypt`, `not addressed to this key`, `sender signature failed`, `malformed`, `newer: section "NAME"` for a message with a critical section this build does not know, which an updated `auu` reads, or `misfiled` for a message the relay listed under a channel it was not sealed for, or listed as a kind its sealed record is not — a knock that is not one inside, or one that is inside a row listed as an ordinary envelope; a stream keeps its manifest chunk only. `auu inbox` says how many are there until you remove them; the directory holds at most 64 MiB, the oldest going first, and a message that alone exceeds that is not kept, which the warning says |
 
 `authorized_peers` is the file that matters. Nothing on the network can add to

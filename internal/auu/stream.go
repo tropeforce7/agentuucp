@@ -122,6 +122,7 @@ func sendStream(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 		Bytes:     manifest.PayloadBytes,
 		Chunks:    manifest.Chunks,
 		ChunkSize: manifest.ChunkSize,
+		kind:      kindStream,
 	}
 	if err := p.save(s); err != nil {
 		os.Remove(path)
@@ -195,9 +196,11 @@ func finishStream(s *store.Store, id *identity.Identity, r *store.Relay, p *pend
 }
 
 // label names the recipient the way the person typing would recognise them.
+// The name is the one this machine gave them, read back from a file; it is
+// escaped all the same, as the last line under the rule.
 func (p *pending) label() string {
 	if p.ToName != "" {
-		return p.ToName
+		return identity.Printable(p.ToName)
 	}
 	if len(p.To) >= 12 {
 		return p.To[:12]
@@ -205,18 +208,19 @@ func (p *pending) label() string {
 	return p.To
 }
 
-// resumeStreams finishes every unfinished upload in the outbox. One failure
-// does not stop the rest: they are separate messages that happened to be
-// interrupted together.
-func resumeStreams(s *store.Store, id *identity.Identity, asJSON bool, relay string) error {
+// resumePending finishes everything unfinished in the outbox: a stream's
+// upload, and a copy of a message to several posted again. One failure
+// does not stop the rest: they are separate messages, or separate copies,
+// that happened to be interrupted or refused together.
+func resumePending(s *store.Store, id *identity.Identity, asJSON bool, relay string) error {
 	waiting, broken, err := listPending(s)
 	if err != nil {
 		return err
 	}
 	for _, b := range broken {
 		fmt.Fprintf(os.Stderr,
-			"warning: outbox record %s has no sealed stream beside it and cannot be resumed; "+
-				"send the message again\n", b)
+			"warning: outbox record %s has no sealed file beside it, or not one this program wrote, "+
+				"and cannot be resumed; send the message again\n", b)
 	}
 	if len(waiting) == 0 {
 		if !asJSON {
@@ -224,7 +228,15 @@ func resumeStreams(s *store.Store, id *identity.Identity, asJSON bool, relay str
 		}
 		return nil
 	}
-	var failed int
+	var failed, worst int
+	fail := func(p *pending, err error) {
+		failed++
+		fmt.Fprintf(os.Stderr, "%s: %v\n", p.MessageID[:12], err)
+		var e *exitError
+		if errors.As(err, &e) && e.code > worst {
+			worst = e.code
+		}
+	}
 	for _, p := range waiting {
 		// The upload was opened on one relay and holds a prefix of these
 		// exact bytes; it cannot be finished anywhere else. A record from
@@ -232,26 +244,36 @@ func resumeStreams(s *store.Store, id *identity.Identity, asJSON bool, relay str
 		// default is where it was opened.
 		r, err := resumeRelay(s, p, relay)
 		if err != nil {
-			failed++
-			fmt.Fprintf(os.Stderr, "%s: %v\n", p.MessageID[:12], err)
+			fail(p, err)
 			continue
 		}
 		if !asJSON {
 			fmt.Printf("resuming %s to %s on %s (%s)\n",
-				p.MessageID[:12], orNone(p.ToName), r.Name, term.HumanBytes(p.Bytes))
+				p.MessageID[:12], p.label(), r.Name, term.HumanBytes(p.Bytes))
 		}
-		out, err := finishStream(s, id, r, p, false)
+		var out sentJSON
+		if p.kind == kindEnvelope {
+			out, err = finishCopy(s, id, r, p)
+		} else {
+			out, err = finishStream(s, id, r, p, false)
+		}
 		if err != nil {
-			failed++
-			fmt.Fprintf(os.Stderr, "%s: %v\n", p.MessageID[:12], err)
+			fail(p, err)
 			continue
 		}
 		if err := printSent(out, r, false, asJSON); err != nil {
 			return err
 		}
 	}
+	// The exit code is the worst of the failures': a relay that refused
+	// or could not be reached is a transport failure to the skill, and a
+	// key that is locked asks for a person, whatever else failed beside it.
 	if failed > 0 {
-		return fmt.Errorf("%d of %d streams did not finish", failed, len(waiting))
+		err := fmt.Errorf("%d of %d unfinished messages did not finish", failed, len(waiting))
+		if worst > exitUsage {
+			return &exitError{code: worst, err: err}
+		}
+		return err
 	}
 	return nil
 }
@@ -287,7 +309,7 @@ func resumeRelay(s *store.Store, p *pending, flag string) (*store.Relay, error) 
 // Three attempts that end in an error other than a wait are the turn's
 // limit, and the sealed bytes are still on disk to try with.
 func uploadStream(c *client.Client, s *store.Store, p *pending) (int64, error) {
-	path := streamPath(s, p.MessageID)
+	path := streamPath(s, p.name())
 	info, err := os.Stat(path)
 	if err != nil {
 		return 0, err
