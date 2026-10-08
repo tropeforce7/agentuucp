@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/wire"
@@ -126,6 +127,17 @@ func OpenManifest(self *identity.Identity, header, sealed []byte) (*Opened, erro
 	sender.Name = ""
 	opened := &Opened{
 		Manifest: &m, SealedManifestBytes: n, Sender: sender, recipient: recipient,
+	}
+	// A known section is read now, under the signature and never in
+	// Validate, which runs before it: the list of everybody a message to
+	// several went to, which must name this reader. The whole rule runs
+	// here, its size check with the rest; and before the sort, since a
+	// manifest that needs a newer auu is handed back and kept as a record
+	// that waits on the relay, which must never carry a list nobody
+	// checked: Load would refuse that record, and the stream would be left
+	// out of every listing while it waited.
+	if _, err := recipients.CheckSections(m.Sections, m.Body.Type, m.To); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrForm, err)
 	}
 	// Only now, with the signature verified, is a section this build does
 	// not know judged: an unsigned manifest is never one that needs a newer

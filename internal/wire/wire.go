@@ -131,8 +131,9 @@ func Check(sections []Section) error {
 	return nil
 }
 
-// known is the sections this build understands, by name. It is empty in this
-// release: the door ships before the first thing that uses it.
+// known is the sections this build understands, by name, filled by each
+// feature's init. It is empty in a binary that links no such feature, as this
+// package's own tests are; internal/recipients is the first.
 var known = map[string]bool{}
 
 // Known says whether this build understands the named section.
@@ -144,7 +145,7 @@ func Known(name string) bool { return known[name] }
 // never input, so it panics rather than return an error nobody could act
 // on. It returns a function that takes the name out again, for a test in
 // another package to put the registry back as it found it; a feature's init
-// ignores it. Nothing in this release calls it.
+// ignores it.
 func Register(name string) (unregister func()) {
 	if err := ValidName(name); err != nil {
 		panic(fmt.Sprintf("wire.Register: %v", err))

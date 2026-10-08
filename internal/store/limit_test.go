@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
@@ -307,6 +308,16 @@ func TestLimitStoredRecordShapes(t *testing.T) {
 		{"a vouch on another type", func(m *Stored) { m.Inner.Body.Vouch = &message.Carried{} }, "vouch is a vouch message's alone"},
 		{"an about on another type", func(m *Stored) { m.Inner.Body.About = strings.Repeat("a", 64) }, "about is a vouch question's alone"},
 		{"vouches on another type", func(m *Stored) { m.Inner.Body.Vouches = []message.Carried{{}} }, "vouches are a knock's alone"},
+		{"a list that does not name the record's to", func(m *Stored) {
+			m.Inner.Sections = []wire.Section{recipientsList(t, m.Inner.From, strings.Repeat("e", 64))}
+		}, "does not name " + strings.Repeat("b", 16)},
+		{"a list that names nobody", func(m *Stored) {
+			m.Inner.Sections = []wire.Section{{Name: recipients.Name, Data: json.RawMessage(`{"to":[]}`)}}
+		}, "recipients section is malformed: it names nobody"},
+		{"a list on a knock", func(m *Stored) {
+			m.Inner.Body = message.Body{Type: message.TypeKnock, Thread: m.Inner.Body.Thread, Name: "alice", Text: "hello"}
+			m.Inner.Sections = []wire.Section{recipientsList(t, m.Inner.To, m.Inner.From)}
+		}, "one envelope to one person"},
 	} {
 		err := write(t, tc.mutate)
 		if err == nil || !strings.Contains(err.Error(), tc.says) {
@@ -326,6 +337,12 @@ func TestLimitStoredRecordShapes(t *testing.T) {
 	}
 	if err := write(t, func(m *Stored) {}); err != nil {
 		t.Errorf("the record as written: %v", err)
+	}
+	// A message to several keeps its list, which names the record's to.
+	if err := write(t, func(m *Stored) {
+		m.Inner.Sections = []wire.Section{recipientsList(t, m.Inner.From, m.Inner.To)}
+	}); err != nil {
+		t.Errorf("a record whose list names its to: %v; want it loaded", err)
 	}
 	// The relay's key is always written, even for the zero value, since
 	// Load requires it: a record with none is from before, not a record
@@ -823,4 +840,15 @@ func TestAStoredRecordsSectionsAreHeldAtLoad(t *testing.T) {
 			t.Errorf("%s: %v; want %q", tc.name, err, tc.want)
 		}
 	}
+}
+
+// recipientsList is the recipients section naming fps, as the sealer writes
+// it.
+func recipientsList(t *testing.T, fps ...string) wire.Section {
+	t.Helper()
+	sec, err := recipients.Section(fps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sec
 }

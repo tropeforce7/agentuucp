@@ -22,6 +22,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/wire"
 )
@@ -184,9 +185,69 @@ func SealFor(sender *identity.Identity, recipient *identity.Public, channel stri
 // SealSections is SealFor with sections. They are held to wire.Check before
 // anything is sealed, and the version is VersionCritical exactly when one of
 // them is critical, both outside and in the inner record (D30); a reader
-// refuses either version written the other way.
+// refuses either version written the other way. It is SealMany for one
+// recipient, which writes no recipients section of its own.
 func SealSections(sender *identity.Identity, recipient *identity.Public, channel string,
 	body message.Body, sections []wire.Section) (*Envelope, *Inner, error) {
+	envs, inners, err := seal(sender, []*identity.Public{recipient}, channel, body, sections)
+	if err != nil {
+		return nil, nil, err
+	}
+	return envs[0], inners[0], nil
+}
+
+// SealMany seals one record for several recipients (P2): one id, one time,
+// one body and one list of sections for every copy, and one seal and one
+// signature per copy, each bound to its own reader as every envelope is.
+// With more than one recipient it adds the recipients section, naming every
+// recipient in the order given, so each reader knows who else was written
+// to; with one it adds nothing, and is SealSections. The envelopes and the
+// records come back in the recipients' order.
+//
+// It is all or nothing: a copy that cannot be sealed, a key locked after
+// some copies were signed among them, returns the error and no envelope,
+// so a caller never holds part of a message to several.
+func SealMany(sender *identity.Identity, to []*identity.Public, channel string,
+	body message.Body, sections []wire.Section) ([]*Envelope, []*Inner, error) {
+	sections, err := withRecipients(to, sections)
+	if err != nil {
+		return nil, nil, err
+	}
+	return seal(sender, to, channel, body, sections)
+}
+
+// withRecipients is the caller's sections with the recipients section added
+// when there is more than one recipient. The section is SealMany's to
+// write: one the caller wrote would name a list nobody checked against the
+// copies being sealed.
+func withRecipients(to []*identity.Public, sections []wire.Section) ([]wire.Section, error) {
+	if len(to) == 0 {
+		return nil, errors.New("envelope: a message to nobody")
+	}
+	if len(to) == 1 {
+		return sections, nil
+	}
+	for _, s := range sections {
+		if s.Name == recipients.Name {
+			return nil, fmt.Errorf("envelope: the %s section is written by SealMany from the recipients it is given", recipients.Name)
+		}
+	}
+	fps := make([]string, len(to))
+	for i, r := range to {
+		fps[i] = r.Fingerprint()
+	}
+	list, err := recipients.Section(fps)
+	if err != nil {
+		return nil, err
+	}
+	return append(append([]wire.Section{}, sections...), list), nil
+}
+
+// seal is every copy of one record. Everything that can be refused is
+// refused before the first signature, and every copy's list is held to the
+// rule for that copy, so a list given by hand is held as SealMany's is.
+func seal(sender *identity.Identity, to []*identity.Public, channel string,
+	body message.Body, sections []wire.Section) ([]*Envelope, []*Inner, error) {
 	if err := wire.Check(sections); err != nil {
 		return nil, nil, err
 	}
@@ -200,46 +261,64 @@ func SealSections(sender *identity.Identity, recipient *identity.Public, channel
 	if err := message.ValidAttachmentNames(body.AttachmentNames()); err != nil {
 		return nil, nil, fmt.Errorf("message: %w", err)
 	}
+	for _, r := range to {
+		if _, err := recipients.CheckSections(sections, body.Type, r.Fingerprint()); err != nil {
+			return nil, nil, err
+		}
+	}
 	id, err := NewID()
 	if err != nil {
 		return nil, nil, err
 	}
-	toFP := recipient.Fingerprint()
 	v := Version
 	if anyCritical(sections) {
 		v = VersionCritical
 	}
-	inner := &Inner{
-		V:          v,
-		From:       sender.Fingerprint(),
-		FromBundle: sender.Public().Bundle(),
-		To:         toFP,
-		ID:         id,
-		Time:       time.Now().UTC().Truncate(time.Second),
-		Body:       body,
-		Channel:    channel,
-		Sections:   sections,
+	now := time.Now().UTC().Truncate(time.Second)
+	envs := make([]*Envelope, 0, len(to))
+	inners := make([]*Inner, 0, len(to))
+	for _, r := range to {
+		inner := &Inner{
+			V:          v,
+			From:       sender.Fingerprint(),
+			FromBundle: sender.Public().Bundle(),
+			To:         r.Fingerprint(),
+			ID:         id,
+			Time:       now,
+			Body:       body,
+			Channel:    channel,
+			Sections:   sections,
+		}
+		env, err := sealOne(sender, r, inner)
+		if err != nil {
+			return nil, nil, err
+		}
+		envs = append(envs, env)
+		inners = append(inners, inner)
 	}
+	return envs, inners, nil
+}
 
+// sealOne signs and seals one copy for its recipient.
+func sealOne(sender *identity.Identity, recipient *identity.Public, inner *Inner) (*Envelope, error) {
 	// Marshal exactly once: the bytes that are signed are the bytes that travel.
 	innerBytes, err := json.Marshal(inner)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-
-	sig, err := sender.Sign(sigInput(toFP, innerBytes))
+	sig, err := sender.Sign(sigInput(inner.To, innerBytes))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	plaintext := make([]byte, 0, sigLen+len(innerBytes))
 	plaintext = append(plaintext, sig...)
 	plaintext = append(plaintext, innerBytes...)
 
-	ct, err := hpke.Seal(recipient.KEM, kdf(), aead(), info(toFP), plaintext)
+	ct, err := hpke.Seal(recipient.KEM, kdf(), aead(), info(inner.To), plaintext)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return &Envelope{V: v, To: toFP, CT: ct}, inner, nil
+	return &Envelope{V: inner.V, To: inner.To, CT: ct}, nil
 }
 
 // anyCritical says whether a list holds a section marked critical.
@@ -344,6 +423,16 @@ func Open(recipient *identity.Identity, env *Envelope) (*Inner, *identity.Public
 		return nil, nil, failWith(ErrMalformed, err, "body")
 	}
 	sender.Name = "" // names come from the local peer list, never from the wire
+	// A known section is read now, under the signature, and before the
+	// sort: the list of everybody a message to several went to, which must
+	// name this reader and is never on a message that is one person's by
+	// its own rules. The whole rule runs here, its size check with the
+	// rest, so nothing in the section is read before the signature; and it
+	// runs before the sort, so a record handed back as needing a newer auu
+	// never carries a list nobody checked, as the stream's manifest must not.
+	if _, err := recipients.CheckSections(inner.Sections, inner.Body.Type, selfFP); err != nil {
+		return nil, nil, failWith(ErrMalformed, err, "recipients")
+	}
 	// Only now, with the signature verified, is a section this build does
 	// not know judged: an unsigned record is never one that needs a newer
 	// auu (R7). The record and its sender come back with the error, so the

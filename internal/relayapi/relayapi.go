@@ -960,6 +960,16 @@ const MaxQueueLimit = 200
 // forward_ttl.
 const MaxHops = 32
 
+// MaxRecipients caps the recipients of one message to several: the
+// fingerprints its recipients section names (D53). It is the protocol's
+// ceiling, fixed for good, and not a relay's setting, which may be lower
+// and never higher: the sealer holds a list to it before anything is
+// sealed, every reader holds the section to it before the list is a loop
+// bound, and a relay holds the count a request carries to it. Thirty-two
+// keeps the section at its maximum near two kibibytes, inside what a
+// reader of v0.15.0 keeps of a section it does not know.
+const MaxRecipients = 32
+
 // The channel caps, protocol constants for the same reason as MaxAllowlist:
 // the sender's client, the owner's and the relay all validate a directory,
 // and they must agree on the bounds. Names and descriptions are measured in

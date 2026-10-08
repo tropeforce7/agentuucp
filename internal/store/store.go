@@ -22,6 +22,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/wire"
 )
@@ -894,6 +895,13 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 		if !wire.Known(sec.Name) && len(sec.Data) > wire.MaxKeptBytes {
 			return nil, fmt.Errorf("the record's section %q is %d bytes, over the %d kept", sec.Name, len(sec.Data), wire.MaxKeptBytes)
 		}
+	}
+	// The list of everybody a message to several went to was held to its
+	// rule by Open, for the reader the record's to names, and by the sealer
+	// for each copy, a sent record keeping the first copy's: a record whose
+	// list says otherwise was not written by this program.
+	if _, err := recipients.CheckSections(m.Inner.Sections, m.Inner.Body.Type, m.Inner.To); err != nil {
+		return nil, fmt.Errorf("the record's %v", err)
 	}
 	if m.DroppedSections < 0 {
 		return nil, fmt.Errorf("the record's dropped section count %d is negative", m.DroppedSections)

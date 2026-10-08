@@ -11,6 +11,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
@@ -55,50 +56,106 @@ func BuildManifest(from *identity.Identity, to *identity.Public, id string,
 
 // BuildManifestSections is BuildManifest with sections: held to wire.Check
 // by Validate, and the manifest is VersionSections exactly when there is any
-// (D30).
+// (D30). It is BuildManifestMany for one recipient, which writes no
+// recipients section of its own.
 func BuildManifestSections(from *identity.Identity, to *identity.Public, id string,
 	body Body, sources []Source, chunkSize int, sections []wire.Section) (*Manifest, error) {
+	ms, err := buildManifests(from, []*identity.Public{to}, id, body, sources, chunkSize, sections)
+	if err != nil {
+		return nil, err
+	}
+	return ms[0], nil
+}
+
+// BuildManifestMany is one stream's manifest for each of several
+// recipients (P2, D49): one id, one time, one body and one list of sections
+// for every copy, and the sources hashed once, however many copies there
+// are. With more than one recipient it adds the recipients section, naming
+// every recipient in the order given; with one it adds nothing. The
+// manifests come back in the recipients' order, each to be signed and
+// sealed for its own recipient by Seal.
+func BuildManifestMany(from *identity.Identity, to []*identity.Public, id string,
+	body Body, sources []Source, chunkSize int, sections []wire.Section) ([]*Manifest, error) {
+	if len(to) == 0 {
+		return nil, fmt.Errorf("%w: a stream to nobody", ErrForm)
+	}
+	if len(to) > 1 {
+		for _, s := range sections {
+			if s.Name == recipients.Name {
+				return nil, fmt.Errorf("%w: the %s section is written by BuildManifestMany from the recipients it is given", ErrForm, recipients.Name)
+			}
+		}
+		fps := make([]string, len(to))
+		for i, r := range to {
+			fps[i] = r.Fingerprint()
+		}
+		list, err := recipients.Section(fps)
+		if err != nil {
+			return nil, err
+		}
+		sections = append(append([]wire.Section{}, sections...), list)
+	}
+	return buildManifests(from, to, id, body, sources, chunkSize, sections)
+}
+
+// buildManifests is every copy's manifest. Each is held to Validate and
+// its list to the rule for its own recipient, so a list given by hand is
+// held as BuildManifestMany's is.
+func buildManifests(from *identity.Identity, to []*identity.Public, id string,
+	body Body, sources []Source, chunkSize int, sections []wire.Section) ([]*Manifest, error) {
 
 	v := Version
 	if len(sections) > 0 {
 		v = VersionSections
 	}
-	m := &Manifest{
-		V:          v,
-		Sections:   sections,
-		ID:         id,
-		From:       from.Fingerprint(),
-		FromBundle: from.Public().Bundle(),
-		To:         to.Fingerprint(),
-		Time:       time.Now().UTC().Truncate(time.Second),
-		ChunkSize:  chunkSize,
-		Body:       body,
-	}
+	var attachments []Attachment
+	var payload int64
 	for _, src := range sources {
 		digest, err := src.Hash()
 		if err != nil {
 			return nil, err
 		}
-		m.Attachments = append(m.Attachments, Attachment{
+		attachments = append(attachments, Attachment{
 			Name: src.Name, Media: src.Media, Size: src.Size, SHA256: digest,
 		})
-		m.PayloadBytes += src.Size
-	}
-	m.Chunks = ChunkCount(m.PayloadBytes, chunkSize)
-	if err := m.Validate(); err != nil {
-		return nil, err
+		payload += src.Size
 	}
 	// The sender's rule for attachment names runs here, where every
 	// stream leaves, and nowhere on the receiving path: a receiver
 	// writes whatever name arrives under SafeName of it.
-	names := make([]string, 0, len(m.Attachments))
-	for _, a := range m.Attachments {
+	names := make([]string, 0, len(attachments))
+	for _, a := range attachments {
 		names = append(names, a.Name)
 	}
-	if err := message.ValidAttachmentNames(names); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrForm, err)
+	now := time.Now().UTC().Truncate(time.Second)
+	ms := make([]*Manifest, 0, len(to))
+	for _, r := range to {
+		m := &Manifest{
+			V:            v,
+			Sections:     sections,
+			ID:           id,
+			From:         from.Fingerprint(),
+			FromBundle:   from.Public().Bundle(),
+			To:           r.Fingerprint(),
+			Time:         now,
+			ChunkSize:    chunkSize,
+			Body:         body,
+			Attachments:  append([]Attachment(nil), attachments...),
+			PayloadBytes: payload,
+		}
+		m.Chunks = ChunkCount(m.PayloadBytes, chunkSize)
+		if err := m.Validate(); err != nil {
+			return nil, err
+		}
+		if err := message.ValidAttachmentNames(names); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrForm, err)
+		}
+		if _, err := recipients.CheckSections(m.Sections, m.Body.Type, m.To); err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrForm, err)
+		}
+		ms = append(ms, m)
 	}
-	return m, nil
+	return ms, nil
 }
 
 // Seal writes a whole stream to w.

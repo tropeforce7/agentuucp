@@ -165,7 +165,8 @@ func TestASectionWritesEveryField(t *testing.T) {
 	}
 }
 
-// The registry is empty in this release, so every section is unknown: one
+// The registry is empty in this package's tests, which link no feature that
+// fills it, so every section is unknown: one
 // that is not critical is ignored, and one that is stops the sort by name.
 func TestSortIgnoresTheUnknownAndRefusesTheCritical(t *testing.T) {
 	if len(known) != 0 {
@@ -189,7 +190,8 @@ func TestSortIgnoresTheUnknownAndRefusesTheCritical(t *testing.T) {
 }
 
 // A section this build knows goes to its rule whether or not it is
-// critical. The registry is empty in this release, so the test fills it.
+// critical. The registry is empty in this package's tests, so the test fills
+// it.
 func TestSortHandsAKnownSectionOn(t *testing.T) {
 	known["recipients"] = true
 	t.Cleanup(func() { delete(known, "recipients") })
