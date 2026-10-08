@@ -69,6 +69,7 @@ Sending:
 ```
 auu send --to NAME|self [--subject S] [--channel NAME] [--attach FILE]... TEXT
 auu send --to NAME --body-file FILE                # or - to read the body from stdin
+auu send --to bob --to carol TEXT                  # a message to several; --to bob,carol is the same
 auu send --to 'bar!bob' TEXT                       # somebody on a relay yours peers with
 auu send --to bob --via bar TEXT                   # the same address, no bang to quote
 auu send --resume                                  # finish what the outbox holds: from the relay's partial, or anew
@@ -317,7 +318,15 @@ the knock, which happens when this machine has pushed one there before).
 `auu send --json` and `auu reply --json`: `id`, `thread`, `to`, `to_name`,
 `relay_id`, `bytes`, `in_reply_to` (when set), `kind` (`envelope` or
 `stream`), `chunks` and `chunk_size` (a stream only), `channel` (when not
-default).
+default). `to` and `to_name` are present exactly when the message went to
+one; a message to several has `recipients` in their place, a list of
+`fingerprint`, `name`, `path` (when by one), and `relay_id` for a copy the
+relay took, or `code` and `error` for one it refused, and `waiting` true
+for a copy left in the outbox because the relay refused the sender rather
+than the copy, with that refusal's `code` and `error` beside it.
+A send to several exits 2 when any copy was not sent, and `auu send
+--resume` finishes what waits. A message to several that would be a stream
+is refused in this release; send it to each recipient on their own.
 
 `auu serve --json`: one object of `answered`, `failed` and `skipped`, each
 a list of `id`, `channel` and `thread`. A message in `failed` is tried
@@ -376,7 +385,10 @@ stderr, since there is nowhere on it for anything to wait.
 
 `auu read --json` and `auu quarantine ls --json` print that same message
 shape: `read` one message with `text` and `thread_subject`, `quarantine ls`
-a list without either. A reply given a subject of its own carries it in
+a list without either. A message you sent to several carries `copies`, one
+per recipient: `fingerprint`, `name`, `path` (when by one), and `relay_id`
+once the relay has it, or `code` and `error` when it refused it, and
+`dropped` true for one given up with `auu outbox drop`. A reply given a subject of its own carries it in
 `subject`, and the thread's in `thread_subject`. A knock carries
 `claimed_name` beside `from_name`: the name its sender called themselves,
 their own claim, where `from_name` is what this machine calls them, which

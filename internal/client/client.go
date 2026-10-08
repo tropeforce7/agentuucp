@@ -81,7 +81,17 @@ type Client struct {
 	certless *http.Client
 	// sleep waits between retries. Tests replace it so they need not wait.
 	sleep func(context.Context, time.Duration) error
+	// maxRetryWait, when set, is the longest Retry-After this Client waits
+	// out: a refusal that asks for longer comes back at once, for a caller
+	// that has something better to do than wait, as a send to several
+	// does, which leaves what it has not posted in the outbox and says
+	// when to try. Zero is the ordinary wait.
+	maxRetryWait time.Duration
 }
+
+// SetMaxRetryWait makes a refusal whose Retry-After is over d come back at
+// once rather than be waited out. Zero restores the ordinary wait.
+func (c *Client) SetMaxRetryWait(d time.Duration) { c.maxRetryWait = d }
 
 // New returns a client for the relay at base.
 //
@@ -590,6 +600,11 @@ func (c *Client) doWithin(ctx context.Context, method, path string, payload any,
 			// The relay has said this request is refused for its size, not for
 			// its timing. Sleeping through the remaining attempts would only
 			// make the same answer take a minute and a half to arrive.
+			return err
+		}
+		if c.maxRetryWait > 0 && httpErr.RetryAfter > c.maxRetryWait {
+			// The caller has said it would rather know now than wait this
+			// long; what the relay asked for is on the error.
 			return err
 		}
 		if sleepErr := c.sleep(ctx, retryWait(httpErr)); sleepErr != nil {

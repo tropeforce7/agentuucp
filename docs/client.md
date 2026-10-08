@@ -341,6 +341,37 @@ The download of a stream on the receiving side runs under the same rule,
 and resumes by range from where it stood. Every other request to the
 relay is answered within two minutes or fails.
 
+A message to several goes to each recipient as a copy sealed for them,
+and each copy names everybody it went to:
+
+```
+auu send --to bob --to carol --subject 'the release' 'out on Friday'
+auu send --to bob,carol,dave 'the same, as one list'
+```
+
+`--to` repeats, and a value may be a list separated by commas; each
+recipient is a name, a fingerprint, `self` or a bang path; `--via` names
+the relays for every recipient, so with it none may carry a path of its
+own. A recipient named twice
+is refused, and so is a list of more than thirty-two before anything else
+is done; a list longer than the relay takes, which its health answer
+says, sixteen by default, is refused naming the relay and the number,
+before anything is sealed.
+Every copy is sealed and written to `outbox/` before any is posted, then
+each is posted in the order given. The command ends with one line per
+recipient, `sent`, `not sent:` and the relay's words, or `waiting in the
+outbox`, and exits 2 when any copy was not sent; a copy refused stays in
+the outbox with the relay's words, and `auu send --resume` posts it
+again. A relay that asks the sender to wait longer than a minute stops
+the posting: that copy and the rest wait in the outbox, and the command
+says how long the relay asked for; so does a relay that refuses this
+machine itself, its certificate or its identity, with the advice a message
+to one gets, and a copy that gets no answer at all. `auu read` of the message you sent says who has it, who does
+not yet, and which copies you gave up with `auu outbox drop`. A message to several large enough
+to become a stream is refused in this release: send it to each recipient
+on their own. Following up on a thread whose latest message is your own
+to several needs `--to PEER`, one of its recipients, to say whom.
+
 `auu outbox` lists what is sealed and waiting in `outbox/`, each with its
 recipient, its relay and its size, and, for one a relay refused, the
 relay's code and words, escaped. `auu outbox drop ID [PEER]` gives one up,

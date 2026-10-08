@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/recipients"
@@ -185,5 +187,65 @@ func TestOpenStreamCarriesTheCountForSeveralAlone(t *testing.T) {
 	}
 	if _, err := c.OpenStream(context.Background(), to, "", 5000, relayapi.MaxRecipients+1); err == nil || len(bodies) != 3 {
 		t.Errorf("a count over the ceiling: %v, %d requests; want it refused before anything is sent", err, len(bodies))
+	}
+}
+
+// SetMaxRetryWait: a 429 that asks for longer than the cap comes back at
+// once, with no sleep asked for at all, carrying what the relay asked; one
+// that asks for the cap or less is waited out as ever; and with no cap the
+// long one is waited out too, the ordinary way (R7, ruling 75).
+func TestAWaitOverTheCapComesBackAtOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		retryAfter  string
+		cap         time.Duration
+		wantSlept   bool
+		wantAttempt int
+	}{
+		{"over the cap", "61", time.Minute, false, 1},
+		{"an hour over the cap", "3600", time.Minute, false, 1},
+		{"at the cap", "60", time.Minute, true, maxRetries + 1},
+		{"no cap", "3600", 0, true, maxRetries + 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var attempts atomic.Int64
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				w.Header().Set("Retry-After", tc.retryAfter)
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(`{"error":"rate limited: posts","code":""}`))
+			}))
+			t.Cleanup(srv.Close)
+			me, err := identity.Generate("alice")
+			if err != nil {
+				t.Fatal(err)
+			}
+			c, err := New(srv.URL, me, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var slept []time.Duration
+			c.sleep = func(_ context.Context, d time.Duration) error {
+				slept = append(slept, d)
+				return nil
+			}
+			c.SetMaxRetryWait(tc.cap)
+			err = c.do(context.Background(), "POST", "/v1/x", nil, nil, nil)
+			var he *HTTPError
+			if !errors.As(err, &he) || he.Status != http.StatusTooManyRequests {
+				t.Fatalf("got %v; want the 429", err)
+			}
+			if (len(slept) > 0) != tc.wantSlept {
+				t.Errorf("slept %v; want a sleep %v", slept, tc.wantSlept)
+			}
+			for _, d := range slept {
+				if tc.cap > 0 && d > tc.cap {
+					t.Errorf("a sleep of %s was asked for, over the cap of %s", d, tc.cap)
+				}
+			}
+			if got := attempts.Load(); got != int64(tc.wantAttempt) {
+				t.Errorf("%d attempts; want %d", got, tc.wantAttempt)
+			}
+		})
 	}
 }

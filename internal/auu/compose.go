@@ -233,7 +233,7 @@ func splitSubject(text string) (subject, body string) {
 // composeTemplate is what the editor opens on: the seed text, if any, above a
 // description of what is about to be sent. It begins with a blank line so the
 // cursor lands where the message goes.
-func composeTemplate(to *identity.Public, subject string, attachments []string, original *store.Stored, seed string) string {
+func composeTemplate(to []*identity.Public, subject string, attachments []string, original *store.Stored, seed string) string {
 	var b strings.Builder
 	if seed != "" {
 		b.WriteString(strings.TrimRight(seed, "\n"))
@@ -244,7 +244,11 @@ func composeTemplate(to *identity.Public, subject string, attachments []string, 
 		fmt.Fprintf(&b, "# Reply to %s from %s: %q.\n",
 			original.Inner.ID[:12], orNone(original.SenderName), original.Inner.Body.Subject)
 	}
-	fmt.Fprintf(&b, "# Message to %s <%s>.\n", peerLabel(to), to.Short())
+	whom := make([]string, len(to))
+	for i, p := range to {
+		whom[i] = fmt.Sprintf("%s <%s>", peerLabel(p), p.Short())
+	}
+	fmt.Fprintf(&b, "# Message to %s.\n", strings.Join(whom, ", "))
 	if subject != "" {
 		fmt.Fprintf(&b, "# %s%s%s\n", subjectPrefix, subject, subjectHint)
 	} else {

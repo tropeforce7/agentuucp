@@ -203,7 +203,9 @@ internal/auu/inbox.go cmdExtract string m.Inner.ID[:12] = local: ValidID at Load
 internal/auu/inbox.go cmdQuarantine string m.Inner.ID[:12] #2 = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go cmdQuarantine string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go cmdQuarantine string pub.Fingerprint()[:16] = local: Fingerprint writes 64 hex characters
+internal/auu/inbox.go copyJSON int RelayID int64 = output
 internal/auu/inbox.go messageJSON int DroppedSections int = output
+internal/auu/inbox.go printCopies string c.Fingerprint[:16] = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go printQuarantineLine string m.Inner.From[:16] #2 = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go printQuarantineLine string m.Inner.From[:16] = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go printQuarantineLine string m.Inner.ID[:12] #2 = local: ValidID at Load shown by TestLimitStoredRecordShapes
@@ -242,6 +244,10 @@ internal/auu/outboxcopy.go outboxDrop string p.MessageID[:12] = local: ValidID a
 internal/auu/outboxcopy.go outboxDrop string p.MessageID[:12] #2 = local: ValidID at listPending shown by TestLimitPendingRecordShapes
 internal/auu/outboxcopy.go outboxJSON int Bytes int64 = output
 internal/auu/outboxcopy.go outboxLine string p.MessageID[:12] = local: ValidID at listPending shown by TestLimitPendingRecordShapes
+internal/auu/outboxcopy.go updateSentCopy string messageID[:12] = local: ValidID at listPending shown by TestLimitPendingRecordShapes
+internal/auu/outboxcopy.go updateSentCopy string messageID[:12] #2 = local: ValidID at listPending shown by TestLimitPendingRecordShapes
+internal/auu/outboxcopy.go updateSentCopy string messageID[:12] #3 = local: ValidID at listPending shown by TestLimitPendingRecordShapes
+internal/auu/outboxcopy.go updateSentCopy string to[:identity.ShortIDLen] = local: ValidFingerprint at listPending shown by TestLimitPendingRecordShapes
 internal/auu/outboxcopy.go writeCopies string p.To[:identity.ShortIDLen] = local: ValidFingerprint at SealMany shown by TestLimitPendingRecordShapes
 internal/auu/prompt.go promptName string fp[:16] = local: fp is Fingerprint of a parsed bundle at every caller, 64 hex characters
 internal/auu/outbox.go pending int ChunkSize int = [4096, 16777216] shown by TestLimitPendingRecordIntegers
@@ -268,6 +274,10 @@ internal/auu/send.go sentJSON int ChunkSize int = output
 internal/auu/send.go sentJSON int Chunks int64 = output
 internal/auu/send.go sentJSON int RelayID int64 = output
 internal/auu/sendchannel.go noSuchChannel string recipient.Fingerprint()[:16] = local: Fingerprint writes 64 hex characters
+internal/auu/sendmany.go followUpCopy string original.Inner.Body.Thread[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/sendmany.go followUpCopy string original.Inner.Body.Thread[:12] #2 = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/sendmany.go recipientJSON int RelayID int64 = output
+internal/auu/sendmany.go sentManyJSON int Bytes int = output
 internal/auu/serve.go (*serveRun).send string m.Inner.From[:16] = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
 internal/auu/serve.go shortID string id[:12] = local: len(id) > 12 by the check before
 internal/auu/serveconfig.go (*serveConfig).check string names[:i] = local: i is an index of names from range
@@ -443,6 +453,7 @@ internal/store/store.go (*Store).RemoveByID.struct int RelayID int64 = > 0 shown
 internal/store/store.go (*Store).RemovePeer string kept[:n - 1] = local: n-1 of kept, with n > 0 by the check before
 internal/store/store.go Config int ChunkSize int = 0 or [4096, 16777216] shown by TestLimitStreamSettings
 internal/store/store.go Config int StreamThreshold int64 = 0 or >= 4096 shown by TestLimitStreamSettings
+internal/store/store.go SentCopy int RelayID int64 = >= 0 shown by TestLimitStoredRecordShapes
 internal/store/store.go Stored int DroppedSections int = >= 0 shown by TestLimitStoredDroppedSections
 internal/store/store.go Stored int RelayID int64 = >= 0 shown by TestLimitStoredRelayID
 internal/store/store.go Stored int RelaySize int64 = >= 0 shown by TestLimitStoredRelaySize

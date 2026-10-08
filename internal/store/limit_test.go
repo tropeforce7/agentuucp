@@ -14,6 +14,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/recipients"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
@@ -344,6 +345,77 @@ func TestLimitStoredRecordShapes(t *testing.T) {
 	}); err != nil {
 		t.Errorf("a record whose list names its to: %v; want it loaded", err)
 	}
+
+	// A sent message to several keeps its copies, one per recipient the
+	// list names, each held to what the sender writes: only in sent/, a
+	// fingerprint the list names, a name that is a name, a path that is an
+	// address, a relay id that is not negative, and a kept refusal a line
+	// of at most relayapi.MaxSaid with a code that is a name.
+	from, to := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	sentCopies := func() []SentCopy {
+		return []SentCopy{{Fingerprint: to, Name: "bob", RelayID: 7}, {Fingerprint: from, Name: "alice"}}
+	}
+	writeSent := func(t *testing.T, box Box, mutate func(m *Stored)) error {
+		t.Helper()
+		m := stored(id, now)
+		m.Inner.Sections = []wire.Section{recipientsList(t, to, from)}
+		m.Copies = sentCopies()
+		mutate(m)
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(s.msgPath(box, id)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(s.msgPath(box, id), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.Load(box, id)
+		return err
+	}
+	for _, tc := range []struct {
+		name   string
+		box    Box
+		mutate func(m *Stored)
+		says   string
+	}{
+		{"copies on a received message", Inbox, func(m *Stored) {}, "only a sent message has copies"},
+		{"a copy for nobody the list names", Sent, func(m *Stored) { m.Copies[1].Fingerprint = strings.Repeat("c", 64) }, "copy 2 is not for a recipient the message names"},
+		{"a copy one short", Sent, func(m *Stored) { m.Copies[1].Fingerprint = from[:63] }, "copy 2 is not for a recipient"},
+		{"a copy twice", Sent, func(m *Stored) { m.Copies[1] = m.Copies[0] }, "copy 2 is not for a recipient"},
+		{"a copy too few", Sent, func(m *Stored) { m.Copies = m.Copies[:1] }, "1 copies for a message to 2"},
+		{"copies with no list", Sent, func(m *Stored) { m.Inner.Sections = nil }, "2 copies for a message to 0"},
+		{"a name that is not a name", Sent, func(m *Stored) { m.Copies[0].Name = "b\x1bob" }, "copy 1's name is not a name"},
+		{"a path that is not an address", Sent, func(m *Stored) { m.Copies[0].Path = "bar!!baz" }, "copy 1's path is not an address"},
+		{"a relay id below zero", Sent, func(m *Stored) { m.Copies[0].RelayID = -1 }, "copy 1's relay id -1 is negative"},
+		{"a relay id at the type's minimum", Sent, func(m *Stored) { m.Copies[0].RelayID = math.MinInt64 }, "is negative"},
+		{"a copy given up and placed both", Sent, func(m *Stored) { m.Copies[0].Dropped = true }, "copy 1 is given up and placed both"},
+		{"a code that is not a name", Sent, func(m *Stored) { m.Copies[1].RefusedCode = "Not A Code" }, "copy 2's refusal code is not a name"},
+		{"a refusal of two lines", Sent, func(m *Stored) { m.Copies[1].Refused = "one\ntwo" }, "copy 2's refusal is not one line"},
+		{"a refusal one byte over", Sent, func(m *Stored) { m.Copies[1].Refused = strings.Repeat("a", relayapi.MaxSaid+1) }, "copy 2's refusal is not one line"},
+	} {
+		if err := writeSent(t, tc.box, tc.mutate); err == nil || !strings.Contains(err.Error(), tc.says) {
+			t.Errorf("%s: %v; want %q", tc.name, err, tc.says)
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(m *Stored)
+	}{
+		{"as written", func(m *Stored) {}},
+		{"by a path, refused at the edge, at the type's maximum", func(m *Stored) {
+			m.Copies[0].Path = "bar!baz"
+			m.Copies[0].RelayID = math.MaxInt64
+			m.Copies[1].RefusedCode = relayapi.CodeMailboxFull
+			m.Copies[1].Refused = strings.Repeat("a", relayapi.MaxSaid)
+		}},
+	} {
+		if err := writeSent(t, Sent, tc.mutate); err != nil {
+			t.Errorf("%s: %v; want it loaded", tc.name, err)
+		}
+	}
+	os.Remove(s.msgPath(Inbox, id))
 	// The relay's key is always written, even for the zero value, since
 	// Load requires it: a record with none is from before, not a record
 	// with the default.

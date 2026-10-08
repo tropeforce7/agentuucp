@@ -45,8 +45,10 @@ type sentJSON struct {
 
 func cmdSend(args []string) error {
 	fs := newFlagSet("send")
-	to := fs.String("to", "", "recipient: peer name or fingerprint, or self for a note to yourself; "+
-		"'bar!bob' sends to bob by way of the relay your relay calls bar")
+	var tos stringList
+	fs.Var(&tos, "to", "recipient: peer name or fingerprint, or self for a note to yourself; "+
+		"'bar!bob' sends to bob by way of the relay your relay calls bar; repeat it, or separate "+
+		"names with commas, for a message to several")
 	via := fs.String("via", "", "relays to send by way of, nearest first, as 'bar' or 'bar!baz'; "+
 		"the same as putting them in --to, for a script that would rather not quote a bang")
 	subject := fs.String("subject", "", "one-line subject")
@@ -68,7 +70,7 @@ func cmdSend(args []string) error {
 		return err
 	}
 	if *resume {
-		if *to != "" || *via != "" || len(attach) > 0 || len(positional) > 0 || *channel != "" {
+		if len(tos) > 0 || *via != "" || len(attach) > 0 || len(positional) > 0 || *channel != "" {
 			return usageErrf("--resume finishes what is already sealed; it takes no other arguments")
 		}
 		s, id, err := loadIdentity()
@@ -77,16 +79,24 @@ func cmdSend(args []string) error {
 		}
 		return resumePending(s, id, *asJSON, *relay)
 	}
-	if *to == "" {
+	if len(tos) == 0 {
 		return usageErrf("--to is required")
 	}
-	var path []string
-	var peer string
-	if path, peer, err = address(*to, *via); err != nil {
-		return err
-	}
+	elems, err := splitTo(tos)
 	if err != nil {
 		return err
+	}
+	// One recipient is the message to one it always was; several are
+	// resolved together once the home is open, every one before anything
+	// is written.
+	var path []string
+	var peer string
+	if len(elems) == 1 {
+		if path, peer, err = address(elems[0], *via); err != nil {
+			return err
+		}
+	} else if len(elems) > relayapi.MaxRecipients {
+		return usageErrf("%d recipients; a message may go to at most %d", len(elems), relayapi.MaxRecipients)
 	}
 	if *msgType != message.TypeAsk && *msgType != message.TypeNote {
 		return usageErrf("--type must be ask or note")
@@ -128,9 +138,16 @@ func cmdSend(args []string) error {
 	if err != nil {
 		return err
 	}
-	recipient, err := s.Resolve(peer)
-	if err != nil {
+	var several []addressed
+	var recipient *identity.Public
+	if len(elems) > 1 {
+		if several, err = resolveSeveral(s, elems, *via); err != nil {
+			return err
+		}
+	} else if recipient, err = s.Resolve(peer); err != nil {
 		return usageErrf("%v", err)
+	} else {
+		several = []addressed{{pub: recipient, path: path}}
 	}
 	warnPending(s)
 	if compose {
@@ -139,7 +156,7 @@ func cmdSend(args []string) error {
 			return err
 		}
 		var edited string
-		text, edited, err = composeIn(s, cfg, composeTemplate(recipient, *subject, attach, nil, text))
+		text, edited, err = composeIn(s, cfg, composeTemplate(publicsOf(several), *subject, attach, nil, text))
 		if err != nil {
 			return err
 		}
@@ -167,9 +184,18 @@ func cmdSend(args []string) error {
 		InReplyTo: *replyTo,
 		Text:      text,
 	}
-	err = sealAndSend(s, id, r, recipient, body, attach,
-		sendMode{stream: *forceStream, inline: *forceInline, channel: *channel, path: path}, *asJSON)
-	if err != nil && compose {
+	mode := sendMode{stream: *forceStream, inline: *forceInline, channel: *channel, path: path}
+	if len(several) > 1 {
+		mode.path = nil
+		err = sendToSeveral(s, id, r, several, body, attach, mode, *asJSON)
+	} else {
+		err = sealAndSend(s, id, r, recipient, body, attach, mode, *asJSON)
+	}
+	// A draft is kept for a message that never went; a message to several
+	// whose copies are in the outbox is finished by --resume, and keeping
+	// the draft too would invite sending it all over again.
+	var waiting copiesWaiting
+	if err != nil && compose && !errors.As(err, &waiting) {
 		return draftKept(s, err)
 	}
 	return err
@@ -241,6 +267,21 @@ func cmdReply(args []string) error {
 	if box == store.Sent {
 		otherFP = original.Inner.To
 	}
+	// Your own message to several has no one person to follow up with:
+	// the sender is you, and the first recipient alone is not who you
+	// wrote to. --to names one of them, and the follow-up goes the way that
+	// copy went unless --via says otherwise.
+	toArg := *to
+	if box == store.Sent && len(original.Copies) > 0 {
+		c, err := followUpCopy(s, original, *to)
+		if err != nil {
+			return err
+		}
+		otherFP = c.Fingerprint
+		if c.Path != "" && *via == "" && !strings.Contains(*to, "!") {
+			toArg = c.Path + "!" + *to
+		}
+	}
 	recipient, err := s.Resolve(otherFP)
 	if err != nil {
 		return usageErrf("cannot reply: %s is not in your peer list", otherFP[:16])
@@ -250,7 +291,7 @@ func cmdReply(args []string) error {
 	if err != nil {
 		return err
 	}
-	path, err := replyPath(s, original, recipient, *to, *via)
+	path, err := replyPath(s, original, recipient, toArg, *via)
 	if err != nil {
 		return err
 	}
@@ -282,7 +323,7 @@ func cmdReply(args []string) error {
 			return err
 		}
 		var edited string
-		text, edited, err = composeIn(s, cfg, composeTemplate(recipient, subj, attach, original, text))
+		text, edited, err = composeIn(s, cfg, composeTemplate([]*identity.Public{recipient}, subj, attach, original, text))
 		if err != nil {
 			return err
 		}

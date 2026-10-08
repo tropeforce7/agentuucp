@@ -24,6 +24,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/regular"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
@@ -782,6 +783,34 @@ type Stored struct {
 	// Inner.Sections as they came. Zero, the value the key is left out
 	// for, is a message that lost none.
 	DroppedSections int `json:"dropped_sections,omitempty"`
+	// Copies is a sent message to several: one entry per recipient, in the
+	// order the recipients section names them, saying where each copy went
+	// and whether the relay has it. The record's Inner is the first copy's,
+	// since the copies differ only in their to and their signature. Empty,
+	// the value the key is left out for, is every other record.
+	Copies []SentCopy `json:"copies,omitempty"`
+}
+
+// SentCopy is one copy of a sent message to several.
+type SentCopy struct {
+	Fingerprint string `json:"fingerprint"`
+	// Name is the recipient's name on this machine when it was sent.
+	Name string `json:"name,omitempty"`
+	// Path is the relays the copy went by, joined by "!", empty for a
+	// recipient on the relay it was posted to.
+	Path string `json:"path,omitempty"`
+	// RelayID is the relay's id for the copy once it has it: a message in
+	// the recipient's mailbox, or a row in the first hop's queue for a
+	// copy by a path. Zero is a copy not yet placed.
+	RelayID int64 `json:"relay_id,omitempty"`
+	// RefusedCode and Refused are the relay's code and sentence the last
+	// time it refused the copy, as the outbox keeps them; empty once it is
+	// placed.
+	RefusedCode string `json:"refused_code,omitempty"`
+	Refused     string `json:"refused,omitempty"`
+	// Dropped says the sender gave the copy up with auu outbox drop, so it
+	// will never be placed; a copy the relay has cannot be dropped.
+	Dropped bool `json:"dropped,omitempty"`
 }
 
 // Box names a spool directory.
@@ -903,6 +932,9 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	if _, err := recipients.CheckSections(m.Inner.Sections, m.Inner.Body.Type, m.Inner.To); err != nil {
 		return nil, fmt.Errorf("the record's %v", err)
 	}
+	if err := validCopies(box, &m); err != nil {
+		return nil, fmt.Errorf("the record's copies: %v", err)
+	}
 	if m.DroppedSections < 0 {
 		return nil, fmt.Errorf("the record's dropped section count %d is negative", m.DroppedSections)
 	}
@@ -915,6 +947,57 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 		}
 	}
 	return &m, nil
+}
+
+// validCopies holds a sent record's copies to what the sender wrote: only
+// in sent/, only on a message the recipients section says went to several,
+// one copy for each recipient it names and no other, each path an address,
+// each relay id a number the relay could have given, and each kept refusal
+// a line of at most relayapi.MaxSaid with a code that is a name, since
+// every one of them is shown.
+func validCopies(box Box, m *Stored) error {
+	if len(m.Copies) == 0 {
+		return nil
+	}
+	if box != Sent {
+		return errors.New("only a sent message has copies")
+	}
+	list, err := recipients.CheckSections(m.Inner.Sections, m.Inner.Body.Type, m.Inner.To)
+	if err != nil {
+		return err
+	}
+	if len(list.To) != len(m.Copies) {
+		return fmt.Errorf("%d copies for a message to %d", len(m.Copies), len(list.To))
+	}
+	named := make(map[string]bool, len(list.To))
+	for _, fp := range list.To {
+		named[fp] = true
+	}
+	for i, c := range m.Copies {
+		if !identity.ValidFingerprint(c.Fingerprint) || !named[c.Fingerprint] {
+			return fmt.Errorf("copy %d is not for a recipient the message names", i+1)
+		}
+		delete(named, c.Fingerprint)
+		if c.Name != "" && identity.ValidName(c.Name) != nil {
+			return fmt.Errorf("copy %d's name is not a name", i+1)
+		}
+		if c.Path != "" && CheckAddress(strings.Split(c.Path, "!"), nil, relayapi.MaxHops) != nil {
+			return fmt.Errorf("copy %d's path is not an address", i+1)
+		}
+		if c.RelayID < 0 {
+			return fmt.Errorf("copy %d's relay id %d is negative", i+1, c.RelayID)
+		}
+		if c.Dropped && c.RelayID != 0 {
+			return fmt.Errorf("copy %d is given up and placed both", i+1)
+		}
+		if c.RefusedCode != "" && wire.ValidName(c.RefusedCode) != nil {
+			return fmt.Errorf("copy %d's refusal code is not a name", i+1)
+		}
+		if len(c.Refused) > relayapi.MaxSaid || message.ValidOneLine("refused", c.Refused) != nil {
+			return fmt.Errorf("copy %d's refusal is not one line of at most %d bytes", i+1, relayapi.MaxSaid)
+		}
+	}
+	return nil
 }
 
 // warnedOnce is the paths already warned about in this process — a spool

@@ -114,53 +114,103 @@ func writeCopies(s *store.Store, r *store.Relay, channel string, copies []sealed
 // relay's code and sentence, so that the outbox says why the copy waits and
 // --resume tries it again; a refusal is any answer the relay gave, a fault
 // of its own among them, which its sentence says. Anything else, a relay
-// that could not be reached, keeps the record as it was. The sent record of
-// a message to
-// several is its sending command's to write, and is not touched here.
+// that could not be reached, keeps the record as it was. Either way the
+// message's sent record says so, when there is one (ruling 74, point 4).
 func finishCopy(s *store.Store, id *identity.Identity, r *store.Relay, p *pending) (sentJSON, error) {
-	raw, err := regular.ReadFile(envPath(s, p.name()))
-	if err != nil {
-		return sentJSON{}, err
-	}
-	// The file is this program's own, written beside the record; it is
-	// read strictly all the same, and must be the copy the record names.
-	var env envelope.Envelope
-	if err := wire.Decode(raw, &env); err != nil {
-		return sentJSON{}, fmt.Errorf("the sealed copy in the outbox cannot be read: %v", err)
-	}
-	if env.To != p.To {
-		return sentJSON{}, errors.New("the sealed copy in the outbox is not addressed to the recipient its record names")
-	}
 	c, err := dial(s, id, r)
 	if err != nil {
 		return sentJSON{}, err
 	}
-	var path []string
-	if p.Path != "" {
-		path = strings.Split(p.Path, "!")
-	}
-	mode := sendMode{channel: p.Channel, path: path, recipients: p.RecipientCount}
-	relayID, err := postOrForward(c, &env, mode)
+	relayID, err := postCopy(c, s, p)
 	if err != nil {
-		var he *client.HTTPError
-		if errors.As(err, &he) {
-			p.RefusedCode = he.Code
-			if wire.ValidName(p.RefusedCode) != nil {
-				p.RefusedCode = ""
-			}
-			p.Refused = keptSentence(he)
-			if serr := p.save(s); serr != nil {
-				fmt.Fprintf(os.Stderr, "warning: the refusal could not be kept with the copy: %v\n", serr)
-			}
-		}
+		refuseCopy(s, p, err)
 		return sentJSON{}, transportErr(err)
 	}
-	p.remove(s)
+	landCopy(s, p, relayID)
 	return sentJSON{
 		ID: p.MessageID, Thread: p.Body.Thread, To: p.To, ToName: p.ToName,
 		RelayID: relayID, Bytes: int(p.Bytes), InReplyTo: p.Body.InReplyTo,
 		Kind: kindEnvelope, Channel: p.Channel, Path: p.Path,
 	}, nil
+}
+
+// postCopy posts one sealed copy as its record says: by its path or into
+// its recipient's mailbox, saying how many the message went to on a
+// forward. The file is this program's own, written beside the record; it is
+// read strictly all the same, and must be the copy the record names.
+func postCopy(c *client.Client, s *store.Store, p *pending) (int64, error) {
+	raw, err := regular.ReadFile(envPath(s, p.name()))
+	if err != nil {
+		return 0, err
+	}
+	var env envelope.Envelope
+	if err := wire.Decode(raw, &env); err != nil {
+		return 0, fmt.Errorf("the sealed copy in the outbox cannot be read: %v", err)
+	}
+	if env.To != p.To {
+		return 0, errors.New("the sealed copy in the outbox is not addressed to the recipient its record names")
+	}
+	var path []string
+	if p.Path != "" {
+		path = strings.Split(p.Path, "!")
+	}
+	return postOrForward(c, &env, sendMode{channel: p.Channel, path: path, recipients: p.RecipientCount})
+}
+
+// landCopy is a copy the relay has: its outbox record and file go, and the
+// sent record says where it is.
+func landCopy(s *store.Store, p *pending, relayID int64) {
+	p.remove(s)
+	updateSentCopy(s, p.MessageID, p.To, func(c *store.SentCopy) {
+		c.RelayID, c.RefusedCode, c.Refused, c.Dropped = relayID, "", "", false
+	})
+}
+
+// refuseCopy is a copy the relay refused: the outbox record keeps the
+// relay's code and words, and so does the sent record. An error that is no
+// answer from a relay changes neither.
+func refuseCopy(s *store.Store, p *pending, err error) {
+	var he *client.HTTPError
+	if !errors.As(err, &he) {
+		return
+	}
+	p.RefusedCode = he.Code
+	if wire.ValidName(p.RefusedCode) != nil {
+		p.RefusedCode = ""
+	}
+	p.Refused = keptSentence(he)
+	if serr := p.save(s); serr != nil {
+		fmt.Fprintf(os.Stderr, "warning: the refusal could not be kept with the copy: %v\n", serr)
+	}
+	updateSentCopy(s, p.MessageID, p.To, func(c *store.SentCopy) {
+		c.RefusedCode, c.Refused = p.RefusedCode, p.Refused
+	})
+}
+
+// updateSentCopy changes one copy in a message's sent record. A message with
+// no sent record is one whose sender stopped between writing its copies and
+// writing the record, and its copies are finished all the same: nothing is
+// said of the record that is not there. One that will not read, or has no
+// copy for this recipient, is said once, and the copy is finished anyway.
+func updateSentCopy(s *store.Store, messageID, to string, change func(*store.SentCopy)) {
+	m, err := s.Holding(store.Sent, messageID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: the sent record of %s could not be read to update: %v\n", messageID[:12], err)
+		return
+	}
+	if m == nil {
+		return
+	}
+	for i := range m.Copies {
+		if m.Copies[i].Fingerprint == to {
+			change(&m.Copies[i])
+			if err := s.Save(store.Sent, m); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: the sent record of %s could not be updated: %v\n", messageID[:12], err)
+			}
+			return
+		}
+	}
+	fmt.Fprintf(os.Stderr, "warning: the sent record of %s has no copy for %s to update\n", messageID[:12], to[:identity.ShortIDLen])
 }
 
 // keptSentence is a refusal's sentence as the outbox keeps it, for
@@ -310,9 +360,15 @@ func outboxDrop(args []string) error {
 	if err != nil {
 		return err
 	}
+	// self is the owner's own copy of a message they sent to several with
+	// themselves among the recipients, as --to took it.
+	self := ""
+	if me, err := s.Self(); err == nil {
+		self = me.Fingerprint()
+	}
 	var hits []*pending
 	for _, p := range waiting {
-		if strings.HasPrefix(p.MessageID, idArg) && (peer == "" || peerNames(p, peer)) {
+		if strings.HasPrefix(p.MessageID, idArg) && (peer == "" || peerNames(p, peer, self)) {
 			hits = append(hits, p)
 		}
 	}
@@ -336,6 +392,13 @@ func outboxDrop(args []string) error {
 	}
 	p := hits[0]
 	p.remove(s)
+	// A copy of a message to several is given up in its sent record too,
+	// so that auu read does not go on saying it waits.
+	if p.kind == kindEnvelope {
+		// A copy another process placed while this one dropped it is
+		// placed, and stays so.
+		updateSentCopy(s, p.MessageID, p.To, dropCopy)
+	}
 	if *asJSON {
 		return printJSON(outboxEntry(p))
 	}
@@ -346,11 +409,19 @@ func outboxDrop(args []string) error {
 	return nil
 }
 
+// dropCopy gives a copy up in its sent record, unless another process
+// placed it meanwhile, which stays placed: a copy is never both.
+func dropCopy(c *store.SentCopy) {
+	if c.RelayID == 0 {
+		c.Dropped = true
+	}
+}
+
 // peerNames says whether the peer argument names a record's recipient: as
-// the name this machine gave them when the copy was written, or as a
-// fingerprint prefix of eight or more.
-func peerNames(p *pending, peer string) bool {
-	if peer == p.ToName {
+// the name this machine gave them when the copy was written, as a
+// fingerprint prefix of eight or more, or as self for the owner's own copy.
+func peerNames(p *pending, peer, self string) bool {
+	if peer == p.ToName || (peer == "self" && self != "" && p.To == self) {
 		return true
 	}
 	lower := strings.ToLower(peer)

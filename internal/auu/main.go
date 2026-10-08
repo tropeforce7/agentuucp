@@ -93,6 +93,7 @@ Usage:
   auu channel pull                    # take the directory a relay holds, from another machine
 
   auu send --to NAME|self [--subject S] [--channel NAME] [--attach FILE]... [TEXT | --body-file F | - | --edit]
+  auu send --to bob --to carol TEXT   # a message to several; --to bob,carol is the same
   auu send --to 'bar!bob' TEXT        # somebody on a relay yours peers with; --via bar is the same
   auu reply MESSAGE-ID|THREAD-ID [--channel NAME] [--attach FILE]... [TEXT | --body-file F | - | --edit]
   auu send --resume                   # finish what the outbox holds
@@ -228,7 +229,16 @@ func run(args []string) error {
 		// would only see that a file could not be read.
 		return &exitError{code: exitDamaged, err: err}
 	}
-	return adviseCert(err)
+	// Advice takes the place of a refusal's words; for a send to several
+	// whose copies wait, the sentence that says so and names --resume
+	// stays beside it.
+	advised := adviseCert(err)
+	var waiting copiesWaiting
+	var e *exitError
+	if advised != err && errors.As(err, &waiting) && errors.As(advised, &e) {
+		return &exitError{code: e.code, err: fmt.Errorf("%v\n%s", e.err, waiting.note)}
+	}
+	return advised
 }
 
 // relayAt is the relay in this home at base, the URL a client was given,

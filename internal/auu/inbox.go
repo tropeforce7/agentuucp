@@ -541,6 +541,50 @@ type messageJSON struct {
 	// verify, and how many are from people it does not hold. On a knock
 	// that carries any.
 	Vouches *knockVouchesJSON `json:"vouches,omitempty"`
+	// Copies is a sent message to several: each recipient, and whether the
+	// relay has their copy, as the sent record says. Absent for any other.
+	Copies []copyJSON `json:"copies,omitempty"`
+}
+
+// copyJSON is one copy of a sent message to several in --json.
+type copyJSON struct {
+	Fingerprint string `json:"fingerprint"`
+	Name        string `json:"name,omitempty"`
+	Path        string `json:"path,omitempty"`
+	RelayID     int64  `json:"relay_id,omitempty"`
+	Code        string `json:"code,omitempty"`
+	Error       string `json:"error,omitempty"`
+	Dropped     bool   `json:"dropped,omitempty"`
+}
+
+// printCopies says, for a sent message to several, who has it and who does
+// not yet: each recipient by the name this machine gave them, the path the
+// copy went by, and the relay's words for one it refused, all escaped. A
+// record with no copies says nothing here.
+func printCopies(m *store.Stored) {
+	for i, c := range m.Copies {
+		head := "to:"
+		if i > 0 {
+			head = ""
+		}
+		label := identity.Printable(orNone(c.Name))
+		if c.Path != "" {
+			label += " by " + identity.Printable(c.Path)
+		}
+		state := "sent"
+		switch {
+		case c.Dropped:
+			state = "given up with auu outbox drop"
+			if c.Refused != "" {
+				state += "; refused: " + identity.PrintableText(c.Refused)
+			}
+		case c.Refused != "":
+			state = "refused: " + identity.PrintableText(c.Refused)
+		case c.RelayID == 0:
+			state = "waiting in the outbox"
+		}
+		fmt.Printf("%-8s %s <%s>: %s\n", head, label, c.Fingerprint[:16], state)
+	}
 }
 
 func toJSON(s *store.Store, box store.Box, m *store.Stored, includeText bool) messageJSON {
@@ -563,6 +607,12 @@ func toJSON(s *store.Store, box store.Box, m *store.Stored, includeText bool) me
 
 		OnRelay:        m.OnRelay,
 		PayloadOnRelay: m.PayloadOnRelay,
+	}
+	for _, c := range m.Copies {
+		out.Copies = append(out.Copies, copyJSON{
+			Fingerprint: c.Fingerprint, Name: c.Name, Path: c.Path, RelayID: c.RelayID,
+			Code: c.RefusedCode, Error: c.Refused, Dropped: c.Dropped,
+		})
 	}
 	if m.Inner.Body.Type == message.TypeVouch && s != nil {
 		out.Vouch = vouchToJSON(judgeVouch(s, m, time.Now()))
@@ -1000,6 +1050,7 @@ func printMessage(s *store.Store, box store.Box, m *store.Stored) {
 	// rule at Validate has refused what would need one: a record from
 	// before the rule, or written by hand, is still in the spool.
 	fmt.Printf("from:    %s <%s>\n", orNone(identity.Printable(m.SenderName)), m.Inner.From[:16])
+	printCopies(m)
 	fmt.Printf("type:    %s\n", m.Inner.Body.Type)
 	// A knock carries the sender's own name, which is a claim and not a
 	// label: said as theirs, escaped as every word from outside is, and
