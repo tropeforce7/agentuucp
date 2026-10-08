@@ -58,6 +58,15 @@ type Limits struct {
 	// per-identity limit. Zero is unlimited.
 	KnocksPerHour int64
 
+	// MaxRecipients is the most recipients a message to several may
+	// name, held on the requests that carry a count: a stream's open and a
+	// user's forward (D47, D54). A plain post carries none, so the relay
+	// cannot hold it there; the health answer gives the number for a
+	// client to hold itself to. Zero is unlimited, which is the protocol's
+	// own ceiling, relayapi.MaxRecipients; the number in force is always
+	// within it.
+	MaxRecipients int64
+
 	// MaxInflight caps requests being handled at once.
 	MaxInflight int64
 	// MaxWaiting caps listings held open at once across the relay. Over
@@ -94,6 +103,7 @@ func DefaultLimits() Limits {
 		KnockMaxBytes:    20480,
 		MaxKnocksWaiting: 10,
 		KnocksPerHour:    10,
+		MaxRecipients:    16,
 		MaxInflight:      256,
 		MaxWaiting:       64,
 	}

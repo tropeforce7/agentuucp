@@ -150,14 +150,14 @@ func TestPostAndOpenStreamCarryTheChannel(t *testing.T) {
 	if _, body := rec.last(); strings.Contains(string(body), `"ch"`) {
 		t.Fatalf("a post for default names a channel: %s", body)
 	}
-	if _, err := c.OpenStream(ctx, to, "bug reports", 5000); err != nil {
+	if _, err := c.OpenStream(ctx, to, "bug reports", 5000, 0); err != nil {
 		t.Fatal(err)
 	}
 	if req, body := rec.last(); req != "POST /v1/mailbox/"+to+"/streams" || !strings.Contains(string(body), `"channel":"bug reports"`) ||
 		!strings.Contains(string(body), `"size":5000`) {
 		t.Fatalf("a stream open for a channel: %s %s", req, body)
 	}
-	if _, err := c.OpenStream(ctx, to, "", 5000); err != nil {
+	if _, err := c.OpenStream(ctx, to, "", 5000, 0); err != nil {
 		t.Fatal(err)
 	}
 	if _, body := rec.last(); strings.Contains(string(body), `"channel"`) {

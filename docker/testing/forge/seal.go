@@ -110,7 +110,7 @@ func cmdSeal(args []string) error {
 		if err := stream.Seal(&blob, id, recipient, m, sources); err != nil {
 			return err
 		}
-		opened, err := c.OpenStream(ctx, recipient.Fingerprint(), "", int64(blob.Len()))
+		opened, err := c.OpenStream(ctx, recipient.Fingerprint(), "", int64(blob.Len()), 0)
 		if err != nil {
 			return err
 		}

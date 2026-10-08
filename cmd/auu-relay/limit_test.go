@@ -112,9 +112,9 @@ func TestLimitRelaySettings(t *testing.T) {
 		})
 	}
 
-	// The three with a ceiling: the two counts at 1000, and the knock cap
-	// at max_bytes, which is the default 16 MiB here and named in the
-	// refusal beside the knock cap.
+	// The four with a ceiling: the two counts at 1000, the recipients at
+	// the protocol's 32, and the knock cap at max_bytes, which is the
+	// default 16 MiB here and named in the refusal beside the knock cap.
 	for _, c := range []struct {
 		key, flag string
 		ceiling   int64
@@ -122,6 +122,7 @@ func TestLimitRelaySettings(t *testing.T) {
 	}{
 		{"limits.max_open_uploads", "--max-open-uploads", maxOpenUploadsCeiling, "must be at most 1000"},
 		{"limits.max_knocks_waiting", "--max-knocks-waiting", maxKnocksWaitingCeiling, "must be at most 1000"},
+		{"limits.max_recipients", "--max-recipients", relayapi.MaxRecipients, "must be at most 32, the protocol's ceiling"},
 		{"limits.knock_max_bytes", "--knock-max-bytes", relayapi.DefaultMaxBytes, "must be at most max_bytes (" + strconv.FormatInt(relayapi.DefaultMaxBytes, 10) + ")"},
 	} {
 		t.Run(c.key, func(t *testing.T) {

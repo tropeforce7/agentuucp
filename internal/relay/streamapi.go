@@ -40,6 +40,12 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 	if !s.decodeRequest(w, body, &req, "stream request") {
 		return
 	}
+	// A copy of a message to several is held to max_recipients here,
+	// before anything is looked up, stored or charged: the count is the
+	// caller's own word about its own request and tells it nothing.
+	if !s.holdRecipients(w, req.SectionList(), "stream request") {
+		return
+	}
 	if req.Size <= 0 {
 		s.fail(w, http.StatusBadRequest, "size must be positive")
 		return

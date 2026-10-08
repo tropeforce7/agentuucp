@@ -66,7 +66,12 @@ type Client struct {
 	// it, zero until one has been read. Atomic, since a health answer is
 	// checked both under mu (a listing's) and outside it.
 	wireLevel atomic.Int64
-	mu        sync.Mutex
+	// maxRecipients is the most recipients the relay takes on a message
+	// to several, from its health answer's max-recipients section, or the
+	// protocol's ceiling when the answer carries none; zero until a health
+	// answer has been read. Atomic for the reason wireLevel is.
+	maxRecipients atomic.Int64
+	mu            sync.Mutex
 	// transport is the one carrying the client certificate, kept so a
 	// renewal can drop the connections using the old one.
 	transport *http.Transport
@@ -328,9 +333,23 @@ type HTTPError struct {
 // code and never the sentence; the sentence is the message a person reads.
 var ErrRelayNeedsNewer = errors.New("the relay needs a newer auu for this request")
 
-// Is makes errors.Is(err, ErrRelayNeedsNewer) true of a needs-newer refusal.
+// ErrTooManyRecipients is what errors.Is finds on a 413 whose code is
+// relayapi.CodeTooManyRecipients: the request carried a copy of a message
+// to more recipients than the relay's max_recipients. The sentence names
+// both numbers and is what a person reads.
+var ErrTooManyRecipients = errors.New("the message is to more recipients than the relay takes")
+
+// Is makes errors.Is true of a needs-newer refusal for ErrRelayNeedsNewer,
+// and of a too-many-recipients one for ErrTooManyRecipients, each by its
+// status and code and never its words.
 func (e *HTTPError) Is(target error) bool {
-	return target == ErrRelayNeedsNewer && e.Status == http.StatusBadRequest && e.Code == relayapi.CodeNeedsNewer
+	switch target {
+	case ErrRelayNeedsNewer:
+		return e.Status == http.StatusBadRequest && e.Code == relayapi.CodeNeedsNewer
+	case ErrTooManyRecipients:
+		return e.Status == http.StatusRequestEntityTooLarge && e.Code == relayapi.CodeTooManyRecipients
+	}
+	return false
 }
 
 // httpError is the one place an HTTPError is made from a relay's answer.
@@ -702,6 +721,23 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 // (D40), zero before one has been read. A feature that depends on what a
 // relay can do reads it; nothing in this release does.
 func (c *Client) WireLevel() int { return int(c.wireLevel.Load()) }
+
+// RecipientCap is the most recipients the relay takes on a message to
+// several: the number its health answer's max-recipients section gives, or
+// relayapi.MaxRecipients from a relay whose answer carries none, which
+// holds no setting of its own. The health answer is asked only when no
+// health answer has been read yet; every later one this Client reads, for
+// a listing or anything else, replaces the number with what the relay
+// says then.
+func (c *Client) RecipientCap(ctx context.Context) (int, error) {
+	if n := c.maxRecipients.Load(); n > 0 {
+		return int(n), nil
+	}
+	if _, err := c.HealthInfo(ctx); err != nil {
+		return 0, fmt.Errorf("asking the relay's max_recipients: %w", err)
+	}
+	return int(c.maxRecipients.Load()), nil
+}
 
 // Health checks that the relay is reachable.
 func (c *Client) Health(ctx context.Context) error {

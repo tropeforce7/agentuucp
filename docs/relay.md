@@ -75,6 +75,7 @@ Later ones win. A flag you do not type never overrides the file.
 | `--knock-max-bytes N` | `limits.knock_max_bytes` | 20480, at most `max_bytes`; 0 is `max_bytes` |
 | `--max-knocks-waiting N` | `limits.max_knocks_waiting` | 10, at most 1000 |
 | `--knocks-per-hour N` | `limits.knocks_per_hour` | 10 |
+| `--max-recipients N` | `limits.max_recipients` | 16, at most 32; 0 is 32 |
 | `--access-log full\|minimal` | `access_log` | `full` |
 | `--print-config` | | print the merged settings and exit |
 | `--version` | | print `auu-relay vX (schema N)` and exit; needs no settings |
@@ -345,6 +346,7 @@ switch the lot off.
 | `knock_max_bytes` | the largest knock envelope, on the knock route's own cap, so a stranger's one message is read under a bound of its own; 0 is `max_bytes`, since a knock is a post, and a value over `max_bytes` is refused at startup naming both; the default takes a knock at its longest with four vouches and not five | 20480 |
 | `max_knocks_waiting` | knockers one mailbox holds a knock from, counted as rows the relay has whatever the owner has read. One knocker holds one row however often they knock: a second knock from a key replaces the first, so this counts knockers and one identity cannot fill it. A knock from somebody the mailbox holds none from is refused `429` at the cap, with no `Retry-After`, since the relay cannot say when the owner will fetch or remove them, and the sender's knock is not charged for it; 0 is unlimited; at most 1000, for the reason `max_open_uploads` has a ceiling | 10 |
 | `knocks_per_hour` | knocks one sender may post in an hour, across every mailbox, beside the post budgets every knock is charged as a post; 0 is unlimited | 10 |
+| `max_recipients` | the most recipients one message to several may name. The relay can hold it only where a request has a body to carry the count, opening a stream and a forward from a user: there a request that says it is one copy of a message to more is refused `413`. A plain post's body is the envelope alone and carries no count, so there the relay cannot see the number, and the health answer gives it for a client to hold itself to. A client that leaves the count out is, as far as the relay can tell, sending to one; the setting binds an honest client, and the post budget binds every client. 0 is unlimited, which is the protocol's own ceiling of 32, and a value over 32 is refused at startup; the health answer and `auu-admin status` give the number in force. The default sends to the most in about half of `posts_per_minute` | 16 |
 
 The three queue limits count a stream from the moment it is opened. What
 an unfinished upload has reserved is charged against the mailbox's messages
@@ -446,11 +448,15 @@ order.
 the relay is under attack. Its answer says the relay's `max_bytes`,
 `knock_max_bytes`, registration mode and `wire_level`: a whole number that
 rises when a release gives the relay something a client may depend on. It
-is 1 from v0.15.0. `auu` refuses a relay's health answer without it.
+is 1 from v0.15.0. `auu` refuses a relay's health answer without it. The
+most recipients a message to several may name, `max_recipients` as it is in
+force, comes in a section of the answer, `max-recipients`, rather than a
+field, so that an `auu` from before it reads the answer still.
 
 Every answer the relay sends may carry a `sections` key at its top: the one
 place a newer relay may say something an older `auu` does not know. This
-release sends none. `auu` reads every answer strictly, ignores a section it
+release sends one, `max-recipients`, not critical, on the health answer and
+on the administrator's status answer. `auu` reads every answer strictly, ignores a section it
 does not know, and refuses an answer with a section marked critical,
 naming it and saying to update `auu`. A refusal whose words it cannot
 read is said with its status and the request. All of a body's sections
@@ -459,7 +465,11 @@ together are held to 16 KiB, and a listing page counts them within
 
 Every request body may carry `sections` the same way, and so may what one
 relay sends another: a hand-over on `POST /v1/forward` and a report on
-`POST /v1/forward/failed`. This release sends none. The relay reads every
+`POST /v1/forward/failed`. The relay knows one, `recipient-count`, the
+number of recipients a copy of a message to several went to, on opening a
+stream and on a user's forward, and holds it to `max_recipients`; on a
+hand-over from a neighbour it does not read it, since the first relay held
+the sender already. The relay reads every
 request body strictly, so a field the request does not have is refused
 `400` by name, and it ignores a section it does not know. It refuses a
 section marked critical with `400`, code `needs-newer` and the sentence
@@ -499,6 +509,7 @@ status and the request. The codes this release writes:
 | `cert-mismatch` | 401 | the certificate names another identity |
 | `cert-refused` | 401 | the certificate could not be read as this relay's, with the reason |
 | `no-administrators` | 403 | the relay has no administrators |
+| `too-many-recipients` | 413 | a copy of a message to more recipients than `max_recipients`, naming both numbers |
 
 `at`, an RFC 3339 time, comes with the three refusals about one. Left
 out, it means none. The sentence names the same time for a person reading

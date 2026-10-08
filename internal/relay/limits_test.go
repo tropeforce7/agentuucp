@@ -806,6 +806,31 @@ func TestDefaultLimitsUnderAFlood(t *testing.T) {
 	t.Logf("100 posts at defaults: %d accepted, %d refused, Retry-After %v", accepted, refused, retries)
 }
 
+// TestASendToTheMostIsAboutHalfAMinutesPosts: the default max_recipients
+// is the most copies of one message a sender posts, one post each, and the
+// reason for the number (D53) is that a send to the most fits in one
+// minute's default posts_per_minute at about half of it, the rest left for
+// everything else the sender does in that minute: sixteen of thirty, which
+// leaves fourteen. A literal would restate the line; the relationship is
+// the decision, held as "fits, and within a tenth of the budget of half",
+// so changing either number asks whether the other was meant to go too.
+// The default is also within the protocol's ceiling, since the number a
+// relay holds always is.
+func TestASendToTheMostIsAboutHalfAMinutesPosts(t *testing.T) {
+	d := DefaultLimits()
+	if d.MaxRecipients >= d.PostsPerMinute {
+		t.Errorf("max_recipients is %d and posts_per_minute %d; a send to the most is to fit in a minute's posts "+
+			"with room left", d.MaxRecipients, d.PostsPerMinute)
+	}
+	if off := 2*d.MaxRecipients - d.PostsPerMinute; off < -d.PostsPerMinute/10 || off > d.PostsPerMinute/10 {
+		t.Errorf("max_recipients is %d of posts_per_minute %d; the relay guide says a send to the most "+
+			"is about half a minute's posts", d.MaxRecipients, d.PostsPerMinute)
+	}
+	if d.MaxRecipients < 1 || d.MaxRecipients > relayapi.MaxRecipients {
+		t.Errorf("max_recipients defaults to %d, outside 1 to the protocol's %d", d.MaxRecipients, relayapi.MaxRecipients)
+	}
+}
+
 // TestTheReportingRateIsATenthOfThePostingRate: the relationship the relay
 // guide explains, held to the numbers rather than left in prose.
 //

@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/wire"
 )
@@ -25,10 +26,19 @@ import (
 // a channel of the recipient's, and returns the upload to append to. An
 // empty channel means default and puts nothing on the wire; the relay
 // checks the name at open, as it checks an envelope's at post.
-func (c *Client) OpenStream(ctx context.Context, toFP, channel string, size int64) (*relayapi.OpenStreamResponse, error) {
+// recipientCount is how many recipients the message this stream is a copy
+// of went to; 0 or 1 is a stream to one.
+func (c *Client) OpenStream(ctx context.Context, toFP, channel string, size int64, recipientCount int) (*relayapi.OpenStreamResponse, error) {
+	// A copy of a message to several says how many it went to, for the
+	// relay to hold to its max_recipients; a stream to one says nothing,
+	// and its request is the bytes it always was.
+	count, err := recipients.CountSection(recipientCount)
+	if err != nil {
+		return nil, err
+	}
 	var out relayapi.OpenStreamResponse
-	err := c.do(ctx, "POST", "/v1/mailbox/"+toFP+"/streams",
-		relayapi.OpenStreamRequest{Size: size, Channel: channel}, &out, nil)
+	err = c.do(ctx, "POST", "/v1/mailbox/"+toFP+"/streams",
+		relayapi.OpenStreamRequest{Sections: relayapi.Sections{Sections: count}, Size: size, Channel: channel}, &out, nil)
 	if err != nil {
 		return nil, err
 	}

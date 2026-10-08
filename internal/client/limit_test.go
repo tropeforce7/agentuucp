@@ -138,7 +138,7 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 			func(c *Client) error { _, err := c.Listed(context.Background()); return err }},
 		{"/v1/mailbox/" + bob.Fingerprint() + "/streams", func(n int64) any { return relayapi.OpenStreamResponse{Upload: "u", ResumeThreshold: n} },
 			func(c *Client) error {
-				_, err := c.OpenStream(context.Background(), bob.Fingerprint(), "", 5000)
+				_, err := c.OpenStream(context.Background(), bob.Fingerprint(), "", 5000, 0)
 				return err
 			}},
 		{"/v1/mailbox/" + fp + "/channels", func(n int64) any {
@@ -168,7 +168,7 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.CertLifetimeSecs = n }), callStatus},
 		{"/v1/mailbox/" + bob.Fingerprint() + "/streams", func(n int64) any { return relayapi.OpenStreamResponse{Upload: "u", ResumeWindow: n} },
 			func(c *Client) error {
-				_, err := c.OpenStream(context.Background(), bob.Fingerprint(), "", 5000)
+				_, err := c.OpenStream(context.Background(), bob.Fingerprint(), "", 5000, 0)
 				return err
 			}},
 	}

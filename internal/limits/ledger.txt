@@ -119,6 +119,7 @@ cmd/auu-relay/config.go LimitsConfig int MaxInflight int64 = >= 0 shown by TestL
 cmd/auu-relay/config.go LimitsConfig int MaxKnocksWaiting int64 = 0 or [1, 1000] shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MaxMailboxes int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MaxOpenUploads int64 = 0 or [1, 1000] shown by TestLimitRelaySettings
+cmd/auu-relay/config.go LimitsConfig int MaxRecipients int64 = 0 or [1, 32] shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MaxWaiting int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int PostBytesPerHour int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int PostsPerMinute int64 = >= 0 shown by TestLimitRelaySettings
@@ -151,6 +152,7 @@ cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxInflight) = >= 0 shown
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxKnocksWaiting) = 0 or [1, 1000] shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxMailboxes) = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxOpenUploads) = 0 or [1, 1000] shown by TestLimitRelaySettings
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxRecipients) = 0 or [1, 32] shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxStreamBytes) = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxWaiting) = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.relayMaxBytes) = >= 0 shown by TestLimitRelaySettings
@@ -343,6 +345,8 @@ internal/pki/bundle.go Bundle int V int = [1, 1] shown by TestLimitBundleV
 internal/pki/pki.go splitLabels string h[start:i] = local: start and i walk len(h) from 0
 internal/recipients/recipients.go Check string fp[:identity.ShortIDLen] = local: ValidFingerprint checked in Check, earlier in the same iteration
 internal/recipients/recipients.go Check string self[:identity.ShortIDLen] = local: ValidFingerprint checked in Check, its first line
+internal/recipients/recipients.go Count int N int = [1, 32] shown by TestLimitRecipientNumbers
+internal/recipients/recipients.go Max int Max int = [1, 32] shown by TestLimitRecipientNumbers
 internal/relay/adminapi.go shortFP string v[:16] = local: ValidFingerprint checked in shortFP, the line before
 internal/relay/filestore.go (*Store).mailboxDir string fp[:2] = local: ValidFingerprint at authedWithCert shown by TestLimitFingerprintsOneShortOnTheWire
 internal/relay/filestore.go (*Store).removeMailboxFiles string fp[:2] = local: ValidFingerprint at authedWithCert shown by TestLimitFingerprintsOneShortOnTheWire

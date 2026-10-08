@@ -703,8 +703,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// The registration mode is what admission to this relay means, and
 	// so what a name listed on it rests on; a client says it wherever it
 	// asks a person to trust a listed name.
+	// The most recipients a message to several may name travels as a
+	// section, not a field: a client from before it ignores it, and one
+	// that knows it reads its absence as a relay that holds only the
+	// protocol's ceiling.
 	resp := relayapi.HealthResponse{OK: true, MaxBytes: s.cfg.MaxBytes, KnockMaxBytes: s.knockMax(),
 		Registration: s.cfg.Registration, WireLevel: relayapi.WireLevel}
+	resp.Sections.Sections = s.maxRecipientsSection()
 	if s.clientCerts() {
 		resp.MLDSA = clientca.ParameterNumber(s.cfg.ClientCerts.Issuer.Parameters())
 	}

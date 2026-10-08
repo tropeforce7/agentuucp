@@ -504,7 +504,16 @@ const (
 	CodeCertMismatch     = "cert-mismatch"
 	CodeCertRefused      = "cert-refused"
 	CodeNoAdministrators = "no-administrators"
+	// CodeTooManyRecipients is a request carrying a copy of a message to
+	// more recipients than this relay's max_recipients, refused 413 with
+	// MsgTooManyRecipients, a sentence that carries the count and the
+	// setting and so is written with its code at its one site.
+	CodeTooManyRecipients = "too-many-recipients"
 )
+
+// MsgTooManyRecipients is the sentence of CodeTooManyRecipients: the count
+// the request carried and the number this relay takes.
+const MsgTooManyRecipients = "this message is to %d recipients; this relay's max_recipients is %d"
 
 // The client-certificate refusals and the administrators' one, whose words
 // the relay writes and no client reads.

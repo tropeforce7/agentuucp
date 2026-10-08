@@ -114,7 +114,7 @@ func streamSectionsDamaged(t *testing.T, from, to *user, channel, subject string
 		damage(blob.Bytes())
 	}
 	ctx := context.Background()
-	opened, err := c.OpenStream(ctx, to.exportFingerprint(), channel, int64(blob.Len()))
+	opened, err := c.OpenStream(ctx, to.exportFingerprint(), channel, int64(blob.Len()), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

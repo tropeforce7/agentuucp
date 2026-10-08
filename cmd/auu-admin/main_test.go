@@ -24,10 +24,12 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/client"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/keyfile"
+	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/relay"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/token"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // fixture is a relay with one administrator, plus homes for whoever a test
@@ -170,10 +172,27 @@ func TestStatus(t *testing.T) {
 	}
 	// And the human form says the same things.
 	plain := f.boss.run("status")
-	for _, want := range []string{"registration:", "administrators:", "mailboxes:"} {
+	for _, want := range []string{"registration:", "administrators:", "mailboxes:", "max recipients: 32\n"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("status output is missing %q:\n%s", want, plain)
 		}
+	}
+}
+
+// The relay's max_recipients is said when the status answer carries its
+// section, and nothing is said from a relay from before the setting, whose
+// answer carries none.
+func TestTheStatusSaysMaxRecipientsWhenTheRelayDoes(t *testing.T) {
+	f := newFixture(t, relay.Config{Limits: relay.Limits{MaxRecipients: 7}})
+	if plain := f.boss.run("status"); !strings.Contains(plain, "max recipients: 7\n") {
+		t.Fatalf("status from a relay set to 7 does not say so:\n%s", plain)
+	}
+	if got := maxRecipientsLine(nil); got != "" {
+		t.Errorf("an answer with no section: %q; want nothing said", got)
+	}
+	section := []wire.Section{{Name: recipients.MaxName, Data: json.RawMessage(`{"max":12}`)}}
+	if got := maxRecipientsLine(section); got != "max recipients: 12\n" {
+		t.Errorf("an answer saying 12: %q", got)
 	}
 }
 

@@ -29,7 +29,8 @@ func TestLimitDefaults(t *testing.T) {
 		got.MaxWaiting != want.MaxWaiting ||
 		got.KnockMaxBytes != want.KnockMaxBytes ||
 		got.MaxKnocksWaiting != want.MaxKnocksWaiting ||
-		got.KnocksPerHour != want.KnocksPerHour {
+		got.KnocksPerHour != want.KnocksPerHour ||
+		got.MaxRecipients != want.MaxRecipients {
 		t.Fatalf("the command's defaults have drifted from the relay's:\n got %+v\nwant %+v", got, want)
 	}
 	if cfg.AccessLog != relay.AccessLogFull {

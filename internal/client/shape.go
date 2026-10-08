@@ -9,9 +9,11 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/clientca"
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/token"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // What a relay lists is checked for shape before it is used.
@@ -42,20 +44,21 @@ func (c *Client) malformed(answer, field, want string) error {
 }
 
 const (
-	wantMaxBytes    = "the relay's max_bytes (from 1 to 1073741824; a health answer without it is refused)"
-	wantWireLevel   = "the relay's wire level (1 or more; a health answer without it is refused)"
-	wantKnockMax    = "the relay's knock cap (from 1 to 1073741824; a health answer without it is refused)"
-	wantFingerprint = "a fingerprint (64 lowercase hex characters)"
-	wantSerial      = "a certificate serial"
-	wantTokenID     = "a token id (32 lowercase hex characters)"
-	wantSeconds     = "a number of seconds within a hundred years"
-	wantCount       = "a count (zero or more)"
-	wantID          = "a message id (one or more)"
-	wantMLDSA       = "an ML-DSA parameter set (44, 65 or 87, or 0 for none)"
-	wantKind        = "a message kind (envelope, stream or knock)"
-	wantChannelName = "a channel name"
-	wantTime        = "a time"
-	wantSpan        = "the lowest message id held, from 0 to last, and 0 only with last 0"
+	wantMaxBytes      = "the relay's max_bytes (from 1 to 1073741824; a health answer without it is refused)"
+	wantWireLevel     = "the relay's wire level (1 or more; a health answer without it is refused)"
+	wantMaxRecipients = "the relay's max_recipients (from 1 to 32, in a section of {\"max\": N} alone; an answer without the section holds no setting)"
+	wantKnockMax      = "the relay's knock cap (from 1 to 1073741824; a health answer without it is refused)"
+	wantFingerprint   = "a fingerprint (64 lowercase hex characters)"
+	wantSerial        = "a certificate serial"
+	wantTokenID       = "a token id (32 lowercase hex characters)"
+	wantSeconds       = "a number of seconds within a hundred years"
+	wantCount         = "a count (zero or more)"
+	wantID            = "a message id (one or more)"
+	wantMLDSA         = "an ML-DSA parameter set (44, 65 or 87, or 0 for none)"
+	wantKind          = "a message kind (envelope, stream or knock)"
+	wantChannelName   = "a channel name"
+	wantTime          = "a time"
+	wantSpan          = "the lowest message id held, from 0 to last, and 0 only with last 0"
 )
 
 // The enumerated fields of an answer, each held to the set the protocol
@@ -127,6 +130,9 @@ func (c *Client) checkStatus(st *relayapi.AdminStatusResponse) error {
 	if !validMLDSA(st.MLDSA) {
 		return c.malformed(answer, "mldsa", wantMLDSA)
 	}
+	if _, err := MaxRecipientsOf(st.Sections.Sections); err != nil {
+		return c.malformed(answer, "the max-recipients section", wantMaxRecipients)
+	}
 	l := st.Limits
 	return c.counts(answer,
 		count{"max_bytes", st.MaxBytes},
@@ -175,7 +181,29 @@ func (c *Client) checkHealth(h *relayapi.HealthResponse) error {
 		return c.malformed("the health answer", "wire_level", wantWireLevel)
 	}
 	c.wireLevel.Store(int64(h.WireLevel))
+	// The most recipients the relay takes travels in a section, read here
+	// once CheckBody has held the list to its shape and sorted it, since
+	// the sort keeps no known section for a caller; one this rule refuses
+	// is the answer's fault by name, never clamped.
+	n, err := MaxRecipientsOf(h.Sections.Sections)
+	if err != nil {
+		return c.malformed("the health answer", "the max-recipients section", wantMaxRecipients)
+	}
+	c.maxRecipients.Store(int64(n))
 	return nil
+}
+
+// MaxRecipientsOf is the number an answer's max-recipients section gives,
+// held to its rule, or relayapi.MaxRecipients when the answer carries
+// none: a relay without the section holds no setting of its own, and the
+// protocol's ceiling is what binds a sender there. It is the one reading
+// of the section, for the health answer and the administrator's status.
+func MaxRecipientsOf(sections []wire.Section) (int, error) {
+	data, ok := recipients.Find(sections, recipients.MaxName)
+	if !ok {
+		return relayapi.MaxRecipients, nil
+	}
+	return recipients.CheckMax(data)
 }
 
 // checkListed is a page of the card listing: entries always sent, empty

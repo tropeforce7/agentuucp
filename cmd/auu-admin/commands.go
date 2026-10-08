@@ -15,10 +15,12 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/client"
 	"github.com/tropeforce7/agentuucp/internal/clientca"
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/term"
 	"github.com/tropeforce7/agentuucp/internal/token"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 func printJSON(v any) error {
@@ -57,6 +59,7 @@ func cmdStatus(args []string) error {
 	fmt.Printf("blocks:         %d\n", st.Blocks)
 	fmt.Printf("access log:     %s\n", identity.PrintableText(st.AccessLog))
 	fmt.Printf("token max age:  %s\n", (time.Duration(st.TokenMaxAgeSecs) * time.Second).String())
+	fmt.Print(maxRecipientsLine(st.Sections.Sections))
 	fmt.Printf("client certs:   %s\n", st.ClientCerts)
 	if st.CAFingerprint != "" {
 		fmt.Printf("  live:         %d\n", st.LiveCerts)
@@ -70,6 +73,23 @@ func cmdStatus(args []string) error {
 		}
 	}
 	return nil
+}
+
+// maxRecipientsLine is the status report's line for the relay's
+// max_recipients, which travels in a section so that an auu-admin from
+// before it reads the answer still: the number in force when the answer
+// carries the section, and nothing at all from a relay from before the
+// setting. The section was held to its rule when the answer was read.
+func maxRecipientsLine(sections []wire.Section) string {
+	data, ok := recipients.Find(sections, recipients.MaxName)
+	if !ok {
+		return ""
+	}
+	n, err := recipients.CheckMax(data)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("max recipients: %d\n", n)
 }
 
 func cmdMailboxes(args []string) error {

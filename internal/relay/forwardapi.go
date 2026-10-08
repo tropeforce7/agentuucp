@@ -54,6 +54,15 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, body []by
 	if !s.decodeRequest(w, body, &req, "forward request") {
 		return
 	}
+	// A user's copy of a message to several is held to max_recipients
+	// here, where the request was read: after the forward's charge, as
+	// every refusal of a forward's body is, and before anything is
+	// stored. This relay is the first one only for a user; a courier's
+	// onward request is a relay's, whose first relay held its sender
+	// already, and a count on it is not read.
+	if !isCourier && !s.holdRecipients(w, req.SectionList(), "forward request") {
+		return
+	}
 	// A user writing via would be forging a return path, and a user with an
 	// empty path has a recipient on this relay and a mailbox route to post
 	// to. Both are the caller's own doing and are said plainly.

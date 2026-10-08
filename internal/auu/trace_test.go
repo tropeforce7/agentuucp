@@ -92,7 +92,7 @@ func TestAStreamWhoseManifestOverstatesItsPayloadIsKeptAndAcknowledged(t *testin
 	short := full[:stream.HeaderSize+n+stream.DefaultChunkSize+stream.TagSize]
 
 	ctx := context.Background()
-	opened, err := c.OpenStream(ctx, bobFP, "", int64(len(short)))
+	opened, err := c.OpenStream(ctx, bobFP, "", int64(len(short)), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func TestAStreamThatNeedsANewerAuuDoesNotStopTheFetch(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	opened, err := c.OpenStream(ctx, bobFP, "", int64(blob.Len()))
+	opened, err := c.OpenStream(ctx, bobFP, "", int64(blob.Len()), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

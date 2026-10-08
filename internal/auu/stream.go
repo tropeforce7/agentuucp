@@ -312,7 +312,7 @@ func uploadStream(c *client.Client, s *store.Store, p *pending) (int64, error) {
 	resumed := false
 	for failed := 0; ; {
 		if p.Upload == "" {
-			opened, err := c.OpenStream(ctx(), p.To, p.Channel, info.Size())
+			opened, err := c.OpenStream(ctx(), p.To, p.Channel, info.Size(), 0)
 			if err != nil {
 				return 0, err
 			}

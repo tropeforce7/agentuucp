@@ -137,7 +137,11 @@ func (s *Server) handleAdminStatus(w http.ResponseWriter, r *http.Request, body 
 		mldsaSet = clientca.ParameterNumber(s.cfg.ClientCerts.Issuer.Parameters())
 	}
 	l := s.cfg.Limits
+	// max_recipients goes in a section and not in LimitsView: a field
+	// LimitsView does not have would be refused by an auu-admin from
+	// before it, which reads the answer strictly.
 	s.writeJSON(w, http.StatusOK, relayapi.AdminStatusResponse{
+		Sections:         relayapi.Sections{Sections: s.maxRecipientsSection()},
 		Registration:     s.cfg.Registration,
 		PublicURL:        s.cfg.PublicURL,
 		Uptime:           now.Sub(s.started).Round(time.Second).String(),

@@ -16,6 +16,13 @@
 // The rule is one function, Check, and both ends run it on every path: the
 // sealer for each copy before anything is signed, the reader of an envelope
 // and of a manifest once the signature has verified, and the store at Load.
+// Two numbers travel beside it, each a section of its own name, since a
+// name says one thing for good: recipient-count on a request, how many a
+// copy's message went to, which the first relay holds to its
+// max_recipients; and max-recipients on the relay's health and status
+// answers, the number it holds, for a client to hold itself to on a plain
+// post, whose body has nowhere to carry a count (D54).
+//
 // It is standard library only, and from this tree it imports only the rules
 // it is built from: identity's for a fingerprint, message's for a type,
 // relayapi's ceiling and the wire's decode.
@@ -46,7 +53,28 @@ const Name = "recipients"
 // is asserted against the encoder by a subtest.
 const MaxBytes = 4096
 
-func init() { wire.Register(Name) }
+// CountName is the request's section: how many recipients the message
+// this request carries a copy of was written to, so that the first relay
+// can hold a sender to its max_recipients (D47, D54). It is a count and
+// never the list: the relay needs the number alone, and a list on a
+// forward would tell the first relay who on other relays was written to.
+const CountName = "recipient-count"
+
+// MaxName is the health answer's section, and the administrator's status
+// answer's: the most recipients this relay takes, the number in force, for
+// a client to hold a message to several to before it sends.
+const MaxName = "max-recipients"
+
+// MaxNumberBytes caps the data of either number's section before it is
+// decoded: {"max":32} is ten bytes, and the cap leaves room for a writer
+// that indents. A number a byte longer is no number this rule takes.
+const MaxNumberBytes = 64
+
+func init() {
+	wire.Register(Name)
+	wire.Register(CountName)
+	wire.Register(MaxName)
+}
 
 // List is the section's data.
 type List struct {
@@ -139,4 +167,77 @@ func CheckSections(sections []wire.Section, bodyType, self string) (List, error)
 		return Check(s.Data, self)
 	}
 	return List{}, nil
+}
+
+// Count is the request section's data.
+type Count struct {
+	N int `json:"n"`
+}
+
+// Max is the answer section's data.
+type Max struct {
+	Max int `json:"max"`
+}
+
+// checkNumber is the rule both numbers share: the size before the strict
+// decode, then 1 to relayapi.MaxRecipients.
+func checkNumber(name string, data []byte, v any, n func() int) (int, error) {
+	if len(data) > MaxNumberBytes {
+		return 0, fmt.Errorf("the %s section is %d bytes, over the %d it may be", name, len(data), MaxNumberBytes)
+	}
+	if err := wire.Decode(data, v); err != nil {
+		return 0, fmt.Errorf("the %s section: %v", name, err)
+	}
+	if got := n(); got < 1 || got > relayapi.MaxRecipients {
+		return 0, fmt.Errorf("the %s section says %d, which is not 1 to %d", name, got, relayapi.MaxRecipients)
+	}
+	return n(), nil
+}
+
+// CheckCount is the rule for a request's count.
+func CheckCount(data []byte) (int, error) {
+	var c Count
+	return checkNumber(CountName, data, &c, func() int { return c.N })
+}
+
+// CheckMax is the rule for an answer's number.
+func CheckMax(data []byte) (int, error) {
+	var m Max
+	return checkNumber(MaxName, data, &m, func() int { return m.Max })
+}
+
+// CountSection is the request's section for a message to n recipients, or
+// nothing for a message to one, whose request is the bytes it always was;
+// 0 is a caller with no count to give, and is a message to one too.
+func CountSection(n int) ([]wire.Section, error) {
+	if n == 0 || n == 1 {
+		return nil, nil
+	}
+	return numberSection(CountName, Count{N: n}, n)
+}
+
+// MaxSection is the answer's section for a relay that takes n.
+func MaxSection(n int) ([]wire.Section, error) {
+	return numberSection(MaxName, Max{Max: n}, n)
+}
+
+func numberSection(name string, v any, n int) ([]wire.Section, error) {
+	if n < 1 || n > relayapi.MaxRecipients {
+		return nil, fmt.Errorf("recipients: %d is not 1 to %d", n, relayapi.MaxRecipients)
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return []wire.Section{{Name: name, Critical: false, Data: data}}, nil
+}
+
+// Find is the data of the named section in a list, and whether there is one.
+func Find(sections []wire.Section, name string) ([]byte, bool) {
+	for _, s := range sections {
+		if s.Name == name {
+			return s.Data, true
+		}
+	}
+	return nil, false
 }

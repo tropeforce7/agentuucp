@@ -277,6 +277,11 @@ type LimitsConfig struct {
 	// KnocksPerHour is the knocks one sender may post in an hour across
 	// every mailbox.
 	KnocksPerHour int64 `json:"knocks_per_hour"`
+	// MaxRecipients is the most recipients a message to several may name,
+	// held where a request carries a count; zero is unlimited, which is
+	// the protocol's ceiling, and over it is refused, since no client may
+	// send more.
+	MaxRecipients int64 `json:"max_recipients"`
 }
 
 // maxOpenUploadsCeiling is the most max_open_uploads may be set to.
@@ -432,6 +437,7 @@ func Defaults() Config {
 			KnockMaxBytes:            d.KnockMaxBytes,
 			MaxKnocksWaiting:         d.MaxKnocksWaiting,
 			KnocksPerHour:            d.KnocksPerHour,
+			MaxRecipients:            d.MaxRecipients,
 		},
 		AccessLog: relay.AccessLogFull,
 	}
@@ -683,6 +689,8 @@ func (c *Config) Merge(fs *flag.FlagSet, f *flagValues) {
 			c.Limits.MaxKnocksWaiting = f.maxKnocksWaiting
 		case "knocks-per-hour":
 			c.Limits.KnocksPerHour = f.knocksPerHour
+		case "max-recipients":
+			c.Limits.MaxRecipients = f.maxRecipients
 		case "courier-home":
 			c.Courier.Home = f.courierHome
 		case "courier-file":
@@ -972,6 +980,7 @@ func (l LimitsConfig) validate() error {
 		{"knock_max_bytes", l.KnockMaxBytes},
 		{"max_knocks_waiting", l.MaxKnocksWaiting},
 		{"knocks_per_hour", l.KnocksPerHour},
+		{"max_recipients", l.MaxRecipients},
 	} {
 		if f.value < 0 {
 			return fmt.Errorf("%s must not be negative, got %d (use 0 for unlimited)", f.name, f.value)
@@ -984,6 +993,13 @@ func (l LimitsConfig) validate() error {
 	if l.MaxKnocksWaiting > maxKnocksWaitingCeiling {
 		return fmt.Errorf("max_knocks_waiting must be at most %d, got %d (use 0 for unlimited)",
 			maxKnocksWaitingCeiling, l.MaxKnocksWaiting)
+	}
+	// The protocol's ceiling and not a choice of this relay's: no client
+	// sends a message to more, so a setting over it would promise what
+	// nobody can ask for.
+	if l.MaxRecipients > relayapi.MaxRecipients {
+		return fmt.Errorf("max_recipients must be at most %d, the protocol's ceiling, got %d (use 0 for unlimited)",
+			relayapi.MaxRecipients, l.MaxRecipients)
 	}
 	// A held listing keeps an in-flight slot for as long as it is held, so
 	// holds allowed up to the in-flight cap could take every slot and the
@@ -1014,6 +1030,7 @@ func (l LimitsConfig) Relay() relay.Limits {
 		KnockMaxBytes:            l.KnockMaxBytes,
 		MaxKnocksWaiting:         l.MaxKnocksWaiting,
 		KnocksPerHour:            l.KnocksPerHour,
+		MaxRecipients:            l.MaxRecipients,
 	}
 }
 

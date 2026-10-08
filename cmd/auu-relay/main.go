@@ -70,6 +70,7 @@ type flagValues struct {
 	maxOpenUploads       int64
 	knockMaxBytes        int64
 	maxKnocksWaiting     int64
+	maxRecipients        int64
 	knocksPerHour        int64
 	maxInflight          int64
 	maxWaiting           int64
@@ -187,6 +188,8 @@ func registerFlags(fs *flag.FlagSet) *flagValues {
 		"most knockers one mailbox holds a knock from, at most 1000 (0: unlimited)")
 	fs.Int64Var(&f.knocksPerHour, "knocks-per-hour", d.Limits.KnocksPerHour,
 		"knocks an hour, per identity, across every mailbox (0: unlimited)")
+	fs.Int64Var(&f.maxRecipients, "max-recipients", d.Limits.MaxRecipients,
+		"most recipients a message to several may name, at most 32 (0: unlimited, which is 32)")
 	fs.StringVar(&f.accessLog, "access-log", d.AccessLog,
 		"full, or minimal to log the route instead of the path and omit the caller")
 	return f
@@ -593,6 +596,7 @@ func logLimits(cfg Config, log *slog.Logger) {
 		"knock_max_bytes", l.KnockMaxBytes,
 		"max_knocks_waiting", l.MaxKnocksWaiting,
 		"knocks_per_hour", l.KnocksPerHour,
+		"max_recipients", l.MaxRecipients,
 		"access_log", cfg.AccessLog)
 	if cfg.AccessLog == relay.AccessLogFull {
 		log.Info("the access log records the verified caller and the request path, " +
