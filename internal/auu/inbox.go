@@ -560,9 +560,12 @@ type messageJSON struct {
 	// this message's own unless it was given one of its own. Set where a
 	// whole message is shown — read, wait and quarantine show — and not in
 	// a listing, where every line is its own message's subject.
-	ThreadSubject string           `json:"thread_subject,omitempty"`
-	Text          string           `json:"text,omitempty"`
-	Attachments   []attachmentJSON `json:"attachments"`
+	ThreadSubject string `json:"thread_subject,omitempty"`
+	// Room is this machine's name for the people a message to several
+	// went to, where a saved room holds exactly them (D60); empty otherwise.
+	Room        string           `json:"room,omitempty"`
+	Text        string           `json:"text,omitempty"`
+	Attachments []attachmentJSON `json:"attachments"`
 	// Channel is the channel the message is filed under, default when the
 	// sender named none.
 	Channel string `json:"channel"`
@@ -1161,7 +1164,68 @@ func threadSubject(s *store.Store, m *store.Stored) string {
 func wholeMessage(s *store.Store, box store.Box, m *store.Stored) messageJSON {
 	out := toJSON(s, box, m, true)
 	out.ThreadSubject = threadSubject(s, m)
+	out.Room = roomOfMessage(s, m)
 	return out
+}
+
+// roomOfMessage is the saved room a message to several went to, by this
+// machine's own label for the people in it (D60): the other people, the
+// sender and the recipients with the reader taken out, against each room's
+// members with self taken out, equal as sets and not empty. For a message
+// this machine sent, the other people are the copies' recipients. The first
+// such room in the file's order is the one named. A message to one names
+// no room, and neither does a rooms file that does not read: the label is
+// a convenience, and read does not fail for want of it.
+func roomOfMessage(s *store.Store, m *store.Stored) string {
+	self := ""
+	if me, err := s.Self(); err == nil {
+		self = me.Fingerprint()
+	}
+	others := map[string]bool{}
+	if len(m.Copies) > 0 {
+		for _, c := range m.Copies {
+			others[c.Fingerprint] = true
+		}
+	} else {
+		list := recipientsOf(m)
+		if len(list) < 2 {
+			return ""
+		}
+		others[m.Inner.From] = true
+		for _, fp := range list {
+			others[fp] = true
+		}
+	}
+	delete(others, self)
+	if len(others) == 0 {
+		return ""
+	}
+	rooms, err := s.Rooms()
+	if err != nil {
+		return ""
+	}
+	for _, r := range rooms {
+		members := map[string]bool{}
+		for _, mem := range r.Members {
+			if mem.FP != self {
+				members[mem.FP] = true
+			}
+		}
+		if len(members) != len(others) {
+			continue
+		}
+		same := true
+		for fp := range others {
+			if !members[fp] {
+				same = false
+				break
+			}
+		}
+		if same {
+			return r.Name
+		}
+	}
+	return ""
 }
 
 func printMessage(s *store.Store, box store.Box, m *store.Stored) {
@@ -1175,6 +1239,11 @@ func printMessage(s *store.Store, box store.Box, m *store.Stored) {
 	printCopies(m)
 	if len(m.Copies) == 0 {
 		printRecipients(s, m)
+	}
+	// This machine's own name for those people, where a saved room holds
+	// exactly them; it says nothing the to: line did not (D60).
+	if room := roomOfMessage(s, m); room != "" {
+		fmt.Printf("room:    %s\n", identity.Printable(room))
 	}
 	fmt.Printf("type:    %s\n", m.Inner.Body.Type)
 	// A knock carries the sender's own name, which is a claim and not a

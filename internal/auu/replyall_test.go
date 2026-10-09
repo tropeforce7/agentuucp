@@ -303,7 +303,9 @@ func TestReplyAllSaysHowToReachSomebodyElsewhere(t *testing.T) {
 	var e *exitError
 	if !asExit(err, &e) || e.code == exitUsage ||
 		!strings.Contains(err.Error(), "1 of 2 copies were not sent and wait in the outbox") ||
-		!strings.Contains(err.Error(), "somebody not registered there is reached by a new message with --to 'RELAY!NAME'") {
+		!strings.Contains(err.Error(), "somebody not registered there is reached by a new message with --to 'RELAY!NAME', "+
+			"or by a new message to a room, which carries an address for each person") ||
+		strings.Contains(err.Error(), "a reply goes back the way the message came") {
 		t.Fatalf("reply --all to somebody elsewhere: %v", err)
 	}
 	waiting, _ := outboxOf(t, bob)
@@ -357,7 +359,9 @@ func TestReplyAllTakesNoAddress(t *testing.T) {
 	for _, extra := range [][]string{{"--to", "alice"}, {"--via", "somewhere"}} {
 		_, err := bob.tryRun(append([]string{"reply", got.ID, "--all"}, append(extra, "x")...)...)
 		var e *exitError
-		if !asExit(err, &e) || e.code != exitUsage || !strings.Contains(err.Error(), "takes no --to or --via") {
+		if !asExit(err, &e) || e.code != exitUsage || !strings.Contains(err.Error(), "--all answers everyone through the relay "+
+			"the message came by, and takes no --to or --via; to reach somebody by other relays, send a new message to them "+
+			"or to a room, which carries an address for each person") {
 			t.Errorf("--all %v: %v", extra, err)
 		}
 	}

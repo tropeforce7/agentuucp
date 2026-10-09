@@ -138,15 +138,50 @@ func cmdSend(args []string) error {
 	if err != nil {
 		return err
 	}
+	// A room's name is tried before the peer list, by its whole name in any
+	// case and never a prefix, and its members take its place in the list
+	// (D56): from here on it is a message to them, as if each had been named.
+	rooms, err := s.Rooms()
+	if err != nil {
+		return err
+	}
+	self, err := s.Self()
+	if err != nil {
+		return err
+	}
+	targets, used, err := expandRooms(s, self, rooms, elems, *via)
+	if err != nil {
+		return err
+	}
 	var several []addressed
 	var recipient *identity.Public
-	if len(elems) > 1 {
-		if several, err = resolveSeveral(s, elems, *via); err != nil {
+	switch {
+	case len(used) > 0:
+		if len(targets) > relayapi.MaxRecipients {
+			return usageErrf("%d recipients once %s %s counted; a message may go to at most %d",
+				len(targets), roomsSaid(used), roomsVerb(used), relayapi.MaxRecipients)
+		}
+		if several, err = resolveSeveral(s, targets, *via); err != nil {
 			return err
 		}
-	} else if recipient, err = s.Resolve(peer); err != nil {
-		return usageErrf("%v", err)
-	} else {
+		// A room of one is a message to one, with no list on it, as one
+		// --to with one name is; the member's relays are its path.
+		if len(several) == 1 {
+			recipient, path = several[0].pub, several[0].path
+			if len(path) > 0 {
+				if err := store.CheckAddress(path, nil, relayapi.MaxHops); err != nil {
+					return usageErrf("%v", err)
+				}
+			}
+		}
+	case len(elems) > 1:
+		if several, err = resolveSeveral(s, targets, *via); err != nil {
+			return err
+		}
+	default:
+		if recipient, err = s.Resolve(peer); err != nil {
+			return usageErrf("%v", err)
+		}
 		several = []addressed{{pub: recipient, path: path}}
 	}
 	warnPending(s)
@@ -184,7 +219,7 @@ func cmdSend(args []string) error {
 		InReplyTo: *replyTo,
 		Text:      text,
 	}
-	mode := sendMode{stream: *forceStream, inline: *forceInline, channel: *channel, path: path}
+	mode := sendMode{stream: *forceStream, inline: *forceInline, channel: *channel, path: path, rooms: used}
 	if len(several) > 1 {
 		mode.path = nil
 		err = sendToSeveral(s, id, r, several, body, attach, mode, *asJSON)
@@ -226,10 +261,10 @@ func cmdReply(args []string) error {
 	}
 	// Everyone is answered as the message came, through the relay it
 	// arrived on: an address per person is not one a reply can be given,
-	// and a room, in the next release, carries one for each.
+	// and a room carries one for each.
 	if *all && (*to != "" || *via != "") {
 		return usageErrf("--all answers everyone through the relay the message came by, and takes no --to " +
-			"or --via; a room, in the next release, carries an address for each person")
+			"or --via; to reach somebody by other relays, send a new message to them or to a room, which carries an address for each person")
 	}
 	if err := validChannelFlag(*channel); err != nil {
 		return err
@@ -533,6 +568,9 @@ type sendMode struct {
 	// message to several, said to the first relay on a forward so that it
 	// can hold the sender to its max_recipients; zero for a message to one.
 	recipients int
+	// rooms is the rooms the recipients were expanded from, for the
+	// sentences that refuse too many recipients.
+	rooms []string
 	// replyAll says this message to several is reply --all, whose copies
 	// all go through the relay the original came by, so that a recipient
 	// on another relay is told how to be reached.

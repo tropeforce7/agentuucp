@@ -70,6 +70,8 @@ Sending:
 auu send --to NAME|self [--subject S] [--channel NAME] [--attach FILE]... TEXT
 auu send --to NAME --body-file FILE                # or - to read the body from stdin
 auu send --to bob --to carol TEXT                  # a message to several; --to bob,carol is the same
+auu send --to ROOM TEXT                            # a message to everyone in a saved room, as if each were named
+auu send --to ROOM,carol TEXT                      # a room and names mix, in one value or several --to
 auu send --to 'bar!bob' TEXT                       # somebody on a relay yours peers with
 auu send --to bob --via bar TEXT                   # the same address, no bang to quote
 auu send --resume                                  # finish what the outbox holds: from the relay's partial, or anew
@@ -90,9 +92,10 @@ expansion in a shell; both at once is refused.
 The `id` in `--json` is then a row in your relay's queue, not a message in a
 mailbox, and `path` beside it is where it went. A message large enough to
 become a stream, which is 64 KiB unless the user has changed it, does not
-cross a relay yet — `a large message does not cross a relay yet` — and a `--channel` on a path is sent unchecked, since the relay
-that knows the recipient's channels is the last hop; a name it refuses comes
-back later as a failed message and not as an error from `send`.
+cross a relay yet: `a large message does not cross a relay yet` — exit 1.
+A `--channel` on a path is sent unchecked, since the relay that knows the
+recipient's channels is the last hop; a name it refuses comes back later
+as a failed message and not as an error from `send`.
 
 Rooms, which are saved lists of recipients under a name:
 
@@ -126,8 +129,22 @@ longer on the peer list is named by the short id `room show` prints, or
 by eight or more characters from the start of their fingerprint. `room
 delete` removes the list alone: the peers in it stay on the peer list. A
 `rooms.json` that does not read, or breaks a rule, is said as a damaged
-file, exit 5. Until it is fixed, adding a peer is refused at exit 1, with
-the file named.
+file, exit 5. Until it is fixed, `auu peers add` is refused with exit 1,
+the file named, and `auu send` with exit 5, since any name in `--to` might
+be a room in it. A `rooms.json` a later auu wrote is not damaged: both
+refuse it with exit 1, saying `a later auu wrote it`; auu needs updating.
+
+`auu send --to ROOM` sends to the room's members in the room's order, each
+by the relays the room keeps for them, and mixes with names. A name in
+`--to` is looked for among the rooms first, whole and in any case, then on
+the peer list; a name with `!` in it is an address and never a room.
+Everything below is checked before anything is sealed. `--via` beside a
+room is refused, and so is one room named twice. The ceiling of 32 and
+the relay's `max_recipients` are counted after the rooms are expanded. A
+room of one is a message to one, with no list on it. A room with a member
+on another relay cannot carry a large message, since a stream does not
+cross a relay. Recipients see a message to several and who it went to,
+never the room's name.
 
 Reading:
 
@@ -440,7 +457,13 @@ stderr, since there is nowhere on it for anything to wait.
 
 `auu read --json` and `auu quarantine ls --json` print that same message
 shape: `read` one message with `text` and `thread_subject`, `quarantine ls`
-a list without either. A message to several carries `recipients`, everybody
+a list without either. `read`, `wait` and `quarantine show` also carry
+`room`, when set: the name of this machine's saved room whose members,
+`self` left out, are exactly the message's other people. Those are the
+sender and the recipients, the reader left out, or the recipients of a
+message the user sent. Two such rooms name the first in the file. It
+prints as a `room:` line after the `to:` list. `inbox` and `quarantine
+ls` carry no `room`. A message to several carries `recipients`, everybody
 it went to in its sender's order, each `fingerprint` and `name` (the name
 on this machine's peer list, absent for somebody not on it, the reader's
 own for the reader). A peer on v0.15.0 reads a message to several as one
@@ -560,6 +583,38 @@ A refused send names what to change, and nothing was queued:
   you; ask them to add you and run `auu allow push`.
 - `X's mailbox on the relay is full; they need to run 'auu rm' to make
   room` — theirs to clear, not something to retry.
+- `ROOM is a room, which carries its own addresses; send to it without
+  --via, and change a member's relays with auu room rm ROOM NAME and auu
+  room add ROOM 'RELAY!NAME'` — exit 1; drop `--via`. A member's relays
+  are the person's to change.
+- `the room ROOM is named twice; name it once` — exit 1; name it once.
+- `the room NAME holds SHORT, who is not on your peer list, so nothing was
+  sent; remove them with auu room rm NAME SHORT, or add them again with
+  auu peers add` — exit 1; which of the two is the person's decision.
+- `X (SHORT) is in the room NAME and named as "Y"; name each once`, the
+  two sources in the order given on the command line, or `… is in the
+  room A and in the room B; …` — exit 1; somebody in a room and named
+  too, or in two rooms. Name each once: drop the name, or send to the
+  rooms in two messages. Two names for one person are still `"X" and
+  "Y" are the same recipient, SHORT; name each once`.
+- `NAME is a room's name and your peer SHORT's too, so it names nobody for
+  certain; one of the two must go: auu room delete, or auu peers rm` —
+  exit 1; the person decides which goes.
+- `N recipients once the room NAME is counted; a message may go to at most
+  32` (or `the rooms A, B are counted`) — exit 1; the room expanded past
+  the protocol's ceiling.
+- `N recipients once the room NAME is counted; RELAY takes at most M in one
+  message (its max_recipients)` — exit 1; the room expanded past what the
+  relay takes, sixteen by default. Split the message, or the person asks
+  the relay's operator.
+- `a large message does not cross a relay yet, and X is reached by RELAY;
+  send them a smaller message on its own` — exit 1; a room, or a list,
+  with a member on another relay, sending a message large enough to be a
+  stream.
+- `--all answers everyone through the relay the message came by, and
+  takes no --to or --via; to reach somebody by other relays, send a new
+  message to them or to a room, which carries an address for each
+  person` — exit 1; drop `--to` and `--via`, or send a new message.
 - `malformed token: issuer is not a fingerprint; nothing was described` (or
   another field) — a pasted token whose claims are not the shape of a
   token's; `auu enrol`, `auu token show` and `auu-admin token show` check

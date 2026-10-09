@@ -151,6 +151,26 @@ there; run auu card push, and if you did not change it, tell the relay's
 operator`. Run the push; the user tells the operator. `auu card show`
 prints what each relay holds, verified with the user's own key.
 
+A **room** is a list of peers saved under a name, so the user can send to
+several at once with `auu send --to NAME`. It is kept in `rooms.json` in
+this home alone, nothing of it is posted, and a second machine keeps its
+own. The commands are the user's, since a room decides who they write to:
+
+```
+auu room create NAME MEMBER...   # the user's; every member but self on the peer list first
+auu room add NAME MEMBER...      # the user's
+auu room rm NAME MEMBER...       # the user's; the last one out deletes the room
+auu room delete NAME             # the user's; it asks first, and the peers stay
+auu room ls --json               # every room: a read, which you may run
+auu room show NAME --json        # who is in one: a read
+```
+
+A MEMBER is a peer as `--to` takes one, or `RELAY!NAME` for somebody on
+another relay. A room and a peer may not share a name, so `auu peers add`
+refuses a name a room holds, and says which room. A `rooms.json` that does
+not read is a damaged file, exit 5: tell the user, who fixes it by hand or
+moves it aside and makes the rooms again.
+
 ## 4. Another relay
 
 One home can be on several relays with one identity, one peer list and one

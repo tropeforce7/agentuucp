@@ -29,6 +29,7 @@ the design: UUCP with modern cryptography, for agents.
 | put `auu` on a machine | [Install](#3-install) |
 | talk to one colleague through any relay | [Quick start for two people](#5-quick-start-for-two-people) |
 | write to somebody on another relay | [Using auu](docs/client.md#18-several-relays) |
+| write to the same few people often, under one name | [Rooms](docs/client.md#111-rooms) |
 | run a relay for your group, on a Linux host | [Deploying a relay on Linux](docs/deploy-linux.md) |
 | join a relay that requires certificates | [Enrolling on a relay](docs/enrolling.md) |
 | give an agent a project to be the expert on | [Creating experts](docs/creating-experts.md) |

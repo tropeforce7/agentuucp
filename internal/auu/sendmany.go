@@ -27,10 +27,84 @@ import (
 const manyWait = 60 * time.Second
 
 // addressed is one recipient as the command was given it: their key on this
-// machine and the relays the copy to them goes by.
+// machine and the relays the copy to them goes by, and where on the command
+// line they came from, for a sentence that names them.
 type addressed struct {
 	pub  *identity.Public
 	path []string
+	// from is how the command named them: a --to element, quoted, or the
+	// room they are in.
+	from string
+}
+
+// target is one --to element after the rooms are expanded: an element to
+// resolve as a name is resolved, or a member of a room already addressed.
+type target struct {
+	elem  string
+	fixed *addressed
+}
+
+// expandRooms replaces each --to element that is a room's name with the
+// room's members (D56): a room is tried by its whole name, in any case,
+// never a prefix, before the peer list, and a name with relays in front of it is an
+// address on another relay and never a room. A member is addressed with
+// the relays the room keeps for them. It refuses --via beside a room
+// (D57), a room a peer has the name of too, and a room with somebody in it
+// no longer on the peer list (D51), each before anything is sealed. It
+// returns the rooms it expanded, by their names in the file.
+func expandRooms(s *store.Store, self *identity.Public, rooms []store.Room, elems []string, via string) ([]target, []string, error) {
+	var out []target
+	var used []string
+	for _, e := range elems {
+		// A name with relays in front is an address on another relay. A
+		// room's name cannot hold a "!", so this is said and not needed.
+		room := store.RoomNamed(rooms, e)
+		if strings.Contains(e, "!") || room == nil {
+			out = append(out, target{elem: e})
+			continue
+		}
+		name := identity.Printable(room.Name)
+		for _, u := range used {
+			if u == room.Name {
+				return nil, nil, usageErrf("the room %s is named twice; name it once", name)
+			}
+		}
+		if via != "" {
+			return nil, nil, usageErrf("%s is a room, which carries its own addresses; send to it without --via, and change a member's relays "+
+				"with %s room rm %s NAME and %s room add %s 'RELAY!NAME'", name, prog, name, prog, name)
+		}
+		peers, err := s.Peers()
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, p := range peers {
+			if strings.EqualFold(p.Name, room.Name) {
+				return nil, nil, usageErrf("%s is a room's name and your peer %s's too, so it names nobody for certain; "+
+					"one of the two must go: %s room delete, or %s peers rm", name, p.Short(), prog, prog)
+			}
+		}
+		for _, m := range room.Members {
+			var pub *identity.Public
+			if m.FP == self.Fingerprint() {
+				pub = self
+			} else if s.IsAuthorized(m.FP) {
+				if pub, err = s.Resolve(m.FP); err != nil {
+					return nil, nil, usageErrf("%v", err)
+				}
+			} else {
+				return nil, nil, usageErrf("the room %s holds %s, who is not on your peer list, so nothing was sent; "+
+					"remove them with %s room rm %s %s, or add them again with %s peers add",
+					name, m.FP[:identity.ShortIDLen], prog, name, m.FP[:identity.ShortIDLen], prog)
+			}
+			var path []string
+			if m.Via != "" {
+				path = strings.Split(m.Via, "!")
+			}
+			out = append(out, target{fixed: &addressed{pub: pub, path: path, from: "in the room " + name}})
+		}
+		used = append(used, room.Name)
+	}
+	return out, used, nil
 }
 
 // splitTo is every --to as elements: each value split on its commas, which a
@@ -51,30 +125,78 @@ func splitTo(values []string) ([]string, error) {
 }
 
 // resolveSeveral resolves every element as a single --to is resolved, each
-// with its own path or --via's, and refuses a recipient named twice, since a
-// message goes once to each person whatever it was called. cmdSend has
-// held the list to the protocol's ceiling already, before the home was
-// opened.
-func resolveSeveral(s *store.Store, elems []string, via string) ([]addressed, error) {
+// with its own path or --via's, takes a room's members as expandRooms
+// addressed them, and refuses a recipient named twice, since a message goes
+// once to each person whatever it was called: by two names, by two rooms,
+// or by a room and a name, each source said. cmdSend holds the list to the
+// protocol's ceiling.
+func resolveSeveral(s *store.Store, targets []target, via string) ([]addressed, error) {
 	var out []addressed
-	seen := map[string]string{}
-	for _, e := range elems {
-		path, peer, err := address(e, via)
-		if err != nil {
-			return nil, err
+	seen := map[string]addressed{}
+	for _, t := range targets {
+		var a addressed
+		if t.fixed != nil {
+			a = *t.fixed
+		} else {
+			path, peer, err := address(t.elem, via)
+			if err != nil {
+				return nil, err
+			}
+			pub, err := s.Resolve(peer)
+			if err != nil {
+				return nil, usageErrf("%v", err)
+			}
+			a = addressed{pub: pub, path: path, from: fmt.Sprintf("%q", t.elem)}
 		}
-		pub, err := s.Resolve(peer)
-		if err != nil {
-			return nil, usageErrf("%v", err)
-		}
-		fp := pub.Fingerprint()
+		fp := a.pub.Fingerprint()
 		if first, ok := seen[fp]; ok {
-			return nil, usageErrf("%q and %q are the same recipient, %s; name each once", first, e, pub.Short())
+			if t.fixed == nil && !strings.HasPrefix(first.from, "in the room ") {
+				return nil, usageErrf("%s and %s are the same recipient, %s; name each once", first.from, a.from, a.pub.Short())
+			}
+			return nil, usageErrf("%s is %s and %s; name each once", recipientName(s, a.pub), sourceSaid(first.from), sourceSaid(a.from))
 		}
-		seen[fp] = e
-		out = append(out, addressed{pub: pub, path: path})
+		seen[fp] = a
+		out = append(out, a)
 	}
 	return out, nil
+}
+
+// roomsSaid is the rooms a list was expanded from, as a sentence says them.
+func roomsSaid(rooms []string) string {
+	named := make([]string, len(rooms))
+	for i, r := range rooms {
+		named[i] = identity.Printable(r)
+	}
+	if len(named) == 1 {
+		return "the room " + named[0]
+	}
+	return "the rooms " + strings.Join(named, ", ")
+}
+
+// roomsVerb is is or are, as roomsSaid names one room or several.
+func roomsVerb(rooms []string) string {
+	if len(rooms) == 1 {
+		return "is"
+	}
+	return "are"
+}
+
+// sourceSaid is where a recipient came from, as the duplicate sentence says
+// it: "in the room team", or "named as \"carol\"".
+func sourceSaid(from string) string {
+	if strings.HasPrefix(from, "in the room ") {
+		return from
+	}
+	return "named as " + from
+}
+
+// recipientName is a recipient as a sentence names them: the peer list's
+// name and short id.
+func recipientName(s *store.Store, pub *identity.Public) string {
+	if name := s.PeerName(pub.Fingerprint()); name != "" {
+		return identity.Printable(name) + " (" + pub.Short() + ")"
+	}
+	return pub.Short()
 }
 
 // publicsOf is the recipients' keys, in order.
@@ -206,7 +328,11 @@ func sendToSeveral(s *store.Store, id *identity.Identity, r *store.Relay, to []a
 		return transportErr(err)
 	}
 	if len(to) > limit {
-		return usageErrf("%d recipients; %s takes at most %d in one message (its max_recipients)", len(to), r.Name, limit)
+		counted := ""
+		if len(mode.rooms) > 0 {
+			counted = " once " + roomsSaid(mode.rooms) + " " + roomsVerb(mode.rooms) + " counted"
+		}
+		return usageErrf("%d recipients%s; %s takes at most %d in one message (its max_recipients)", len(to), counted, r.Name, limit)
 	}
 
 	// size is what --json and the plain line say of each copy: an
@@ -384,7 +510,7 @@ func sendToSeveral(s *store.Store, id *identity.Identity, r *store.Relay, to []a
 	}
 	if mode.replyAll && anyNotRegistered(results) {
 		msg += fmt.Sprintf("; a reply to everyone goes through %s, and somebody not registered there is reached "+
-			"by a new message with --to 'RELAY!NAME', or by a room, in the next release, which carries an "+
+			"by a new message with --to 'RELAY!NAME', or by a new message to a room, which carries an "+
 			"address for each person", r.Name)
 	}
 	final := errors.New(msg)

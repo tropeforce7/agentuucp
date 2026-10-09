@@ -112,6 +112,14 @@ var subcommands = []subcommand{
 		{name: "show", describe: "show a held message"},
 		{name: "trust", describe: "trust its sender and deliver it"},
 	}},
+	{name: "room", describe: "saved lists of recipients under a name", subs: []subcommand{
+		{name: "ls", describe: "every room and how many are in it"},
+		{name: "show", describe: "who is in one"},
+		{name: "create", describe: "make a room of peers"},
+		{name: "add", describe: "add peers to a room"},
+		{name: "rm", describe: "take peers out of a room"},
+		{name: "delete", describe: "delete a room, asking first"},
+	}},
 	{name: "damaged", describe: "mail kept because it could not be opened", subs: []subcommand{
 		{name: "ls", describe: "list what is kept under damaged/"},
 		{name: "reopen", describe: "open what needed a newer auu, with this one"},
@@ -213,7 +221,7 @@ func complete(args []string) []candidate {
 		name := strings.TrimLeft(prev, "-")
 		for _, f := range flagsFor(path) {
 			if f.name == name && !f.isBool {
-				return shown(cur, matching(cur, valuesFor(name)))
+				return shown(cur, matching(cur, valuesFor(path, name)))
 			}
 		}
 	}
@@ -240,12 +248,18 @@ func flagsFor(path []string) []flagInfo {
 	return got
 }
 
-// valuesFor is what may follow a flag that takes a value.
-func valuesFor(flag string) []candidate {
+// valuesFor is what may follow a flag that takes a value. send's --to
+// takes a room's name too; no other --to (reply, vouch, cursor) takes
+// one, so only send's --to offers rooms.
+func valuesFor(path []string, flag string) []candidate {
 	switch flag {
 	case "to":
 		out := []candidate{{"self", "a note to yourself"}}
-		return append(out, peers()...)
+		out = append(out, peers()...)
+		if strings.Join(path, " ") == "send" {
+			out = append(out, roomNames()...)
+		}
+		return out
 	case "peer":
 		out := []candidate{{"self", "your own channels, changed from another machine"}}
 		return append(out, peers()...)
@@ -290,6 +304,21 @@ func positionalsFor(path []string, words []string) []candidate {
 		return messages(store.Quarantine)
 	case "peers rm":
 		return peers()
+	// words ends with the word being completed, so one word is the
+	// first positional.
+	case "room show", "room delete":
+		if len(words) <= 1 {
+			return roomNames()
+		}
+	case "room add", "room rm":
+		if len(words) <= 1 {
+			return roomNames()
+		}
+		return append([]candidate{{"self", "yourself"}}, peers()...)
+	case "room create":
+		if len(words) >= 2 {
+			return append([]candidate{{"self", "yourself"}}, peers()...)
+		}
 	case "relay default", "relay rename", "relay rm", "relay show":
 		return relayCandidates()
 	case "peers add", "enrol":
@@ -432,6 +461,23 @@ func relayCandidates() []candidate {
 			describe += " (default)"
 		}
 		out = append(out, candidate{r.Name, describe})
+	}
+	return out
+}
+
+// roomNames is this home's rooms, each with how many are in it.
+func roomNames() []candidate {
+	s, err := openStore()
+	if err != nil {
+		return nil
+	}
+	rooms, err := s.Rooms()
+	if err != nil {
+		return nil
+	}
+	var out []candidate
+	for _, r := range rooms {
+		out = append(out, candidate{r.Name, fmt.Sprintf("a room of %d", len(r.Members))})
 	}
 	return out
 }

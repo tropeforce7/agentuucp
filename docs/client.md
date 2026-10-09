@@ -366,7 +366,8 @@ own. A recipient named twice
 is refused, and so is a list of more than thirty-two before anything else
 is done. A list longer than the relay takes, which its health answer
 says, sixteen by default, is refused naming the relay and the number,
-before anything is sealed.
+before anything is sealed. A list you send to often can be saved as a
+room; see [1.11](#111-rooms).
 
 Every copy is sealed and written to `outbox/` before any is posted, then
 each is posted in the order given. The command ends with one line per
@@ -646,9 +647,9 @@ the whole reply is refused before anything is sealed, naming them, and the
 two things to do are to ask the sender to vouch for them or to add them
 with `auu peers add`. It goes through the relay the message came by, so a
 recipient who is not registered there is a copy left in the outbox, and
-the sentence says to reach them with a new message to `'RELAY!NAME'`. It
-takes no `--to` or `--via`, since a room, in the next release, carries an
-address for each person.
+the sentence says to reach them with a new message to `'RELAY!NAME'`, or
+to a room that holds them. It takes no `--to` or `--via`, since a reply
+goes back the way the message came.
 
 A copy of a message you already hold that arrives
 again, which a sender's `--resume` after a lost answer can post, is
@@ -1325,6 +1326,118 @@ Windows. Nobody has used it there by hand.
 | 4 | your keys are encrypted and locked: run `auu unlock` in your own terminal; or unlocked to receive and this command originates: run `auu unlock --send` at a terminal, which lasts ten minutes |
 | 5 | a file in this machine's auu home is damaged, has been altered, or has an unsafe mode; a person needs to look, and the message names the file |
 
+### 1.11 Rooms
+
+A room is a list of recipients saved under a name. It is kept in
+`rooms.json` in the home and nowhere else. Nothing of it is posted, so no
+relay learns that a room exists. A message sent to a room is a message to
+several, as if each member had been named. Its recipients see who it went
+to, as they see it for any message to several, and not the room's name.
+
+*Listing 1.11a*
+```
+auu room create team bob carol 'bar!dave'
+auu room ls
+auu room show team
+auu room add team erin
+auu room rm team carol
+auu room delete team
+```
+
+`room create NAME MEMBER...` makes a room, and `room add` adds to one. A
+MEMBER is a peer as `--to` takes one: a name, a fingerprint, a short id or
+`self`. Somebody on another relay is `RELAY!NAME`, with the nearest relay
+first, and the room keeps those relays for them. Everybody but `self` must
+be on your peer list when the room is made or added to, since a room holds
+only people this machine can seal to. `room ls` prints each room and how
+many are in it. `room show` prints who is in one, by the peer list's name
+and the short id, with `by` and the relays for a member who has them.
+`room rm` takes members out, named as the peer list names them, or by the
+short id `room show` prints for somebody no longer on the list. The last
+one out deletes the room. `room delete` asks first and removes the list
+alone: the peers stay on your peer list. `room ls` and `room show` take
+`--json`.
+
+A room's name has a peer name's form: letters, digits, `.`, `_` and `-`,
+at most 64 bytes. Rooms and peers share one set of names. A room may not
+take a peer's name, and a peer may not be added under a room's. A name of
+eight or more hex characters is refused, since it could be the start of a
+fingerprint. A room is named whole, in any case, and never by a prefix. A
+home holds at most 256 rooms, and a room 1 to 32 members. A `rooms.json`
+that does not read, or breaks a rule, is refused by name with exit 5.
+Until it is fixed, `auu send` and `auu peers add` refuse too, since any
+name either is given might be a room in it: `auu send` with exit 5, and
+`auu peers add` with exit 1, as it says any refusal of the add. A
+`rooms.json` a later auu wrote is not damaged, and both refuse it with
+exit 1, saying `a later auu wrote it`.
+
+*Listing 1.11b*
+```
+auu send --to team --subject 'the release' 'out on Friday'
+auu send --to team,frank 'and frank too'
+```
+
+`--to` takes a room's name wherever it takes a peer's. A name is looked
+for among the rooms first, whole and in any case, and then on the peer
+list as before. A name with `!` in it is an address and never a room.
+The room's members take its place in the list, in the room's order, each
+with the relays the room keeps for them. A room and other names mix, in
+one value or in several `--to`. `--via` beside a room is refused, since a
+room carries its own addresses: `team is a room, which carries its own
+addresses; send to it without --via, and change a member's relays with
+auu room rm team NAME and auu room add team 'RELAY!NAME'`. A room named
+twice is refused on its own, before anything is counted: `the room team
+is named twice; name it once`.
+
+Every check is made before anything is sealed. A member no longer on your
+peer list refuses the send, naming the room and the two remedies: `the
+room team holds SHORT, who is not on your peer list, so nothing was sent;
+remove them with auu room rm team SHORT, or add them again with auu peers
+add`. Somebody in a room and named as well, or in two rooms, is refused
+naming both, in the order they were given on the command line: `carol
+(SHORT) is in the room team and named as "carol"; name each once`. A room
+and a peer that share a name, as an older auu or a hand edit can leave
+them, name nobody for certain, and a send to it is refused: `team is a
+room's name and your peer SHORT's too, so it names nobody for certain;
+one of the two must go: auu room delete, or auu peers rm`.
+
+The limits are counted after the rooms are expanded. More than thirty-two
+recipients is refused, `40 recipients once the room team is counted; a
+message may go to at most 32`. More than the relay takes is refused naming
+the relay and its number, `N recipients once the room team is counted;
+RELAY takes at most MAX in one message (its max_recipients)`. A room of
+one is a message to one, with no list on it, sent by the relays the room
+keeps for that member.
+
+A room with a member on another relay cannot carry a large message. A
+message large enough to become a stream does not cross a relay, so the
+whole send is refused before anything is read. For a room of several the
+sentence names the member, with the largest attachment after it: `a large
+message does not cross a relay yet, and dave is reached by bar; send them
+a smaller message on its own`.
+
+`auu read`, `auu wait` and `auu quarantine show` of a message to several
+print `room:` and a room's name, after the `to:` list, when the other
+people on it are exactly a saved room's members. The other
+people are the sender and every recipient, with you taken out, against the
+room's members with `self` taken out, in any order. For a message you
+sent they are its recipients. Two rooms with the same members name the
+first in the file. Their `--json` carries the name as `room`. It is this
+machine's own label for a list the `to:` line already shows, and it says
+nothing the sender sent. The inbox listing and `auu quarantine ls` are
+unchanged, and their `--json` carries no `room`.
+
+`auu reply --all` is unchanged by rooms. It answers the sender and every
+other recipient through the relay the message came by. It takes no `--to`
+or `--via`, since a reply goes back the way the message came. A recipient
+on another relay is reached by a new message to `'RELAY!NAME'`, or to a
+room that holds them, since a room carries an address for each person.
+
+Rooms are this home's alone. A second machine of the same identity has its
+own `rooms.json`, as it has its own peer list. Copying the home to it
+copies the file as it stands. After that a room changed on one machine is
+not changed on the other.
+
 ## 2. Local state
 
 Everything lives in `~/.auu`, or `$AUU_HOME` if set. The directory is mode 0700
@@ -1347,6 +1460,7 @@ Go's file modes say nothing about who can read.
 | `COMPOSE_MSG` | the last message composed in the editor |
 | `authorized_peers` | one export line per peer, the trust anchor; a peer added on a vouch has a `# vouched for by` comment above its line, which `auu peers rm` takes with it |
 | `vouches/<fingerprint>.json` | a vouch a peer gave you to keep, one per voucher, named by the voucher's fingerprint: the document and the signature as they arrived, the newest kept; `auu knock --vouch` carries it |
+| `rooms.json` | your rooms, saved lists of recipients under a name, each member by fingerprint with the relays to go by; this machine's alone and never posted, at most 256 rooms of 1 to 32 members; `auu room` keeps it, and a file that will not read, or that breaks a rule, is refused by name with exit 5 |
 | `channels.json` | your channel directory as this machine last signed it, `issued` included; `auu channel push` signs it under that time again, and a file that will not read, or that breaks a rule, is refused by name with exit 5 |
 | `card.json` | your card as this machine last pushed it, `issued` included: your name and whether the relay may list you and let a knock through; `auu card push` signs it again with the words a typed flag changes, and a file that will not read, or that breaks a rule, is refused by name with exit 5 |
 | `channel-settings.json` | this machine's own policy per channel: whether mail fetched from it is left on the relay; absent, and every channel keeps |

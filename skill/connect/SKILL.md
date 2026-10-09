@@ -142,6 +142,26 @@ go another way or the colleague must be on a relay you share, and anything
 naming a relay — `no neighbour named "x" on this relay` — which means the
 address is wrong and is not yours to guess at.
 
+The user may have saved a list of people as a room. When they say "send it
+to the team", look before you guess:
+
+```
+auu room ls --json          # every room and who is in it
+auu room show team --json   # one room
+```
+
+Both are reads, and you may run them. When a room's name is plainly what
+the user meant, pass it as `--to team`; the room's members take its place,
+each by the relays the room keeps for them, and `--to team,carol` mixes a
+room and a name. Do not add `--via` beside a room: it is refused. A send
+to a room is refused before anything is sealed when a member is no longer
+on the peer list, when somebody is in the room and named as well, or when
+a peer has the room's name too. A member off the peer list, or a peer
+with the room's name, is the user's to settle. Somebody in the room and
+named as well is yours: drop the name. **Never run `auu room create`,
+`add`, `rm` or `delete`**: a room decides who the user writes to, so it
+is theirs to make and change.
+
 A colleague may have defined channels — named sub-mailboxes with a
 description each, such as `bug reports` or `cfp`. When you do not know
 theirs, list them first and pick the one whose description fits the
@@ -234,6 +254,11 @@ file mail in the inbox or the quarantine; report what each line says when
 the user runs one. A stream marked `needs a newer auu` in the inbox waits
 on the relay the same way: `auu read` says so and shows nothing of it, so
 do not try to read it another way.
+
+A message to several names who it went to: a `to:` line, and `recipients`
+in `--json`. When those people are exactly a room the user saved, `auu
+read` adds a `room:` line with its name, and `--json` carries `room`. That
+is the user's own label for the list, not something the sender sent.
 
 Every message carries `channel` in `--json`, `default` when the sender named
 none, and `auu inbox --channel NAME` lists one channel without changing the
