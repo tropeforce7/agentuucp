@@ -92,7 +92,7 @@ starting` line leads with `version=`, the version the binary was built
 from, and `schema=`, the database schema it speaks, then the address, the
 TLS mode, the database, and for `files` the certificate and where the
 bundle came from. So a journal answers which relay is running without a
-shell on the host; `auu-relay --version` answers the same of a binary in
+shell on the host. `auu-relay --version` answers the same of a binary in
 hand.
 
 `tls.bundle` and `tls.bundle_credential` name the same file two ways, and
@@ -152,11 +152,11 @@ beside it.
 
 Each message's row has an id the database numbers from 1 and never reuses.
 A listing says the lowest and highest ids the mailbox holds, read from those
-rows in the same transaction as the page; nothing new is counted or kept
+rows in the same transaction as the page. Nothing new is counted or kept
 for it. A client whose cursor is above the highest is told at once, even on
 a held listing, and fetches again from the lowest. A database that is
 deleted begins its numbering again, which is when that happens to every
-client at once; a relay that carries its database forward keeps its
+client at once. A relay that carries its database forward keeps its
 numbering.
 
 So `relay.db` stays small whatever the relay is carrying. A 2 GB message is
@@ -172,9 +172,9 @@ registered key at the push and again wherever the relay acts on one: the
 allow list at every post, the card at every knock, and the directory at
 every post and every stream open, `default` included. The
 `channels` rows beside the directory's bytes are the relay's parse at the
-push, kept for the administrator's count and for the watch's issue time;
-nothing routes by them, so a row inserted or edited with the database open
-changes what `auu-admin` prints and not where a message goes, and a
+push, kept for the administrator's count and for the watch's issue time.
+Nothing routes by them, so a row inserted or edited with the database open
+changes what `auu-admin` prints and not where a message goes. A
 directory whose bytes or signature are edited routes nothing at all: the
 mailbox is closed to every post, `default` and the owner's own included,
 until they push again, as a mailbox whose allow list does not verify is,
@@ -185,40 +185,43 @@ line and decide nothing: an edit to those columns changes what
 `auu-admin` prints and not what the relay does, and an edit to the bytes
 or the signature makes the row `broken`, which the owner is told of at
 their next fetch and repairs with a push, whatever issue time the edit
-left. The name on a card is not stored a second time; the relay has no
-use for it. A message row carries its kind, `envelope`, `stream` or
-`knock`, the word the route it arrived by gives it and the word every
-listing says beside the row; a knock is an envelope a stranger posted to
-the knock route of a mailbox whose card, verified at that moment and
-never read from the column, says `knocks`. A knock row carries one thing
-no other row does: the fingerprint of the knocker, the one the request's
-signature proved and never anything the envelope claims. It is there so
-that a second knock from the same key replaces the first — which is what
-makes `max_knocks_waiting` a count of knockers — and it lives exactly as
-long as the row: until the owner's fetch acknowledges it, until it is
-replaced, or until the mailbox goes. Beside the uploads table it is the
-only place the relay records who is sending something; an operator whose
-users would rather it did not can say so, and those users push a card
-that takes no knocks.
+left. The name on a card is not stored a second time. The relay has no
+use for it.
+
+A message row carries its kind, `envelope`, `stream` or `knock`, the word
+the route it arrived by gives it and the word every listing says beside
+the row. A knock is an envelope a stranger posted to the knock route of a
+mailbox whose card, verified at that moment and never read from the
+column, says `knocks`. A knock row carries one thing no other row does:
+the fingerprint of the knocker, the one the request's signature proved and
+never anything the envelope claims. It is there so that a second knock
+from the same key replaces the first — which is what makes
+`max_knocks_waiting` a count of knockers. It lives exactly as long as the
+row: until the owner's fetch acknowledges it, until it is replaced, or
+until the mailbox goes. Beside the uploads table it is the only place the
+relay records who is sending something. An operator whose users would
+rather it did not can say so, and those users push a card that takes no
+knocks.
 
 An operator can list all of this, and count it, and delete it. None of it can
-be read. Every file is a sealed envelope or a sealed stream. **Back up the
-database and the message directory together**, or you will restore an index
-pointing at mail that is not there. A relay that finds one without the other
-says so at startup and repairs itself towards the database. Files in a
-mailbox's directory with no row are removed; `tmp/`, `uploads/` and
-`outbound/` are the relay's own and are not read as mailboxes. Rows with
-no file are dropped and logged. A stream whose file
-has changed length since it was stored is dropped by the same rule when its
-recipient asks for it. The log carries the message id and both lengths. It
-carries the mailbox only under `access_log: "full"`, since its owner is the
-caller. The recipient's `auu inbox` says which message was damaged on the
-relay and to ask the sender to send it again, then moves on. The one case it
-will not repair is a database that knows no mailbox at all beside a directory
-that holds mail, since repairing that would mean removing every message. The
-database was lost. The relay refuses to start, saying so, and naming the
-two remedies, restoring `relay.db` from a backup or moving the message
-directory aside to start empty.
+be read. Every file is a sealed envelope or a sealed stream.
+
+**Back up the database and the message directory together**, or you will
+restore an index pointing at mail that is not there. A relay that finds
+one without the other says so at startup and repairs itself towards the
+database. Files in a mailbox's directory with no row are removed. `tmp/`,
+`uploads/` and `outbound/` are the relay's own and are not read as
+mailboxes. Rows with no file are dropped and logged. A stream whose file
+has changed length since it was stored is dropped by the same rule when
+its recipient asks for it. The log carries the message id and both
+lengths. It carries the mailbox only under `access_log: "full"`, since its
+owner is the caller. The recipient's `auu inbox` says which message was
+damaged on the relay and to ask the sender to send it again, then moves
+on. The one case it will not repair is a database that knows no mailbox at
+all beside a directory that holds mail, since repairing that would mean
+removing every message. The database was lost. The relay refuses to start,
+saying so, and naming the two remedies, restoring `relay.db` from a backup
+or moving the message directory aside to start empty.
 
 A database at this version's schema is opened as it is. One from schema
 11 on, the first kept version, is carried forward: before anything
@@ -228,23 +231,26 @@ version at a time, each step and its version number committed together,
 so a database is always at some whole version. The journal says so at
 the start, naming both versions and the copy. The copy is the way back
 to the release before, with that release's binary, and it is yours to
-remove once this release has run as you want; the relay never removes
+remove once this release has run as you want. The relay never removes
 it, and never replaces one: anything already at that path, a copy from an
 upgrade you went back from among others, stops the start with nothing
-changed until you move it aside or remove it. Going back costs every
-message that arrived after the upgrade, since the copy has no row for it
-and the release before removes a file no row claims; a way back that must
-keep them starts from a backup of the message directory taken at the same
-time. It also puts every row back as it was at the upgrade, and so undoes
-everything an administrator or a user changed on the relay since: a
-mailbox removed since is back with its certificates, a certificate or a
-token revoked since is live again, a token spent since has its uses back, a
-block added since is gone, and each allow list, card and directory is the
-one held at the upgrade, or none. Make those changes again after going
-back. A copy that cannot be made stops the start, naming its path and the
+changed until you move it aside or remove it.
+
+Going back costs every message that arrived after the upgrade, since the
+copy has no row for it and the release before removes a file no row
+claims. A way back that must keep them starts from a backup of the message
+directory taken at the same time. It also puts every row back as it was at
+the upgrade, and so undoes everything an administrator or a user changed
+on the relay since: a mailbox removed since is back with its certificates,
+a certificate or a token revoked since is live again, a token spent since
+has its uses back, a block added since is gone, and each allow list, card
+and directory is the one held at the upgrade, or none. Make those changes
+again after going back.
+
+A copy that cannot be made stops the start, naming its path and the
 cause, with nothing changed, and a step that fails stops it naming the
 step, the version the database is still at and the copy. A database named
-in the settings as a `file:` URI is not carried forward; name it by its
+in the settings as a `file:` URI is not carried forward. Name it by its
 path. A database from
 before schema 11 is refused, never read: delete it and the message
 directory beside it, and the relay recreates both at the next start,
@@ -473,7 +479,7 @@ Every request body may carry `sections` the same way, and so may what one
 relay sends another: a hand-over on `POST /v1/forward` and a report on
 `POST /v1/forward/failed`. The relay knows one, `recipient-count`, the
 number of recipients a copy of a message to several went to, on opening a
-stream and on a user's forward, and holds it to `max_recipients`; on a
+stream and on a user's forward, and holds it to `max_recipients`. On a
 hand-over from a neighbour it does not read it, since the first relay held
 the sender already. The relay reads every
 request body strictly, so a field the request does not have is refused
@@ -519,7 +525,7 @@ status and the request. The codes this release writes:
 
 `at`, an RFC 3339 time, comes with the three refusals about one. Left
 out, it means none. The sentence names the same time for a person reading
-the answer by hand; `auu` shows `at` in the reader's zone and never reads
+the answer by hand. `auu` shows `at` in the reader's zone and never reads
 a time out of a sentence.
 
 The HTTP layer has bounds of its own, none of them settings:
@@ -547,10 +553,12 @@ the body closes the connection behind its answer. Those refusals are that
 `413`, a `401` for a header that will not parse or an identity no mailbox
 has, and a `503` from the in-flight cap. Go's `net/http` would otherwise
 read up to 256 KiB of the unread body before answering on a connection it
-meant to keep, and wait for a body that never came. The relay speaks
-HTTP/1.1 alone. HTTP/2 is off on the listener and not offered by ALPN, so a
-client that offers `h2` is answered over HTTP/1.1. Every property of the
-wire above holds under the one protocol the relay's tests run.
+meant to keep, and wait for a body that never came.
+
+The relay speaks HTTP/1.1 alone. HTTP/2 is off on the listener and not
+offered by ALPN, so a client that offers `h2` is answered over HTTP/1.1.
+Every property of the wire above holds under the one protocol the relay's
+tests run.
 
 The access log records one line per request. In the default `full` mode that
 line names the verified caller and the request path, which together are who is
@@ -561,7 +569,7 @@ tell an attack from ordinary traffic. One thing it does not hide, because
 it is not in the log at all: a waiting knock's row names its knocker, so
 the database says who has knocked at whom until that knock is fetched or
 replaced. An operator whose users want no such record turns knocks off by
-telling them so; a user does it themselves with a card that says no
+telling them so. A user does it themselves with a card that says no
 knocks.
 
 A file operation under the message directory that fails is answered to the
@@ -852,6 +860,7 @@ transport authentication is post-quantum at the same level. The set is the
 anchor's, and every machine's key must match it, stronger or weaker. A
 machine asks the relay which before it generates one, and the relay refuses
 any other. Changing it means a new anchor and every machine enrolling again.
+
 ML-DSA requires TLS 1.3, which the relay insists on everywhere, with
 `X25519MLKEM768` as the only key exchange and no setting to relax either.
 TLS 1.3 is also the first version to encrypt the client's certificate rather
@@ -902,7 +911,7 @@ rather than only beside the route in 1.10.
 
 Two things bound it. A fingerprint is a global identifier where a relay name is
 deliberately local, so what a reader learns is *which* relays carry mail to you
-and not merely what you call them; but an open relay cannot forward outward at
+and not merely what you call them. But an open relay cannot forward outward at
 all — `courier.home` beside open registration refuses to start — so what is
 disclosed is who carries in, never who you carry to. And the list cannot be
 withheld from your own users without making forwarding unusable for them: a
@@ -916,17 +925,18 @@ for the rest of what open registration discloses too.
 Set `registration` to `token` and nobody creates a mailbox without an
 invitation an administrator signed. Combined with each user running
 `auu allow push`, that keeps a relay to a known group. `closed` stops new
-mailboxes altogether while leaving the existing ones working. In every
-mode the display name a registration carries is held to the export line's
-rule and refused `400` otherwise. The rule is letters, digits, `.`, `_`
-and `-`, at most 64 bytes. That is because the relay serves it to every
-enrolled machine and the administrator's terminal. `auu lookup` and
-`auu-admin` print a name from a relay older than that rule with anything
-unprintable escaped, the confirmation before a mailbox is removed included.
-Every client prints a relay's refusal the same way, so a relay's own
-sentences cannot drive a terminal either. A machine's certificate label is
-stripped of the same characters a channel name may not hold before it is
-stored.
+mailboxes altogether while leaving the existing ones working.
+
+In every mode the display name a registration carries is held to the
+export line's rule and refused `400` otherwise. The rule is letters,
+digits, `.`, `_` and `-`, at most 64 bytes. That is because the relay
+serves it to every enrolled machine and the administrator's terminal.
+`auu lookup` and `auu-admin` print a name from a relay older than that
+rule with anything unprintable escaped, the confirmation before a mailbox
+is removed included. Every client prints a relay's refusal the same way,
+so a relay's own sentences cannot drive a terminal either. A machine's
+certificate label is stripped of the same characters a channel name may
+not hold before it is stored.
 
 The relay stores nothing it can read and needs no backups beyond whatever is
 still in transit. The relay's bundle can be reissued from the offline
@@ -990,8 +1000,8 @@ administrators file is: the relay refuses to start if it is writable by
 group or others, since whoever can write it decides which relays may put
 mail into this one's mailboxes.
 
-**Use one name for a neighbour in both places.** Nothing can enforce it — a
-relay cannot learn a neighbour's identity from its health answer — so the
+**Use one name for a neighbour in both places.** Nothing can enforce it. A
+relay cannot learn a neighbour's identity from its health answer. So the
 relay says at every start which names appear in one and not the other:
 
 ```
@@ -1022,7 +1032,7 @@ That line ends less than it may sound, and the difference matters to whoever
 removes it. It ends the key's standing *as a courier* there: the return paths it
 could write under your relay's name, and the courier budgets it drew on. It does
 not end its mailbox. A courier is an ordinary enrolled user of the relay it
-forwards to, and the forward route is open to every registered identity — a
+forwards to, and the forward route is open to every registered identity. A
 non-courier is refused only for writing a return path it has no right to. So the
 key stays an identity able to post, and to forward its own mail as any user
 does, under a user's budgets rather than a courier's. What ends that is what
@@ -1048,13 +1058,13 @@ make one and post through this relay to its neighbours, under this relay's
 own courier. Set registration to token or closed, or remove courier.home
 ```
 
-The forward route is open to every identity with a mailbox on this relay —
-it has to be, since forwarding is something your own users do — so with
+The forward route is open to every identity with a mailbox on this relay.
+It has to be, since forwarding is something your own users do. So with
 `registration: open` a stranger makes a mailbox in one request and posts
 through it. It reaches your neighbour under *your* relay's courier
 identity, spends the budget they gave you, and fills the queue you are
 holding for them. Nothing of it is delivered, because the recipient's
-allow list runs at the relay that delivers; but the remedy your neighbour
+allow list runs at the relay that delivers. But the remedy your neighbour
 has is to stop accepting from you. It is a refusal rather than a warning
 because the two settings are each reasonable alone and together undo what
 one of them is for.
@@ -1072,7 +1082,7 @@ relay-wide pair is two bounds because bytes do not bound files: the
 smallest envelope is about a hundred bytes, so a gigabyte of them is ten
 million rows and ten million files, and a relay that fills up should say
 so while it still has somewhere to write the saying. Over any of them the
-relay answers `507` and the sender tries again later; the queue empties
+relay answers `507` and the sender tries again later. The queue empties
 itself as the neighbour takes what is waiting, so there is nobody to tell.
 
 A neighbour is held to the relay-wide pair, to
@@ -1081,7 +1091,7 @@ and to no per-poster byte bound at all: a courier carries many people's
 mail, so one person's share of the bytes would refuse a busy neighbour's
 whole queue. Its own share of the rows is ten thousand by default, a
 hundred times a person's. It is there because the relay-wide pair bounds
-every poster together and not any one of them — one peer whose mail is not
+every poster together and not any one of them. One peer whose mail is not
 moving on, because what it sends through you is bound for somewhere that is
 down, would reach the relay-wide count by itself and everybody else's mail
 would be refused on its account. Like every per-poster bound here it counts
@@ -1103,7 +1113,7 @@ arrives and by its own timer, takes the oldest first and posts each to that
 neighbour's forward route. A neighbour that is not answering is left alone
 for a minute, then two, doubling to an hour, less a random part so that two
 relays which lost the same cable do not knock on the same second every hour
-for a week; the backing off is per neighbour and not per message, since a
+for a week. The backing off is per neighbour and not per message, since a
 neighbour that is down is down for every message waiting for it. A
 neighbour that refuses one message finally — an address it cannot route, a
 request it will not take — ends that message and goes on to the next, and
@@ -1114,7 +1124,7 @@ person who sent it reads which relay refused and why.
 is not answering — three days by default — after which the mail is failed
 and the person who sent it is told. `courier.max_hops` is how many relays
 one address may name, counting the path still ahead and the hops already
-taken together; it is at most 32, which every client holds an address to
+taken together. It is at most 32, which every client holds an address to
 as well, so an address that this relay would refuse is one a sender is
 told about before anything is sealed.
 
@@ -1154,7 +1164,7 @@ worth stating because the two numbers sit side by side in the table above and
 invite the opposite guess. A report costs this relay a row of the reporting
 neighbour's own share of the queue — `courier.queue_max_messages_per_courier` —
 so the question the rate answers is how fast one neighbour may spend that share
-on reports. At sixty a minute it needs nearly three hours to fill it; at the
+on reports. At sixty a minute it needs nearly three hours to fill it. At the
 posting rate of six hundred it would need about seventeen minutes. Nothing is
 lost by the slower drain: a relay passing back a long backlog of undeliverables
 honours the `Retry-After` it is given, and `courier.forward_ttl` is three days
@@ -1174,7 +1184,7 @@ and ending handed rows on a timer would tell every sender that every delivered
 message had failed. `courier.forward_ttl` ends a row that is still *waiting*,
 which is a relay that never got the message away, and that is a different
 thing. What it costs when it happens is that the sender reads `handed over`
-until the row is purged and then reads nothing; what keeps it rare is that it
+until the row is purged and then reads nothing. What keeps it rare is that it
 takes a peering an operator has half-configured, or a queue already at its
 bound, on top of a message that could not be delivered in the first place.
 
@@ -1185,7 +1195,7 @@ in a circle stops at the first relay it comes back to. A hash is kept for
 as long as the envelope could still be alive in the network ahead of it,
 and `courier.carried_max_rows` bounds how many there are. At that ceiling
 the relay refuses to take anything new rather than forgetting one, since
-forgetting is what the table exists to prevent; the refusal names the
+forgetting is what the table exists to prevent. The refusal names the
 setting.
 
 A neighbour offered an envelope this relay already holds answers `409`, and
@@ -1197,7 +1207,7 @@ repeat has more than one cause and they end differently:
   it.
 - **The id, a code and a sentence**, when that row has since ended there. Its
   report came back to a relay that never heard the id it names, and could not
-  take it; this answer is how the news arrives instead. The row ends the same
+  take it. This answer is how the news arrives instead. The row ends the same
   way and the report goes on back, so the sender reads the far relay's reason.
 - **The id of the message it became**, when the neighbour was the last hop and
   delivered it. Handed. The id is kept with the hash rather than looked up in
@@ -1234,7 +1244,7 @@ list for a courier's mailbox itself and answers as it would.
 
 Saying more would cost you something. Before this, a post to a courier's
 mailbox was simply taken, so the answer said nothing about your couriers
-file; a refusal of its own would turn these routes into a way for anyone
+file. A refusal of its own would turn these routes into a way for anyone
 holding a courier's fingerprint to ask which relays you accept forwards
 from, one fingerprint at a time.
 
@@ -1260,12 +1270,12 @@ forwarding work for them.
 
 It is not the disclosure the silent courier mailbox above exists to prevent.
 That one was an oracle open to anybody holding a fingerprint, who needed no
-mailbox here to use it; this route answers only identities that have one.
+mailbox here to use it. This route answers only identities that have one.
 
 **How much that narrows it is your `registration` setting.** With `token` or
 `closed` it is the identities an administrator let in, or the ones already there.
 With `open`, the default, a registered identity is anybody who asked, so your
-accept-side peering is public to anyone who asks for a mailbox — and one of those
+accept-side peering is public to anyone who asks for a mailbox. One of those
 identities is a neighbour's own courier, since a courier registers here in order
 to forward. [1.9](#19-keeping-a-relay-private) says what that costs beside the
 rest of what open registration discloses, and why the remedy is `token` rather
@@ -1274,7 +1284,7 @@ than a setting on this route.
 There is no paging and no parameter: `relayapi.MaxCouriers`, a thousand,
 bounds both the lines you may put in the file and the entries a client will
 read, so the whole list is one answer. A relay with no `courier` block answers
-an empty list rather than an error — it forwards nothing, and that is an
+an empty list rather than an error. It forwards nothing, and that is an
 answer. A line added to or removed from the file shows up in the next answer
 without a restart, as it does everywhere else the file is read.
 
