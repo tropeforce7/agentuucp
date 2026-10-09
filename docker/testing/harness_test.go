@@ -57,6 +57,12 @@ type machine struct {
 	// Of helpers below.
 	alias string
 	url   string
+	// bin is the directory auu, auu-admin and auu-ca are run from, empty
+	// for the PATH's, which are this tree's. Family O sets it to the
+	// previous release's, and asserts the version they say before anything
+	// else, since an old party quietly running this tree's auu would make
+	// every row pass and prove nothing.
+	bin string
 }
 
 var (
@@ -197,15 +203,26 @@ func (m *machine) exec(stdin string, argv ...string) result {
 	return r
 }
 
-func (m *machine) auu(args ...string) result { return m.exec("", append([]string{"auu"}, args...)...) }
+func (m *machine) auu(args ...string) result {
+	return m.exec("", append([]string{m.program("auu")}, args...)...)
+}
 func (m *machine) admin(args ...string) result {
-	return m.exec("", append([]string{"auu-admin"}, args...)...)
+	return m.exec("", append([]string{m.program("auu-admin")}, args...)...)
 }
 func (m *machine) ca(args ...string) result {
-	return m.exec("", append([]string{"auu-ca"}, args...)...)
+	return m.exec("", append([]string{m.program("auu-ca")}, args...)...)
 }
 func (m *machine) auuIn(stdin string, args ...string) result {
-	return m.exec(stdin, append([]string{"auu"}, args...)...)
+	return m.exec(stdin, append([]string{m.program("auu")}, args...)...)
+}
+
+// program is the path a command is run by on this machine: the bare name
+// for the PATH's, or the one in bin.
+func (m *machine) program(name string) string {
+	if m.bin == "" {
+		return name
+	}
+	return m.bin + "/" + name
 }
 
 // root runs a shell script on the machine as root, the way an operator or

@@ -634,7 +634,10 @@ again, which a sender's `--resume` after a lost answer can post, is
 acknowledged and not delivered twice. Where the channel keeps its mail and
 the relay still has your copy, the fetch says `N already held`; where it
 does not, the second copy is met as any message the relay serves again is,
-and nothing is said.
+and nothing is said. A copy that arrives again after you removed the first
+with `auu rm`, from the relay and from here, is new mail to this machine,
+since nothing here remembers mail removed that way, and it is delivered
+again.
 
 A thread id works there too. `auu reply THREAD-ID` answers whatever is latest
 on the thread, including your own last message. In that case it is a
@@ -728,15 +731,29 @@ and a stream's manifest are read strictly. So one that carries a field this
 build does not know is refused as malformed and kept under `damaged/`. That
 is what a peer running something other than this `auu` looks like from here.
 
-*Compatibility.* Everything you use, your `auu`, your peers' and the
-relays, goes to v0.15.0 once, together, and after that versions may differ.
-v0.14.0 and before are not supported. The break runs one way: v0.14.0
-reads what v0.15.0 sends, but v0.15.0 refuses a message v0.14.0 sealed,
-other than a stream, as malformed and keeps it under `damaged/`. The
-release note ([`docs/releases/v0.15.0.md`](releases/v0.15.0.md)) gives the
-order to upgrade in. From v0.15.0 on, a newer build adds what it adds through
-sections in messages and in what relays and clients send each other, and
-through refusal codes; an older build ignores what it may and refuses by
+*Compatibility.* v0.15.0 is the floor. Everything you use, your `auu`,
+your peers' and the relays, goes to v0.15.0 or later once, together, and
+after that versions may differ; v0.14.0 and before are not supported.
+v0.16.0 and v0.15.0 mix in any order, as sender, relay and recipient
+alike:
+
+| Sender | Relay | Recipient | What happens |
+| --- | --- | --- | --- |
+| v0.16.0 | v0.16.0 | v0.16.0 | Each copy of a message to several is delivered and read, and `auu reply --all` answers everyone. |
+| v0.16.0 | v0.16.0 | v0.15.0 | A message to several is read as a plain message from the sender; `--json` names `recipients` in `ignored_sections`, and `auu reply` reaches the sender alone. |
+| v0.16.0 | v0.15.0 | any | The relay takes every copy. A plain post carries nothing for it to read, and it ignores the count on a stream's open and on a copy sent on by bang path; its health answer says no `max-recipients`, so the sender holds itself to 32, the protocol's ceiling. |
+| v0.15.0 | any | any | Each message goes to one recipient, as it always has. |
+
+Nothing is kept as `newer` or `malformed` in any row. The break with
+v0.14.0 runs one way and is unchanged: v0.14.0 reads what v0.15.0 and
+v0.16.0 send, except a large message to several, and v0.15.0 and later
+refuse a message v0.14.0 sealed, other than a stream, as malformed and
+keep it under `damaged/`. The release notes give the order to upgrade
+in from v0.14.0 and what each release changed:
+[`docs/releases/v0.15.0.md`](releases/v0.15.0.md) and
+[`docs/releases/v0.16.0.md`](releases/v0.16.0.md). From v0.15.0 on, a
+newer build adds what it adds through sections in messages and in what
+relays and clients send each other, and through refusal codes; an older build ignores what it may and refuses by
 name what it must, and never reads a newer message with a part dropped.
 A relay's `wire_level` says what it can do.
 

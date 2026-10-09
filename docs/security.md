@@ -119,6 +119,28 @@ who they are, and only until the owner's fetch acknowledges it, it is
 replaced, or the mailbox goes. An owner who would rather the relay held
 no such thing pushes a card that says no knocks.
 
+**A message to several** is several messages to the relay. Each copy is
+sealed for one recipient and goes as a post, a stream or a forward of
+its own, and the list of everybody it went to, the `recipients` section,
+is inside each copy's seal, where the relay cannot read it. The relay
+reads a count, how many the message went to, on a stream's open and on a
+user's forward, which are the two requests with a body to carry one, so
+that it can hold the sender to `max_recipients`; it never reads who they
+are, and it neither stores nor logs the count. A courier's hand-over to
+the next relay carries no count, so a relay after the first learns
+nothing of it. On a plain post the relay reads nothing about the other
+recipients at all. What it does see is what any post shows it: one
+verified sender writing into several mailboxes close together, which a
+`full` access log records as it records every post. Every recipient
+reads the whole list, by fingerprint, so there is no blind copy: a
+person a message to several went to cannot be hidden from the others.
+And the list is the sender's word. A reader checks that the list names
+the reader, the copy's own recipient, and its form, and can check
+nothing else of whom it names, so a sender can name people they never
+wrote to. That is why `auu reply --all` sends only to people already on
+the replier's peer list, and refuses the whole reply, naming them, when
+anybody on the list is not.
+
 A listing held open (`wait`) tells the relay nothing it did not know. It is
 the owner's own listing, answered later. A directory watch (`peers`) tells
 it which peers the watcher may post to, which the directory fetch the
@@ -949,7 +971,10 @@ what this means for a person upgrading, and the release note
 [`docs/releases/v0.15.0.md`](releases/v0.15.0.md) gives the order. **Nothing on this
 machine is from before** either. A file a version from before a rule wrote
 is refused by name with a sentence saying what to do, never migrated and
-never read under the old rule. A relay's database from before schema 11,
+never read under the old rule, where the version is one before v0.15.0;
+a file v0.15.0 or later wrote is read by every later build, so a later
+build adds to a kept file's shape only in a way the older file still
+reads. A relay's database from before schema 11,
 a home's `config.json` of the shape from before it could know more than
 one relay, a record with no relay name, and an `auu-ca` key file that is
 not encrypted are each refused so. The relay's database is the one file

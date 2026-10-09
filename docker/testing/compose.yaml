@@ -26,6 +26,11 @@ services:
     build:
       context: ../..
       dockerfile: docker/testing/Dockerfile
+      # The previous release, cloned at its tag by run.sh for family O. A
+      # compose command run by hand, which builds nothing, never reads it;
+      # a build without run.sh fails at the stage that wants it, saying so.
+      additional_contexts:
+        prev: ${AUU_E2E_PREV:-./prev-is-cloned-by-run.sh}
     image: auu-e2e
     init: true
     entrypoint: ["/usr/local/bin/entrypoint-relay.sh"]

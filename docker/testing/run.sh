@@ -25,9 +25,31 @@ mkdir -p out
 command -v docker >/dev/null || { echo "docker is not installed" >&2; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "docker compose is not available" >&2; exit 1; }
 
+# prev is the release family O runs as the old party, the old relay and the
+# old tools; each release moves it to the one before. It is built from a
+# clone of this repository at its tag, made from the local object store and
+# fetching nothing, so that Go stamps the binaries with the tag as it stamps
+# any tagged build: a tree from git archive carries no version, and the
+# family's first assertion is the old binary's version.
+prev=v0.15.0
+repo=$(git -C "$here" rev-parse --show-toplevel)
+if ! git -C "$repo" rev-parse -q --verify "refs/tags/$prev" >/dev/null; then
+	echo "this clone has no tag $prev, which family O builds the previous release from; run 'git fetch --tags' and try again" >&2
+	exit 1
+fi
+prevdir=$(mktemp -d)
+removeprev() { rm -rf "$prevdir"; }
+trap removeprev EXIT
+# The clone is a directory under the context's root and not the root, so the
+# .dockerignore in the old tree, which leaves out .git, is not the context's.
+git -c advice.detachedHead=false clone -q --depth 1 --branch "$prev" "file://$repo" "$prevdir/src"
+export AUU_E2E_PREV="$prevdir"
+
 docker compose build
 docker compose up -d
 cleanup() {
+	# First, since a failing command in an EXIT trap under set -e ends it.
+	removeprev
 	if [ -z "${AUU_E2E_KEEP:-}" ]; then
 		docker compose down -v
 	else

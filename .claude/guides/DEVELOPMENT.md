@@ -375,7 +375,16 @@ one of them.
 request body embeds `relayapi.Sections`, and no row inside a list does
 (R3): a fact about a row is never critical, because a critical section on
 a page refuses the whole page, and a page one newer row refuses is a
-mailbox that does not drain on that machine. Everything from the wire is
+mailbox that does not drain on that machine. A post and a knock are not
+requests in this sense: their body is the outer envelope, which gains
+nothing (see the next rule), so a fact a
+relay needs about a post comes from a number the client holds itself to,
+read from the health answer as `max-recipients` is, or from a route of
+its own under a new wire level. The design for messages to several first
+assumed a post carried sections and put the recipient list on it; a
+v0.15.0 relay would have refused the fifth field, and the pre-read
+caught it against `server.go` before a line was written. Read a body's
+type before you plan to put something in it. Everything from the wire is
 read through `wire.Decode`, so a field nobody declared is refused by name,
 and a body's sections are held to `wire.CheckBody` at both ends: the
 list's shape, then 16 KiB as this build encodes them, then the sort, a
@@ -417,6 +426,53 @@ client keeps it and refuses a health answer without it; nothing compares
 it yet, and the first feature that depends on a relay's ability reads it
 and says "this relay is too old for that" before it tries.
 
+**A known section's data is read strictly, and a change to it is a new
+section name, never a field added to the old.** The door is lenient about
+a section a reader does not know and strict about one it does: a reader
+that knows the name decodes its data through `wire.Decode` under the
+section's own rule, its size before the decode, and refuses what it does
+not expect, a field the data does not have among it
+(`TestTheRuleTakesAListAndRefusesWhatBreaksIt`). So what a name says, it
+says for good, and `wire.known` is one namespace in which each name says
+one thing. The design for messages to several reached for one name three
+times: the sealed list, a list on the request for the relay's cap, and
+the relay's number on the health answer, all `recipients`. A list on a
+forward request would also have told the first relay who on other relays
+had been written to, which it learns from nothing else, when all it
+needs is how many. They became three names with one shape each:
+`recipients` for the sealed list, `recipient-count` (`{"n": N}`) on a
+request, and `max-recipients` (`{"max": N}`) on the health and status
+answers, `recipients.Name`, `recipients.CountName` and
+`recipients.MaxName`.
+
+**A section is critical only when reading without it would mislead.**
+Critical means a reader that does not know the section must not read the
+rest, so it is for a part whose absence makes the message say something
+false. `recipients`, the first known section, is not critical: without
+it a message to several reads truly as a message from the sender to the
+reader, and a reply reaches the sender, which is a correct message with
+less said. Made critical, it would have raised the envelope to
+`VersionCritical`, and every message to several would have been one a
+v0.15.0 machine keeps as `newer`, or leaves waiting on the relay when it
+is a stream, unread until that machine upgraded, for the sake of a list
+it could do without. Ask what an older reader would
+believe without the part, and mark it critical only when the answer is
+something untrue.
+
+**A relay setting a client must know travels in a health section after
+the floor, never in a new required field.** A client reads the health
+answer strictly, so a field a v0.15.0 client does not know is one it
+refuses by name, and a field a newer client requires is one it refuses a
+v0.15.0 relay's answer for lacking. Either would have made the release
+an upgrade in an order. `max_recipients` is said as the `max-recipients`
+section on the health answer and on the administrator's status answer;
+a client that knows it holds the number to its rule (1 to 32, refused as
+malformed outside it, never clamped) and reads its absence as a relay
+that holds no setting, so the protocol's ceiling binds; a client that
+does not know it ignores it. The fields a health answer requires were
+all in place at the floor, `wire_level` the last of them, added when
+everything was upgraded together; after it, none is added.
+
 **A client decides on a refusal's code and status, never its sentence.**
 Every refusal is `{"error", "code"}`, the code always written, empty for a
 refusal of no particular kind and shaped like a section's name otherwise.
@@ -439,31 +495,43 @@ another holds that every code is written by some route; and each code has
 a test through a real relay that fails if the relay writes the sentence
 without it.
 
-**Nothing on this machine is from before.** The same reasoning, for the
-files a version from before a rule wrote: there are no users, so a file
-from before is not supported, and every tolerance for one is a path
-nobody tests. A file from before a rule is refused by name with a
-sentence saying what to do — re-create it, delete it — never migrated
-and never read under the old rule. The relay's database is the one
-exception, and it has a floor: from schema 11 it is carried forward, and
-from before 11 refused (see "Storage"); a home's
-`config.json` of the shape from before a home could know more than one
-relay, and a relay's file loose in the home's root, are refused at
-`Open`, and `Config` is a strict decode that refuses a key it does not
-write; a spool record names its relay and is held at `Load` to every
+**Nothing on this machine is from before a rule.** A file from before a
+rule stays refused as written, and every tolerance for one would be a
+path nobody tests. Only a version before v0.15.0 can have written such a
+file, since a rule added from v0.15.0 on holds only what the release
+that adds it writes: a home v0.14.0 wrote is read as it is unless one of
+its files breaks a rule. The other direction is kept: a file v0.15.0 or
+later wrote is read by every later build, since v0.15.0 is the first
+version whose files are kept, so a change to a kept file's shape adds
+what it needs in a way the older file still reads. The outbox's second
+kind, a copy of a message to several, is told by the sealed file beside
+the record, `.stream` or `.env`, and never by a new required key, which
+would have made every record v0.15.0 left waiting broken on the first
+run after the upgrade; `TestARecordV0150WroteIsStillAStream` reads a
+record in v0.15.0's exact keys, and `TestLimitPendingRecordShapes` holds
+each kind to what this program writes for it. The rule runs one way: an
+earlier build need not read a later build's file. A file from before a
+rule is refused by name with a sentence saying what to do — re-create
+it, delete it — never migrated and never read under the old rule. The
+relay's database is the one exception, and it has a floor: from schema
+11 it is carried forward, and from before 11 refused (see "Storage"); a
+home's `config.json` of the shape from before a home could know more
+than one relay, and a relay's file loose in the home's root, are refused
+at `Open`, and `Config` is a strict decode that refuses a key it does
+not write; a spool record names its relay and is held at `Load` to every
 rule `Open` held it to; an outbox record without its relay is broken; a
 ledger entry that counts an attempt with no time is refused; an `auu-ca`
 key file that is a plain `PRIVATE KEY` block is refused, as is a relay
-record without `bundle_path`. Each refusal has its test, the file made in
-its old form. The tolerances that went — the home's move to `relays/`,
-the relay's seven migrations, `legacyWarning` and the first-time
-encryption of an authority, the empty relay name read as the default,
-the sweep's "entry from before there were timestamps" — each carried a
-lesson worth keeping, and those stay below in the past tense: they are
-about a migration that no longer exists, but what they taught about
-ordering a one-way move, a struct written back, and a state marker is
-general. The terminal escapers stay, as the last line under a rule and
-not the rule.
+record without `bundle_path`. Each refusal has its test, the file made
+in its old form. The tolerances that went — the home's move to
+`relays/`, the relay's seven migrations, `legacyWarning` and the
+first-time encryption of an authority, the empty relay name read as the
+default, the sweep's "entry from before there were timestamps" — each
+carried a lesson worth keeping, and those stay below in the past tense:
+they are about a migration that no longer exists, but what they taught
+about ordering a one-way move, a struct written back, and a state marker
+is general. The terminal escapers stay, as the last line under a rule
+and not the rule.
 
 **A listing held open is the owner's listing answered later, and over its
 cap the hold degrades rather than refusing.** `GET /v1/mailbox/{fp}?wait=D`

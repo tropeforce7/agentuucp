@@ -1634,16 +1634,53 @@ characters in the file, which were the sender's fingerprint, and the
 extract succeeded; nothing re-verifies a stored message. Navigate the JSON.
 
 **From v0.16.0, the suite runs against the previous release too (D41).**
-v0.15.0 is the first kept version of the wire, and from the next release
-the container suite runs each party as the previous release's real
-binaries as well as this one's: an old relay with new clients, a new relay
-with old clients, and two clients a release apart. A promise that an older
-build ignores or refuses by name what a newer one adds is tested by the
-older build itself, never by a fake of it; there is no fake old relay in
-the tree, and this is why. Until there is a release before the one being
-tested, the rule has nothing to run against, and v0.15.0's own suite
-proves the door from the new side only: family U has a build from the
-future sealed by `forge seal`.
+v0.15.0 is the first kept version of the wire, and v0.16.0 is the first
+release the rule runs for. Family O in `docker/testing` builds the
+previous release beside this tree: `run.sh` makes a local clone of the
+repository at the release's tag, fetching nothing, so that Go stamps the
+binaries with their version as it stamps any tagged build, and the image
+builds them in a stage of its own beside this tree's. Its rows are an old
+recipient reading a new message to several, as an envelope and as a
+stream; a new sender posting through an old relay; and an old sender,
+with the old tools, on a new relay. Each row checks each old program's
+version before it relies on it, so a row cannot pass against this
+tree's binary by mistake. A promise that an older build ignores or refuses by name what a
+newer one adds is tested by the older build itself, never by a fake of
+it; there is no fake old relay in the tree, and this is why. Each
+release moves the tag in `run.sh` to the release before it.
+
+**A known section comes with the tests that hold its rule on every path,
+and the first one is the worked case.** The `recipients` section and its
+two numbers were tested so, and a later section is held to the same. The
+rule runs where the sealer writes the section, before anything is signed
+(`TestSealManyRefusesBeforeItSigns`, which counts the signatures), and
+the manifest builder refuses the same lists and hands back nothing
+(`TestBuildManifestManyRefusesWhatSealManyRefuses`); on both sealed paths
+once the signature has verified, the envelope's `Open`
+(`TestAListThatBreaksTheRuleIsMalformedAtOpen`) and the manifest's
+`OpenManifest` (`TestAListThatBreaksTheRuleIsRefusedOnTheStreamPath`),
+each with its twin proving that a list under a signature that does not
+verify is refused for the signature and not the list
+(`TestAnUnsignedListIsRefusedForItsSignature`,
+`TestAnUnsignedListOnAStreamIsRefusedForItsSignature`); and at the
+store's `Load`, as the record rule, in `TestLimitStoredRecordShapes`. The
+size is checked before the strict decode, and the test feeds data over
+the cap whose last byte is not JSON, so a decode that ran first would say
+something else (`TestTheSizeIsCheckedBeforeTheDecode`). A count is held
+at its edges, 0, 1, 32 and 33, and at the type's extremes, beside the
+forms a JSON number may not take (`TestTheRuleTakesAListAndRefusesWhatBreaksIt`,
+`TestLimitRecipientNumbers`). A request's section is held at the relay
+through the real route, before anything is stored or charged where the
+route allows it, with the budget the refusal did not spend shown spent by
+the next request (`TestAStreamOpenIsHeldToMaxRecipients`), and after the
+charge on the forward route, where every decode is, with the cost shown
+(`TestAUsersForwardIsHeldToMaxRecipients`,
+`TestARefusedForwardCostsAPostAsAMalformedOneDoes`); a relay that must
+not read it is shown not to (`TestACouriersRecipientCountIsNotRead`), and
+the log is shown not to carry it (`TestTheCountIsNotLogged`). An answer's
+section is read by the client absent, present, outside its rule and of
+another shape (`TestTheHealthAnswersMaxRecipients`). And the previous
+release reads it, in family O, since only the old binary can say what the old binary does.
 
 ## Manual verification
 

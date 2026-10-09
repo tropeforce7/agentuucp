@@ -393,7 +393,11 @@ shape: `read` one message with `text` and `thread_subject`, `quarantine ls`
 a list without either. A message to several carries `recipients`, everybody
 it went to in its sender's order, each `fingerprint` and `name` (the name
 on this machine's peer list, absent for somebody not on it, the reader's
-own for the reader). A message you sent to several carries `copies`, one
+own for the reader). A peer on v0.15.0 reads a message to several as one
+from the sender to them alone: their `auu read --json` names `recipients` in
+`ignored_sections`, and their `auu reply` reaches the sender alone, so an
+answer from one recipient that the others never see is what that looks
+like. A message you sent to several carries `copies`, one
 per recipient: `fingerprint`, `name`, `path` (when by one), and `relay_id`
 once the relay has it, or `code` and `error` when it refused it, and
 `dropped` true for one given up with `auu outbox drop`. A reply given a subject of its own carries it in
@@ -564,8 +568,11 @@ A refused send names what to change, and nothing was queued:
   user waits or uses another relay. A message forwarded through a relay
   that refuses this way comes back as undeliverable in the same words.
   N is the relay's `wire_level`, which its health answer carries: 1 from
-  v0.15.0, rising when a relay can do something new, and required, so a
-  health answer without it is refused as malformed.
+  v0.15.0 and still 1 in v0.16.0, rising when a relay can do something
+  new, and required, so a health answer without it is refused as
+  malformed. A relay on v0.15.0 serves a v0.16.0 `auu` in full; its
+  health answer has no `max-recipients` section, so a message to several
+  there is held to 32.
 - `the relay at URL refused METHOD PATH (STATUS) in an error body without
   its "code"`, or `with an error code that is not one` — the relay is
   older than this `auu`, or what is at URL is not a relay of this

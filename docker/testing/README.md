@@ -65,6 +65,7 @@ reports`, is snapshotted for the matrix.
 | G      | a database an older release wrote: relay A stopped, its database replaced by one built from schema 11's text with one mailbox in it, owned and moded as the unit's files are, and the relay started, which keeps a copy readable by its user alone, carries the database to this schema, says so, and serves the mailbox; the snapshot is put back after |
 | V      | one peer vouching for another, across alice, bob and a fresh carol: an introduction carol adds on alice's word, with the comment saying whose word it was; a question about a key that alice answers by hand, nothing answering it by itself; and a vouch alice gives carol that carol's knock on bob carries, which bob's quarantine names as alice's word before it asks him anything |
 | U      | mail from a build from the future, sealed on alice's machine by `forge seal`: a message with a critical section bob's build does not know, kept under `damaged/` with the cause `newer: section "S"` and said to need a newer auu, by name, and counted apart from damaged mail; the same as a stream, which waits on the relay unacknowledged, marked in the listing and counted every run, with `read` and `reply` answering in one sentence; and a section bob need not know, which is ignored and named in `--json` as the message is read |
+| O      | the previous release, run as itself: its real `auu`, `auu-admin` and `auu-relay`, built from a clone of this repository at its tag and each checked by the version it says before a row relies on it; olive, enrolled by the old `auu` in a home of her own on bob's machine, reading a message to several from alice as a message from alice, the list named in `ignored_sections`, and her reply going to alice alone; the same as a stream; the relay swapped for the old one and every copy of a message to several taken, by bang path and as a stream; and olive writing to alice and bob on this relay, with the old `auu-admin` reading its status |
 
 Each family restores every machine from the snapshot before it starts, and
 each row undoes its own fault, so a row runs alone:
@@ -130,6 +131,19 @@ The sealing is `envelope.SealSections` and `stream.BuildManifestSections`
 and the posting `internal/dial`'s client, the same calls
 `internal/auu/sections_test.go` makes in process; family U is the same
 thing through a real relay.
+
+The image also carries the previous release, for family O. `run.sh` clones
+this repository at the tag it names in `prev`, from the local object store
+and fetching nothing, into a directory outside the repository's build
+context, and
+compose hands that to the build as the context `prev`; a stage of its own
+builds the four programs from it by the first stage's steps and command,
+for `./cmd/...` alone, into `/opt/auu-prev/bin`, off the PATH. A clone and not an archive,
+because Go stamps a binary with the tag only when it is built in a
+repository at that tag, and each row of the family first checks that the
+old program says it is the previous release. A clone with no such tag
+stops `run.sh` with the advice to run `git fetch --tags`. Each release
+moves `prev`, and `prevVersion` in `matrix_o_test.go` with it.
 
 `upstream/main.go` is the other program the image carries for the tests
 alone: a stand-in for api.anthropic.com on loopback that records the method,

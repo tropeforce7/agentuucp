@@ -17,6 +17,19 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -o /out/ ./cmd/... ./docker/testing/forge ./docker/testing/upstream
 
+# The previous release, for family O: the four programs from the clone run.sh
+# made at its tag, by the same steps and command as above for ./cmd/... alone, so the
+# version each says is Go's own stamping of the tag and nothing this file
+# adds. They go to /opt/auu-prev/bin, off the PATH, and a row names them.
+FROM golang:1.27 AS build-prev
+WORKDIR /src
+COPY --from=prev src/go.mod src/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY --from=prev src/ ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -o /out/ ./cmd/...
+
 FROM debian:13-slim
 # runuser and flock come with util-linux, pkill with procps; sqlite3 is what the guide's backup
 # line uses and what the matrix vandalises rows with; git is what 'auu serve'
@@ -38,5 +51,6 @@ RUN useradd --system --home-dir /var/lib/auu --no-create-home \
       --shell /usr/sbin/nologin --user-group auu-proxy \
  && install -d -m 0755 /etc/auu /etc/auu/delivered
 COPY --from=build /out/auu /out/auu-admin /out/auu-ca /out/auu-relay /out/forge /out/upstream /usr/local/bin/
+COPY --from=build-prev /out/auu /out/auu-admin /out/auu-ca /out/auu-relay /opt/auu-prev/bin/
 COPY docker/testing/entrypoint-relay.sh docker/testing/entrypoint-user.sh /usr/local/bin/
 RUN chmod 0755 /usr/local/bin/entrypoint-relay.sh /usr/local/bin/entrypoint-user.sh

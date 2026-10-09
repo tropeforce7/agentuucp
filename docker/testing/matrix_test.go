@@ -45,6 +45,7 @@ func TestMatrix(t *testing.T) {
 		{"G", "a database an older release wrote", upgradeRows},
 		{"V", "one peer vouching for another", vouchRows},
 		{"U", "mail from a build from the future", newerRows},
+		{"O", "the previous release", olderRows},
 	}
 	for _, f := range families {
 		f := f
@@ -79,6 +80,8 @@ func TestMatrix(t *testing.T) {
 // does.
 var familySetup = map[string]func(*testing.T){
 	"F": peerTheRelays,
+	// O03 sends a copy by bang path through the relays F peers.
+	"O": peerTheRelays,
 }
 
 // loadState reads from the machines what the cycle recorded in memory, so
