@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/tropeforce7/agentuucp/internal/testutil"
 )
 
 // The skills name commands, and a skill that names a command which does not
@@ -106,13 +108,20 @@ func formsIn(t *testing.T, path string) []form {
 				texts = append(texts, m[1])
 			}
 		}
+		// A line may hold several commands, and a command may stand behind
+		// a prompt, sudo, env or a path; each is read as its own form.
 		for _, text := range texts {
-			prog, sub, ok := commandLine(text)
-			if !ok {
-				continue
+			for _, piece := range testutil.FormPieces(text) {
+				prog, sub, ok := commandLine(piece)
+				if !ok {
+					continue
+				}
+				out = append(out, form{file: path, line: i + 1, prog: prog, sub: sub, text: piece})
 			}
-			out = append(out, form{file: path, line: i + 1, prog: prog, sub: sub, text: strings.TrimSpace(text)})
 		}
+	}
+	if inFence {
+		t.Errorf("%s: a fenced block is never closed, so everything after it was read the wrong way round", path)
 	}
 	return out
 }
@@ -193,21 +202,26 @@ func commandsOf(t *testing.T, path, after string) [][]string {
 func TestEverySkillCommandExists(t *testing.T) {
 	known := dispatched(t)
 	for _, path := range skillFiles(t) {
-		for _, f := range formsIn(t, path) {
-			groups, ok := known[f.prog]
-			if !ok {
-				t.Errorf("%s:%d: %q names %s, which is not one of the three programs", f.file, f.line, f.text, f.prog)
-				continue
-			}
-			if f.sub == "" {
-				continue // the program with a flag or a placeholder alone
-			}
-			if !dispatches(groups, f.sub) {
-				t.Errorf("%s:%d: %q names %s %s, which %s does not dispatch",
-					f.file, f.line, f.text, f.prog, f.sub, f.prog)
-			}
+		for _, f := range undispatched(known, formsIn(t, path)) {
+			t.Errorf("%s:%d: %q names %s %s, which %s does not dispatch",
+				f.file, f.line, f.text, f.prog, f.sub, f.prog)
 		}
 	}
+}
+
+// undispatched is every form whose command its program does not dispatch.
+// A form of the program with a flag or a placeholder alone names no command.
+func undispatched(known map[string][][]string, forms []form) []form {
+	var out []form
+	for _, f := range forms {
+		if f.sub == "" {
+			continue
+		}
+		if !dispatches(known[f.prog], f.sub) {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // undocumented is what the reference deliberately leaves out, each with the

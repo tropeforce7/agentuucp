@@ -1465,6 +1465,19 @@ command added, renamed or removed is a failing test rather than a skill
 that misleads an agent, and a new command belongs in `skill/reference.md`
 in the same commit as itself. `auu channel keep` shipped without its line in
 the usage block because nothing checked; this is that check.
+The documents tell a person what to type, and a command or a relay flag
+renamed in the code would leave every document that names it wrong with
+nothing failing. `TestEveryDocumentCommandExists` beside it reads the
+README, `docs/*.md` and `docs/releases/*.md` with the same reader, which
+splits a line at `;`, `&&`, `||`, `|` and `$(`. It also reads a form behind
+`$ `, `sudo` and its options, `env`, a variable set in front
+(`AUU_HOME=/x auu`), `ExecStart=` or a bin directory. In `cmd/auu-relay`,
+`TestEveryDocumentRelayFlagExists` holds every `auu-relay` form in the same
+documents, a line ending in `\` joined to the next, to the flags
+`registerFlags` builds. `TestTheRelayFlagTableMatchesTheFlagSet` holds the
+flag table in `docs/relay.md` section 1 to that set both ways. None of the
+three has an exemption: a release note that names a removed command as
+history gets one when it is needed, with its reason.
 
 **Keep `auu-admin` a separate binary.** The privilege boundary is then visible
 in what is installed where, the skill can be told never to run it, and an
