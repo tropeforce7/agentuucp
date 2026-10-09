@@ -8,7 +8,7 @@ git worktree of that checkout, and sending back what the program printed.
 
 One machine can be an expert for several projects: one channel each.
 
-`auu serve` runs until it is stopped, holding on the relay between rounds;
+`auu serve` runs until it is stopped, holding on the relay between rounds.
 `auu serve --once` is one round, for a timer or a person.
 
 ## The file
@@ -52,7 +52,7 @@ One machine can be an expert for several projects: one channel each.
 | `thread_ttl` | How long a thread's state is kept after its last message. Default `168h`. |
 
 `proxy` is the key-holding proxy, one section for the whole file, and is
-its own section below; a file without it hands the handler no key at all.
+its own section below. A file without it hands the handler no key at all.
 
 A path in the file that is not absolute — a channel's `dir`, the proxy's
 `key_file` or `control`, and the same two in the split proxy's own file —
@@ -68,9 +68,11 @@ nothing would be a channel nobody was serving. So is a field in another
 case than this guide's (`"Exec"` for `exec`), a field given twice, and
 anything after the closing brace, each of which the JSON reader would
 otherwise take without a word. The split proxy's own file is read the same
-way. `auu serve check` reads the
-file, checks every directory and program it names, and prints what it would
-serve, without touching a key, a relay or the network:
+way.
+
+`auu serve check` reads the file, checks every directory and program it
+names, and prints what it would serve, without touching a key, a relay or
+the network:
 
 ```
 $ auu serve check
@@ -95,7 +97,7 @@ warm session for the channel: the tour of the code is paid for once. At each
 new thread's first message the worktree is moved to whatever the checkout's
 HEAD is then, so the expert follows the project without anybody writing a
 hook. Untracked scratch — the test file the agent wrote to try something —
-survives that move; a tracked edit does not, and in this mode it was never
+survives that move. A tracked edit does not, and in this mode it was never
 going to be returned to anyone.
 
 **`side-copy`** is an expert that works. Every thread gets a worktree of its
@@ -118,7 +120,7 @@ git apply THREAD12.patch
 ```
 
 Three things follow from `git add -A`. What the handler committed is in the
-patch, and so is what it merely wrote. What `.gitignore` hides is not — a
+patch, and so is what it merely wrote. What `.gitignore` hides is not. A
 handler that writes its answer into an ignored path will find it does not
 travel. And a file that is not text travels too, since the diff is taken
 with `--binary`.
@@ -126,17 +128,17 @@ with `--binary`.
 A handler that changes files and prints nothing sends nothing at all: exit
 0 with no output is "nothing to say", so the message is settled, no reply
 goes out, and the work waits in the worktree until the thread is swept. The
-patch goes with an answer; it is not an answer by itself.
+patch goes with an answer. It is not an answer by itself.
 
 There is no limit on how large a patch may be. A big one becomes a stream
-rather than being refused, so what it meets in the end is the asker's
+rather than being refused. What it meets in the end is the asker's
 mailbox: an enormous diff fills it, the send fails, and after `retries` the
 message is left unanswered for the owner to look at. A side-copy expert
 that can produce diffs that large wants an `after` hook that refuses one,
 which is the same hook that runs the tests.
 
 A thread's worktree is let go of when the thread has been idle for
-`thread_ttl`; a read-only channel's is not, and lasts as long as the
+`thread_ttl`. A read-only channel's is not, and lasts as long as the
 channel is in the file.
 
 A worktree is not a container. Two threads cannot collide over files, but
@@ -180,28 +182,32 @@ files: read them, do not run them.
 
 What the handler prints on standard output is the reply. Exit 0 having
 printed nothing means "nothing to say": the message is settled and no reply
-goes out. Any other exit is a failure — the message stays unread, the
+goes out. Any other exit is a failure. The message stays unread, the
 attempt is counted, and the next round tries again until `retries` runs out.
+
 A reply is held to the same rule as a typed message — prose, with line
 breaks and tabs — and a Windows line ending is folded to a line break
 first, so a handler on Windows or any tool in text mode there is an honest
-answer; a lone carriage return, or any other control character, fails the
+answer. A lone carriage return, or any other control character, fails the
 round with the rule's sentence, recorded as that message's failure.
 
 The two hooks get the same environment less `AUU_SUBJECT`,
 `AUU_ATTACHMENTS` and the proxy's two variables, and nothing on standard
-input: they are not shown the message. `after` also gets `AUU_STATUS`, which is the handler's exit status
-as a number, or `timeout`, or `before` when the handler never ran because
-the before hook failed. A hook's output is never a reply.
+input: they are not shown the message. `after` also gets `AUU_STATUS`,
+which is the handler's exit status as a number, or `timeout`, or `before`
+when the handler never ran because the before hook failed. A hook's output
+is never a reply.
 
 Everything a hook or a handler writes to its standard error is printed to
 serve's own, with the thread's short id in front of each line. It is printed
 when the program has finished rather than as it goes: serve gives each
 program a file rather than a pipe, because a pipe held open by something the
-handler started would make the wait after a timeout never end. Each program
-is killed with everything it started when the timeout comes — on Unix
-through a process group of its own, on Windows by walking the process tree
-with `taskkill /T` — so a session the handler started does not outlive it.
+handler started would make the wait after a timeout never end.
+
+Each program is killed with everything it started when the timeout
+comes — on Unix through a process group of its own, on Windows by walking
+the process tree with `taskkill /T` — so a session the handler started does
+not outlive it.
 
 ## Which messages are answered
 
@@ -228,7 +234,7 @@ A thread id is a message id, 32 lowercase hex characters, and serve makes
 the thread's directory and its worktree's path from it. A message whose
 thread id is anything else — a peer's `--thread "../../outside"` — is
 refused as malformed when it is opened, kept under `damaged/` and
-acknowledged, and never reaches serve; a record in the spool with one,
+acknowledged, and never reaches serve. A record in the spool with one,
 which only a hand could have written, is that message's failure in the
 ledger and the round goes on to the next.
 
@@ -241,7 +247,7 @@ the acknowledgement.
 **The first start does not answer old mail.** With no ledger, everything in
 the inbox is written down as skipped and a sentence says how many. If it is
 a new expert whose mail is waiting for it, `auu serve --once --backlog`
-answers it instead; that belongs to a first start alone, and later it is
+answers it instead. That belongs to a first start alone, and later it is
 refused.
 
 **Mail on a served channel stays on the relay.** Every channel keeps its
@@ -262,7 +268,7 @@ auu serve ls                    # what is served, and the threads it is holding
 ```
 
 Without `--once` it runs until it is stopped. A round is a fetch and then
-every pending message; between rounds it holds a listing open on every relay
+every pending message. Between rounds it holds a listing open on every relay
 the home is on, so a message is answered when it arrives rather than at the
 next poll. A relay that cannot hold one is asked every twenty seconds, which
 is the same interval `auu watch` uses and is not a setting: a relay that can
@@ -277,11 +283,13 @@ at exit 2, when every relay's watch has ended for a reason no interval will
 change. A relay that is merely down is not one of those: serve says so once
 and waits for it to come back.
 
-`--config FILE` reads a file somewhere else. Exit 0 is a round in which
-everything was answered, or a service that was stopped; 1 is a bad file, or
-a `--once` round that left something unanswered; 2 is a relay that could not
-be reached, or another serve already running in this home; 4 is a home whose
-keys are locked, or unlocked only to receive.
+`--config FILE` reads a file somewhere else.
+
+Exit 0 is a round in which everything was answered, or a service that was
+stopped; 1 is a bad file, or a `--once` round that left something
+unanswered; 2 is a relay that could not be reached, or another serve already
+running in this home; 4 is a home whose keys are locked, or unlocked only to
+receive.
 
 One serve runs per home, held by `serve/lock`. The owner's own `auu inbox`
 is not blocked by it: that has a lock of its own, per relay, and waits.
@@ -304,7 +312,7 @@ answering.
 
 An expert host with an account of its own — a system user whose key is
 unencrypted, which is the shape for a machine that reboots unattended —
-runs as an ordinary system unit; `docs/creating-experts.md` section 7 sets
+runs as an ordinary system unit. `docs/creating-experts.md` section 7 sets
 that up from the account to the day-two commands.
 
 What follows is the other shape: a person's own account with an encrypted
@@ -336,10 +344,10 @@ journalctl --user -u auu-serve -f
 Lingering is the step people forget: without it a user unit runs only while
 that user has a session, so the expert would answer for as long as somebody
 was logged in and no longer. With an encrypted home, `auu unlock --send
---ttl 0` and `auu agent start` have to happen before the unit starts, and a machine that
-reboots unattended cannot do that for itself — which is the argument for
-leaving an expert host's home unencrypted and locking down the machine
-instead.
+--ttl 0` and `auu agent start` have to happen before the unit starts. A
+machine that reboots unattended cannot do that for itself — which is the
+argument for leaving an expert host's home unencrypted and locking down
+the machine instead.
 
 ## What it is holding
 
@@ -356,7 +364,7 @@ relay — so it is safe to run against a home whose service is busy.
 
 Threads do not last for ever. A thread nothing has touched for its
 channel's `thread_ttl` (a week by default) has its state directory deleted
-and, in `side-copy`, its worktree removed; the sweep runs when serve starts
+and, in `side-copy`, its worktree removed. The sweep runs when serve starts
 and after every round. A read-only channel's own worktree and directory are
 never swept: they are the channel's, and they hold the warm session's
 memory of the project. Nothing that is still work is swept — a message
@@ -391,7 +399,7 @@ reply then meets.
 
 **Narrow the tools.** The wrapper is where an agent's flags live, and the
 tool list is the operator's to cut down. `Edit` and `Write` are a side
-copy's tools, since a side copy's whole point is a change to send back; a
+copy's tools, since a side copy's whole point is a change to send back. A
 read-only expert still writes — a scratch test, a bit of output to read —
 but it writes through the shell in its own worktree, and nothing it writes
 leaves the machine. `auu` and `auu-admin` must never be in any expert's
@@ -434,42 +442,46 @@ a request whose first path element is a live token, strips it, drops every
 `x-api-key` to the real key, and forwards it, streaming the answer back as
 it arrives, so a server-sent event passes chunk by chunk. A request with no
 token, an unknown one or a dead one is `404` with one sentence and nothing
-is forwarded. The token is live from just before the handler starts until
-just after it exits, and dies before the `after` hook runs, so the hooks
-never hold one; the URL is worthless off the host, since the proxy is
-loopback, and worthless after the invocation, since the token is dead.
-Serve is serial, so one token is live at a time in the ordinary case; the
-proxy refuses to issue a seventeenth. Whatever serve inherited under
-`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL` — a unit
-still handing it the real key — is dropped from every program's environment,
-and `check` says so by name.
+is forwarded.
+
+The token is live from just before the handler starts until just after it
+exits, and dies before the `after` hook runs, so the hooks never hold one.
+The URL is worthless off the host, since the proxy is loopback, and
+worthless after the invocation, since the token is dead. Serve is serial, so
+one token is live at a time in the ordinary case; the proxy refuses to issue
+a seventeenth.
+
+Whatever serve inherited under `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`
+or `ANTHROPIC_BASE_URL` — a unit still handing it the real key — is dropped
+from every program's environment, and `check` says so by name.
 
 The proxy logs requests, never contents: one line per request on serve's own
 standard error with the token's first eight characters, the method, the path
 after the token, the upstream's status, the bytes each way and the time
 taken; a refusal logs the same with the reason (`no token`, `unknown
 token`, `revoked token`); a mint and a revocation log the token's first
-eight characters. No header, no body, no key. `auu serve check` prints
-`proxy: key from PATH (N bytes), listen 127.0.0.1:0, upstream
-https://api.anthropic.com` — the key's size and nothing else of it — and
-refuses a missing or empty key file, a listen off the host, a plain-http
-upstream off the host, and a section that names neither `key_file` nor
-`control`, each by name.
+eight characters. No header, no body, no key.
+
+`auu serve check` prints `proxy: key from PATH (N bytes), listen
+127.0.0.1:0, upstream https://api.anthropic.com` — the key's size and
+nothing else of it — and refuses a missing or empty key file, a listen off
+the host, a plain-http upstream off the host, and a section that names
+neither `key_file` nor `control`, each by name.
 
 What one user id cannot protect, said plainly: with the proxy in-process,
 serve and the handler run as the same account, so a file serve can read,
 the handler can read. The proxy therefore keeps the key out of the
 handler's environment, out of every reply, and out of anything a model does
-with what it was given; it does not stop a handler with a shell that knows
+with what it was given. It does not stop a handler with a shell that knows
 the file's path and is told to `cat` it. Two things narrow that: the key
 file's path is in `serve.json`, which the handler can also read, so the
 defence is not obscurity; and the model's shell is only there in side-copy
 mode. For a host where that is not enough, the proxy runs apart, as
-another account, with the key out of the handler's reach altogether; that
+another account, with the key out of the handler's reach altogether. That
 is the split proxy below.
 
 The outbound connection honours `HTTPS_PROXY` from serve's environment, as
-a host behind a corporate proxy needs; the key travels inside TLS to
+a host behind a corporate proxy needs. The key travels inside TLS to
 Anthropic whichever way the connection goes.
 
 ### The split proxy
@@ -492,7 +504,7 @@ names another — that holds the section's keys at the top level:
 ```
 
 `key_file` and `control` are both required there, the key file readable by
-the proxy's account alone; `listen` and `upstream` are as above. The
+the proxy's account alone. `listen` and `upstream` are as above. The
 expert's `serve.json` then carries `"proxy": {"control":
 "/run/auu-proxy/control.sock"}` and nothing else: not the key file's path,
 not who may ask, so the handler, which can read that file, learns nothing
@@ -506,21 +518,25 @@ account of the caller: its uid is in `allow_uids`, or its primary group is
 `allow_group`, or that group is among the groups the account database
 lists for it; with neither key set, the proxy's own primary group. Any
 other caller is closed before a byte is read, and logged with its uid and
-pid. Being able to reach the socket at all is the file mode's business,
-and the proxy gives the socket, and the directory when it is the proxy's,
-to `allow_group` at start — the callers' group, never the proxy's, since
-a caller put in the proxy's group could read the key file; the proxy's
-unit puts it in the callers' group so that it may. The protocol is one line each way, and `nc -U` speaks it: `PING`
-answers `OK`; `MINT` answers `OK http://127.0.0.1:PORT/TOKEN`, and the
-token lives for as long as that connection does — a `REVOKE TOKEN` on it
-ends it early, and so does simply closing it, so a serve that dies
-mid-invocation takes its token with it; a second `MINT` on one connection,
-or anything else, is `ERR` and a close. Every mint is logged on the
-proxy's own standard error with the caller's uid and pid, and its requests
-and refusals are logged there too, in the lines above; serve's own log
-says only that it asked, and where. The handler, being the same uid as
-serve, can also ask the socket for a token; what that buys is more use of
-the same key, never the key.
+pid. Being able to reach the socket at all is the file mode's business.
+The proxy gives the socket, and the directory when it is the proxy's, to
+`allow_group` at start — the callers' group, never the proxy's, since a
+caller put in the proxy's group could read the key file. The proxy's unit
+puts it in the callers' group so that it may.
+
+The protocol is one line each way, and `nc -U` speaks it: `PING` answers
+`OK`. `MINT` answers `OK http://127.0.0.1:PORT/TOKEN`, and the token lives
+for as long as that connection does. A `REVOKE TOKEN` on it ends it early,
+and so does simply closing it, so a serve that dies mid-invocation takes
+its token with it. A second `MINT` on one connection, or anything else, is
+`ERR` and a close.
+
+Every mint is logged on the proxy's own standard error with the caller's
+uid and pid, and its requests and refusals are logged there too, in the
+lines above. Serve's own log says only that it asked, and where.
+
+The handler, being the same uid as serve, can also ask the socket for a
+token. What that buys is more use of the same key, never the key.
 
 `auu serve` with `control` set in its file asks the socket for a token per
 invocation, on a connection it holds for the run and closes after, and
@@ -554,11 +570,11 @@ and answer on any channel. A tool allow list in a wrapper is advice to one
 particular program, not a boundary. If the expert must be contained, contain
 it the way anything else is contained: a separate Unix account with its own
 home and its own identity, or a container. Everything the expert can read,
-it can be asked about — the peer list is the whole of the access control,
+it can be asked about. The peer list is the whole of the access control,
 and anyone on it can ask anything.
 
 Messages are data, not instructions. A handler that acts on what a message
 tells it to do is a handler that does what the sender wants rather than what
 its owner wants. A wrapper around an agent should say so to the model in as
-many words, and tell it to stay inside the worktree whatever it is asked;
-the wrapper this repository will ship for Claude Code does both.
+many words, and tell it to stay inside the worktree whatever it is asked.
+The wrapper this repository will ship for Claude Code does both.
