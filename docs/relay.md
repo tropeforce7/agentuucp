@@ -448,13 +448,16 @@ relay carries any envelope version, ignores a section in a request it does
 not know and refuses one marked critical with `needs-newer`, and says what
 it can do as `wire_level`. v0.14.0 and before are not supported. The
 release note, [`docs/releases/v0.15.0.md`](releases/v0.15.0.md), gives the
-order. A v0.15.0 relay and v0.16.0 clients mix in any order, and so do a
-v0.16.0 relay and v0.15.0 clients. A v0.15.0 relay does not hold
-`max_recipients`: it ignores the count on a stream's open and on a user's
-forward, and its health answer says no `max-recipients`, so a v0.16.0
-client holds a message to several to 32, the protocol's ceiling, there.
-[`docs/releases/v0.16.0.md`](releases/v0.16.0.md) says what else
-changed.
+order. A v0.15.0 relay and v0.16.0 or v0.17.0 clients mix in any order,
+and so do a v0.16.0 or v0.17.0 relay and v0.15.0 clients. A v0.17.0
+relay is a v0.16.0 relay in what it does, and v0.17.0 clients send what
+v0.16.0 clients send. A v0.15.0 relay does not hold `max_recipients`:
+it ignores the count on a stream's open and on a user's forward, and its
+health answer says no `max-recipients`, so a v0.16.0 or later client
+holds a message to several to 32, the protocol's ceiling, there.
+[`docs/releases/v0.16.0.md`](releases/v0.16.0.md) and
+[`docs/releases/v0.17.0.md`](releases/v0.17.0.md) say what else changed,
+and the second takes a v0.14.0 relay straight to v0.17.0.
 
 `GET /v1/health` is exempt from all of it, so monitoring does not flap while
 the relay is under attack. Its answer says the relay's `max_bytes`,

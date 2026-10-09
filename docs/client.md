@@ -756,8 +756,10 @@ is what a peer running something other than this `auu` looks like from here.
 *Compatibility.* v0.15.0 is the floor. Everything you use, your `auu`,
 your peers' and the relays, goes to v0.15.0 or later once, together, and
 after that versions may differ. v0.14.0 and before are not supported.
-v0.16.0 and v0.15.0 mix in any order, as sender, relay and recipient
-alike:
+v0.17.0, v0.16.0 and v0.15.0 mix in any order, as sender, relay and
+recipient alike. v0.17.0 sends and relays what v0.16.0 does, and a
+message to a room is a message to several on the wire, so v0.16.0 in the
+table stands for v0.17.0 as well:
 
 | Sender | Relay | Recipient | What happens |
 | --- | --- | --- | --- |
@@ -768,12 +770,14 @@ alike:
 
 Nothing is kept as `newer` or `malformed` in any row. The break with
 v0.14.0 runs one way and is unchanged: v0.14.0 reads what v0.15.0 and
-v0.16.0 send, except a large message to several, and v0.15.0 and later
+later send, except a large message to several, and v0.15.0 and later
 refuse a message v0.14.0 sealed, other than a stream, as malformed and
 keep it under `damaged/`. The release notes give the order to upgrade
 in from v0.14.0 and what each release changed:
-[`docs/releases/v0.15.0.md`](releases/v0.15.0.md) and
-[`docs/releases/v0.16.0.md`](releases/v0.16.0.md).
+[`docs/releases/v0.15.0.md`](releases/v0.15.0.md),
+[`docs/releases/v0.16.0.md`](releases/v0.16.0.md) and
+[`docs/releases/v0.17.0.md`](releases/v0.17.0.md), which takes v0.14.0
+straight to v0.17.0.
 
 From v0.15.0 on, a
 newer build adds what it adds through sections in messages and in what
@@ -1302,6 +1306,13 @@ running as you can read them. And a passphrase in a file
 keeps one has opted out of the arrangement above, whatever the scope says.
 And one thing stays as it was. `inbox/` and `sent/` hold your mail after it
 has been opened, in the clear. Encrypting the keys protects the keys.
+
+A running agent looks at its socket every thirty seconds. When the
+socket is gone, when another file or another agent's socket stands at
+its path, or when its runtime directory is gone or is now a file, it
+locks, dropping the keys, and stops. It leaves alone whatever stands
+there, removing only a socket that is still its own. A path it cannot
+read it says once in its log, and goes on serving.
 
 Encryption is optional and a home that never runs `auu passphrase set` is
 untouched, byte for byte. A home that has can be read only by a build with

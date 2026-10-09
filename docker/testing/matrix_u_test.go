@@ -81,14 +81,14 @@ func u01(t *testing.T) {
 	r := bob.auu("inbox")
 	expectCode(t, r, 0)
 	// The sender by name, the section by name, where it was kept, and that
-	// the remedy is bob's, not alice's: damaged.go's keepNewer, and
-	// skill/reference.md's sentence.
+	// the remedy is bob's, not alice's, naming the reopen: damaged.go's
+	// keepNewer, and skill/reference.md's sentence.
 	stderrIs(t, r, fmt.Sprintf(`warning: relay message %d from alice needs a newer auu (section %q) and was kept as %s; `+
-		"update auu to read it", id, futureSection, keptFile(id)))
+		"update auu and open it with auu damaged reopen %s %d", id, futureSection, keptFile(id), relayName, id))
 	keptRecord(t, id, fmt.Sprintf(`newer: section \"%s\"`, futureSection))
 	// Counted apart from damaged mail, which would tell bob to ask alice
 	// to send it again.
-	newer := "1 message(s) kept under " + bobDamaged + " need a newer auu; update auu to read them"
+	newer := "1 message(s) kept under " + bobDamaged + " need a newer auu; update auu and open them with auu damaged reopen --all"
 	expectSays(t, r, 0, newer)
 	expectNot(t, r, "a newer ask", "ask their senders", "ask the sender")
 	if holds(queued(t, state.bobFP), id) {
@@ -100,7 +100,7 @@ func u01(t *testing.T) {
 	stderrIs(t, again, "")
 	verdict(t, "ok", "Bob's build keeps the message under damaged/ with the cause newer and the section's name, "+
 		"acknowledges it, and says in one warning who sent it, which section it needs, where it is and that the remedy "+
-		"is to update auu; the inbox counts it apart from damaged mail every run, and nobody is told to send it again.")
+		"is to update auu and reopen it; the inbox counts it apart from damaged mail every run, and nobody is told to send it again.")
 }
 
 func u02(t *testing.T) {

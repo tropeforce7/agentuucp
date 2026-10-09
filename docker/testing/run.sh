@@ -31,7 +31,7 @@ docker compose version >/dev/null 2>&1 || { echo "docker compose is not availabl
 # fetching nothing, so that Go stamps the binaries with the tag as it stamps
 # any tagged build: a tree from git archive carries no version, and the
 # family's first assertion is the old binary's version.
-prev=v0.15.0
+prev=v0.16.0
 repo=$(git -C "$here" rev-parse --show-toplevel)
 if ! git -C "$repo" rev-parse -q --verify "refs/tags/$prev" >/dev/null; then
 	echo "this clone has no tag $prev, which family O builds the previous release from; run 'git fetch --tags' and try again" >&2

@@ -18,10 +18,11 @@ import (
 // earlier build's files and never the reverse, so a home this tree has
 // written is not one the old build was promised to read.
 var olderRows = []matrixRow{
-	{"O01", "old_recipient", "alice writes to bob and to olive, who runs the previous release, and olive reads it as a message from alice", o01},
+	{"O01", "old_recipient", "alice writes to bob and to olive, who runs the previous release, olive reads it with everyone it went to and answers them all", o01},
 	{"O02", "old_recipient_stream", "the same as a stream, a message too large for an envelope", o02},
 	{"O03", "old_relay", "alice writes to several through a relay running the previous release, by bang path and as a stream", o03},
 	{"O04", "old_sender_and_tools", "olive writes to alice and to bob on this relay, and the previous release's auu-admin reads its status", o04},
+	{"O05", "room_to_old_recipient", "alice saves a room of bob and olive and sends to it, and both read it, olive on the previous release", o05},
 }
 
 const (
@@ -29,7 +30,7 @@ const (
 	prevBin = "/opt/auu-prev/bin"
 	// prevVersion is the release they are, which run.sh's prev names: the
 	// two move together, each release.
-	prevVersion = "v0.15.0"
+	prevVersion = "v0.16.0"
 	oliveHome   = "/home/bob/.auu-olive"
 )
 
@@ -158,38 +159,44 @@ func o01(t *testing.T) {
 	subject := "to bob and olive"
 	sendSeveral(t, "bob,olive", "--subject", subject, "one message, two readers")
 
-	id, ignored := readBySubject(t, olive, subject)
-	if strings.Join(ignored, ",") != "recipients" {
-		t.Errorf("olive's --json names %q in ignored_sections, want recipients", ignored)
-	}
-	r := olive.auu("read", id)
-	expectSays(t, r, 0, "one message, two readers")
-	expectNot(t, r, "newer", "malformed")
+	id := oldReadsAll(t, olive, subject, "one message, two readers")
 
-	// Her reply is to the sender alone: she has no --all, and the list was
-	// passed over.
-	replied := "olive's answer"
-	expectCode(t, olive.auu("reply", id, "--subject", replied, "answered by the previous release"), 0)
-	aid, _ := readBySubject(t, alice, replied)
-	expectSays(t, alice.auu("read", aid), 0, "answered by the previous release")
-	var in newerFetch
-	jsonOf(t, bob.auu("inbox", "--json"), &in)
-	for _, m := range in.Messages {
-		if m.Subject == replied {
-			t.Errorf("bob was sent olive's reply, which was for alice alone")
-		}
+	// Her reply --all answers alice and bob, through the relay the message
+	// came by.
+	replied := "olive's answer to everyone"
+	expectCode(t, olive.auu("reply", id, "--all", "--subject", replied, "answered by the previous release"), 0)
+	for _, m := range []*machine{alice, bob} {
+		rid, _ := readBySubject(t, m, replied)
+		expectSays(t, m.auu("read", rid), 0, "answered by the previous release")
 	}
 
 	bid, _ := readBySubject(t, bob, subject)
-	r = bob.auu("read", bid)
+	r := bob.auu("read", bid)
 	expectSays(t, r, 0, "one message, two readers")
 	if to := lineWith(r.stdout, "to:"); !strings.Contains(to, "you") || !strings.Contains(to, "olive") {
 		t.Errorf("bob's to: line is %q, want him and olive", to)
 	}
 	nothingDamaged(t, alice, bob, olive)
-	verdict(t, "ok", "The previous release reads a message to several as a message from its sender: the list is a section "+
-		"it does not know and need not, named in ignored_sections, and its reply goes to the sender alone, while this "+
-		"release's reader names everyone the message went to.")
+	verdict(t, "ok", "The previous release reads a message to several whole, passing over no section, names everyone "+
+		"it went to, and answers them all with reply --all.")
+}
+
+// oldReadsAll is the previous release's olive reading a message to her and
+// bob: nothing passed over in --json, the text, and a to: line naming bob
+// and her. It returns the message's id.
+func oldReadsAll(t *testing.T, olive *machine, subject, text string) string {
+	t.Helper()
+	id, ignored := readBySubject(t, olive, subject)
+	if len(ignored) != 0 {
+		t.Errorf("olive's --json names %q in ignored_sections, want none", ignored)
+	}
+	r := olive.auu("read", id)
+	expectSays(t, r, 0, text)
+	expectNot(t, r, "newer", "malformed")
+	if to := lineWith(r.stdout, "to:"); strings.TrimSpace(to) != "to:      bob, you" {
+		t.Errorf("olive's to: line is %q, want bob and her", to)
+	}
+	return id
 }
 
 func o02(t *testing.T) {
@@ -203,8 +210,8 @@ func o02(t *testing.T) {
 	}
 
 	id, ignored := readBySubject(t, olive, subject)
-	if strings.Join(ignored, ",") != "recipients" {
-		t.Errorf("olive's --json names %q in ignored_sections, want recipients", ignored)
+	if len(ignored) != 0 {
+		t.Errorf("olive's --json names %q in ignored_sections, want none", ignored)
 	}
 	out := "/home/bob/o02-olive"
 	t.Cleanup(func() { bob.root("rm -rf " + out) })
@@ -220,7 +227,7 @@ func o02(t *testing.T) {
 	}
 	readBySubject(t, bob, subject)
 	nothingDamaged(t, alice, bob, olive)
-	verdict(t, "ok", "The previous release reads a stream to several whole: its manifest's list is a section it passes over, "+
+	verdict(t, "ok", "The previous release reads a stream to several whole, passing over no section of its manifest, "+
 		"and the payload is the sender's to the byte.")
 }
 
@@ -253,7 +260,7 @@ func o03(t *testing.T) {
 
 	// An envelope to bob and, by bang path through relay-b and relay-c, to
 	// dave: the copy for dave is a user's forward carrying the count, which
-	// the old relay does not know and passes over.
+	// the old relay holds to its own max_recipients.
 	subject := "through the previous relay"
 	s := sendSeveral(t, "bob,bee!see!dave", "--subject", subject, "two copies, one forwarded")
 	if s.Recipients[1].Path == "" {
@@ -285,7 +292,7 @@ func o03(t *testing.T) {
 	}
 
 	// A stream to bob and olive: each open carries the count, which the
-	// old relay passes over as well.
+	// old relay holds to its max_recipients as well.
 	streamSubject := "a large one through the previous relay"
 	expectCode(t, alice.exec("", "sh", "-c", "head -c 102400 /dev/urandom > /home/alice/o03.bin"), 0)
 	t.Cleanup(func() { alice.exec("", "rm", "-f", "/home/alice/o03.bin") })
@@ -297,9 +304,8 @@ func o03(t *testing.T) {
 
 	expectNot(t, result{stdout: relayLogSince(m)}, "needs-newer", "too-many-recipients", "malformed")
 	nothingDamaged(t, alice, bob, olive, dave)
-	verdict(t, "ok", "A relay on the previous release takes every copy of a message to several: a plain post carries "+
-		"nothing it could refuse, the count on a stream's open and on a user's forward is a section it passes over, "+
-		"and a health answer with no max-recipients section is no obstacle to the send.")
+	verdict(t, "ok", "A relay on the previous release takes every copy of a message to several, by bang path and as "+
+		"a stream: the count on a stream's open and on a user's forward is one it knows and holds within its own limit.")
 }
 
 func o04(t *testing.T) {
@@ -322,5 +328,39 @@ func o04(t *testing.T) {
 	stderrIs(t, r, "")
 	nothingDamaged(t, alice, bob, olive)
 	verdict(t, "ok", "The previous release sends to this one as it always did, and its auu-admin reads this relay's "+
-		"status, passing over the max-recipients section it does not know.")
+		"status.")
+}
+
+func o05(t *testing.T) {
+	olive := oliveMeets(t)
+	// The room is alice's alone: nothing of it is posted, so olive's
+	// release has nothing to know.
+	expectCode(t, alice.auu("room", "create", "pair", "bob", "olive"), 0)
+	t.Cleanup(func() { expectCode(t, alice.auu("room", "delete", "pair", "--yes"), 0) })
+
+	subject := "to the room pair"
+	var s sentToSeveral
+	r := alice.auu("send", "--to", "pair", "--json", "--subject", subject, "one message, a room of two")
+	if r.code != 0 {
+		t.Fatalf("send to the room: exit %d\n%s%s", r.code, r.stdout, r.stderr)
+	}
+	jsonOf(t, r, &s)
+	if len(s.Recipients) != 2 || s.Recipients[0].Name != "bob" || s.Recipients[1].Name != "olive" {
+		t.Fatalf("the room went to %+v, want bob then olive", s.Recipients)
+	}
+	for _, c := range s.Recipients {
+		if c.RelayID == 0 || c.Code != "" || c.Error != "" || c.Waiting {
+			t.Fatalf("a copy was not taken: %+v", s)
+		}
+	}
+
+	oldReadsAll(t, olive, subject, "one message, a room of two")
+	bid, _ := readBySubject(t, bob, subject)
+	r = bob.auu("read", bid)
+	expectSays(t, r, 0, "one message, a room of two")
+	expectNot(t, r, "room:")
+	expectSays(t, alice.auu("read", s.ID), 0, "room:    pair")
+	nothingDamaged(t, alice, bob, olive)
+	verdict(t, "ok", "A room is a message to several on the wire: the previous release reads it whole with everyone it "+
+		"went to, the room's name travels nowhere, so bob's read names none, and alice's own read names it.")
 }
