@@ -2,13 +2,13 @@
 
 This is for the person who has been sent an enrolment token and wants to
 start sending and reading mail. You are not running the relay and not
-administering it; somebody else did that, and the token is what they gave
+administering it. Somebody else did that, and the token is what they gave
 you. By the end you will have an identity, a mailbox on their relay, a
 certificate for the machine you are sitting at, and the relay's own
 authority pinned so that nothing else can impersonate it.
 
 Everything here is one program, `auu`. The commands are the same whether the
-relay uses client certificates or not; where it matters, the text says so.
+relay uses client certificates or not. Where it matters, the text says so.
 
 ## 1. Install Go
 
@@ -21,8 +21,8 @@ go version
 ```
 
 The Go your distribution packages is usually older. Go 1.21 and later fetch
-the toolchain a module asks for by themselves, so any of those will do;
-anything older cannot. Either way, installing from go.dev is the sure path,
+the toolchain a module asks for by themselves, so any of those will do.
+Anything older cannot. Either way, installing from go.dev is the sure path,
 and the same on every Unix host.
 
 Go to <https://go.dev/dl/> and take the archive for your system: `linux-amd64`
@@ -81,13 +81,13 @@ signature: NOT checked; the issuer is not in your peer list. The relay will chec
 
 Three things to look at. The **relay** is where your identity will be
 registered, so it should be the one you were told about. The **use** should
-be `register`, which creates a mailbox; `cert` is for adding a machine to an
+be `register`, which creates a mailbox. `cert` is for adding a machine to an
 identity that already has one, which is section 8. And the **signature**
-line: `auu` can only check it against a key it already knows, and at this
-point it knows none, so the relay will do the checking. That is fine.
+line: `auu` can only check it against a key it already knows. At this point
+it knows none, so the relay will do the checking. That is fine.
 
 The token is a bearer credential. Anyone holding it can create a mailbox in
-your place until it is spent, and it is spent by exactly one use. Treat it
+your place until it is spent. It is spent by exactly one use. Treat it
 like a password until then.
 
 ## 4. Enrol
@@ -99,7 +99,7 @@ auu enrol --name bob --label laptop ccxt2.eyJpZCI6...
 `--name` is how the people you write to will address you: letters, digits,
 dots, underscores and hyphens, and not `self`, which is reserved. `--label`
 is what this machine is called in certificate listings, yours and the
-administrator's; it defaults to the hostname.
+administrator's. It defaults to the hostname.
 
 `auu` shows you the token again and asks:
 
@@ -111,7 +111,7 @@ Say `y` and, in order, it:
 
 1. Fetches the relay's **trust anchor** and checks it against the hash the
    token carries. The relay's certificate is under its operator's own
-   authority, not a public one, and this is how your machine comes to trust
+   authority, not a public one. This is how your machine comes to trust
    it. If the two do not match, nothing is written and you are told:
 
    ```
@@ -140,17 +140,17 @@ client certificate for this machine (laptop): expires 2027-09-08
 ```
 
 If the last line instead says `this relay does not use client certificates`,
-the relay has them switched off. Everything else still happened, and the
-rest of this document applies except the parts about certificates. Should
-the operator switch them on later, your next command says a certificate is
-missing; an ordinary token from the administrator and
+the relay has them switched off. Everything else still happened. The rest
+of this document applies except the parts about certificates. Should the
+operator switch them on later, your next command says a certificate is
+missing. An ordinary token from the administrator and
 `auu register --token TOKEN` issues one, with nothing else to redo.
 
 Add `--yes` to skip the question in a script.
 
 If the relay refused the token after your identity was created, `auu` says
 so and what to do: ask for a new token and run `auu register --token TOKEN`.
-Your identity is kept; there is no need to enrol again from the start.
+Your identity is kept. There is no need to enrol again from the start.
 
 ## 5. See what you have
 
@@ -180,8 +180,8 @@ relay's signing intermediate last seen: 9e4f…, issued 2026-09-08
 ```
 
 `relay.example.com` there is the name this home gave the relay, taken from its
-address. It is what you pass to `--relay` when you are on more than one; with
-one relay you never have to.
+address. It is what you pass to `--relay` when you are on more than one.
+With one relay you never have to.
 
 The anchor is what this machine now trusts for that relay, and nothing else:
 not the system's certificate store, not any public authority. That is the
@@ -189,8 +189,8 @@ intended state.
 
 ## 6. Exchange keys and lock your mailbox
 
-A token got you a mailbox. It says nothing about who is safe to talk to; that
-is still a person confirming a fingerprint with another person. Send your
+A token got you a mailbox. It says nothing about who is safe to talk to.
+That is still a person confirming a fingerprint with another person. Send your
 export line, the `ccx2.…bob` line above, to a colleague over a channel you
 both already trust, get theirs, and add it:
 
@@ -207,21 +207,23 @@ and says whether it is already on your list. That is for checking with the
 person, not a substitute for it.
 
 `allow push` tells the relay that only the people on your list may queue mail
-for you. Without it anyone registered on the relay can, and their messages
-land in quarantine rather than your inbox. From here the README's quick
-start is the rest: `auu send`, `auu inbox`, `auu read`, `auu reply`; and
-`client.md` is the client in full.
+for you. Without it anyone registered on the relay can. Their messages land
+in quarantine rather than your inbox.
+
+From here the README's quick start is the rest: `auu send`, `auu inbox`,
+`auu read`, `auu reply`. `client.md` is the client in full.
 
 ## 7. Day to day
 
 **Renewal is automatic.** The certificate lasts as long as the relay's
-operator set, a year by default, and `auu` renews it from sixty days before
+operator set, a year by default. `auu` renews it from sixty days before
 expiry as a side effect of whatever command you run, over the certificate it
-already holds; on an encrypted home a plain `auu unlock` is enough, since
+already holds. On an encrypted home a plain `auu unlock` is enough, since
 renewing this machine's own certificate originates nothing. `auu cert
-renew` does it now if you want to watch. A machine
-left unused past its expiry cannot renew, because the request would be
-presented with an expired certificate; `auu` then says:
+renew` does it now if you want to watch.
+
+A machine left unused past its expiry cannot renew, because the request
+would be presented with an expired certificate. `auu` then says:
 
 ```
 this relay requires a client certificate and this machine's is expired 2027-09-08:
@@ -230,10 +232,10 @@ run 'auu register --token TOKEN' with a token from an administrator
 
 With no working certificate left on record, the relay treats that as
 enrolling again rather than adding a machine, so an ordinary enrolment token
-does, and the certificate comes with it in the same step.
+does. The certificate comes with it in the same step.
 
 **The relay's own certificate can run out too**, if its operator lets the
-signing authority they were issued lapse. That is theirs to fix, and `auu`
+signing authority they were issued lapse. That is theirs to fix. `auu`
 says so rather than sending you to enrol again, which would not help:
 
 ```
@@ -242,9 +244,9 @@ on the offline machine and replace the bundle. Nothing on this machine is wrong
 ```
 
 **A token that has just expired** is still good for five minutes, the clock
-skew a relay allows between machines, and `auu token show` and the enrolment
+skew a relay allows between machines. `auu token show` and the enrolment
 prompt say so — `expired 30s ago; a relay accepts it for 5 minutes past that`
-— so you know whether to hurry. Past that it is `expired`, and the relay
+— so you know whether to hurry. Past that it is `expired`. The relay
 refuses it by name.
 
 **A rotation notice** looks like this and needs nothing from you:
@@ -270,7 +272,7 @@ again with a new token, which accepts what the relay serves now
 
 Those are the only two explanations, and only the operator can tell you
 which. Restoring a backup of the relay's host is the innocent one, and it
-happens; a new token from them is what lets your machine accept what the
+happens. A new token from them is what lets your machine accept what the
 relay serves now.
 
 **This one is different:**
@@ -281,21 +283,21 @@ if the relay was rebuilt, enrol again with a new token
 ```
 
 The relay is not under the authority you pinned. If the operator rebuilt
-their authority from scratch, they will know, and a new token from them
+their authority from scratch, they will know. A new token from them
 carries the new anchor. If they did not, you are not talking to their relay.
 Ask before doing anything.
 
 ## 8. A second machine
 
 Your identity can be on several machines. Each machine has its own
-certificate, and that is the point: a laptop can be revoked without touching
+certificate. That is the point: a laptop can be revoked without touching
 the desktop, and a copy of your files on somebody else's machine gets them
 nothing at the relay.
 
 Copy `~/.auu` to the new machine, **except every `cert.json`** under
 `relays/`, each of which is the first machine's credential for one relay,
 with its key. Then ask the administrator for a certificate token bound to
-your fingerprint; on their side that is `--use cert --for` your fingerprint,
+your fingerprint. On their side that is `--use cert --for` your fingerprint,
 which `auu id` prints. With it:
 
 ```
@@ -304,25 +306,29 @@ auu cert ls
 ```
 
 `cert ls` shows every machine on your identity, with its label and serial.
+
 A machine that tries to use the relay before this step is told exactly that
 its certificate is missing, and what to do. An ordinary enrolment token
 will not do here, because your identity already holds a live certificate on
-the first machine, and the relay says so in those words, with your own
+the first machine. The relay says so in those words, with your own
 fingerprint filled in: "this identity already holds a live certificate on
 another machine, so adding this one needs a certificate token: ask the
 administrator for one issued with `--use cert --for` FINGERPRINT".
 
 Both machines then see the same mail: a channel keeps its mail on the relay
 unless you set it otherwise, so what one machine fetches is still there for
-the other to fetch, and `auu channel keep NAME off` is what goes back to the
-mail leaving the relay as soon as one machine reads it. `auu rm MESSAGE-ID`
-removes a message from the relay and from the machine you run it on; the
-other machine's next `auu inbox` notices it has gone and stops marking it
-` on relay`, keeping its own copy. Your settings file travels with the home,
-so a copy made now carries the channels you have set.
+the other to fetch. `auu channel keep NAME off` is what goes back to the
+mail leaving the relay as soon as one machine reads it.
+
+`auu rm MESSAGE-ID` removes a message from the relay and from the machine
+you run it on. The other machine's next `auu inbox` notices it has gone and
+stops marking it ` on relay`, keeping its own copy.
+
+Your settings file travels with the home, so a copy made now carries the
+channels you have set.
 
 If you copied `cert.json` along with everything else, both machines work
-until either renews its certificate — and then the other is told its
+until either renews its certificate. Then the other is told its
 certificate was revoked, because a renewal retires the certificate it
 replaced and the copy was that certificate. The way out is the same
 sentence: a certificate token for this machine.
@@ -331,7 +337,7 @@ sentence: a certificate token for this machine.
 
 You can be on more than one relay from the same home, with one identity, one
 peer list and one inbox. Enrolling is the same command: the token says which
-relay, and it is added under the name of its host.
+relay. It is added under the name of its host.
 
 ```
 auu enrol --name bob ccxt2.eyJpZCI6...      # the other relay's token
@@ -345,7 +351,7 @@ auu relay ls
 * is the default; override it with --relay NAME or AUU_RELAY
 ```
 
-The first relay you joined stays the default; a later one does not take it.
+The first relay you joined stays the default. A later one does not take it.
 Say which you mean with `--relay`, or change the default once:
 
 ```
@@ -354,13 +360,13 @@ auu relay default personal
 ```
 
 `auu inbox` fetches from every relay you are on, so there is one inbox
-whichever way mail arrived, and a reply goes back the way its message came
+whichever way mail arrived. A reply goes back the way its message came
 without being told. Only `register`, `cert`, `anchor`, `lookup` and `send`
 need to be told which relay, and only when the default is not the one you
 want.
 
 One thing worth knowing before you join a second relay: it is the same
-identity, so the same fingerprint is registered on both, and anybody who can
+identity, so the same fingerprint is registered on both. Anybody who can
 see both relays can tell it is one person. If you want to be a different
 person on the other relay, give it a home of its own with `AUU_HOME` and
 enrol there from nothing.
@@ -369,7 +375,7 @@ enrol there from nothing.
 
 Tell the administrator which machine, by its label or serial from
 `auu cert ls`. They revoke that certificate and the relay refuses it on its
-very next request; your identity and your other machines are untouched.
+very next request. Your identity and your other machines are untouched.
 Revocation is about the relay: whoever has the machine still has whatever
 mail was already on it.
 
@@ -383,7 +389,7 @@ address means nothing about `auu`, which brings its own verifier.
 A relay behind a web server that terminates TLS for it presents that
 server's certificate instead. Tokens for such a relay name no anchor,
 `auu anchor` says none is pinned, and your machine verifies the server's
-certificate the ordinary way. That is the operator's arrangement, and it is
+certificate the ordinary way. That is the operator's arrangement. It is
 not a fault.
 
 ## Encrypting your keys
@@ -399,7 +405,7 @@ auu passphrase set
 That asks for a passphrase twice, encrypts the keys, and starts an agent that
 holds them unlocked for eight hours, so nothing else changes about how you use
 `auu`. When it locks, a command that needs the keys asks you for the
-passphrase again; an AI running `auu` for you cannot unlock them and will ask
+passphrase again. An AI running `auu` for you cannot unlock them and will ask
 you to run `auu unlock` in your own terminal instead. `auu id` says whether
 the keys are encrypted and whether they are unlocked right now. *Encrypting
 your keys* in `client.md` says what this protects and what it does not.
