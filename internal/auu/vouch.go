@@ -340,8 +340,8 @@ func peersAddVouched(args []string) error {
 	// already using it for somebody else, by the rule the knock uses.
 	name, takenBy := freeName(s, j.Doc.Subject, j.Doc.Name)
 	if takenBy != "" {
-		fmt.Printf("%q is already the name of %s on your peer list, so it is not offered\n",
-			j.Doc.Name, takenBy[:identity.ShortIDLen])
+		fmt.Printf("%q is already the name of %s, so it is not offered\n",
+			j.Doc.Name, takenBy)
 	}
 	if !*yes {
 		name = promptName(j.Doc.Subject, name)
@@ -368,8 +368,9 @@ func peersAddVouched(args []string) error {
 }
 
 // freeName is the name offered for a subject: the claimed one when no
-// other peer folds to it, and otherwise the fallback with the fingerprint
-// of the peer using it, so the collision can be said before the question.
+// other peer folds to it and no room has it, and otherwise the fallback
+// with what holds the name, a peer by its short fingerprint or a room by
+// its name, so the collision can be said before the question.
 // It is knockName's rule with the claim passed in.
 func freeName(s *store.Store, fp, claimed string) (name string, takenBy string) {
 	if claimed == "" || identity.ValidName(claimed) != nil {
@@ -378,8 +379,12 @@ func freeName(s *store.Store, fp, claimed string) (name string, takenBy string) 
 	peers, _ := s.Peers()
 	for _, other := range peers {
 		if other.Fingerprint() != fp && strings.EqualFold(other.Name, claimed) {
-			return fallbackName(fp), other.Fingerprint()
+			return fallbackName(fp), other.Short() + " on your peer list"
 		}
+	}
+	// A room's name is not offered either: one name means one thing.
+	if room := s.RoomNameTaken(claimed); room != "" {
+		return fallbackName(fp), "the room " + identity.Printable(room)
 	}
 	return claimed, ""
 }

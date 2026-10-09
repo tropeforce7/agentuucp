@@ -566,7 +566,7 @@ func peersFetch(args []string) error {
 	// nothing.
 	name, takenBy := suggestedName(s, found)
 	if takenBy != "" {
-		fmt.Printf("%q is already the name of %s on your peer list, so it is not offered\n", found.Suggested, takenBy[:identity.ShortIDLen])
+		fmt.Printf("%q is already the name of %s, so it is not offered\n", found.Suggested, takenBy)
 	}
 	if !*yes {
 		name = promptName(found.Public.Fingerprint(), name)

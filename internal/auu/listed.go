@@ -213,9 +213,11 @@ func findOnRelay(c *client.Client, r *store.Relay, query string) (*listedPeer, e
 // does not already use for somebody else, and peer-<fp8> otherwise. A
 // suggestion and never the label: the person accepts it or types another.
 //
-// Taken means what AddPeer refuses on, a peer whose name folds equal, so
-// the offer and the refusal agree: "bo" is offered beside "bob", and "Bob"
-// is not. Resolve is not the test, since it matches a name by unique
+// Taken means what AddPeer refuses on, a peer whose name folds equal or a
+// room with the name, so the offer and the refusal agree: "bo" is offered
+// beside "bob", and "Bob" is not. takenBy says what holds it, as the
+// sentence says it: a peer's short fingerprint on the peer list, or the
+// room by name. Resolve is not the test, since it matches a name by unique
 // prefix, and would have called a free name another peer's.
 func suggestedName(s *store.Store, found *listedPeer) (name string, takenBy string) {
 	fp := found.Public.Fingerprint()
@@ -227,8 +229,12 @@ func suggestedName(s *store.Store, found *listedPeer) (name string, takenBy stri
 	peers, _ := s.Peers()
 	for _, other := range peers {
 		if other.Fingerprint() != fp && strings.EqualFold(other.Name, found.Suggested) {
-			return fallbackName(fp), other.Fingerprint()
+			return fallbackName(fp), other.Short() + " on your peer list"
 		}
+	}
+	// A room's name is not offered either: one name means one thing.
+	if room := s.RoomNameTaken(found.Suggested); room != "" {
+		return fallbackName(fp), "the room " + identity.Printable(room)
 	}
 	return found.Suggested, ""
 }

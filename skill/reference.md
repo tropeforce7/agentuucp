@@ -94,6 +94,41 @@ cross a relay yet — `a large message does not cross a relay yet` — and a `--
 that knows the recipient's channels is the last hop; a name it refuses comes
 back later as a failed message and not as an error from `send`.
 
+Rooms, which are saved lists of recipients under a name:
+
+```
+auu room ls [--json]                               # every room and how many are in it: a read, which you may run
+auu room show NAME [--json]                        # who is in one: a read, which you may run
+auu room create NAME MEMBER...                     # the person's command, since a room decides who they write to; never run it
+auu room add NAME MEMBER...                        # the person's command; never run it
+auu room rm NAME MEMBER...                         # the person's command; never run it; removing the last member deletes the room
+auu room delete NAME [--yes]                       # the person's command; it asks first; never run it
+```
+
+A room is kept in `rooms.json` in this home and nowhere else. Nothing of
+it is posted, so no relay learns that a room exists. A second machine of
+the same identity has its own rooms, as it has its own peer list.
+
+A MEMBER is a peer as `auu send --to` takes one, by name, fingerprint or
+short id, or `self`. For somebody on another relay it is `RELAY!NAME`, or
+`R1!R2!NAME` with the nearest relay first, and `room show` prints those
+relays after `by`. Everybody but `self` must be on the peer list when the
+room is made or added to.
+
+A room's name has a peer name's form: letters, digits, `.`, `_` and `-`,
+at most 64 bytes. It may not be eight or more hex characters, in either
+case, which could be read as the start of a fingerprint. A room is named in
+full, in any case, and never by a prefix, and a room and a peer may not
+share a name. A home holds at most 256 rooms and a room 1 to 32 members.
+
+`room rm` names a member as the peer list does first. A member who is no
+longer on the peer list is named by the short id `room show` prints, or
+by eight or more characters from the start of their fingerprint. `room
+delete` removes the list alone: the peers in it stay on the peer list. A
+`rooms.json` that does not read, or breaks a rule, is said as a damaged
+file, exit 5. Until it is fixed, adding a peer is refused at exit 1, with
+the file named.
+
 Reading:
 
 ```
@@ -444,6 +479,14 @@ set), `queued` (a map of channel to count) and `error` (when set).
 `auu rm --json`: a list of `id`, `relay` (when one was involved),
 `removed_relay`, `removed_local`.
 
+`auu room ls --json`: `rooms`, a list in the order the rooms were made,
+each `name`, `members` — each `fingerprint`, `name` (the peer list's name
+for them, `you` for this identity, empty for somebody no longer on the
+peer list), `via` (when set: the relays to go by, nearest first, joined by
+`!`) and `problem` (when set: `not on your peer list`) — and `problem`
+(when set: `a peer is named X too`). `auu room show --json`: one such
+room.
+
 `auu damaged ls --json`: a list, oldest first, of `relay`, `id` (the
 relay's id for the message), `received`, `size` (the kept bytes on this
 disk), `cause` (the record's, such as `malformed` or `newer: section
@@ -676,6 +719,45 @@ From `auu damaged reopen`, which the person runs and you report:
   were` on stderr beside exit 4, or `… before this stopped; …` beside
   exit 2, or exit 1 when a file could not be written — what was filed
   stays filed; the user unlocks, or waits, and runs it again.
+
+From `auu room`:
+
+- `room ls` prints one line a room, `NAME N member(s)`, with `; K not on
+  your peer list` and `; a peer is named X too` when they apply, or `no
+  rooms; make one with auu room create NAME MEMBER...`. `room show` prints
+  `NAME, N member(s)`, then a line per member: the peer list's name for
+  them, `you`, or `(not on your peer list)`; then the short id; then `by`
+  and the relays, when the member has them.
+- `K not on your peer list: remove each with auu room rm, or add them
+  again with auu peers add`, and `a peer is named X too: one name means
+  one thing, so one of the two must go: auu room delete, or auu peers rm`
+  — from `room show`; report them, and the person decides which.
+- `room NAME made with N member(s)`, `N added to NAME, which has M
+  member(s)`, `removed` and the member's line for each one `room rm`
+  removed, then `N removed from NAME, which has M member(s)` or `NAME had
+  nobody left and is deleted`, and `room NAME deleted` — what the
+  person's command did; report it.
+- `delete the room NAME and its list of N member(s)? The peers stay on
+  your peer list [y/N]:` — `room delete` asking; anything but `y` or
+  `yes` prints `nothing was deleted; NAME is kept` on stderr and exits 1.
+- `X is not on your peer list, and a room holds only people this machine
+  can seal to; add them with auu peers add first (REASON)` — exit 1; the
+  person adds the peer, and only then the member. A name that matches
+  more than one peer is refused with which ones it matches instead.
+- `X names PEER (SHORT), who is not in NAME; auu room show NAME lists who
+  is, by a short id that names them alone`, and `X and Y are the same
+  member of NAME; name each once` — from `room rm`, exit 1.
+- `there is no room NAME; auu room ls lists them`, `X is not in NAME; auu
+  room show NAME lists who is`, `X is already in NAME; name each once`,
+  `X is the start of more than one member's fingerprint in NAME; give more
+  of it`, `there is a room NAME already; auu room add NAME MEMBER adds to
+  it`, `NAME is your peer SHORT's name, and a room and a peer may not share
+  one; choose another`, `NAME could be the start of a fingerprint, which
+  names a peer; give the room a name with a letter past f in it`, `X
+  names relays to reach yourself by; a copy to yourself goes nowhere, so
+  name self alone`, `NAME would have N members, and a room holds at most
+  32` and `this home has N rooms, the most it holds; auu room delete one
+  first` — exit 1, and nothing was changed.
 
 On stderr after the messages of `auu inbox` or `auu wait`, once per run,
 about your own allow list on one relay; the exit code is the run's own:

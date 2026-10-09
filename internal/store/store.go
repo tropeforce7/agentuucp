@@ -392,7 +392,7 @@ func (s *Store) configDamaged(cause error) error {
 }
 
 // NameFree reports whether a peer may be added under the name it carries:
-// nothing else on the list folds to it. It is what AddPeer refuses on,
+// nothing else on the list folds to it, and no room has it. It is what AddPeer refuses on,
 // asked separately by a command that must know before it does something
 // it cannot undo — a knock is posted before the peer is added, and a
 // refusal after the post would leave the knock sent and the peer out.
@@ -401,7 +401,10 @@ func (s *Store) NameFree(pub *identity.Public) error {
 	if err != nil {
 		return err
 	}
-	return nameFree(peers, pub)
+	if err := nameFree(peers, pub); err != nil {
+		return err
+	}
+	return s.roomNameTaken(pub.Name)
 }
 
 // nameFree is NameFree over a list already read. A peer already on the
@@ -504,6 +507,10 @@ func (s *Store) addPeer(pub *identity.Public, note string) (added bool, err erro
 			return false, fmt.Errorf("peer name %q is already used by %s; choose a different name",
 				pub.Name, existing.Short())
 		}
+	}
+	// One name means one thing: a peer may not take a room's (D56).
+	if err := s.roomNameTaken(pub.Name); err != nil {
+		return false, err
 	}
 	line := pub.ExportLine()
 	existing, err := os.ReadFile(s.path(peersFile))

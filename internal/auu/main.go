@@ -119,6 +119,12 @@ Usage:
   auu quarantine ls [--json]
   auu quarantine show MESSAGE-ID [--json]
   auu quarantine trust MESSAGE-ID
+  auu room ls [--json]              # saved lists of recipients under a name
+  auu room show NAME [--json]
+  auu room create NAME MEMBER...    # a member is a peer, self, or RELAY!NAME
+  auu room add NAME MEMBER...
+  auu room rm NAME MEMBER...        # the last one out deletes the room
+  auu room delete NAME [--yes]
   auu damaged ls [--json]           # what was kept because it could not be opened
   auu damaged reopen RELAY ID | --all [--json]  # open what needed a newer auu, with this one
 
@@ -359,6 +365,8 @@ func dispatch(args []string) error {
 		return cmdOutbox(rest)
 	case "damaged":
 		return cmdDamaged(rest)
+	case "room", "rooms":
+		return cmdRoom(rest)
 	case "inbox":
 		return cmdInbox(rest)
 	case "read":

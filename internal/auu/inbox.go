@@ -1946,8 +1946,8 @@ func cmdQuarantine(args []string) error {
 				identity.Printable(m.Inner.Body.Name))
 			offered = fallbackName(pub.Fingerprint())
 		} else if takenBy != "" {
-			fmt.Printf("%q is already the name of %s on your peer list, so it is not offered\n",
-				identity.Printable(m.Inner.Body.Name), takenBy[:identity.ShortIDLen])
+			fmt.Printf("%q is already the name of %s, so it is not offered\n",
+				identity.Printable(m.Inner.Body.Name), takenBy)
 		} else if offered != fallbackName(pub.Fingerprint()) {
 			fmt.Printf("they call themselves %s; that is their own claim, not a name you gave\n",
 				identity.Printable(m.Inner.Body.Name))
