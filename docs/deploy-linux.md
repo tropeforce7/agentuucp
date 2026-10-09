@@ -4,7 +4,7 @@ This puts an AgentUUCP relay on a Linux server as a system service: its own
 user, its own state directory, a certificate it obtains and renews itself, and
 a systemd unit that confines it to the little it needs. The host needs
 systemd 250 or later as PID 1 — Debian 12 or 13, Ubuntu 24.04 or later,
-Fedora, RHEL 9 and its rebuilds; the reason is in step 3a — and the commands
+Fedora, RHEL 9 and its rebuilds. The reason is in step 3a. The commands
 below are the ones every one of those has, with the package and firewall
 commands given for both families where they differ. It takes about fifteen
 minutes on a fresh host, and assumes you have a DNS name pointing at the
@@ -71,19 +71,19 @@ go install github.com/tropeforce7/agentuucp/cmd/auu-relay@latest
 ```
 
 That fetches the module, builds the relay for this processor, and leaves it
-in `~/go/bin`; step 3 moves it to `/usr/local/bin`, owned by root. It is
+in `~/go/bin`. Step 3 moves it to `/usr/local/bin`, owned by root. It is
 pure Go with no C dependencies, so nothing else needs installing.
 
 `scripts/install.sh` is steps 0 and 1 as one command: it installs Go only
-when the host has none new enough, and with `--relay` it builds `auu-relay`
-beside the client tools, into `/usr/local/bin` when run as root, so step 3
-is then already done. The README's install section has the curl line; add
+when the host has none new enough. With `--relay` it builds `auu-relay`
+beside the client tools, into `/usr/local/bin` when run as root. Step 3
+is then already done. The README's install section has the curl line. Add
 `--relay` to it (`| sudo sh -s -- --relay`). From a checkout on the host it
 is `sh scripts/install.sh --from . --relay`.
 
 If you would rather build on your own machine and copy the binary across,
 which the kit below needs since it packs the binary, remember that a binary
-is built for one kind of processor and will not run on another; Linux says
+is built for one kind of processor and will not run on another. Linux says
 only `Exec format error` when you try. Ask the host with `ssh HOST uname -m`
 and set `GOARCH` to match: `amd64` for `x86_64`, `arm64` for `aarch64`.
 
@@ -98,7 +98,7 @@ From a clone, `make relay-linux` builds the amd64 one into
 for, if you are unsure what you have.
 
 You do not need `auu-admin` on the server. Administration happens from an
-administrator's own machine, signed with their own key; the server only holds
+administrator's own machine, signed with their own key. The server only holds
 the list of who is allowed.
 
 ## The short way: a kit
@@ -106,21 +106,23 @@ the list of who is allowed.
 Steps 2 to 7 below can be done by a script instead: `auu-ca kit` packs the
 relay binary, the settings and the administrator file written for your host,
 the systemd unit, the relay's signing bundle and an installer into one
-archive, and `install.sh` on the host does what the steps do, printing each
-command before it runs it, and refuses a host that already has a relay. It
-needs systemd 250 or later as PID 1: Debian 12 or 13, Ubuntu 24.04 or later,
-Fedora, RHEL 9 and its rebuilds. On anything else it says so and stops, and
-the steps below are the way. **The host also needs `unzip`**, which a
-minimal install does not have: `apt install unzip`, or `dnf install unzip`,
-before the recipe below; `python3 -m zipfile -e FILE .` unpacks the archive
-too, if python3 is there and unzip is not.
+archive. `install.sh` on the host does what the steps do, printing each
+command before it runs it, and refuses a host that already has a relay.
+
+It needs systemd 250 or later as PID 1: Debian 12 or 13, Ubuntu 24.04 or
+later, Fedora, RHEL 9 and its rebuilds. On anything else it says so and
+stops. The steps below are the way. **The host also needs `unzip`**, which
+a minimal install does not have: `apt install unzip`, or
+`dnf install unzip`, before the recipe below.
+`python3 -m zipfile -e FILE .` unpacks the archive too, if python3 is there
+and unzip is not.
 
 Two things come first, on your own machine: the authority from step 3a,
 made once with `auu-ca init`, and the first administrator's export line,
 since a relay that admits nobody without a token needs somebody to issue
 them. The administrator prints their line on their own machine, as step 5
-describes; the relay does not exist yet, so `auu init` takes no `--relay`
-here, and an identity that already exists just prints its line:
+describes. The relay does not exist yet, so `auu init` takes no `--relay`
+here. An identity that already exists just prints its line:
 
 ```
 auu init --name bunty                 # once, on the administrator's machine
@@ -154,9 +156,9 @@ rm relay.example.com.zip
 
 `auu-ca kit` prints the archive's files with their hashes and the recipe
 above, and reminds you that the host needs `unzip`. `unzip -o` replaces a
-kit still unpacked there from last time without asking — without it, unzip's
-"replace?" prompt arrives on the terminal `sudo` is about to ask on, and
-what you type for one goes to the other. The python form unpacks without
+kit still unpacked there from last time without asking. Without it, unzip's
+"replace?" prompt arrives on the terminal `sudo` is about to ask on. What
+you type for one goes to the other. The python form unpacks without
 the files' modes, which the script does not depend on. The kit's own README
 says all of this again, for whoever has the archive and nothing else.
 
@@ -164,14 +166,16 @@ The archive holds the bundle, so it is handled exactly as `relay-bundle.json`
 is in step 3a: written 0600, copied, used, deleted at both ends, and
 `auu-ca show` warns about it until it is gone from your machine. The
 script seals the bundle to the host and deletes the plaintext before it
-starts the relay. `--without-bundle` leaves it out, for moving the bundle
-some other way; the script then installs everything else, stops before
+starts the relay.
+
+`--without-bundle` leaves it out, for moving the bundle some other way.
+The script then installs everything else, stops before
 starting the relay, and prints the `systemd-creds encrypt` and `systemctl
 enable --now` lines to run once the bundle is on the host.
 
 Once the relay is up, the administrator points their own machine at it,
 pinning its trust anchor — `auu-ca kit` printed the hash, and the script
-prints it again when it is done — and checks; this is step 5's
+prints it again when it is done — and checks. This is step 5's
 `auu init --relay --anchor` for an identity that already exists:
 
 ```
@@ -179,7 +183,9 @@ auu relay add https://relay.example.com:9443 --name work --anchor HASH
 auu-admin status
 ```
 
-Step 8 invites the first user. The script is `internal/kit/install.sh` in
+Step 8 invites the first user.
+
+The script is `internal/kit/install.sh` in
 the repository, and `scripts/kit-check.sh` runs it, fresh and as `update`
 (see *Day two*), under a real systemd in CI on every push.
 
@@ -193,11 +199,13 @@ install -d -m 0700 -o auu -g auu /var/lib/auu
 install -d -m 0755 /etc/auu
 ```
 
-`--system` gives a low uid, no password and no login; `--user-group` makes a
-group of the same name; `useradd` is the form every distribution has, where
-`adduser` differs between them, and `/usr/sbin/nologin` is on all of them
-(`command -v nologin` says where). The home directory is the state directory,
-and it must be `0700`: the relay refuses to start if its message directory
+`--system` gives a low uid, no password and no login. `--user-group` makes a
+group of the same name. `useradd` is the form every distribution has, where
+`adduser` differs between them. `/usr/sbin/nologin` is on all of them
+(`command -v nologin` says where).
+
+The home directory is the state directory. It must be `0700`: the relay
+refuses to start if its message directory
 is writable by anyone else, because a file dropped in there would be a
 message it never received.
 
@@ -225,8 +233,8 @@ auu-ca init --name "Your Organisation"
 `init` asks for a passphrase, twice, and encrypts every private key it writes
 under it. Keep it somewhere that is not the backup of this directory: without
 it the authority is gone and every machine enrols again under a new anchor.
-`relay` asks for it too, once a year; `show` never does. For an unattended
-run, `--passphrase-file PATH` reads the first line of a file, and standard
+`relay` asks for it too, once a year. `show` never does. For an unattended
+run, `--passphrase-file PATH` reads the first line of a file. Standard
 input is read when it is not a terminal.
 
 `init` prints the trust anchor's hash. Keep that too: it is what an enrolment
@@ -247,9 +255,11 @@ The bundle is the relay's two signing keys, in the clear, which is why the
 file is deleted at both ends the moment the sealed credential exists — and
 why `auu-ca show` nags about the local copy until you do. `auu-ca` writes it
 mode 0600 and `scp` keeps that mode. A kit (*The short way*, above) holds
-the same bundle inside its archive, and `show` warns about that file the
-same way. If you would rather it never touched a
-disk at all, there is a form for that below. Do not shorten any of this to
+the same bundle inside its archive. `show` warns about that file the same
+way.
+
+If you would rather it never touched a disk at all, there is a form for
+that below. Do not shorten any of this to
 `auu-ca relay --out - | ssh … sudo …`: the two sides of a pipe start
 together and both ask on the terminal at once, and ssh reports your correct
 password wrong three times while `auu-ca` waits for a passphrase it never
@@ -265,7 +275,7 @@ Five things about the `systemd-creds` command:
   the TPM2 together when the machine has a TPM2, the host key alone when it
   does not. The host key is `/var/lib/systemd/credential.secret`, root-only,
   made on first use.
-- It needs root on the server, which is what `sudo` is for, and `sudo` needs
+- It needs root on the server, which is what `sudo` is for. `sudo` needs
   a terminal to ask you on, which is what `ssh -t` is for.
 - It reads the credential from standard input when the input is `-`, which
   is how the bundle can be sealed without a file anywhere: `auu-ca relay
@@ -275,19 +285,19 @@ Five things about the `systemd-creds` command:
   `printf '%s\n' "$bundle" | ssh you@relay.example.com 'umask 077 && cat >
   /dev/shm/relay-bundle.json'`, then `unset bundle`, then the `ssh -t … sudo
   systemd-creds encrypt` line above with `/dev/shm/relay-bundle.json` in
-  place of `relay-bundle.json`. `/dev/shm` is memory; `rm` it as above. The
+  place of `relay-bundle.json`. `/dev/shm` is memory. `rm` it as above. The
   one-line pipe is right only when ssh is by key and `sudo` asks nothing.
 - The result, `/etc/auu/relay-bundle.cred`, is ciphertext, written by root
-  at mode 0644. That is fine as it is — without the host key it decrypts for
-  nobody, root included — and `chmod 0600` costs nothing if you prefer it.
+  at mode 0644. That is fine as it is. Without the host key it decrypts for
+  nobody, root included. `chmod 0600` costs nothing if you prefer it.
   The relay never reads it directly, and needs no access to it.
 
 `systemd-creds` and `LoadCredentialEncrypted=` arrived in systemd 250, which
 is the one requirement this guide puts on the host: Debian 12 ships 252 and
 13 ships 257, Ubuntu 24.04 255, Fedora and RHEL and CentOS Stream 9 252 or
-later, and this guide was run to the end on Debian 13 and Ubuntu 24.04 —
+later. This guide was run to the end on Debian 13 and Ubuntu 24.04.
 `scripts/systemd-check.sh` is that run, steps 2 to 7 on a throwaway host as
-root, and CI repeats it on every push. Ubuntu 22.04 has systemd 249 and no
+root. CI repeats it on every push. Ubuntu 22.04 has systemd 249 and no
 `systemd-creds` at all: on it, use the plain file below until 24.04. A
 host without systemd takes the plain file too. On the RHEL family,
 SELinux has not been tried.
@@ -296,12 +306,12 @@ For a relay that is not under systemd, or whose secrets are managed some
 other way, `auu-ca relay --out relay-bundle.json` writes a plain file, `scp`
 and `install -o auu -g auu -m 0600` put it at `/etc/auu/relay-bundle.json`,
 and the settings name it as `tls.bundle`. The command then tells you to
-delete the file from your own machine, and `auu-ca show` warns for as long
+delete the file from your own machine. `auu-ca show` warns for as long
 as it is still there: it holds live signing keys, and your backups must not.
 
 The bundle does **not** hold the trust anchor's key, or either offline
-authority's; a test asserts that by searching it for their bytes. Back up the
-`auu-ca` directory — it is the one thing that cannot be reissued.
+authority's. A test asserts that by searching it for their bytes. Back up the
+`auu-ca` directory. It is the one thing that cannot be reissued.
 
 ## 4. Write the settings
 
@@ -334,42 +344,46 @@ address:
 ```
 
 `tls.bundle_credential` is the name the credential was sealed under in step
-3a; the relay looks for it in the directory systemd fills at start and refuses
+3a. The relay looks for it in the directory systemd fills at start and refuses
 to start, naming the `LoadCredentialEncrypted=` line it expected, if it is not
-there. A plain file is `"bundle": "/etc/auu/relay-bundle.json"` instead;
-give one or the other, never both.
+there. A plain file is `"bundle": "/etc/auu/relay-bundle.json"` instead.
+Give one or the other, never both.
 
 The relay makes its own certificate, so it needs no particular port and no
-public certificate authority. `listen` above can be anything; 443 is not
-special any more, and the unit below runs the relay without the capability to
+public certificate authority. `listen` above can be anything. 443 is not
+special any more. The unit below runs the relay without the capability to
 bind it. Whatever the port, **`public_url` must name it too**, as `:9443` does
 above: tokens carry `public_url` and machines connect to it, and the relay
-warns at startup when the two disagree. **Its host must be one the bundle was
-issued for**, a `--host` from step 3a: machines verify the relay's
-certificate against the name they connect by, and the certificate is minted
-for the bundle's hosts, so a bundle for another host would lock every user
-out. The relay refuses to start instead, naming the host `public_url`
-carries, the host the bundle was issued for, and the `auu-ca relay` command
-that issues a bundle for the right one. Nothing goes in front of the relay:
-it terminates TLS itself, and a reverse proxy is not supported.
+warns at startup when the two disagree.
+
+**Its host must be one the bundle was issued for**, a `--host` from step
+3a: machines verify the relay's certificate against the name they connect
+by, and the certificate is minted for the bundle's hosts, so a bundle for
+another host would lock every user out. The relay refuses to start
+instead, naming the host `public_url` carries, the host the bundle was
+issued for, and the `auu-ca relay` command that issues a bundle for the
+right one.
+
+Nothing goes in front of the relay: it terminates TLS itself, and a
+reverse proxy is not supported.
 
 Four of those are choices rather than facts about your host, and a fifth is
 a limit worth knowing about:
 
 - **`registration: "token"`** means nobody gets a mailbox without an invitation
   an administrator signed. It is the right default for a relay you are putting
-  on the public internet. `open` lets anyone register; `closed` stops new
+  on the public internet. `open` lets anyone register. `closed` stops new
   mailboxes while the existing ones keep working.
 - **`access_log: "minimal"`** logs the route rather than the path and omits
   the caller. In `full` mode the journal records who is writing to whose
-  mailbox, which is the social graph; on a relay shared beyond one team, do not
+  mailbox, which is the social graph. On a relay shared beyond one team, do not
   keep that.
 - **`client_certs.mode`** is `off` here. Set it to `required` and the relay
   issues each machine a certificate of its own when it enrols, and refuses any
   request that does not present a live one. It is a second credential per
   machine, not per person: it is what lets you revoke a stolen laptop without
   touching its owner's identity. It costs each user an extra token when they
-  add a second machine, and switching it on later costs each existing user one
+  add a second machine. Switching it on later costs each existing user one
   ordinary token. See *Client certificates* below, and the section of that
   name in `relay.md` for what it does and does not protect.
 - **`limits.max_waiting`**, 64 unless you set it, caps how many listings
@@ -377,10 +391,11 @@ a limit worth knowing about:
   to answer only when mail arrives rather than at once. A held listing
   keeps one of the `max_inflight` request slots (256) for as long as it is
   held, up to a minute, so `max_waiting` must sit well under `max_inflight`
-  or watchers alone could fill the relay; the defaults leave 192 slots for
-  everything else, and the relay refuses to start when `max_waiting` is
-  not under `max_inflight`, naming both. Over the cap the relay does not refuse anyone: the next
-  listing that asks to be held is answered at once, as a relay without the
+  or watchers alone could fill the relay. The defaults leave 192 slots for
+  everything else. The relay refuses to start when `max_waiting` is not
+  under `max_inflight`, naming both. Over the cap the relay does not refuse
+  anyone: the next listing that asks to be held is answered at once, as a
+  relay without the
   feature would answer it, and the watcher asks again at its interval.
 
 
@@ -396,17 +411,18 @@ Expect exactly this refusal:
 auu-relay: tls.bundle_credential is "relay-bundle" but CREDENTIALS_DIRECTORY is not set: the relay is not running under a unit with LoadCredentialEncrypted=relay-bundle:... in it
 ```
 
-The bundle is a credential, and credentials exist only inside the running
+The bundle is a credential. Credentials exist only inside the running
 service, so outside the unit this is the right answer. It is also the last
 check the relay makes: every other refusal — an unknown key, a directory with
 the wrong mode, an administrator file it cannot read — comes before it, so
-any *other* message is a real problem with the file. Do not run this as root.
-Resolving the settings creates the message directory if it is missing, and
-one created by root is one the service cannot write to. To see the printed
-settings anyway, add `--tls-mode off --tls-bundle-credential ''` — and
-`--client-certs off` if you have turned them on — which leaves the bundle out
-of the picture for this one run; the bundle itself is checked at step 7, from
-the journal.
+any *other* message is a real problem with the file.
+
+Do not run this as root. Resolving the settings creates the message
+directory if it is missing, and one created by root is one the service
+cannot write to. To see the printed settings anyway, add
+`--tls-mode off --tls-bundle-credential ''` — and `--client-certs off` if
+you have turned them on — which leaves the bundle out of the picture for
+this one run. The bundle itself is checked at step 7, from the journal.
 
 ## 5. Name the first administrator
 
@@ -439,11 +455,13 @@ ccx2.<base64>.bunty
 ```
 
 The file must not be writable by group or others — anyone who can write it can
-appoint themselves — and the relay refuses to start if it is. The relay loads
-it at start and re-reads it whenever it changes, so adding or removing an
-administrator later is an edit, not a restart; the journal shows
-`administrators loaded count=1` at start and `administrators reloaded count=N`
-at each edit, which is also how you would notice an edit that was not yours.
+appoint themselves — and the relay refuses to start if it is.
+
+The relay loads it at start and re-reads it whenever it changes, so adding
+or removing an administrator later is an edit, not a restart. The journal
+shows `administrators loaded count=1` at start and
+`administrators reloaded count=N` at each edit, which is also how you would
+notice an edit that was not yours.
 
 ## 6. Install the unit and start it
 
@@ -461,12 +479,12 @@ so that you can judge any change to it:
   start, systemd unseals the bundle from step 3a into a directory only this
   service can see, and tells the relay where in `$CREDENTIALS_DIRECTORY`. The
   ID before the colon is the one `systemd-creds encrypt --name=` was given and
-  the one `relay.json` names; all three must agree, and a test in the
+  the one `relay.json` names. All three must agree. A test in the
   repository holds the two shipped files to it. The credentials directory is
   inside the service's own mount namespace and needs no `ReadOnlyPaths=`.
 - **`User=auu`** with **`CapabilityBoundingSet=`** empty: nothing runs as
   root and the relay holds no capability. It needs none, because it makes its
-  own certificate and so has no reason to be on 80 or 443; the comment in the
+  own certificate and so has no reason to be on 80 or 443. The comment in the
   unit says which two lines to add back if you put it on 443 anyway.
 - **`StateDirectory=auu`** at mode `0700`: systemd creates `/var/lib/auu`,
   owns it for the service, and makes it the only writable path. The database
@@ -485,7 +503,7 @@ so that you can judge any change to it:
 - **`RestrictAddressFamilies=AF_INET AF_INET6`**: it can open network sockets
   and nothing else.
 - **`TimeoutStopSec=30`**: on `stop` the relay finishes the requests it is
-  handling and then exits; systemd waits that long before killing it. A
+  handling and then exits. systemd waits that long before killing it. A
   listing a watcher asked the relay to hold open is answered first, with
   what it has, so a stop never waits on one.
 
@@ -511,22 +529,24 @@ journalctl -u auu-relay | grep bundle_source
 ```
 
 expecting `bundle_source=credential`, with `cert=` naming a path under
-`/run/credentials/auu-relay.service/`. Three names have to agree, and each
-way they can disagree fails differently. If the relay did not start at all
+`/run/credentials/auu-relay.service/`.
+
+Three names have to agree. Each way they can disagree fails differently.
+If the relay did not start at all
 and the journal says `CREDENTIALS_DIRECTORY is not set`, the unit is missing
 its `LoadCredentialEncrypted=` line. If it says `no such file or directory`
 under that directory, the ID in the unit and `tls.bundle_credential` in
 `relay.json` differ. If the relay never ran and systemd itself says `Failed
 to set up credentials: Protocol error` and `status=243/CREDENTIALS`, the
 name the file was sealed under (`systemd-creds encrypt --name=`) and the ID
-in the unit differ; seal it again under the right one. Then, from anywhere:
+in the unit differ. Seal it again under the right one. Then, from anywhere:
 
 ```
 curl -v https://relay.example.com:9443/v1/health
 ```
 
 The first request after a start takes a few seconds, because that is when the
-certificate is fetched; after that it is instant. `/v1/health` is exempt from
+certificate is fetched. After that it is instant. `/v1/health` is exempt from
 every rate limit, so monitoring can hit it as often as it likes. From the
 administrator's machine:
 
@@ -536,7 +556,7 @@ auu-admin status
 
 That request is signed with the administrator's key and answered only if the
 line in `/etc/auu/admins` matches. A `403` means the export line and the file
-disagree; check for a stray character.
+disagree. Check for a stray character.
 
 ## 8. Invite the first user
 
@@ -554,7 +574,7 @@ auu enrol --name bob TOKEN
 
 That creates his identity and his mailbox in one step, with the relay
 recorded in his settings. After that he swaps export lines with the people he
-wants to talk to, exactly as in the README's quick start; a token gets you a
+wants to talk to, exactly as in the README's quick start. A token gets you a
 mailbox and says nothing about who is safe to talk to.
 
 ## Client certificates
@@ -599,7 +619,9 @@ certificate's serial is looked up beside it.
 
 **Logs** go to the journal. `journalctl -u auu-relay --since today` for a
 look, `-p warning` for only what went wrong. One line per request in the
-access log, at the detail `access_log` allows. A line for `GET
+access log, at the detail `access_log` allows.
+
+A line for `GET
 /v1/mailbox/{fp}` with `status=200` and a `dur=` of many seconds — `dur=30s`
 or thereabouts, never above a minute — is a listing the relay held open for
 a watcher until mail arrived or the hold ran out, not a stalled request: a
@@ -625,8 +647,10 @@ rm relay-bundle.json
 
 The same steps as the first time, then a restart: the relay unseals the new
 credential at start and nothing is cached anywhere. Do the same, without
-waiting, if you think the relay has been compromised. A relay installed
-from a kit rotates the same way, or with a new kit: `auu-ca kit` for the
+waiting, if you think the relay has been compromised.
+
+A relay installed from a kit rotates the same way, or with a new kit:
+`auu-ca kit` for the
 host again issues fresh intermediates, and `sh install.sh update` seals
 them over the old credential and restarts.
 
@@ -636,11 +660,12 @@ them over the old credential and restarts.
 sudo sh auu-relay-kit/install.sh update
 ```
 
-with the kit made, copied and unpacked as in *The short way*; `auu-ca kit`
+with the kit made, copied and unpacked as in *The short way*. `auu-ca kit`
 prints the recipe with `update` in it when it already knows the host.
+
 `update` stops the relay and copies its database, binary, unit, settings,
 administrators and credential into `/var/lib/auu/backups/<time>/`, with a
-`RESTORE` file there holding the commands that put each back; it never
+`RESTORE` file there holding the commands that put each back. It never
 puts them back itself, and the backups are yours to remove. Then it
 replaces the binary and the unit, seals the kit's bundle over the old
 credential when the kit has one, and replaces `relay.json` and `admins`
@@ -651,12 +676,14 @@ written beside it as `/etc/auu/relay.json.kit` or `/etc/auu/admins.kit`,
 and the script says so, so a limit you raised or an administrator you
 added survives an upgrade and the kit's version is there to compare. A
 kit that names no administrator never replaces an `admins` that names
-one. Every step of `update` is idempotent — the user made if missing, the
+one.
+
+Every step of `update` is idempotent — the user made if missing, the
 directories made if missing, the unit put back if gone — so the same
 command repairs a relay whose unit or binary has gone, or one that
 systemd has stopped restarting, and a kit whose bundle has already been
 sealed can be run again. `update` is for a relay installed from a kit or
-in the credential form; a plain-file relay takes the guide's manual
+in the credential form. A plain-file relay takes the guide's manual
 upgrade below — on one, `update` stops at the settings check after the
 stop, naming the cause, with the backup lines.
 
@@ -671,10 +698,12 @@ Either way the relay carries its database forward at the first start of
 the new binary, when it is from schema 11 on. It first copies the
 database beside itself, as `relay.db.before-schema-N` with `N` the version
 it found, mode 0600 and owned as the database is, and then takes it to
-this version's schema one step at a time; the journal says so, naming both
-versions and the copy. The copy is how you go back: stop the relay, put
-the previous binary back, move the copy over `relay.db`, and start it.
-Going back loses every message that arrived after the upgrade: the copy
+this version's schema one step at a time. The journal says so, naming both
+versions and the copy.
+
+The copy is how you go back: stop the relay, put the previous binary
+back, move the copy over `relay.db`, and start it. Going back loses every
+message that arrived after the upgrade: the copy
 has no row for it, and the previous release's start removes a file no row
 claims. If you may need to go back without losing them, back up the
 message directory with the database before the upgrade, as the section
@@ -684,19 +713,23 @@ since: a mailbox you removed since is back with its certificates, a
 certificate or a token you revoked since is live again, a token spent
 since has its uses back, a block you added is gone, and each user's allow
 list, card and directory is the one the relay held at the upgrade, or
-none. Remove, revoke and block again after going back. Remove the copy yourself once the
-new release has run as you want; the relay never does, and it never
-writes over one either: a file already at the copy's path, such as the
-copy from an upgrade you went back from, stops the start, naming it, until
-you move it aside or remove it. A copy that cannot be made, or a step that
+none. Remove, revoke and block again after going back.
+
+Remove the copy yourself once the new release has run as you want. The
+relay never does, and it never writes over one either: a file already at
+the copy's path, such as the copy from an upgrade you went back from,
+stops the start, naming it, until you move it aside or remove it. A copy
+that cannot be made, or a step that
 fails, stops the start with nothing lost, naming the path, the cause and
-the version the database is still at. A database from before schema 11 is refused
-rather than read: it is deleted, with the message directory beside it,
-and the relay recreates both at the next start; every machine enrolled on
-the relay enrols again. The refusal in the journal says exactly that,
-naming both paths, and `update` stops at it with the backup lines, since
-the relay did not start. Take the backup below before an upgrade all the
-same — `update` takes one of the database itself, but not of the message
+the version the database is still at.
+
+A database from before schema 11 is refused rather than read: it is
+deleted, with the message directory beside it, and the relay recreates
+both at the next start. Every machine enrolled on the relay enrols again.
+The refusal in the journal says exactly that, naming both paths, and
+`update` stops at it with the backup lines, since the relay did not start.
+Take the backup below before an upgrade all the
+same. `update` takes one of the database itself, but not of the message
 files, which an update does not touch.
 
 `broken` in any of the three document columns of `auu-admin mailboxes ls`
@@ -717,14 +750,15 @@ cannot read any of it. What is worth keeping is the `auu-ca` directory on your
 own machine, from which the relay's bundle can always be reissued. What is
 worth keeping on the server is `/var/lib/auu` — if you want mail in flight to
 survive a rebuild — as `relay.db` and `messages/` **together**. One without
-the other is an index pointing at files that are not there; the relay repairs
+the other is an index pointing at files that are not there. The relay repairs
 that at the next start by dropping the rows, but the mail is gone. The other
-way round, `messages/` without `relay.db`, is a lost database, and the relay
+way round, `messages/` without `relay.db`, is a lost database. The relay
 refuses to start rather than sweep the mail away: the log says
 `/var/lib/auu/relay.db is new but /var/lib/auu/messages holds mail for 2
 mailboxes: the database was lost`, and you either restore `relay.db` from the
-backup or move `messages/` aside to start the relay empty. The database is in
-WAL mode, so copy it with the service stopped, or with
+backup or move `messages/` aside to start the relay empty.
+
+The database is in WAL mode, so copy it with the service stopped, or with
 `sqlite3 /var/lib/auu/relay.db ".backup /root/relay.db"` (`apt install
 sqlite3`, or `dnf install sqlite`), which is safe while it runs.
 
@@ -734,18 +768,20 @@ recoverable by anyone holding both `/etc/auu/relay-bundle.cred` and
 `/var/lib/systemd/credential.secret` — so back up `/etc/auu` freely, and
 never back up `/var/lib/systemd/credential.secret`, which systemd itself says
 not to. With a TPM2 in the machine, the bundle is recoverable on that machine
-and no other, and a disk image is certificates and ciphertext. What neither
+and no other. A disk image is certificates and ciphertext. What neither
 protects against is root on the running relay, or the relay process's own
-memory; those were never in scope, and the disposable intermediates are the
-answer to them — rotate, as above.
+memory. Those were never in scope, and the disposable intermediates are the
+answer to them. Rotate, as above.
 
-**Limits** are the defaults in the *Limits* table of `relay.md` unless the settings
-say otherwise, and at those defaults a two gigabyte file is refused. If your
-users send large things, raise `limits.post_bytes_per_hour` and
-`limits.mailbox_max_bytes`; both are per person, so they are a decision about
-how much of the disk one person may fill. Watch `df /var/lib/auu` — every
-message is a file there until it is collected. A user's mail now stays after
-they have read it, until they remove it with `auu rm`: a channel keeps its
+**Limits** are the defaults in the *Limits* table of `relay.md` unless the
+settings say otherwise. At those defaults a two gigabyte file is refused. If
+your users send large things, raise `limits.post_bytes_per_hour` and
+`limits.mailbox_max_bytes`. Both are per person, so they are a decision
+about how much of the disk one person may fill. Watch `df /var/lib/auu`.
+Every message is a file there until it is collected.
+
+A user's mail now stays after they have read it, until they remove it with
+`auu rm`: a channel keeps its
 mail unless its owner says otherwise, which is what lets their second machine
 read the same mail, so `limits.mailbox_max_messages` and
 `limits.mailbox_max_bytes` are what a mailbox holds rather than what is in
