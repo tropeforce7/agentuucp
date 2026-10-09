@@ -81,16 +81,18 @@ auu peers fetch bob                # add one, at a terminal, after reading the f
 
 `listed` prints each identity's short id, the name on their card, their
 keys and whether they are on your list already, and says which kind of
-relay it is; every entry was verified on your machine against the key
-beside it, and one the relay served that does not verify is left out and
-counted. `peers fetch` takes a name from that listing, or a short id or
+relay it is. Every entry was verified on your machine against the key
+beside it. One the relay served that does not verify is left out and
+counted.
+
+`peers fetch` takes a name from that listing, or a short id or
 fingerprint from anywhere, prints what `lookup` prints, and asks you —
 `peers fetch` is yours, at a terminal, and the skills never run it. What
 a name there rests on is who the relay admits: on a relay that invites by
-token, an administrator let that identity in; on one that registers
+token, an administrator let that identity in. On one that registers
 anyone, a name proves nothing about who holds it, and the command says
 so before it asks. The name offered as the local name is the owner's
-own claim; accept it or type another. Two people may claim one name,
+own claim. Accept it or type another. Two people may claim one name,
 and then the command says to use the short id.
 
 Restrict your relay mailbox to the people on your list:
@@ -125,7 +127,9 @@ knocks. Each flag defaults to what your last push said, so a bare
 `auu card push` pushes the same card again, which is the repair `auu
 inbox` names when a relay has lost it; `--listed=false` turns a word off
 and `auu card clear` pushes a card that says neither, which is what having
-no card means. Saying you may be listed is saying you may be found by
+no card means.
+
+Saying you may be listed is saying you may be found by
 every identity the relay admits, and what that is worth depends on the
 relay: `auu relay show` says whether it invites by token or registers
 anyone, and so does `auu lookup`. As with the allow list, a card edited
@@ -164,8 +168,8 @@ it is never left on the relay, whatever the channel's keep setting says.
 `auu quarantine show` prints it whole, saying the name is their own
 claim. `auu quarantine trust` is what accepts them: at a terminal it
 offers their claimed name as the local name, saying it is their claim and
-not a name you gave, and adds them once you accept it or type another;
-with no terminal the claim is not offered at all, since the prompt would
+not a name you gave, and adds them once you accept it or type another.
+With no terminal the claim is not offered at all, since the prompt would
 take it with nobody there, and `peer-<short>` is offered instead. Then,
 if your mailbox is restricted, it asks whether to push your allow list so
 they can write to you.
@@ -184,7 +188,7 @@ auu peers add --vouched MESSAGE-ID # rita adds xena on victor's word, at a termi
 `auu vouch` signs a statement — *I hold this key on my peer list, under
 this name, as of now* — and sends it to another peer as a message of its
 own. Both must be on your list, and they must be two different people.
-The name in it is yours for them; at the other end it is offered and
+The name in it is yours for them. At the other end it is offered and
 never taken. Signing it is an act of yours, so where the agent holds your
 key it needs `auu unlock --send`.
 
@@ -192,8 +196,10 @@ At the other end the inbox lists it as `vouch`, with what it is for:
 `vouches for "xena" 4c1d… (not on your list)`, or `(already your peer as
 …)` once you hold them. `auu read` shows it whole. It counts only when
 the person who sent it is on your list and its signature checks out under
-the key you hold for them; a vouch from anybody else is held in
-quarantine like any stranger's mail and adds nobody. `auu peers add
+the key you hold for them. A vouch from anybody else is held in
+quarantine like any stranger's mail and adds nobody.
+
+`auu peers add
 --vouched` prints the fingerprint, whose word it is, and the sentence
 *victor is on your list, so this is victor's word for the key*, asks, and
 asks the local name with the voucher's name offered. It writes a comment
@@ -227,14 +233,15 @@ a question from a peer about a key on your list is answered with your
 vouch, sent to them by the relay the question came through, and marked
 read, with one line, `answered rita: you hold 4c1d… as "xena"`. Each
 answer discloses one thing, that the key is on your list, with your name
-for it and your signature, and only to a peer already on it; but nothing
+for it and your signature, and only to a peer already on it. But nothing
 limits how many a peer may ask, so a peer who asks about every key they
 can see learns which of them you hold and what you call them. The
-setting is for somebody content to tell their peers that; it is off unless
-you turn it on, and the command says all of this when you do. A
-question about a key you do not hold, or about you, is left for you; one
-from somebody not on your list is in quarantine and never answered; and
-serve's own rounds never answer one, though a handler of yours that runs
+setting is for somebody content to tell their peers that. It is off unless
+you turn it on, and the command says all of this when you do.
+
+A question about a key you do not hold, or about you, is left for you. One
+from somebody not on your list is in quarantine and never answered.
+Serve's own rounds never answer one, though a handler of yours that runs
 `auu inbox` is `auu inbox`. Signing the answer
 originates as you, so where the agent holds your key and is unlocked only
 to receive, the question is left unread and the line names `auu unlock
@@ -253,10 +260,10 @@ auu knock alice --vouch bob --vouch dave           # up to four
 
 A vouch whose subject is you is kept when it arrives, under
 `vouches/` by its voucher's fingerprint, and its inbox line says `bob
-vouched for you; kept for your knocks`; a newer one from the same
+vouched for you; kept for your knocks`. A newer one from the same
 voucher replaces it and an older one does not. `auu knock --vouch V`
 reads the one kept from V, checks it still verifies and is still yours,
-and carries it on the knock; it refuses a voucher you hold no vouch
+and carries it on the knock. It refuses a voucher you hold no vouch
 from, and says how many to leave off when the knock would be over the
 relay's knock size, which the relay tells every client.
 
@@ -264,13 +271,14 @@ At the other end the quarantine lists the knock with `vouched for by bob`
 for each voucher the person holds whose vouch checks out, `and 2 you do
 not know` for the rest, and says so of one that does not verify; `auu
 quarantine trust` says whose word each is before it asks the local name.
+
 Choosing what to carry is yours: a vouch tells the person you knock on
 who vouches for you.
 
 Trusting a vouch is trusting the voucher: somebody you hold can introduce
 anybody to you, which is no more than they could do across a table. There
-are no chains — a vouch counts only from somebody already on your list —
-and once added, the entry is yours: the voucher changing their mind later
+are no chains. A vouch counts only from somebody already on your list.
+Once added, the entry is yours: the voucher changing their mind later
 changes nothing here.
 
 ### 1.3 Send something
@@ -322,7 +330,9 @@ every receiver, since a sender cannot know where a message lands. The rule
 is exactly what a receiver would change. `auu extract` writes every
 attachment under a safe form of its name (see *Receive*). The sender's
 rule is that the name is already that form, so an honest sender never
-ships a name a receiver would write differently. Above 64 KiB in all, the
+ships a name a receiver would write differently.
+
+Above 64 KiB in all, the
 message goes as a stream. It is sealed to `outbox/` first, then uploaded
 in one request per attempt, the whole of it or the rest of it from where
 the relay's copy ends. An attempt that is interrupted is tried again on
@@ -349,39 +359,45 @@ auu send --to bob --to carol --subject 'the release' 'out on Friday'
 auu send --to bob,carol,dave 'the same, as one list'
 ```
 
-`--to` repeats, and a value may be a list separated by commas; each
-recipient is a name, a fingerprint, `self` or a bang path; `--via` names
+`--to` repeats, and a value may be a list separated by commas. Each
+recipient is a name, a fingerprint, `self` or a bang path. `--via` names
 the relays for every recipient, so with it none may carry a path of its
 own. A recipient named twice
 is refused, and so is a list of more than thirty-two before anything else
-is done; a list longer than the relay takes, which its health answer
+is done. A list longer than the relay takes, which its health answer
 says, sixteen by default, is refused naming the relay and the number,
 before anything is sealed.
+
 Every copy is sealed and written to `outbox/` before any is posted, then
 each is posted in the order given. The command ends with one line per
 recipient, `sent`, `not sent:` and the relay's words, or `waiting in the
-outbox`, and exits 2 when any copy was not sent; a copy refused stays in
+outbox`, and exits 2 when any copy was not sent. A copy refused stays in
 the outbox with the relay's words, and `auu send --resume` posts it
 again. A relay that asks the sender to wait longer than a minute stops
 the posting: that copy and the rest wait in the outbox, and the command
-says how long the relay asked for; so does a relay that refuses this
+says how long the relay asked for. So does a relay that refuses this
 machine itself, its certificate or its identity, with the advice a message
-to one gets, and a copy that gets no answer at all. `auu read` of the message you sent says who has it, who does
-not yet, and which copies you gave up with `auu outbox drop`. A message to several large enough
+to one gets, and a copy that gets no answer at all. `auu read` of the
+message you sent says who has it, who does
+not yet, and which copies you gave up with `auu outbox drop`.
+
+A message to several large enough
 to become a stream goes as one stream to each recipient, every one sealed
 to `outbox/` before the first upload, so `outbox/` holds the payload once
 for each recipient until the uploads finish. A recipient by bang path
 refuses the whole send, since a stream does not cross a relay. A stream
 copy the relay refuses stays in the outbox with the relay's words, as an
 envelope copy does, until `auu send --resume` finishes it or `auu outbox
-drop ID PEER` gives it up, and the command names both. Following up on a thread whose latest message is your own
+drop ID PEER` gives it up, and the command names both.
+
+Following up on a thread whose latest message is your own
 to several needs `--to PEER`, one of its recipients, to say whom, or
 `--all` to answer them all.
 
 `auu outbox` lists what is sealed and waiting in `outbox/`, each with its
 recipient, its relay and its size, and, for one a relay refused, the
 relay's code and words, escaped. `auu outbox drop ID [PEER]` gives one up,
-removing its record and its sealed file; the id may be four or more of its
+removing its record and its sealed file. The id may be four or more of its
 first characters, and `PEER`, a peer's name or eight or more characters of
 their fingerprint, says whose it is when one id has more than one thing
 waiting. It does not ask first, as `auu rm` does not, since a message given
@@ -546,12 +562,12 @@ auu queue                    # mail a relay is still carrying onward
 
 **Mail that came by another relay** says so. `auu read` prints a `via` line
 naming the relays it crossed, nearest the sender first, and `auu reply` goes
-back along that address reversed without being told — so answering somebody
+back along that address reversed without being told. So answering somebody
 on another relay is the same command as answering anybody. A message posted
 to your own relay has no `via` and no line, which is most mail.
 
 The reversal can fail, and it is worth knowing why. Each name in `via` is
-what that hop calls the hop before it; a reply's address is resolved against
+what that hop calls the hop before it. A reply's address is resolved against
 the list of relays a relay *dials*. Operators are meant to use one name in
 both places and a relay complains at its start when they do not, but nothing
 can enforce it and a one-way peering is legitimate. Where the two disagree
@@ -580,7 +596,7 @@ Rarely it is instead a relay that failed the message a day or more before your
 relay asked again, and has forgotten why.
 A very long chain eventually fills the sentence, and then it is the front that
 is dropped, marked with `…`, because the reason it failed is worth more than
-the list of names — and the first name you lose is the one on the line above
+the list of names. The first name you lose is the one on the line above
 it anyway. `auu inbox` prints one line while anything
 is waiting and says nothing when nothing is.
 
@@ -598,6 +614,7 @@ disk folds, such as case on macOS and Windows, is settled by the disk's
 own answer and nothing is overwritten. A directory that already holds a
 thousand names like it is refused with the count, and `--out` somewhere
 else is the answer.
+
 The line that reports each file says the sender's name where it differs
 from what was written. The file is made and the spooled bytes are read by
 their handle, not their name. An attachment that turns out not to be a
@@ -618,7 +635,7 @@ as `x-2.txt`.
 A message to several says so. The inbox listing marks it `(to N)`, and
 `auu read` prints a `to:` line naming everybody it went to: the name your
 peer list has for each, the short fingerprint for one it does not know,
-and `you`; `--json` carries `recipients`, each `fingerprint` and `name`.
+and `you`. `--json` carries `recipients`, each `fingerprint` and `name`.
 `auu reply` answers the sender alone. `auu reply --all` answers the sender
 and every other recipient, as a message to several of its own, or as an
 ordinary reply when that is one person. Every one of them must be on your
@@ -627,12 +644,14 @@ the whole reply is refused before anything is sealed, naming them, and the
 two things to do are to ask the sender to vouch for them or to add them
 with `auu peers add`. It goes through the relay the message came by, so a
 recipient who is not registered there is a copy left in the outbox, and
-the sentence says to reach them with a new message to `'RELAY!NAME'`; it
+the sentence says to reach them with a new message to `'RELAY!NAME'`. It
 takes no `--to` or `--via`, since a room, in the next release, carries an
-address for each person. A copy of a message you already hold that arrives
+address for each person.
+
+A copy of a message you already hold that arrives
 again, which a sender's `--resume` after a lost answer can post, is
 acknowledged and not delivered twice. Where the channel keeps its mail and
-the relay still has your copy, the fetch says `N already held`; where it
+the relay still has your copy, the fetch says `N already held`. Where it
 does not, the second copy is met as any message the relay serves again is,
 and nothing is said. A copy that arrives again after you removed the first
 with `auu rm`, from the relay and from here, is new mail to this machine,
@@ -678,7 +697,7 @@ their one line, both escaped before they reach your terminal. It is never
 left on the relay, so it holds no room in your mailbox. `trust` on a
 knock offers the claimed name as the local name and, when this machine
 has pushed an allow list to that relay, asks whether to push it again so
-they can reply; answering no prints the `auu allow push` to run later.
+they can reply. Answering no prints the `auu allow push` to run later.
 
 *Listing 1.5c*
 ```
@@ -733,7 +752,7 @@ is what a peer running something other than this `auu` looks like from here.
 
 *Compatibility.* v0.15.0 is the floor. Everything you use, your `auu`,
 your peers' and the relays, goes to v0.15.0 or later once, together, and
-after that versions may differ; v0.14.0 and before are not supported.
+after that versions may differ. v0.14.0 and before are not supported.
 v0.16.0 and v0.15.0 mix in any order, as sender, relay and recipient
 alike:
 
@@ -751,9 +770,12 @@ refuse a message v0.14.0 sealed, other than a stream, as malformed and
 keep it under `damaged/`. The release notes give the order to upgrade
 in from v0.14.0 and what each release changed:
 [`docs/releases/v0.15.0.md`](releases/v0.15.0.md) and
-[`docs/releases/v0.16.0.md`](releases/v0.16.0.md). From v0.15.0 on, a
+[`docs/releases/v0.16.0.md`](releases/v0.16.0.md).
+
+From v0.15.0 on, a
 newer build adds what it adds through sections in messages and in what
-relays and clients send each other, and through refusal codes; an older build ignores what it may and refuses by
+relays and clients send each other, and through refusal codes. An older
+build ignores what it may and refuses by
 name what it must, and never reads a newer message with a part dropped.
 A relay's `wire_level` says what it can do.
 
@@ -786,7 +808,7 @@ this machine fetched there. Every listing says the lowest and highest numbers
 the relay holds for you. A cursor above the highest is past everything there.
 That happens on an ordinary day, when you `auu rm` the newest message kept on
 the relay. It also happens when the relay's operator deleted its database and
-its numbering began again; an upgrade does not do that. The next fetch tells
+its numbering began again. An upgrade does not do that. The next fetch tells
 the two apart by asking the relay for its list without the messages and
 matching each row to what you already have from it. When it all matches, the
 cursor goes back to the relay's highest number and nothing is said. When it
@@ -825,10 +847,10 @@ right, at exit 5.
 
 *Setting a cursor by hand.* `auu cursor show` prints each relay's cursor
 beside what the relay holds, its lowest and highest numbers and how many,
-or a dash for a relay it could not ask; `--relay NAME` narrows it and
+or a dash for a relay it could not ask. `--relay NAME` narrows it and
 `--json` gives it to a script. `auu cursor reset --relay NAME` sets that
 relay's cursor to 0, or to `--to N`, after saying what the next fetch will
-then fetch, and asks first; `--yes` skips the question for a script of
+then fetch, and asks first. `--yes` skips the question for a script of
 your own, and without a terminal and without `--yes` it is refused. `--to`
 is a relay message id in decimal. A relay this home has added but never
 joined has no cursor, and reset says to `auu register` there first. It
@@ -877,7 +899,9 @@ from that poll, and exits 0. At `--timeout` it prints
 `nothing happened in 10m0s` and exits 3, the code `auu wait` uses for the
 same thing. The timeout is 10 minutes unless you say, or `0` for no limit,
 since a watch under a supervisor sits all day. `auu wait`'s `--timeout`
-must be more than nothing, since a wait is over when it ends. There are
+must be more than nothing, since a wait is over when it ends.
+
+There are
 two kinds of event. A `message` is a message the relay holds that this
 machine has not fetched, a post or a placed stream. It is said with its
 relay, channel, kind, size and relay id. A `directory` is a peer accepting
@@ -909,7 +933,9 @@ arrives, for up to the interval, so an event comes back when it happens.
 The interval is `--interval`, 20 seconds, at least 5. Every relay you are
 on is watched at once, and the first to answer ends the watch. A relay
 over its cap on holds answers at once and is polled at the interval
-instead, which the watch cannot tell and does not need to. There are no
+instead, which the watch cannot tell and does not need to.
+
+There are no
 delivery receipts, and cannot be. The relay records no sender on a
 message, so it cannot say whose was collected — with one exception, a
 knock, whose row names its knocker until the fetch that acknowledges it.
@@ -984,7 +1010,7 @@ auu send --to 'bar!baz!bob' 'two hops'
 ```
 
 Quote it: `!` is history expansion in an interactive shell. `--via` is the
-same address given separately, for exactly that reason; giving the relays
+same address given separately, for exactly that reason. Giving the relays
 in both at once is refused rather than merged.
 
 **Each name is what *your* relay calls that relay**, and only the first one
@@ -1000,19 +1026,19 @@ directory it dials from and served by no route, so a name that is wrong there is
 found by sending, and comes back as `no neighbour named "bar" on this relay`
 before anything is queued. The relays your relay *accepts* forwarded mail from
 are listed, by `auu relay couriers`, because you have to admit them to be
-reachable from off your relay; [*Admitting a courier*](#18-several-relays) below
+reachable from off your relay. [*Admitting a courier*](#18-several-relays) below
 is that. An operator normally uses one name for a neighbour in both halves, but
 nothing can make them, so a name from the listing is a good guess at an address
 and not a promise.
 
-Your relay queues the message and answers at once; the id you get back is
+Your relay queues the message and answers at once. The id you get back is
 a row in that queue rather than a message in a mailbox, and the `sent`
 record keeps the path beside it. `auu queue` is what shows that row
 afterwards, and `auu inbox` says one line while it is waiting. If a hop
 cannot deliver it, that comes back later, not in the answer to your send.
 
 At the other end they see a `via` line on `auu read` and can answer with
-`auu reply`, which goes back the way it came; [1.5](#15-receive) says what
+`auu reply`, which goes back the way it came. [1.5](#15-receive) says what
 that rests on and how they answer when it cannot.
 
 What does not cross a relay yet is a large message. A stream is an upload
@@ -1028,13 +1054,13 @@ a large message does not cross a relay yet
 
 A channel name on a path is sent as written and not checked here. Which
 channels somebody has is theirs to publish to the senders they admit, and
-the relay that knows is the last one, not yours; a name that hop refuses
+the relay that knows is the last one, not yours. A name that hop refuses
 comes back later as a failed message rather than as an error when you send.
 
 Your terminal checks what it can: every name is a relay name, no relay is
 named twice, and an address names at most 32 relays, which is the
-protocol's ceiling. A relay may allow fewer — `courier.max_hops` is 8
-unless its operator changed it — and nothing on the wire says what a given
+protocol's ceiling. A relay may allow fewer. `courier.max_hops` is 8
+unless its operator changed it. Nothing on the wire says what a given
 relay allows, so an address between the two passes here and is refused by
 the first hop, in that hop's words.
 
@@ -1054,8 +1080,8 @@ It means one thing more, and it is better read here than discovered. Your allow
 list is one list, and your relay asks it one question: may this fingerprint put
 something in this mailbox. So the courier's own key may also write to you
 directly, as any sender would. That message lands in quarantine rather than your
-inbox — what decides that is your peer list, which admitting a courier does not
-touch — so you see an unknown sender and decide, exactly as you would for a
+inbox. What decides that is your peer list, which admitting a courier does not
+touch. So you see an unknown sender and decide, exactly as you would for a
 stranger. The difference admitting makes is that a restricted mailbox refuses a
 stranger at the relay and will not refuse this one.
 
@@ -1072,7 +1098,7 @@ auu allow push                     # nothing changes at the relay until you do
 `auu relay couriers` prints each one with its fingerprint and whether you
 admit it already. The names are **your relay's own**. A relay calls each
 neighbour whatever its operator chose, the same relay may be called something
-else at the next hop, and what a relay calls itself is published nowhere — so a
+else at the next hop, and what a relay calls itself is published nowhere. So a
 name from this listing is good for addressing mail through your relay and for
 nothing else. It is also the first element of a path: `bar!bob` reaches bob
 through the neighbour your relay calls `bar`.
@@ -1166,7 +1192,9 @@ Those two sentences are the whole of the arrangement with an AI. It never
 sees the passphrase and cannot unlock anything. The `connect` skill tells
 it to ask you to run the command the sentence names and then try again. It
 also tells it to check `auu agent status --json` for `scope` before its
-first send. `auu unlock` reads a passphrase from the terminal, from
+first send.
+
+`auu unlock` reads a passphrase from the terminal, from
 `--passphrase-file` for a secret manager, or from standard input when that
 is a pipe. No other command reads one from anywhere but a terminal, and
 none takes one as an argument or from the environment. At your own
