@@ -55,9 +55,20 @@
 #   <= n           the bound; where the site's bound is a constant the
 #                  test holds n to it, and where it is not, n is the
 #                  name the code gives it with its arithmetic, as
-#                  "hold + 1"
+#                  "hold + 1", held to the code's spelling. A name that
+#                  reads a parameter or a local is refused unless the
+#                  test names the site as an exception, with why
 #   one of a, b    the bound is a parameter and the callers give it
-#                  these
+#                  these. The test follows the parameter to every caller
+#                  in its package, and through a caller's own parameter
+#                  to that caller's callers. It reads a constant by its
+#                  value and a method by the test's table of bounds.
+#                  Every value passed must be listed, and every value
+#                  listed passed. A function that is exported, used other
+#                  than in a call, called through an interface or as a
+#                  method expression, named in a file the build leaves
+#                  out, or never called cannot give a list, and neither
+#                  can a caller that spreads another call's results
 #   local: <why>   the bound is the program's own arithmetic on values
 #                  it already holds, with no edge from outside to feed;
 #                  the why says which values, and the row may name the

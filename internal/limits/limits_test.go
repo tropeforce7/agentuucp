@@ -34,9 +34,13 @@ import (
 // the floor. A new integer from outside fails this test until its row
 // and its test exist, which is the point. A third kind of site is a cap:
 // a reader bounded by http.MaxBytesReader or io.LimitReader, or a header
-// cap set on an http.Server or an http.Transport; its row says the
-// bound, held to the tree where the bound is a constant, and the
-// TestLimit test that shows it at the bound and one over.
+// cap set on an http.Server or an http.Transport. Its row says the bound
+// and names the TestLimit test that shows it at the bound and one over.
+// A constant bound is held to the tree. A bound the row names is held to
+// the tree's spelling of it, and may not read a parameter or a local,
+// including a function literal's parameter, unless a named exception says
+// why. A bound the row gives as one of a set must be a parameter, and the
+// set is held to what every caller passes.
 
 // floor is what the sweep that wrote the ledger found. A walk that finds
 // fewer is not reaching the tree.
@@ -86,6 +90,13 @@ type site struct {
 	typeName string // for a field, the struct's type by full path; "" otherwise
 	bound    int64  // for a cap whose bound is a constant, its value
 	constant bool   // whether bound is known
+
+	// For a cap, the bound as written, the function the site sits in
+	// and its package, so that a bound that is not a constant can be
+	// held to the tree: by its spelling, or through its callers.
+	boundExpr ast.Expr
+	fd        *ast.FuncDecl
+	p         *pkg
 }
 
 // row is one ledger line.
@@ -102,12 +113,19 @@ func TestEveryIntegerFromOutsideHasItsLimitTest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	problems, sites := check(t, root, string(ledger))
+	problems, sites, unused := checkWith(t, root, string(ledger), capBounds, capSettings, spelledBounds)
 	if len(sites) < floor {
 		t.Fatalf("found %d sites; the sweep that wrote the ledger found %d, so the walk is not reaching the tree", len(sites), floor)
 	}
 	for _, p := range problems {
 		t.Error(p)
+	}
+	// An entry of the table no one-of row's walk reaches is a reading
+	// nothing holds to the tree, and an exception no <= row takes excuses
+	// nothing. Only the tree itself can say so, since a planted module has
+	// tables of its own.
+	for _, u := range unused {
+		t.Error(u)
 	}
 }
 
@@ -256,10 +274,38 @@ func TestShapeSize(t *testing.T) {}
 // a cap — a MaxBytesReader, a LimitReader, a server's MaxHeaderBytes in a
 // literal and a transport's MaxResponseHeaderBytes by assignment, one more
 // LimitReader with a good row — and asserts the sentence for a cap with
-// no row, and then, row by row, a number that is not the constant in the
-// tree, a name where the bound is a constant, a one of where it is a
-// constant, a number where it is not a constant, and a bound of no known
-// shape; the good row draws no sentence.
+// no row. Then, row by row, it asserts a number that is not the constant
+// in the tree, a name where the bound is a constant, a one of where it is
+// a constant, a number where the bound is not a constant, and a bound of
+// no known shape. The good row draws no sentence.
+//
+// It plants as well a body cap whose bound is a parameter. That bound is
+// given by a function literal's call of it, whose own function's callers
+// pass a constant and a method the planted table reads, and by a direct call
+// passing a constant expression. The row naming that set in another order
+// draws no sentence, and so does one that lists a value twice. A row short
+// of a value is told to add it, and a row with a value no caller passes is
+// told to remove it. A row that says the parameter by name is told to say
+// the set. A generic function called once as an explicit instance and once
+// by inference is read as the function, and its row draws no sentence; so is
+// a method of a generic type called on an instance, which only its origin
+// names. A method whose constant the planted table renders gives that
+// constant's value, not another's.
+//
+// Each a sentence of its own: a caller passing a local and a call the
+// table does not read, an exported method, a method value, a method whose
+// body is not the table's, a method whose body is not a setting plus a
+// constant, a function nobody calls, a bound that is not a parameter, a
+// number where that bound is not a constant, a bound by name that is not
+// the tree's spelling, a method called through an interface, one named in
+// a file the build leaves out, a call that spreads another call's results,
+// and a method expression; a table entry whose body adds to another value
+// than its setting's; and a <= row of a bound that reads a local copy of
+// a parameter or a function literal's parameter. A <= row of a bound that
+// reads a parameter passes only where the planted spelled bounds excuse
+// it. The table's
+// entry nothing reaches and the spelled bound nothing takes are reported
+// apart.
 func TestALedgerFindsACapAndHoldsItsBoundToTheTree(t *testing.T) {
 	root := plantModule(t, `package planted
 
@@ -279,8 +325,141 @@ func server() *http.Server { return &http.Server{MaxHeaderBytes: hold} }
 func transport(t *http.Transport) { t.MaxResponseHeaderBytes = hold }
 
 func small(r io.Reader) io.Reader { return io.LimitReader(r, 512) }
+
+type Server struct{ max int64 }
+
+func (s *Server) postCap() int64 { return s.max + hold }
+
+func (s *Server) knockCap() int64 { return s.max * 2 }
+
+func (s *Server) other() int64 { return 7 }
+
+func (s *Server) readBody(w http.ResponseWriter, r *http.Request, limit int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+}
+
+func (s *Server) authed(limit int64) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { s.readBody(w, r, limit) }
+}
+
+func (s *Server) local(w http.ResponseWriter, r *http.Request, n int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, n)
+}
+
+func (s *Server) Exported(w http.ResponseWriter, r *http.Request, n int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, n)
+}
+
+func (s *Server) valued(w http.ResponseWriter, r *http.Request, n int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, n)
+}
+
+func (s *Server) knocked(w http.ResponseWriter, r *http.Request, n int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, n)
+}
+
+func orphan(w http.ResponseWriter, r *http.Request, n int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, n)
+}
+
+func (s *Server) field(r io.Reader) io.Reader { return io.LimitReader(r, s.max) }
+
+func held(r io.Reader, size int64) io.Reader { return io.LimitReader(r, size+1) }
+
+func (s *Server) routes() {
+	s.authed(512)
+	s.authed(s.postCap())
+	s.readBody(nil, nil, 1<<20)
+	size := int64(9)
+	s.local(nil, nil, size)
+	s.local(nil, nil, s.other())
+	s.Exported(nil, nil, 1)
+	f := s.valued
+	f(nil, nil, 1)
+	s.valued(nil, nil, 2)
+	s.knocked(nil, nil, s.knockCap())
+	s.tiny(nil, nil, s.tinyCap())
+	s.shaped(nil, nil, s.shapeCap())
+	s.viaface(nil, nil, 3)
+	s.hidden(nil, nil, 5)
+	s.spread(three())
+	(*Server).exprd(s, nil, nil, 777)
+	gen[string](nil, nil, 4096, "")
+	gen(nil, nil, 8192, 1)
+	(&boxed[int]{}).take(nil, nil, 2048)
+}
+
+const little = 1 << 10
+
+func (s *Server) tinyCap() int64 { return s.max + little }
+
+func (s *Server) shapeCap() int64 { return s.max * 2 }
+
+func (s *Server) tiny(w http.ResponseWriter, r *http.Request, n int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, n)
+}
+
+func (s *Server) shaped(w http.ResponseWriter, r *http.Request, n int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, n)
+}
+
+type facer interface {
+	viaface(w http.ResponseWriter, r *http.Request, n int64)
+}
+
+func (s *Server) viaface(w http.ResponseWriter, r *http.Request, n int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, n)
+}
+
+func callFace(f facer) { f.viaface(nil, nil, 3) }
+
+func (s *Server) hidden(w http.ResponseWriter, r *http.Request, n int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, n)
+}
+
+func (s *Server) spread(w http.ResponseWriter, r *http.Request, n int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, n)
+}
+
+func three() (http.ResponseWriter, *http.Request, int64) { return nil, nil, 4 }
+
+func (s *Server) exprd(w http.ResponseWriter, r *http.Request, n int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, n)
+}
+
+func gen[T any](w http.ResponseWriter, r *http.Request, n int64, _ T) {
+	r.Body = http.MaxBytesReader(w, r.Body, n)
+}
+
+type boxed[T any] struct{}
+
+func (b *boxed[T]) take(w http.ResponseWriter, r *http.Request, n int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, n)
+}
+
+func aliased(r io.Reader, limit int64) io.Reader {
+	n := limit
+	return io.LimitReader(r, n)
+}
+
+func literal(r io.Reader) io.Reader {
+	f := func(n int64) io.Reader { return io.LimitReader(r, n) }
+	return f(1 << 40)
+}
+
+func (s *Server) doubleCap() int64 { return s.max*2 + hold }
+
+func (s *Server) doubled(w http.ResponseWriter, r *http.Request, n int64) {
+	r.Body = http.MaxBytesReader(w, r.Body, n)
+}
+
+func (s *Server) more() {
+	aliased(nil, 1<<40)
+	s.doubled(nil, nil, s.doubleCap())
+}
 `)
-	if err := os.WriteFile(filepath.Join(root, "internal", "planted", "planted_test.go"), []byte(`package planted
+	dir := filepath.Join(root, "internal", "planted")
+	if err := os.WriteFile(filepath.Join(dir, "planted_test.go"), []byte(`package planted
 
 import "testing"
 
@@ -288,12 +467,41 @@ func TestLimitCap(t *testing.T) {}
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A file no host builds, which names hidden: the walk cannot type it,
+	// so it cannot tell a caller there from another use of the name.
+	if err := os.WriteFile(filepath.Join(dir, "never.go"), []byte(`//go:build planted_never
+
+package planted
+
+func never(s *Server) { s.hidden(nil, nil, 6) }
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	problems, sites := check(t, root, "")
-	if len(sites) != 5 {
-		t.Fatalf("found %d sites, want 5: %+v", len(sites), sites)
+	if len(sites) != 24 {
+		t.Fatalf("found %d sites, want 24: %+v", len(sites), sites)
 	}
 	const add = " has no row in ledger.txt; add one saying the bound it reads under, as <= n, and the TestLimit test that shows it at the bound and one over, or the program's own arithmetic as local:"
 	want := []string{
+		"internal/planted/planted.go (*Server).Exported cap http.MaxBytesReader(r.Body, n)" + add,
+		"internal/planted/planted.go (*Server).doubled cap http.MaxBytesReader(r.Body, n)" + add,
+		"internal/planted/planted.go (*Server).exprd cap http.MaxBytesReader(r.Body, n)" + add,
+		"internal/planted/planted.go (*Server).field cap io.LimitReader(r, s.max)" + add,
+		"internal/planted/planted.go (*Server).hidden cap http.MaxBytesReader(r.Body, n)" + add,
+		"internal/planted/planted.go (*Server).knocked cap http.MaxBytesReader(r.Body, n)" + add,
+		"internal/planted/planted.go (*Server).local cap http.MaxBytesReader(r.Body, n)" + add,
+		"internal/planted/planted.go (*Server).readBody cap http.MaxBytesReader(r.Body, limit)" + add,
+		"internal/planted/planted.go (*Server).shaped cap http.MaxBytesReader(r.Body, n)" + add,
+		"internal/planted/planted.go (*Server).spread cap http.MaxBytesReader(r.Body, n)" + add,
+		"internal/planted/planted.go (*Server).tiny cap http.MaxBytesReader(r.Body, n)" + add,
+		"internal/planted/planted.go (*Server).valued cap http.MaxBytesReader(r.Body, n)" + add,
+		"internal/planted/planted.go (*Server).viaface cap http.MaxBytesReader(r.Body, n)" + add,
+		"internal/planted/planted.go (*boxed[T]).take cap http.MaxBytesReader(r.Body, n)" + add,
+		"internal/planted/planted.go aliased cap io.LimitReader(r, n)" + add,
+		"internal/planted/planted.go gen cap http.MaxBytesReader(r.Body, n)" + add,
+		"internal/planted/planted.go held cap io.LimitReader(r, size + 1)" + add,
+		"internal/planted/planted.go literal cap io.LimitReader(r, n)" + add,
+		"internal/planted/planted.go orphan cap http.MaxBytesReader(r.Body, n)" + add,
 		"internal/planted/planted.go read cap io.LimitReader(r, n + 1)" + add,
 		"internal/planted/planted.go serve cap http.MaxBytesReader(r.Body, 1 << 20)" + add,
 		"internal/planted/planted.go server cap MaxHeaderBytes: hold" + add,
@@ -303,6 +511,24 @@ func TestLimitCap(t *testing.T) {}
 	if strings.Join(problems, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("problems:\n%s\nwant:\n%s", strings.Join(problems, "\n"), strings.Join(want, "\n"))
 	}
+	// The planted table of bounds: postCap and tinyCap read as the tree
+	// has them, knockCap from a body the tree does not have, shapeCap from
+	// a body that is not a setting plus a constant, and an entry for a
+	// method nothing calls.
+	bounds := map[string]capBound{
+		"internal/planted (*Server).postCap":   {body: "s.max + hold", name: "max"},
+		"internal/planted (*Server).tinyCap":   {body: "s.max + little", name: "max"},
+		"internal/planted (*Server).knockCap":  {body: "s.max + 1", name: "max"},
+		"internal/planted (*Server).shapeCap":  {body: "s.max * 2", name: "max"},
+		"internal/planted (*Server).doubleCap": {body: "s.max * 2 + hold", name: "max"},
+		"internal/planted (*Server).gone":      {body: "s.max + hold", name: "max"},
+	}
+	// The planted spelled bounds: held's size + 1, which its row says by
+	// name, and a site that is not in the tree.
+	spelled := map[string]string{
+		"internal/planted/planted.go held cap io.LimitReader(r, size + 1)": "the planted exception",
+		"internal/planted/planted.go gone cap io.LimitReader(r, n)":        "a site that is gone",
+	}
 	ledger := strings.Join([]string{
 		"internal/planted/planted.go serve cap http.MaxBytesReader(r.Body, 1 << 20) = <= 1048575 shown by TestLimitCap",
 		"internal/planted/planted.go server cap MaxHeaderBytes: hold = <= hold shown by TestLimitCap",
@@ -310,18 +536,81 @@ func TestLimitCap(t *testing.T) {}
 		"internal/planted/planted.go read cap io.LimitReader(r, n + 1) = <= 65537 shown by TestLimitCap",
 		"internal/planted/planted.go read cap io.LimitReader(r, n + 1) = about n shown by TestLimitCap",
 		"internal/planted/planted.go small cap io.LimitReader(r, 512) = <= 512 shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).readBody cap http.MaxBytesReader(r.Body, limit) = one of 1048576, max + 65536, 512 shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).readBody cap http.MaxBytesReader(r.Body, limit) = one of 512, max + 65536 shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).readBody cap http.MaxBytesReader(r.Body, limit) = one of 512, 512, max + 65536, 1048576, 4096 shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).local cap http.MaxBytesReader(r.Body, n) = one of 9, 7 shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).Exported cap http.MaxBytesReader(r.Body, n) = one of 1 shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).valued cap http.MaxBytesReader(r.Body, n) = one of 1, 2 shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).knocked cap http.MaxBytesReader(r.Body, n) = one of max + 1 shown by TestLimitCap",
+		"internal/planted/planted.go orphan cap http.MaxBytesReader(r.Body, n) = one of 1 shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).field cap io.LimitReader(r, s.max) = one of 1, 2 shown by TestLimitCap",
+		"internal/planted/planted.go held cap io.LimitReader(r, size + 1) = <= size + 1 shown by TestLimitCap",
+		"internal/planted/planted.go held cap io.LimitReader(r, size + 1) = <= size + 2 shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).readBody cap http.MaxBytesReader(r.Body, limit) = <= limit shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).field cap io.LimitReader(r, s.max) = <= 4096 shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).tiny cap http.MaxBytesReader(r.Body, n) = one of max + 1024 shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).tiny cap http.MaxBytesReader(r.Body, n) = one of max + 65536 shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).shaped cap http.MaxBytesReader(r.Body, n) = one of max shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).viaface cap http.MaxBytesReader(r.Body, n) = one of 3 shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).hidden cap http.MaxBytesReader(r.Body, n) = one of 5 shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).spread cap http.MaxBytesReader(r.Body, n) = one of 4 shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).exprd cap http.MaxBytesReader(r.Body, n) = one of 777 shown by TestLimitCap",
+		"internal/planted/planted.go gen cap http.MaxBytesReader(r.Body, n) = one of 8192, 4096 shown by TestLimitCap",
+		"internal/planted/planted.go (*boxed[T]).take cap http.MaxBytesReader(r.Body, n) = one of 2048 shown by TestLimitCap",
+		"internal/planted/planted.go aliased cap io.LimitReader(r, n) = <= n shown by TestLimitCap",
+		"internal/planted/planted.go literal cap io.LimitReader(r, n) = <= n shown by TestLimitCap",
+		"internal/planted/planted.go (*Server).doubled cap http.MaxBytesReader(r.Body, n) = one of max + 65536 shown by TestLimitCap",
 	}, "\n")
-	problems, _ = check(t, root, ledger)
+	problems, _, unused := checkWith(t, root, ledger, bounds, map[string]string{"max": "s.max"}, spelled)
+	const readBody = "internal/planted/planted.go (*Server).readBody cap http.MaxBytesReader(r.Body, limit)"
+	const tableless = ", which is not a constant, a parameter followed to its callers, or a method the table of bounds reads; pass one of those, or say the bound as local: with why"
+	const unseen = ", so its callers are not all visible; say the bound as local: with why"
 	want = []string{
 		"ledger.txt:1: internal/planted/planted.go serve cap http.MaxBytesReader(r.Body, 1 << 20) says <= 1048575, but the bound in the tree is 1048576",
 		"ledger.txt:2: internal/planted/planted.go server cap MaxHeaderBytes: hold says \"<= hold\", but the bound in the tree is the constant 65536; say <= 65536",
 		"ledger.txt:3: internal/planted/planted.go transport cap t.MaxResponseHeaderBytes: hold says one of, but the bound in the tree is the constant 65536; say <= 65536",
-		"ledger.txt:4: internal/planted/planted.go read cap io.LimitReader(r, n + 1) says <= 65537, but the bound in the tree is not a constant; name it",
+		"ledger.txt:4: internal/planted/planted.go read cap io.LimitReader(r, n + 1) says <= 65537, but its bound reads the parameter n of read; pass the parameter alone as the bound and say one of the set its callers pass, or say the bound as local: with why",
 		"ledger.txt:5: internal/planted/planted.go read cap io.LimitReader(r, n + 1) is written twice",
 		"ledger.txt:5: internal/planted/planted.go read cap io.LimitReader(r, n + 1) has the bound \"about n\", which is not <= n, one of a, b or local:, a bound being a number or a name with its arithmetic",
+		"ledger.txt:8: " + readBody + " is written twice",
+		"ledger.txt:8: " + readBody + " says one of 512, max + 65536, but its callers pass 512, max + 65536, 1048576; add 1048576",
+		"ledger.txt:9: " + readBody + " is written twice",
+		"ledger.txt:9: " + readBody + " says one of 512, 512, max + 65536, 1048576, 4096, but no caller passes 4096; remove it",
+		"ledger.txt:10: internal/planted/planted.go (*Server).local cap http.MaxBytesReader(r.Body, n) says one of, but internal/planted/planted.go:65 passes size" + tableless,
+		"ledger.txt:10: internal/planted/planted.go (*Server).local cap http.MaxBytesReader(r.Body, n) says one of, but internal/planted/planted.go:66 passes s.other()" + tableless,
+		"ledger.txt:11: internal/planted/planted.go (*Server).Exported cap http.MaxBytesReader(r.Body, n) says one of, but its bound is a parameter of (*Server).Exported, which is exported" + unseen,
+		"ledger.txt:12: internal/planted/planted.go (*Server).valued cap http.MaxBytesReader(r.Body, n) says one of, but (*Server).valued is used at internal/planted/planted.go:68 other than in a call" + unseen,
+		"ledger.txt:13: internal/planted/planted.go (*Server).knocked cap http.MaxBytesReader(r.Body, n) says one of, but the table of bounds has internal/planted (*Server).knockCap's body as s.max + 1, and its body in the tree is s.max * 2; read the method again and change its entry in the table",
+		"ledger.txt:14: internal/planted/planted.go orphan cap http.MaxBytesReader(r.Body, n) says one of, but orphan has no caller to give its bound; give it a caller, or say the bound as local: with why",
+		"ledger.txt:15: internal/planted/planted.go (*Server).field cap io.LimitReader(r, s.max) says one of, but its bound s.max is not a parameter of (*Server).field, so it has no callers to read the set from; say it by its name, as <= s.max",
+		"ledger.txt:17: internal/planted/planted.go held cap io.LimitReader(r, size + 1) is written twice",
+		"ledger.txt:17: internal/planted/planted.go held cap io.LimitReader(r, size + 1) says <= size + 2, but the bound in the tree is size + 1",
+		"ledger.txt:18: " + readBody + " is written twice",
+		"ledger.txt:18: " + readBody + " says <= limit, but its bound reads the parameter limit of (*Server).readBody; say one of the set its callers pass",
+		"ledger.txt:19: internal/planted/planted.go (*Server).field cap io.LimitReader(r, s.max) is written twice",
+		"ledger.txt:19: internal/planted/planted.go (*Server).field cap io.LimitReader(r, s.max) says <= 4096, but the bound in the tree is not a constant; name it, as <= s.max",
+		"ledger.txt:21: internal/planted/planted.go (*Server).tiny cap http.MaxBytesReader(r.Body, n) is written twice",
+		"ledger.txt:21: internal/planted/planted.go (*Server).tiny cap http.MaxBytesReader(r.Body, n) says one of max + 65536, but its callers pass max + 1024; add max + 1024",
+		"ledger.txt:21: internal/planted/planted.go (*Server).tiny cap http.MaxBytesReader(r.Body, n) says one of max + 65536, but no caller passes max + 65536; remove it",
+		"ledger.txt:22: internal/planted/planted.go (*Server).shaped cap http.MaxBytesReader(r.Body, n) says one of, but the table of bounds reads internal/planted (*Server).shapeCap, whose body s.max * 2 is not a setting plus a constant; make it one, or say the bound as local: with why",
+		"ledger.txt:23: internal/planted/planted.go (*Server).viaface cap http.MaxBytesReader(r.Body, n) says one of, but (*Server).viaface is called through the interface facer at internal/planted/planted.go:105" + unseen,
+		"ledger.txt:24: internal/planted/planted.go (*Server).hidden cap http.MaxBytesReader(r.Body, n) says one of, but (*Server).hidden is named in internal/planted/never.go, which the host's build leaves out" + unseen,
+		"ledger.txt:25: internal/planted/planted.go (*Server).spread cap http.MaxBytesReader(r.Body, n) says one of, but internal/planted/planted.go:76 passes its bound through a call it spreads, s.spread(three()), which the walk cannot read; pass the values one by one, or say the bound as local: with why",
+		"ledger.txt:26: internal/planted/planted.go (*Server).exprd cap http.MaxBytesReader(r.Body, n) says one of, but (*Server).exprd is called as a method expression at internal/planted/planted.go:77, which the walk does not read; call it as a method, or say the bound as local: with why",
+		"ledger.txt:29: internal/planted/planted.go aliased cap io.LimitReader(r, n) says <= n, but its bound reads the local n of aliased; the walk cannot follow it to a caller, so say the bound as local: with why, or pass a parameter alone as the bound and say one of the set its callers pass",
+		"ledger.txt:30: internal/planted/planted.go literal cap io.LimitReader(r, n) says <= n, but its bound reads the local n of literal; the walk cannot follow it to a caller, so say the bound as local: with why, or pass a parameter alone as the bound and say one of the set its callers pass",
+		"ledger.txt:31: internal/planted/planted.go (*Server).doubled cap http.MaxBytesReader(r.Body, n) says one of, but the table of bounds names internal/planted (*Server).doubleCap's setting max, which is s.max, and its body adds to something else: s.max * 2 + hold; say the setting it adds to, or say the bound as local: with why",
 	}
 	if strings.Join(problems, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("problems:\n%s\nwant:\n%s", strings.Join(problems, "\n"), strings.Join(want, "\n"))
+	}
+	wantUnused := []string{
+		"the table of bounds has an entry for internal/planted (*Server).gone, which no one-of row's walk reached; remove it, or mend the row whose callers call it",
+		"the spelled bounds excuse internal/planted/planted.go gone cap io.LimitReader(r, n), which no <= row of a bound that is not a constant says; remove it",
+	}
+	if strings.Join(unused, "\n") != strings.Join(wantUnused, "\n") {
+		t.Fatalf("unused:\n%s\nwant:\n%s", strings.Join(unused, "\n"), strings.Join(wantUnused, "\n"))
 	}
 }
 
@@ -354,9 +643,63 @@ func ask(b []byte) (Answer, error) {
 	}
 }
 
+// capBound is how the table of bounds reads one method whose call a
+// caller passes as a cap's bound. The body is the method's one return of
+// one expression, held to the tree as written. It must be a setting plus
+// a constant. The name is the setting as the ledger says it, held by the
+// table of settings to the code's spelling of the setting the body adds
+// to, and the bound is rendered as the name plus the constant's value in
+// the tree.
+type capBound struct {
+	body, name string
+}
+
+// capSettings is the setting each name in the table of bounds stands
+// for, by the code's spelling of it. A table entry's body is that setting
+// plus a constant, and the name is given here once, so that an entry whose
+// body adds to some other value cannot keep a setting's name. What the
+// setting's own accessor returns is not held here: knockMax is read as
+// knock_max_bytes on the strength of its comment and its test.
+var capSettings = map[string]string{
+	"max_bytes":       "s.cfg.MaxBytes",
+	"knock_max_bytes": "s.knockMax()",
+}
+
+// capBounds is the table of bounds for the tree, keyed by the method's
+// package directory and its name as the ledger writes a function. Each
+// entry is held to the tree when a one-of row's walk reaches it. The test
+// of the tree as it stands fails on an entry no one-of row's walk
+// reaches.
+var capBounds = map[string]capBound{
+	"internal/relay (*Server).postCap":    {body: "s.cfg.MaxBytes + relayapi.FramingAllowance", name: "max_bytes"},
+	"internal/relay (*Server).forwardCap": {body: "s.cfg.MaxBytes + relayapi.FramingAllowance", name: "max_bytes"},
+	"internal/relay (*Server).knockCap":   {body: "s.knockMax() + relayapi.FramingAllowance", name: "knock_max_bytes"},
+}
+
+// spelledBounds are the cap sites whose <= row may name a bound that
+// reads a parameter, keyed by the site's key, each with the reason. Any
+// other such row is refused: a parameter's value is its callers', and the
+// row says the set they pass. The test of the tree as it stands fails on
+// an entry no <= row takes.
+var spelledBounds = map[string]string{
+	"internal/client/client.go (*Client).attempt cap io.LimitReader(resp.Body, hold + 1)": "its callers pass locals read from the relay's health answer (client.go listingCap), which no walk can render, and the row names the hold each caller computes",
+}
+
 // check walks the tree under root, reads the ledger, and returns every
-// problem in ledger order and the sites it found.
+// problem in ledger order and the sites it found. It reads a caller's
+// method by the tree's table of bounds and takes the tree's spelled
+// bounds. An entry nothing takes is the tree's test to report, not a
+// planted module's.
 func check(t *testing.T, root, ledger string) (problems []string, sites []site) {
+	t.Helper()
+	problems, sites, _ = checkWith(t, root, ledger, capBounds, capSettings, spelledBounds)
+	return problems, sites
+}
+
+// checkWith is check with the table of bounds and the spelled bounds
+// given. It returns as well a sentence for every entry of the table no
+// one-of row's walk reached, and for every spelled bound no <= row took.
+func checkWith(t *testing.T, root, ledger string, bounds map[string]capBound, settings, spelled map[string]string) (problems []string, sites []site, unused []string) {
 	t.Helper()
 	tree := load(t, root)
 	sites = tree.sites()
@@ -373,6 +716,7 @@ func check(t *testing.T, root, ledger string) (problems []string, sites []site) 
 	problems = append(problems, tree.problems...)
 
 	funcs := tree.functions()
+	reached, taken := map[string]bool{}, map[string]bool{}
 	rows, rowProblems := parseLedger(ledger)
 	problems = append(problems, rowProblems...)
 	seen := map[string]bool{}
@@ -411,10 +755,12 @@ func check(t *testing.T, root, ledger string) (problems []string, sites []site) 
 				continue
 			}
 		} else if s.kind == "cap" {
-			// A cap row says the bound as the site reads it: a constant
-			// bound as its number, held to the tree; a bound that is a
-			// parameter or a sum by name; or the program's own arithmetic
-			// as local:, which may name a test and need not.
+			// A cap row says the bound the site reads under. A row that
+			// says a number is held to the constant in the tree. A row
+			// that says a name is held to the tree's spelling. A row that
+			// says one of a set is held to what the callers pass. A row
+			// that says local: is the program's own arithmetic, the row's
+			// own word, and may name a test or not.
 			if strings.HasPrefix(r.rng, "local:") {
 				if r.test == "" {
 					continue
@@ -436,9 +782,42 @@ func check(t *testing.T, root, ledger string) (problems []string, sites []site) 
 				case s.constant && n != s.bound:
 					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says <= %d, but the bound in the tree is %d", r.line, r.key, n, s.bound))
 					continue
-				case !s.constant && isNumber && m[1] == "<= ":
-					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says <= %d, but the bound in the tree is not a constant; name it", r.line, r.key, n))
-					continue
+				case !s.constant && m[1] == "<= ":
+					// A row that says <= of a bound that is not a constant
+					// says the bound by its name, as the tree spells it. A
+					// bound that reads a parameter has the value its callers
+					// give, so its row says the set they pass; one that reads
+					// a local or a function literal's parameter has a value
+					// no walk can follow, so its row says local: with why. A
+					// row may say the name instead only where spelledBounds
+					// says why.
+					if _, excused := spelled[r.key]; excused {
+						taken[r.key] = true
+					} else if param, declParam, isParam, reads := readsLocal(s); reads {
+						what, remedy := "the parameter", "say one of the set its callers pass"
+						if !isParam {
+							remedy = "pass the parameter alone as the bound and say one of the set its callers pass, or say the bound as local: with why"
+						}
+						if !declParam {
+							what, remedy = "the local", "the walk cannot follow it to a caller, so say the bound as local: with why, or pass a parameter alone as the bound and say one of the set its callers pass"
+						}
+						problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says <= %s, but its bound reads %s %s of %s; %s", r.line, r.key, m[2], what, param, enclosingName(s.fd), remedy))
+						continue
+					}
+					spelling := types.ExprString(s.boundExpr)
+					if isNumber {
+						problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says <= %d, but the bound in the tree is not a constant; name it, as <= %s", r.line, r.key, n, spelling))
+						continue
+					}
+					if m[2] != spelling {
+						problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says <= %s, but the bound in the tree is %s", r.line, r.key, m[2], spelling))
+						continue
+					}
+				case !s.constant && m[1] == "one of ":
+					if bad := tree.capCallers(r, s, bounds, settings, reached); len(bad) > 0 {
+						problems = append(problems, bad...)
+						continue
+					}
 				}
 			}
 		} else if !ranges.MatchString(r.rng) {
@@ -480,7 +859,27 @@ func check(t *testing.T, root, ledger string) (problems []string, sites []site) 
 		}
 		problems = append(problems, fmt.Sprintf("%s has no row in ledger.txt; add one saying the range the code holds it to, or open, and the TestLimit test that shows it", s.key))
 	}
-	return problems, sites
+	var names []string
+	for name := range bounds {
+		if !reached[name] {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		unused = append(unused, fmt.Sprintf("the table of bounds has an entry for %s, which no one-of row's walk reached; remove it, or mend the row whose callers call it", name))
+	}
+	var keys []string
+	for key := range spelled {
+		if !taken[key] {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		unused = append(unused, fmt.Sprintf("the spelled bounds excuse %s, which no <= row of a bound that is not a constant says; remove it", key))
+	}
+	return problems, sites, unused
 }
 
 // parseBound reads a bound written as a number; a bound written by
@@ -488,6 +887,471 @@ func check(t *testing.T, root, ledger string) (problems []string, sites []site) 
 func parseBound(s string) (int64, bool) {
 	n, err := strconv.ParseInt(s, 10, 64)
 	return n, err == nil
+}
+
+// capCallers holds a cap row that says "one of" a set, where the bound is
+// not a constant, to the callers that give it. The bound must be a parameter
+// of the function the site sits in, a function literal counting as part of
+// its declaration. Every caller of that function in its package is found by
+// the function's object, whether it is called by its name or by a selector,
+// and a generic function's instance counts as the function. Each argument is
+// read as a constant's value, as a parameter of the caller followed to its
+// own callers in turn, or as a call of a method the table of bounds reads.
+// The set read must be the row's set, both ways. A value the row lists twice
+// draws no sentence. The walk refuses a function whose callers may be
+// elsewhere: an exported one, one used other than in a call, one called
+// through an interface, one named in a file the host's build leaves out, and
+// one nobody calls. It refuses as well a call it cannot line up with the
+// parameters: a method expression, and a call whose arguments are another
+// call's results, where the bound falls past the call's own arguments; where
+// it falls among them, that argument is a call the table does not read and
+// is refused as one. A local: row is the row's own word and never comes
+// here, and a row that says <= is held to the bound's spelling instead.
+func (tr *tree) capCallers(r row, s site, bounds map[string]capBound, settings map[string]string, reached map[string]bool) []string {
+	lead := fmt.Sprintf("ledger.txt:%d: %s", r.line, r.key)
+	fn, i, ok := paramOf(s.p, s.fd, s.boundExpr)
+	if !ok {
+		spelling := types.ExprString(s.boundExpr)
+		remedy := "say it by its name, as <= " + spelling
+		if _, _, reads := readsParam(s); reads {
+			remedy = "pass a parameter alone as the bound, or say the bound as local: with why"
+		}
+		return []string{fmt.Sprintf("%s says one of, but its bound %s is not a parameter of %s, so it has no callers to read the set from; %s", lead, spelling, enclosingName(s.fd), remedy)}
+	}
+	w := &capWalk{tr: tr, lead: lead, bounds: bounds, settings: settings, reached: reached, visiting: map[capParam]bool{}, seen: map[string]bool{}}
+	w.callers(fn, i)
+	if len(w.problems) > 0 {
+		return w.problems
+	}
+	var listed []string
+	inList := map[string]bool{}
+	for _, v := range strings.Split(strings.TrimPrefix(r.rng, "one of "), ", ") {
+		if !inList[v] {
+			inList[v] = true
+			listed = append(listed, v)
+		}
+	}
+	var problems, missing []string
+	for _, v := range w.values {
+		if !inList[v] {
+			missing = append(missing, v)
+		}
+	}
+	if len(missing) > 0 {
+		problems = append(problems, fmt.Sprintf("%s says %s, but its callers pass %s; add %s", lead, r.rng, strings.Join(w.values, ", "), strings.Join(missing, ", ")))
+	}
+	for _, v := range listed {
+		if !w.seen[v] {
+			problems = append(problems, fmt.Sprintf("%s says %s, but no caller passes %s; remove it", lead, r.rng, v))
+		}
+	}
+	return problems
+}
+
+// readsParam says whether a cap's bound reads a value its function was
+// given or made: a parameter of the declaration it sits in, a function
+// literal's parameter, or a local. It names the first such value and
+// says whether the bound is one of the declaration's parameters alone. A
+// receiver, a field, a constant and a package-level variable, of this
+// package or another, are not such values: the row may name them.
+func readsParam(s site) (name string, alone, reads bool) {
+	name, _, alone, reads = readsLocal(s)
+	return name, alone, reads
+}
+
+// readsLocal is readsParam, saying as well whether the value it names is
+// one of the declaration's own parameters.
+func readsLocal(s site) (name string, declParam, alone, reads bool) {
+	if s.fd == nil || s.p == nil {
+		return "", false, false, false
+	}
+	fn, ok := s.p.info.Defs[s.fd.Name].(*types.Func)
+	if !ok {
+		return "", false, false, false
+	}
+	sig := fn.Type().(*types.Signature)
+	params := sig.Params()
+	isParam := func(v *types.Var) bool {
+		for i := 0; i < params.Len(); i++ {
+			if params.At(i) == v {
+				return true
+			}
+		}
+		return false
+	}
+	local := func(id *ast.Ident) (*types.Var, bool) {
+		v, ok := s.p.info.Uses[id].(*types.Var)
+		if !ok || v.IsField() || (v.Pkg() != nil && v.Parent() == v.Pkg().Scope()) || v == sig.Recv() {
+			return nil, false
+		}
+		return v, true
+	}
+	ast.Inspect(s.boundExpr, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && !reads {
+			if v, ok := local(id); ok {
+				name, declParam, reads = id.Name, isParam(v), true
+			}
+		}
+		return !reads
+	})
+	if id, ok := ast.Unparen(s.boundExpr).(*ast.Ident); ok && reads && declParam {
+		v, _ := local(id)
+		alone = isParam(v)
+	}
+	return name, declParam, alone, reads
+}
+
+// capParam is one parameter of one function, by its object and position.
+type capParam struct {
+	fn *types.Func
+	i  int
+}
+
+// capWalk is one walk from a cap's bound up through its callers: the
+// values read, in the order the walk met them and once each, and the
+// sentences for whatever could not be read.
+type capWalk struct {
+	tr       *tree
+	lead     string
+	bounds   map[string]capBound
+	settings map[string]string
+	reached  map[string]bool
+	visiting map[capParam]bool
+	values   []string
+	seen     map[string]bool
+	problems []string
+}
+
+// localWhy ends every sentence that says the walk cannot give the set: the
+// row then says why the bound holds instead.
+const localWhy = "say the bound as local: with why"
+
+// callers reads the argument every caller of fn passes at i. A parameter
+// already walked is not walked again. That ends a cycle, and a parameter
+// reached by two paths is read once.
+func (w *capWalk) callers(fn *types.Func, i int) {
+	if w.visiting[capParam{fn, i}] {
+		return
+	}
+	w.visiting[capParam{fn, i}] = true
+	p, fd := w.tr.declOf(fn)
+	if p == nil {
+		w.fail("%s says one of, but its bound is passed through %s, which is not declared in the tree, so its callers are not all visible; %s", w.lead, objName(fn), localWhy)
+		return
+	}
+	name := enclosingName(fd)
+	if fn.Exported() {
+		w.fail("%s says one of, but its bound is a parameter of %s, which is exported, so its callers are not all visible; %s", w.lead, name, localWhy)
+		return
+	}
+	w.throughInterface(p, fn, name)
+	w.namedLeftOut(p, fn, name)
+	calls, others := 0, 0
+	for _, f := range p.files {
+		var stack []ast.Node
+		ast.Inspect(f, func(n ast.Node) bool {
+			if n == nil {
+				stack = stack[:len(stack)-1]
+				return true
+			}
+			stack = append(stack, n)
+			id, ok := n.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if used, ok := p.info.Uses[id].(*types.Func); !ok || used.Origin() != fn {
+				return true
+			}
+			call := callOf(stack)
+			if call == nil {
+				others++
+				w.fail("%s says one of, but %s is used at %s other than in a call, so its callers are not all visible; %s", w.lead, name, w.tr.at(id), localWhy)
+				return true
+			}
+			calls++
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && p.info.Types[sel.X].IsType() {
+				w.fail("%s says one of, but %s is called as a method expression at %s, which the walk does not read; call it as a method, or %s", w.lead, name, w.tr.at(call), localWhy)
+				return true
+			}
+			if i < len(call.Args) {
+				w.arg(p, enclosingFunc(stack), call.Args[i])
+			} else {
+				w.fail("%s says one of, but %s passes its bound through a call it spreads, %s, which the walk cannot read; pass the values one by one, or %s", w.lead, w.tr.at(call), types.ExprString(call), localWhy)
+			}
+			return true
+		})
+	}
+	if calls == 0 && others == 0 {
+		w.fail("%s says one of, but %s has no caller to give its bound; give it a caller, or %s", w.lead, name, localWhy)
+	}
+}
+
+// throughInterface refuses a method that a use in its package may reach
+// through an interface. A call there resolves to the interface's method,
+// not to fn, so the walk would not see it.
+func (w *capWalk) throughInterface(p *pkg, fn *types.Func, name string) {
+	recv := fn.Type().(*types.Signature).Recv()
+	if recv == nil {
+		return
+	}
+	t := recv.Type()
+	if pt, ok := t.(*types.Pointer); ok {
+		t = pt.Elem()
+	}
+	for _, f := range p.files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			id, ok := n.(*ast.Ident)
+			if !ok || id.Name != fn.Name() {
+				return true
+			}
+			m, ok := p.info.Uses[id].(*types.Func)
+			if !ok {
+				return true
+			}
+			mr := m.Type().(*types.Signature).Recv()
+			if mr == nil {
+				return true
+			}
+			iface, ok := mr.Type().Underlying().(*types.Interface)
+			if !ok {
+				return true
+			}
+			if types.Implements(t, iface) || types.Implements(types.NewPointer(t), iface) {
+				w.fail("%s says one of, but %s is called through the interface %s at %s, so its callers are not all visible; %s", w.lead, name, types.TypeString(mr.Type(), types.RelativeTo(p.types)), w.tr.at(id), localWhy)
+			}
+			return true
+		})
+	}
+}
+
+// namedLeftOut refuses a function whose name appears in a file of its
+// package that the host's build constraints leave out. That file has no
+// types, so any identifier of the name counts: a caller there would be
+// one the walk does not see.
+func (w *capWalk) namedLeftOut(p *pkg, fn *types.Func, name string) {
+	for _, lf := range w.tr.excluded[p.dir] {
+		found := false
+		ast.Inspect(lf.file, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok && id.Name == fn.Name() {
+				found = true
+			}
+			return !found
+		})
+		if found {
+			w.fail("%s says one of, but %s is named in %s, which the host's build leaves out, so its callers are not all visible; %s", w.lead, name, lf.rel, localWhy)
+		}
+	}
+}
+
+// arg reads one argument a caller passes: a constant as its value, a
+// parameter of the caller's declaration by that function's callers, or a
+// call of a method in the table of bounds as the table renders it, the
+// method's body held to the table. Anything else draws a sentence saying
+// it could not be read.
+func (w *capWalk) arg(p *pkg, fd *ast.FuncDecl, e ast.Expr) {
+	e = ast.Unparen(e)
+	if tv, ok := p.info.Types[e]; ok && tv.Value != nil {
+		if n, exact := constant.Int64Val(constant.ToInt(tv.Value)); exact {
+			w.add(strconv.FormatInt(n, 10))
+			return
+		}
+	}
+	if caller, j, ok := paramOf(p, fd, e); ok {
+		w.callers(caller, j)
+		return
+	}
+	if call, ok := e.(*ast.CallExpr); ok && len(call.Args) == 0 {
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+			if m, ok := p.info.Uses[sel.Sel].(*types.Func); ok {
+				if key, ok := w.tr.methodKey(m); ok {
+					if b, listed := w.bounds[key]; listed {
+						w.reached[key] = true
+						body, ret, mp := w.tr.returns(m)
+						if body != b.body {
+							w.fail("%s says one of, but the table of bounds has %s's body as %s, and its body in the tree is %s; read the method again and change its entry in the table", w.lead, key, b.body, body)
+							return
+						}
+						v, ok := rendered(mp, ret, b.name)
+						if !ok {
+							w.fail("%s says one of, but the table of bounds reads %s, whose body %s is not a setting plus a constant; make it one, or %s", w.lead, key, body, localWhy)
+							return
+						}
+						if want, known := w.settings[b.name]; known && !addsTo(ret, want) {
+							w.fail("%s says one of, but the table of bounds names %s's setting %s, which is %s, and its body adds to something else: %s; say the setting it adds to, or %s", w.lead, key, b.name, want, body, localWhy)
+							return
+						} else if !known {
+							w.fail("%s says one of, but the table of bounds names %s's setting %s, which the table of settings does not have; add it, with the code's spelling of it", w.lead, key, b.name)
+							return
+						}
+						w.add(v)
+						return
+					}
+				}
+			}
+		}
+	}
+	w.fail("%s says one of, but %s passes %s, which is not a constant, a parameter followed to its callers, or a method the table of bounds reads; pass one of those, or %s", w.lead, w.tr.at(e), types.ExprString(e), localWhy)
+}
+
+// addsTo says whether a body is the setting spelled want plus something.
+func addsTo(e ast.Expr, want string) bool {
+	be, ok := e.(*ast.BinaryExpr)
+	return ok && be.Op == token.ADD && types.ExprString(be.X) == want
+}
+
+// rendered is a table entry's bound: the setting's name plus the value of
+// the constant the body adds, read from the tree's types.
+func rendered(p *pkg, e ast.Expr, name string) (string, bool) {
+	be, ok := e.(*ast.BinaryExpr)
+	if p == nil || !ok || be.Op != token.ADD {
+		return "", false
+	}
+	tv, ok := p.info.Types[be.Y]
+	if !ok || tv.Value == nil {
+		return "", false
+	}
+	n, exact := constant.Int64Val(constant.ToInt(tv.Value))
+	if !exact {
+		return "", false
+	}
+	return name + " + " + strconv.FormatInt(n, 10), true
+}
+
+func (w *capWalk) add(v string) {
+	if !w.seen[v] {
+		w.seen[v] = true
+		w.values = append(w.values, v)
+	}
+}
+
+func (w *capWalk) fail(format string, args ...any) {
+	w.problems = append(w.problems, fmt.Sprintf(format, args...))
+}
+
+// paramOf says whether e is an identifier naming a parameter of fd, a use
+// inside a function literal of fd counting, and which function and
+// position it is.
+func paramOf(p *pkg, fd *ast.FuncDecl, e ast.Expr) (*types.Func, int, bool) {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok || fd == nil {
+		return nil, 0, false
+	}
+	v, ok := p.info.Uses[id].(*types.Var)
+	if !ok {
+		return nil, 0, false
+	}
+	fn, ok := p.info.Defs[fd.Name].(*types.Func)
+	if !ok {
+		return nil, 0, false
+	}
+	params := fn.Type().(*types.Signature).Params()
+	for i := 0; i < params.Len(); i++ {
+		if params.At(i) == v {
+			return fn, i, true
+		}
+	}
+	return nil, 0, false
+}
+
+// callOf is the call whose callee is the identifier at the top of the
+// stack, f(...), x.f(...) or an instance f[T](...), or nil when the
+// identifier is used another way, as a method value or a function value.
+func callOf(stack []ast.Node) *ast.CallExpr {
+	k := len(stack) - 1
+	var fun ast.Expr = stack[k].(*ast.Ident)
+	if k >= 1 {
+		if sel, ok := stack[k-1].(*ast.SelectorExpr); ok && sel.Sel == fun {
+			fun, k = sel, k-1
+		}
+	}
+	if k >= 1 {
+		switch ix := stack[k-1].(type) {
+		case *ast.IndexExpr:
+			if ix.X == fun {
+				fun, k = ix, k-1
+			}
+		case *ast.IndexListExpr:
+			if ix.X == fun {
+				fun, k = ix, k-1
+			}
+		}
+	}
+	if k >= 1 {
+		if call, ok := stack[k-1].(*ast.CallExpr); ok && call.Fun == fun {
+			return call
+		}
+	}
+	return nil
+}
+
+// declOf is the package and the declaration of a function of the tree,
+// found by its object.
+func (tr *tree) declOf(fn *types.Func) (*pkg, *ast.FuncDecl) {
+	for _, p := range tr.pkgs {
+		if p.types != fn.Pkg() {
+			continue
+		}
+		for _, f := range p.files {
+			for _, decl := range f.Decls {
+				if fd, ok := decl.(*ast.FuncDecl); ok && p.info.Defs[fd.Name] == types.Object(fn) {
+					return p, fd
+				}
+			}
+		}
+	}
+	return nil, nil
+}
+
+// objName is a function's name as the ledger writes one, for a function
+// with no declaration in the tree to read it from.
+func objName(fn *types.Func) string {
+	recv := fn.Type().(*types.Signature).Recv()
+	if recv == nil {
+		return fn.Name()
+	}
+	return "(" + types.TypeString(recv.Type(), types.RelativeTo(fn.Pkg())) + ")." + fn.Name()
+}
+
+// methodKey is a method's key in the table of bounds: its package's
+// directory and its name as the ledger writes a function.
+func (tr *tree) methodKey(m *types.Func) (string, bool) {
+	recv := m.Type().(*types.Signature).Recv()
+	if recv == nil || m.Pkg() == nil {
+		return "", false
+	}
+	t, star := recv.Type(), ""
+	if pt, ok := t.(*types.Pointer); ok {
+		t, star = pt.Elem(), "*"
+	}
+	named, ok := types.Unalias(t).(*types.Named)
+	if !ok {
+		return "", false
+	}
+	dir := strings.TrimPrefix(m.Pkg().Path(), tr.modulePath+"/")
+	return dir + " (" + star + named.Obj().Name() + ")." + m.Name(), true
+}
+
+// returns is a method's body as the table of bounds holds it: the one
+// expression of its one return statement, with the expression and its
+// package. A body of another shape is a sentence saying so, with no
+// expression.
+func (tr *tree) returns(m *types.Func) (string, ast.Expr, *pkg) {
+	p, fd := tr.declOf(m)
+	if fd == nil || fd.Body == nil || len(fd.Body.List) != 1 {
+		return "not one return of one expression", nil, nil
+	}
+	ret, ok := fd.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) != 1 {
+		return "not one return of one expression", nil, nil
+	}
+	return types.ExprString(ret.Results[0]), ret.Results[0], p
+}
+
+// at is a node's place as a sentence gives it, the file from the root and
+// the line.
+func (tr *tree) at(n ast.Node) string {
+	pos := tr.fset.Position(n.Pos())
+	return fmt.Sprintf("%s:%d", filepath.ToSlash(mustRel(tr.root, pos.Filename)), pos.Line)
 }
 
 // functions is every function and method declared in the non-test tree,
@@ -516,10 +1380,22 @@ type pkg struct {
 
 // tree is the type-checked non-test tree.
 type tree struct {
-	root     string
-	fset     *token.FileSet
-	pkgs     []*pkg
-	problems []string
+	root       string
+	modulePath string
+	fset       *token.FileSet
+	pkgs       []*pkg
+	problems   []string
+
+	// excluded is, by package directory, every file the host's build
+	// constraints leave out, parsed without types.
+	excluded map[string][]leftFile
+}
+
+// leftFile is one file the host's build leaves out, by its path from the
+// root.
+type leftFile struct {
+	rel  string
+	file *ast.File
 }
 
 // load parses and type-checks every package under internal/ and cmd/
@@ -528,7 +1404,7 @@ type tree struct {
 // would then miss.
 func load(t *testing.T, root string) *tree {
 	t.Helper()
-	tr := &tree{root: root, fset: token.NewFileSet()}
+	tr := &tree{root: root, fset: token.NewFileSet(), excluded: map[string][]leftFile{}}
 	ctxt := build.Default
 	ctxt.Dir = root
 	saved := build.Default
@@ -584,6 +1460,7 @@ func load(t *testing.T, root string) *tree {
 	}
 	sort.Strings(dirs)
 	modulePath := modulePathOf(t, root)
+	tr.modulePath = modulePath
 	for _, dir := range dirs {
 		p := byDir[dir]
 		p.info = &types.Info{
@@ -612,6 +1489,8 @@ func (tr *tree) leftOut(path, rel string) {
 		tr.problems = append(tr.problems, fmt.Sprintf("%s: %v", rel, err))
 		return
 	}
+	dir := filepath.ToSlash(filepath.Dir(rel))
+	tr.excluded[dir] = append(tr.excluded[dir], leftFile{rel: rel, file: f})
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch x := n.(type) {
 		case *ast.StructType:
@@ -924,6 +1803,10 @@ func (tr *tree) capSite(p *pkg, rel string, stack []ast.Node, pos token.Pos, tex
 		key:  fmt.Sprintf("%s %s cap %s", rel, enclosingName(enclosingFunc(stack)), text),
 		kind: "cap",
 		pos:  tr.fset.Position(pos),
+
+		boundExpr: bound,
+		fd:        enclosingFunc(stack),
+		p:         p,
 	}
 	if tv, ok := p.info.Types[bound]; ok && tv.Value != nil {
 		if n, exact := constant.Int64Val(constant.ToInt(tv.Value)); exact {
