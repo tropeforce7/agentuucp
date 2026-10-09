@@ -1046,6 +1046,36 @@ The client surfaces a refusal as exit 4 with the agent's sentence verbatim,
 and `auu serve` — the one thing that originates unattended by design —
 refuses to start under receive scope in its own words.
 
+**A service holds its identity key in the clear, and its account locks it
+away.** A program that sends with nobody there cannot type a passphrase,
+and no agent a person unlocked is waiting for it. So a service's key is a
+plain identity file. The account the service runs as, that account's
+directory and the unit that starts it are what keep the key from everyone
+but root. The relay's courier was built on a plain identity file before the
+guide said a service may hold one. This paragraph makes it the rule, so
+that the next service does not decide it again.
+
+The tree has two such services:
+
+- The relay's courier home, named by `courier.home` and set up with no
+  passphrase (`docs/relay.md` 1.10, the passage beginning "Set the home
+  up as the user the relay runs as"). `openHome` in
+  `internal/relay/courier.go` refuses one whose identity is encrypted, by
+  name. The relay uses it only to dial a neighbour. Accepting forwarded
+  mail through `courier.authorized_file` needs no identity key, so a
+  relay that dials nobody holds no identity key.
+- An expert on a dedicated account (`docs/creating-experts.md`), whose
+  every reply originates.
+
+A person's own account running `auu serve` is the other shape. The key
+stays encrypted. `auu unlock --send --ttl 0` and `auu agent start` after
+each boot put it in the agent in send scope, and a user unit with
+lingering keeps serve running (`docs/serve.md`). Serve's refusal under
+receive scope, in the paragraph above, belongs to this shape alone: a home
+in the clear has no agent and no scope, and `cmdServe` in
+`internal/auu/serve.go` asks for send scope only when the home is
+encrypted.
+
 **An HPKE context cannot be rewound, so seal to disk before you upload.** A
 stream is one context and a run of chunks; the nonce counter advances on every
 `Seal` and never goes back. A chunk the network lost cannot be sealed a second
