@@ -13,31 +13,35 @@ there because the relay routes by it. The name and the period it is
 checked against come out of the directory the owner signed, verified
 against their registered key at the post itself and not read from the
 rows the relay parsed at the push: a post to a channel that does not
-exist, or is not open, is refused before the message is stored, and a
+exist, or is not open, is refused before the message is stored. A
 directory that no longer verifies closes the mailbox — every name
 refused, `default` and the owner's own post included — until they push
 again. It closes rather than falling back to `default`, because falling
 back would open a name an owner's own document may have removed or
 closed, and because that is what a signed thing that no longer verifies
 does here: a broken allow list already refuses every sender. The owner is
-told at their next fetch, and `auu channel push` is the repair. The owner chooses what the labels say. The kind is one of three words,
-`envelope`, `stream` or `knock`, given by the route the message arrived
-by and said beside the row in every listing; a knock is a stranger's one
-message, taken past the allow list only where the recipient's signed card
-says `knocks`, and it says nothing about who knocked, since that is inside
-the ciphertext like every sender. Beside the rows, per mailbox, the three
-documents an owner signs and pushes: the channel directory, the allow
-list, and the card, which says the owner's name and two words of the
-owner's, `listed` and `knocks`. Each is the bytes the owner signed and the
-signature, verified against the registered key at the push and again
-wherever the relay acts on it, and the card's two words are parsed into
-columns that decide nothing. The message itself is a file beside the
-database, which an operator can list, count and delete but not read.
-Every value the relay puts
-to that database goes as a query parameter, never into the text of a query.
-That is true of a fingerprint, a channel name, a token id and a reason
-alike. A test (`internal/sqlshape`) parses the tree and fails on any query
-whose text is not a constant.
+told at their next fetch, and `auu channel push` is the repair. The owner
+chooses what the labels say.
+
+The kind is one of three words, `envelope`, `stream` or `knock`, given by
+the route the message arrived by and said beside the row in every
+listing. A knock is a stranger's one message, taken past the allow list
+only where the recipient's signed card says `knocks`. It says nothing
+about who knocked, since that is inside the ciphertext like every sender.
+
+Beside the rows, per mailbox, the three documents an owner signs and
+pushes: the channel directory, the allow list, and the card, which says
+the owner's name and two words of the owner's, `listed` and `knocks`. Each
+is the bytes the owner signed and the signature, verified against the
+registered key at the push and again wherever the relay acts on it. The
+card's two words are parsed into columns that decide nothing. The message
+itself is a file beside the database, which an operator can list, count
+and delete but not read.
+
+Every value the relay puts to that database goes as a query parameter,
+never into the text of a query. That is true of a fingerprint, a channel
+name, a token id and a reason alike. A test (`internal/sqlshape`) parses
+the tree and fails on any query whose text is not a constant.
 
 Since a channel keeps its mail by default, that ciphertext now stays until
 its owner removes it rather than until they read it. The relay learns
@@ -51,7 +55,7 @@ Three rows are exceptions, and each is worth stating. While a stream is being
 uploaded, the relay holds a row naming the *sender* as well as the recipient.
 It has to, because only the sender may append to their own upload and the
 reservation must be charged to somebody. That row lives for the length of one
-upload and is deleted when the stream completes or is abandoned, and nothing
+upload and is deleted when the stream completes or is abandoned. Nothing
 survives it.
 
 The other is a knock. A knock row carries the fingerprint of whoever
@@ -61,40 +65,45 @@ until the mailbox goes. It has to, because that is what lets a second knock
 from one key replace the first, so the waiting cap counts knockers rather
 than knocks and no single identity can fill a mailbox's share of it. Nothing
 survives that row either: no counter, no log line and no other table keeps
-it, and an owner who would rather the relay held no such thing pushes a card
+it. An owner who would rather the relay held no such thing pushes a card
 that says no knocks, which closes the door and stores nothing.
 
 The third is mail this relay has taken to carry to a neighbouring relay,
 which only a relay peered with another ever holds. A relay that forwards
 cannot seal a bounce and should not be given the ability to, so mail that
 cannot be delivered has to be somebody's for anyone to be told about it:
-the row names whoever posted it. While it waits it names the recipient too;
-the moment the neighbour takes the envelope both the file and the
+the row names whoever posted it. While it waits it names the recipient too.
+The moment the neighbour takes the envelope both the file and the
 recipient go. What is left is the poster, this relay's own name for the
 neighbour, and the address: the relays the message came through and the
 ones it has still to go to, by the names each relay knows them by. That
 last is relay-granularity routing — not who wrote to whom, since the
 recipient is gone and the sender was never there, but which relays
 carried it — and it stays as long as the row does, which outlasts the
-envelope. In an ordinary hour the file and the recipient go within seconds,
-because a worker hands the envelope over as soon as one arrives; what is
+envelope.
+
+In an ordinary hour the file and the recipient go within seconds,
+because a worker hands the envelope over as soon as one arrives. What is
 left goes when the window in which something could still come back about
 that message has passed, which is `courier.forward_ttl` for each hop the
 message had left to go, and so three days at the defaults for the last hop
 and longer for a message with further to travel. When a neighbour is
 unreachable the whole row waits as long as the relay keeps trying, which
-`courier.forward_ttl` also sets; after that the row is failed, the poster
+`courier.forward_ttl` also sets. After that the row is failed, the poster
 can read what happened to their mail for a day, and then it goes. A relay
 with no `courier` block — every relay until its operator peers one — holds
-none of this. Those three rows are
-the whole of what the relay writes down about who is sending something.
+none of this.
+
+Those three rows are the whole of what the relay writes down about who is
+sending something.
 
 While an upload's row lives, the reservation counts against the recipient's quotas
 and the relay's as though the stream were already queued. That holds for an
 envelope posted beside it as much as for another stream. One arithmetic
 answers both, so neither can be filled into the other's reservation. What
 bounds one identity's uploads is the count, `max_open_uploads`, beside its
-byte budget. The count is four unless the operator sets `max_open_uploads`, across every mailbox it sends to. The open
+byte budget. The count is four unless the operator sets
+`max_open_uploads`, across every mailbox it sends to. The open
 charges the declared size. What the relay never ends up holding comes back
 when the upload goes unplaced. So the budget charges what the relay holds,
 and an abandoned upload does not spend the hour.
@@ -106,15 +115,18 @@ records exactly that unless you set `access_log: "minimal"`. Rate limiting
 keeps the verified fingerprint in memory for as long as a bucket lives.
 Anybody holding the logs of a `full`-mode relay holds the social graph. Nothing
 of that is written to the database, and no limiter key is ever written
-anywhere; the one thing a stored row says about a sender is the knocker on a
-knock, above, which lives as long as the knock does. The
-channel a message was posted to is the one thing about a message's content
-the relay learns beyond its size. It is written to the row, served in the
-owner's own listing, and recorded in the access log under neither mode.
+anywhere. The one thing a stored row says about a sender is the knocker on a
+knock, above, which lives as long as the knock does.
+
+The channel a message was posted to is the one thing about a message's
+content the relay learns beyond its size. It is written to the row, served
+in the owner's own listing, and recorded in the access log under neither
+mode.
+
 A knock is seen as any post is, and stored with one thing more: the row
 says `knock` and carries the knocker's fingerprint, which is what lets a
 second knock from one key replace the first. What the knocker *wrote* is
-inside the ciphertext like every sender's words; what the row holds is
+inside the ciphertext like every sender's words. What the row holds is
 who they are, and only until the owner's fetch acknowledges it, it is
 replaced, or the mailbox goes. An owner who would rather the relay held
 no such thing pushes a card that says no knocks.
@@ -125,13 +137,15 @@ its own, and the list of everybody it went to, the `recipients` section,
 is inside each copy's seal, where the relay cannot read it. The relay
 reads a count, how many the message went to, on a stream's open and on a
 user's forward, which are the two requests with a body to carry one, so
-that it can hold the sender to `max_recipients`; it never reads who they
+that it can hold the sender to `max_recipients`. It never reads who they
 are, and it neither stores nor logs the count. A courier's hand-over to
 the next relay carries no count, so a relay after the first learns
 nothing of it. On a plain post the relay reads nothing about the other
 recipients at all. What it does see is what any post shows it: one
 verified sender writing into several mailboxes close together, which a
-`full` access log records as it records every post. Every recipient
+`full` access log records as it records every post.
+
+Every recipient
 reads the whole list, by fingerprint, so there is no blind copy: a
 person a message to several went to cannot be hidden from the others.
 And the list is the sender's word. A reader checks that the list names
@@ -147,7 +161,9 @@ it which peers the watcher may post to, which the directory fetch the
 watcher made first had already told it. It tells it nothing about a peer
 who has not admitted the watcher, since such a peer is dropped before
 anything is held. Neither reaches the access log. The query string is not
-logged under either mode. And there are no delivery receipts for an
+logged under either mode.
+
+And there are no delivery receipts for an
 ordinary message, and cannot be: its stored row has no sender, so nothing
 ties it being collected to the person who posted it, and building that
 would mean recording the sender on every message, which is the social
@@ -167,7 +183,9 @@ it is shown. A name and a label are held to a rule that leaves no control
 or format character in them. A sentence has every character a terminal
 would obey rather than show escaped the way Go quotes a string. That
 happens where the error is made rather than where it is printed, so no
-command can forget. What a peer writes is held to the same standard twice
+command can forget.
+
+What a peer writes is held to the same standard twice
 over. A subject, a text and an attachment name are refused at open, on
 both paths, if they carry a control character, a format character, a
 private-use character or a line or paragraph separator. A line break and a
@@ -177,6 +195,7 @@ inbox listing, `read`, quarantine, watch, serve's console lines and
 completion. A record in the spool is held to the rule again when it is
 read back, and one that fails it is not shown. Sender names, which come
 from this machine's own peer list, go through the same escaper.
+
 `auu-admin`'s listings hold the relay's enumerated words to the set the
 protocol defines, refusing the answer whole otherwise. Those words are a
 registration mode, a certificate mode, an allow state, and a token's use
@@ -186,7 +205,9 @@ token's relay and note are escaped when it is described. The key proxy's
 log line escapes the path a caller sent. The same treatment covers a name
 from a relay that is not this one. It covers `auu-admin`'s confirmation
 before it removes a mailbox, which prints the name at the one moment an
-administrator is reading carefully. And what the relay lists is checked
+administrator is reading carefully.
+
+And what the relay lists is checked
 for shape before it is used. Every fingerprint, serial and token id in an
 answer is held to its rule as it comes off the wire. A lifetime it reports
 in seconds is bounded before anything multiplies it. Every count it
@@ -195,7 +216,9 @@ of the three, and an upload's offset a byte count. So an answer with a
 two-byte fingerprint or a negative queue is refused whole as malformed,
 naming the field and the relay. It is not sliced by a command that
 expected sixty-four characters or seeked to by one that expected an
-offset. Every integer that enters the program from outside has a row in
+offset.
+
+Every integer that enters the program from outside has a row in
 `internal/limits/ledger.txt`, and so does every slice of a string or a
 byte slice. An integer from outside is a field in a JSON shape, a number
 or a duration parsed from text, a length read from four bytes, or a flag.
@@ -204,7 +227,9 @@ that takes it to the edge and one step past. For a slice, it gives the
 rule that fixed the operand's length and the point it ran, with the test
 that feeds the operand one byte short there, or the operand's own
 arithmetic. The test beside the ledger walks the tree and fails on a site
-with no row. A record read back from the home is held to the shapes a
+with no row.
+
+A record read back from the home is held to the shapes a
 print slices at the point it is read. Those are a message's ids,
 fingerprints and digests at `Load`, a relay's pinned hashes, a
 certificate's serial, and an outbox record's id and recipient. So a file
@@ -284,7 +309,7 @@ which the neighbours' own budgets bound and which their operators end by
 removing one line from their couriers file. It buys no message and nobody's
 identity: the courier carries sealed envelopes and cannot open one, as the
 relay it belongs to cannot. The file is protected the way the bundle is, by
-the host — the relay's user alone, 0600, under the unit's hardening — and
+the host — the relay's user alone, 0600, under the unit's hardening.
 `docs/relay.md` section 1.10 says how the peering is set up.
 
 **A control message, and what a lying courier can do with one.** There is one
@@ -292,7 +317,7 @@ route on which a relay tells another relay something rather than handing it
 something: an undeliverable, `POST /v1/forward/failed`, carrying an id, a code
 and a sentence. A relay cannot seal a bounce and should not be able to, so
 this is how a sender learns that mail could not be delivered three relays
-away — the news unwinds one hop at a time along the rows each relay is
+away. The news unwinds one hop at a time along the rows each relay is
 holding, until it reaches the row whose poster is the sender, who reads it in
 `auu queue`.
 
@@ -301,7 +326,7 @@ A report is accepted only against a row this relay really handed to *that*
 courier, and once: so a courier can end the messages it was given and no
 others, and what it was given is bounded by this relay's own queue caps. There
 is no way to make a relay carry a report it did not earn, no way to end
-somebody else's mail, and nothing to learn — a refusal says a row is not one
+somebody else's mail, and nothing to learn. A refusal says a row is not one
 this relay is waiting to hear about and never which rows it holds. What a
 courier can do is lie about *why*: the code is one of two words a relay can
 prove about its own attempt, and the sentence is free text, so a courier can
@@ -334,7 +359,7 @@ row is still waiting, so it tries again, and the neighbour's `409` now carries
 how that row ended, which is how the news gets through. After the neighbour has
 purged its ended row, a day later, a retry meets the bare refusal instead and
 reads `refused: …: already carried`, which is true about the outcome and silent
-about its cause; the sender's own relay had every retry before then, at least
+about its cause. The sender's own relay had every retry before then, at least
 one an hour, to learn the code.
 
 One boundary of the couriers route rests on a setting, and it is the same setting
@@ -346,11 +371,11 @@ peering joins the set that relay has already chosen to show anybody: the cards o
 users who asked to be listed, and the answers to key lookups.
 
 What is disclosed is which relays carry mail *in*, by fingerprint rather than by
-the operator's local name, and never which relays it carries *to* — an open relay
+the operator's local name, and never which relays it carries *to*. An open relay
 cannot forward outward at all, since `courier.home` beside open registration
 refuses to start. Nothing about a message is disclosed and no name a sender needs
 is withheld. The remedy is `token` or `closed`, which is the remedy for the rest
-of it; withholding the list from a relay's own users is not one, since a
+of it. Withholding the list from a relay's own users is not one, since a
 recipient who cannot read it cannot admit a courier and cannot be reached from
 off their relay. `docs/relay.md` section 1.9 says this where an operator chooses
 the setting.
@@ -414,7 +439,7 @@ publish to their senders. Beside it, the state of each of the three
 documents that owner signed — the allow list, the card and the channel
 directory. Every state is reached by verifying that stored document
 against the registered key at the moment the record is read, never by
-reading a column the push wrote, and a mailbox that has never pushed one
+reading a column the push wrote. A mailbox that has never pushed one
 of them has no state to show for it. What is printed of each differs, since
 each says something different when it is there: a count and `signed` for
 the allow list, what the card says of itself for the card, and the bare
@@ -427,31 +452,32 @@ does, which is none. That list is inherent in running a relay, which is
 why the file naming administrators belongs to whoever runs the host and
 to nobody else.
 
-**Enrolment tokens.** Signed by the issuing administrator's own identity key,
-so the relay holds no new private key material. Removing an administrator
-from the authorized file invalidates every token they issued. A token must also
-be registered with the relay before it can be redeemed, which is what makes
-revocation and single use real rather than hoped for. Tokens are bearer
-credentials. Send them over TLS. The relay's audit log records a token's id and never the token. The relay does
-not record which token created which mailbox. That link appears once in the
-operator's audit log and nowhere in the database, because a permanent table of
-who invited whom is a social graph of a different kind.
+**Enrolment tokens.** Signed by the issuing administrator's own identity
+key, so the relay holds no new private key material. Removing an
+administrator from the authorized file invalidates every token they
+issued. A token must also be registered with the relay before it can be
+redeemed, which is what makes revocation and single use real rather than
+hoped for. Tokens are bearer credentials. Send them over TLS. The relay's
+audit log records a token's id and never the token. The relay does not
+record which token created which mailbox. That link appears once in the
+operator's audit log and nowhere in the database, because a permanent
+table of who invited whom is a social graph of a different kind.
 
 **The allow list.** Owner-signed, like the channel directory. `auu allow
 push` signs the list of who may post to you with your identity key. The
 relay verifies the signature against your registered key before storing
 it and again on every post, with no cache. A row edited in the relay's
-database therefore refuses every sender but the owner rather than admitting one. A
-sender is told what a refused sender is always told. Your own listing says
-`broken`, `auu inbox` says so, and your next `auu allow push` is the whole
-repair, whatever issue time an editor left on the row, since the
-newer-issued rule holds only between two lists you signed. A row with no
-signature is broken too. A signed row with its
-signature removed refuses every sender but the owner at once. There is no state in
-which the relay honours a list it cannot verify. So a restricted mailbox
-whose list does not verify is closed until its owner pushes, and `auu
-inbox` tells them so on every fetch. Your own machine also remembers that
-it pushed a signed list, and says so if the relay's row has gone
+database therefore refuses every sender but the owner rather than
+admitting one. A sender is told what a refused sender is always told.
+Your own listing says `broken`, `auu inbox` says so, and your next
+`auu allow push` is the whole repair, whatever issue time an editor left
+on the row, since the newer-issued rule holds only between two lists you
+signed. A row with no signature is broken too. A signed row with its
+signature removed refuses every sender but the owner at once. There is no
+state in which the relay honours a list it cannot verify. So a restricted
+mailbox whose list does not verify is closed until its owner pushes, and `auu
+inbox` tells them so on every fetch. Your own machine also remembers
+that it pushed a signed list, and says so if the relay's row has gone
 altogether. What this does not cover is root on the relay's host, who can
 replace the relay itself. That is where *What is not protected* below
 draws the line. The signature moves the bar from editing one table to
@@ -460,7 +486,7 @@ replacing the binary.
 **The card.** Owner-signed, the third document. `auu card push` signs
 your name and two words, `listed` and `knocks`, with your identity key,
 and the relay verifies the pair against your registered key before storing
-it. A row edited in the relay's database stops verifying, and a card that
+it. A row edited in the relay's database stops verifying. A card that
 does not verify says nothing on your behalf: the relay reads it as
 `broken`, your own listing says so, `auu inbox` says so, and a bare `auu
 card push` is the whole repair, whatever issue time an editor left on the
@@ -480,16 +506,18 @@ card is not a stranger's to learn.
 **Where trust comes from.** `authorized_peers`, and nowhere else. The relay's
 key lookup endpoint is a convenience for typing accuracy. It is not a trust
 anchor, and `auu lookup` deliberately refuses to add anyone. Confirm
-fingerprints with people directly. The card listing is a second way a
+fingerprints with people directly.
+
+The card listing is a second way a
 person may choose to fill the file, and it rests on exactly one thing:
 who the relay admits. The relay can prove, and the client checks, that a
 listed bundle hashes to its fingerprint and that its card was signed by
-the key inside it; that is a statement about bytes, and the client
+the key inside it. That is a statement about bytes, and the client
 verifies every entry itself, dropping what fails, so an edit to the
 relay's database removes a name and never adds one. What the relay
 cannot prove is that a fingerprint belongs to a person. On a relay that
 invites by token, a listed identity was let in by an administrator who
-signed the token, and its name is its own claim; on one that registers
+signed the token, and its name is its own claim. On one that registers
 anyone, an identity proves nothing about who holds it. So a peer taken
 from the listing is trusted as far as the relay's admission is, and no
 further, and `auu peers fetch`, the one
@@ -498,16 +526,17 @@ asks, at a terminal, and never without a person. The name on a card is
 the owner's claim, offered at the prompt as the local name and never
 taken as one until the person accepts it. A relay that lies about its
 mode is admitting anybody, which is the case the sentence warns of.
+
 A vouch is the third way, and it rests on a peer already in the file: a
 message from somebody you hold carrying their signed word that they hold
 another key, under a name. It counts only when its signer is on your list
 and it verifies under the key you hold for them, never the bundle the
-message brought; from anybody else it is held in quarantine and adds
+message brought. From anybody else it is held in quarantine and adds
 nobody. There are no chains and no arithmetic: a vouch from somebody you
 added on a vouch is a vouch from them, judged the same way. `auu peers add
 --vouched` is the one command that adds from one, at a terminal, saying
 whose word it is, with the voucher's name offered at the prompt and never
-taken until the person accepts it; it writes a comment above the entry
+taken until the person accepts it. It writes a comment above the entry
 saying whose word it was. A peer who is compromised can introduce anybody
 to you, which is what trusting them means, and no more than they could
 do across a table.
@@ -521,9 +550,9 @@ recipient with a restricted list admits a *relay* rather than a person, and
 admits everybody who can post through it along with it.
 
 That is why it goes nowhere near `authorized_peers`. A peer is somebody whose
-key seals mail to you and whose fingerprint you confirmed with them; a courier
-is admitted so that a delivery may be accepted at all, and it can read nothing —
-a relay cannot open an envelope, and admitting one does not change that.
+key seals mail to you and whose fingerprint you confirmed with them. A courier
+is admitted so that a delivery may be accepted at all, and it can read nothing.
+A relay cannot open an envelope, and admitting one does not change that.
 
 What it can do is worth stating exactly, because the narrower reading is the
 tempting one. An allow list is one list and the relay asks it one question: may
@@ -559,20 +588,22 @@ quarantine, where every stranger's message goes. One: `auu knock` sends
 one and then refuses, since the person is a peer by then. The relay does
 not count them — it has no memory of who knocked — so what bounds a
 knocker who is not running this client is the operator's two settings,
-`max_knocks_waiting` on the mailbox and `knocks_per_hour` on the sender. Nothing on the knocked
-side is trusted by its arrival: the name the knock carries is the
-sender's own claim, shown as theirs, offered at the prompt when somebody
-runs `auu quarantine trust` and never taken as a label until a person
-accepts it. On the knocking side the peer being added is that person's
-own decision, asked for at a terminal before anything is sent, which is
-why neither `knock` nor `peers fetch` is a command the skills run. A
-knock may carry up to four vouches the knocker keeps, each a peer's
+`max_knocks_waiting` on the mailbox and `knocks_per_hour` on the sender.
+Nothing on the knocked side is trusted by its arrival: the name the knock
+carries is the sender's own claim, shown as theirs, offered at the prompt
+when somebody runs `auu quarantine trust` and never taken as a label until
+a person accepts it. On the knocking side the peer being added is that
+person's own decision, asked for at a terminal before anything is sent,
+which is why neither `knock` nor `peers fetch` is a command the skills
+run.
+
+A knock may carry up to four vouches the knocker keeps, each a peer's
 signed word that they hold the knocker, chosen by the knocker, since what
 it carries tells the knocked person who vouches for them. What one adds is
 a sentence and no more: a vouch counts only when its voucher is somebody
 the knocked person already holds, it verifies under the key they hold for
 that voucher, and it is for the knocker's own key, so a vouch about
-somebody else cannot be presented as one's own; the quarantine line names
+somebody else cannot be presented as one's own. The quarantine line names
 those vouchers and counts the rest, and `auu quarantine trust` says whose
 word each is before the name is asked. It adds nobody, opens nothing past
 the relay, and changes nothing about who decides. The relay sees a larger
@@ -580,10 +611,10 @@ knock: `knock_max_bytes` is 20 KiB by default, which takes four at their
 longest, and the health answer carries it so a client refuses a knock
 with vouches over it before sending, naming how many to leave off; one
 with none meets the relay's own refusal, which names the setting.
-The one identity trusted without an entry
-is your own. A message you sent yourself is opened, verified and delivered
-like any other, and the relay accepts it for your mailbox whatever your allow
-list says. Sender
+
+The one identity trusted without an entry is your own. A message you sent
+yourself is opened, verified and delivered like any other, and the relay
+accepts it for your mailbox whatever your allow list says. Sender
 and recipient are the same authenticated identity, which a `full` access log
 records as such.
 
@@ -594,6 +625,7 @@ They can do anything the relay can, including replacing it, and the relay
 cannot defend itself from the machine it runs on. What such an attacker still
 cannot do is read or forge a message. *Keeping a relay private* in
 `relay.md` says what keeping the host secure means.
+
 Compromise of your `identity.json` gives an attacker everything. That is
 your mail, and the ability to write as you. With a passphrase set (see
 *Encrypting your keys*) the file holds only your public half. The keys are
@@ -621,20 +653,21 @@ here has one, and a relay request is decided by its method and path
 against the relay's route table. A plain `auu unlock` is receive scope.
 The agent opens mail, signs the transport, and signs what lists, fetches,
 watches and acknowledges. It refuses to sign a message, a stream's
-manifest, a channel directory, an allow list, a card, a vouch, a token, or any
-request that
-posts, uploads, registers, pushes or administers, a knock among them: a
-knock is a message and its route originates, so an agent unlocked to
-receive refuses it twice over, exit 4 with nothing sent. Anything it does not
-recognise is refused too. `auu unlock --send` is everything, and then back
-to receive. It asks the passphrase again, and its window is ten minutes by
-default. An induced action in receive scope can therefore fetch mail and
-acknowledge it, which is to say delete it from the relay. It can renew
-this machine's own certificate, and nothing more. The relay issues that
-certificate to the signing identity's fingerprint and to no other, on the
-live certificate it then retires, with no token and for no other machine,
-so it is maintenance and not an act. In a send window it can originate as
-the person, which is why the window is short and typed for.
+manifest, a channel directory, an allow list, a card, a vouch, a token, or
+any request that posts, uploads, registers, pushes or administers, a knock
+among them: a knock is a message and its route originates, so an agent
+unlocked to receive refuses it twice over, exit 4 with nothing sent.
+Anything it does not recognise is refused too. `auu unlock --send` is
+everything, and then back to receive. It asks the passphrase again, and
+its window is ten minutes by default. An induced action in receive scope
+can therefore fetch mail and acknowledge it, which is to say delete it
+from the relay. It can renew this machine's own certificate, and nothing
+more. The relay issues that certificate to the signing identity's
+fingerprint and to no other, on the live certificate it then retires, with
+no token and for no other machine, so it is maintenance and not an act. In
+a send window it can originate as the person, which is why the window is
+short and typed for.
+
 This does not reach a home that was never encrypted, whose keys are files
 any process can read. Nor does it reach one whose passphrase is in a file,
 which the AI can read too. The one accepted exception is `auu serve`. An
@@ -868,7 +901,7 @@ With keys already swapped, in person or over something you both trust:
    behind that relay, and it is the one place a list means something coarser
    than the fingerprints in it.
 7. Your relay's row is now `handed`. Its file and Bob's fingerprint go at
-   once; the poster, your relay's name for `bar`, and the address stay while
+   once. The poster, your relay's name for `bar`, and the address stay while
    something could still come back about it. `auu queue` is what you read,
    and `auu inbox` says one line while anything is waiting.
 
@@ -924,27 +957,30 @@ That is set by hand or copied from a machine that had fetched further. It
 is not put right by itself: the cursor is a person's to set, and nothing
 from the relay can say whether the gap was meant. Then `auu inbox` says so,
 with the count and `auu cursor reset --relay NAME`, which says what the
-next fetch will fetch before it writes the cursor; since every fetch meets
+next fetch will fetch before it writes the cursor. Since every fetch meets
 the mail it already has, a fetch from the front delivers nothing twice. It
-exits 5 without acknowledging anything or moving the cursor. Each message listed says which channel it is under (`channel`),
-always, `default` included, held to the channel name rule as it is read. It
-says how it came, too: `via`, the relays it crossed before the one holding
-it, nearest the sender first and joined by `!`, always present and empty for
+exits 5 without acknowledging anything or moving the cursor.
+
+Each message listed says which channel it is under (`channel`), always,
+`default` included, held to the channel name rule as it is read. It says
+how it came, too: `via`, the relays it crossed before the one holding it,
+nearest the sender first and joined by `!`, always present and empty for
 mail posted to that relay directly. A client holds those names to the same
-address rule every relay ran — a relay name each, none named twice, at most
-32 of them — and refuses a row that breaks it by name, since an address that
-reached a client having broken it came through a relay that did not run it.
-It says its kind too (`envelope`, `stream` or `knock`). The listing says the state
-of the owner's allow list (`allow`), of their card (`card`) and of their
-channel directory (`directory`) on every answer — the same three words for
-each, `signed`, `none` or `broken` — since each of the three is verified
-where the relay acts on it and a broken one refuses something on the
-owner's behalf that they would otherwise learn of only from silence: a
-broken allow list every sender, a broken card every knock, a broken
-directory every post. **Nothing on the wire
-is from before, and what comes after has one door.** v0.15.0 is the
-floor: everything is upgraded to it once, together, and nothing from
-before it is supported. So a field one end always sends is
+address rule every relay ran — a relay name each, none named twice, at
+most 32 of them — and refuses a row that breaks it by name, since an
+address that reached a client having broken it came through a relay that
+did not run it. It says its kind too (`envelope`, `stream` or `knock`).
+The listing says the state of the owner's allow list (`allow`), of their
+card (`card`) and of their channel directory (`directory`) on every answer
+— the same three words for each, `signed`, `none` or `broken` — since each
+of the three is verified where the relay acts on it and a broken one
+refuses something on the owner's behalf that they would otherwise learn of
+only from silence: a broken allow list every sender, a broken card every
+knock, a broken directory every post.
+
+**Nothing on the wire is from before, and what comes after has one door.**
+v0.15.0 is the floor: everything is upgraded to it once, together, and
+nothing from before it is supported. So a field one end always sends is
 required by the other and refused by name when it is absent, with nothing
 of the answer used, rather than read as a peer from before the field. A
 listing without `channel`, `kind`, `allow` or `card`, a health answer
@@ -957,36 +993,37 @@ manifest, answer and request carries and every reader of this build was
 written to read: a part it does not know it ignores, and a part marked
 critical it refuses by name, saying that the reader, this machine or the
 relay, needs a newer auu, rather than read the rest with that part
-dropped. A message that
-needs a newer auu is kept under `damaged/` with the cause `newer` and the
-section's name, and is not deleted: updating auu and reading it again is
-what to do about it, and asking the sender to send it again is not. The
-outer envelope a relay reads is four fields for good, and a relay carries
-an envelope whose version it does not know, since what the version means
-is between the sender and the recipient. The relay's `wire_level` on its
-health answer says what it can do. And a refusal is told apart by its
-`code`, never by its words, so a relay may change its words and add codes
-without a client misreading either. [`docs/client.md`](client.md) says
-what this means for a person upgrading, and the release note
-[`docs/releases/v0.15.0.md`](releases/v0.15.0.md) gives the order. **Nothing on this
-machine is from before** either. A file a version from before a rule wrote
-is refused by name with a sentence saying what to do, never migrated and
-never read under the old rule, where the version is one before v0.15.0;
-a file v0.15.0 or later wrote is read by every later build, so a later
-build adds to a kept file's shape only in a way the older file still
-reads. A relay's database from before schema 11,
-a home's `config.json` of the shape from before it could know more than
-one relay, a record with no relay name, and an `auu-ca` key file that is
-not encrypted are each refused so. The relay's database is the one file
+dropped. A message that needs a newer auu is kept under `damaged/` with
+the cause `newer` and the section's name, and is not deleted: updating auu
+and reading it again is what to do about it, and asking the sender to send
+it again is not. The outer envelope a relay reads is four fields for good,
+and a relay carries an envelope whose version it does not know, since what
+the version means is between the sender and the recipient. The relay's
+`wire_level` on its health answer says what it can do. And a refusal is
+told apart by its `code`, never by its words, so a relay may change its
+words and add codes without a client misreading either.
+[`docs/client.md`](client.md) says what this means for a person upgrading,
+and the release note [`docs/releases/v0.15.0.md`](releases/v0.15.0.md)
+gives the order.
+
+**Nothing on this machine is from before** either. A file a version from
+before a rule wrote is refused by name with a sentence saying what to do,
+never migrated and never read under the old rule, where the version is one
+before v0.15.0. A file v0.15.0 or later wrote is read by every later
+build, so a later build adds to a kept file's shape only in a way the
+older file still reads. A relay's database from before schema 11, a home's
+`config.json` of the shape from before it could know more than one relay,
+a record with no relay name, and an `auu-ca` key file that is not
+encrypted are each refused so. The relay's database is the one file
 carried forward, from schema 11 on, since a relay was running on it when
-the schema next changed: a step per version, each what that version
-added and nothing else, after a copy of the database is kept beside it
-for the way back. That copy is a snapshot of every row the database held
-at the upgrade, the mailboxes, certificates and tokens among them, and
-nothing the relay does afterwards reaches it: a mailbox deregistered, a
-token spent or revoked, a row deleted under `secure_delete`, each is still
-in the copy. It is mode 0600 beside the database, and it is the operator's
-to remove once the new release has run as they want.
+the schema next changed: a step per version, each what that version added
+and nothing else, after a copy of the database is kept beside it for the
+way back. That copy is a snapshot of every row the database held at the
+upgrade, the mailboxes, certificates and tokens among them, and nothing
+the relay does afterwards reaches it: a mailbox deregistered, a token
+spent or revoked, a row deleted under `secure_delete`, each is still in
+the copy. It is mode 0600 beside the database, and it is the operator's to
+remove once the new release has run as they want.
 
 Two routes carry a mailbox's channel directory, the signed list of named
 sub-mailboxes an owner defines. The owner pushes it with `PUT
@@ -1007,6 +1044,7 @@ relay never bounds `issued` against its own clock. So an owner who signs
 one far in the future locks their own other machines out of pushing until
 they push a later one, or deregister. Only the identity key can do that,
 to itself.
+
 Anyone the allow list admits fetches it with `GET
 /v1/mailbox/{fp}/channels` and gets the same two fields back verbatim, to
 verify against the key they hold for the owner. A sender the allow list
@@ -1024,14 +1062,15 @@ same places, before the signature.
 The relay verifies the pair against the registered key before storing
 either. It answers `401` for a signature that does not verify, `400` with
 the rule broken or the document over its bytes, and `409` for a list
-issued no later than the one it holds, a broken row being no bar. A body with no document is answered `400 this relay takes a signed
+issued no later than the one it holds, a broken row being no bar. A body
+with no document is answered `400 this relay takes a signed
 allow list; the request carries no document`, which stores nothing. The
 owner reads it back with `GET /v1/mailbox/{fp}/allow`. That answer is the
 pair verbatim and `state`, one of `signed`, `none` and `broken`. `none`
 means never pushed, and any registered sender may post. `broken` means it
 does not verify, a row with no signature included, and every sender but
-the owner is refused. The owner's own mailbox listing carries the same word as `allow`
-on every answer.
+the owner is refused. The owner's own mailbox listing carries the same
+word as `allow` on every answer.
 
 The card travels the same way. `PUT /v1/mailbox/{fp}/card` carries
 `document` and `signature`, the card as the owner signed it under its own
@@ -1048,7 +1087,9 @@ over its bytes or naming another owner, and `409` for a card issued
 no later than the one it holds, a broken row being no bar. The owner
 reads it back with `GET /v1/mailbox/{fp}/card`, the pair verbatim and
 `state`, one of `signed`, `none` and `broken`, and their own listing
-carries the word as `card`. Any registered, unblocked identity — a
+carries the word as `card`.
+
+Any registered, unblocked identity — a
 mailbox, not a certificate alone — fetches the cards that say listed
 with `GET /v1/listed?after=FP&limit=N`: a page of `entries`, each the
 `bundle` the relay verified the card against at the push, the
@@ -1056,14 +1097,16 @@ with `GET /v1/listed?after=FP&limit=N`: a page of `entries`, each the
 `after` exclusive, at most `limit` of them, `limit` held to 1 to 100 and
 refused outside it, and `listed`, how many such cards the relay holds in
 all. Blocked owners are left out. The relay verifies nothing on the way
-out; the reader verifies every entry — the bundle parses, its
+out. The reader verifies every entry — the bundle parses, its
 fingerprint is the document's owner, the signature verifies under its
 key, the document says listed, and the fingerprints rise — and drops
 what fails, refusing an answer whole that breaks the order or carries
 more than it asked for, and a full page from which nothing could be
 paged past. A page is held to 256 KiB, which a hundred cards at their
 cap fit under, and the whole listing to ten thousand entries served,
-verified or not. The health answer, unsigned and served to
+verified or not.
+
+The health answer, unsigned and served to
 anyone, carries the relay's registration mode as `registration`, one of
 `open`, `token` and `closed`: it is what admission to the relay means,
 and a client prints it wherever it shows a name it found there, since a
@@ -1118,18 +1161,21 @@ from, or `D` elapses, and then to answer the ordinary listing. A relay holds
 for at most 60 seconds, clamping a longer `D` rather than refusing it. One
 already holding as many listings as `max_waiting` allows, or two for the
 same identity, answers at once instead. The hold degrades and never
-refuses. `peers=FP:ISSUED,...` names peers whose channel directories the
+refuses.
+
+`peers=FP:ISSUED,...` names peers whose channel directories the
 caller is watching and the issue time it holds for each, in Unix
 nanoseconds. A push that replaces one of them wakes the hold. The answer
 names in `directories_changed` every watched peer whose directory is
 issued later than the caller said. A peer the caller may not post to is
 dropped without a word, never named and never woken on, since the
-directory fetch the caller made first has already told it `403`. `stubs=1`
-answers every row without its `envelope`, for a caller that wants the ids
-and nothing else. That is what checking whether mail it left on the relay
-is still there needs, and what stops a mailbox of such mail being
-downloaded again on every check. A stubs listing whose row carries an
-envelope is refused by the client by name, as a relay that ignored the
+directory fetch the caller made first has already told it `403`.
+
+`stubs=1` answers every row without its `envelope`, for a caller that
+wants the ids and nothing else. That is what checking whether mail it left
+on the relay is still there needs, and what stops a mailbox of such mail
+being downloaded again on every check. A stubs listing whose row carries
+an envelope is refused by the client by name, as a relay that ignored the
 parameter.
 
 A large message changes step 7 only. Instead of arriving with the rest of the
@@ -1213,34 +1259,35 @@ attempt and what the relay holds is at least the threshold, the partial is
 kept for one resume, for sixty seconds from that moment and no longer.
 Otherwise nothing is kept, and the upload, its file, its row and its
 reservation go together. The sender's budget is then given back what the
-relay never held, the size less what it had kept before that attempt. A kept partial stays
-charged while it is kept. So the relay never holds less than a threshold's
-worth of an upload that did not finish. A stream is placed by at most two
-attempts on one id. A sender that trickles a byte at a time builds nothing
-up. A budget is spent on what the relay holds or places and on nothing
-else. The sender learns what the relay kept the way this wire tells it, by
-the next attempt. One from zero on the same id is `409` with the kept
-offset, from which it resumes once. It is `404` or `410` when the relay
-has let the upload go, on which it opens anew. It is simply the fresh
-attempt when the relay never saw the one that was lost. A resume after the
-window is `410`, naming when the upload expired and saying to open again,
-with the upload and its reservation gone. An upload nobody puts a byte to
-within sixty seconds of its open goes the same way.
+relay never held, the size less what it had kept before that attempt. A
+kept partial stays charged while it is kept. So the relay never holds less
+than a threshold's worth of an upload that did not finish. A stream is
+placed by at most two attempts on one id. A sender that trickles a byte at
+a time builds nothing up. A budget is spent on what the relay holds or
+places and on nothing else. The sender learns what the relay kept the way
+this wire tells it, by the next attempt. One from zero on the same id is
+`409` with the kept offset, from which it resumes once. It is `404` or
+`410` when the relay has let the upload go, on which it opens anew. It is
+simply the fresh attempt when the relay never saw the one that was lost. A
+resume after the window is `410`, naming when the upload expired and
+saying to open again, with the upload and its reservation gone. An upload
+nobody puts a byte to within sixty seconds of its open goes the same way.
 
-Bytes that stop coming end inside the window too. The attempt runs under the
-relay's own stall deadline on the connection, sixty seconds, which no setting changes, and
-moved on by every read that delivers bytes. So a transfer of any length
-finishes while bytes keep arriving. A stalled one is cut and judged by the
-rule above, its answer written under a fresh deadline of its own for anyone
-still listening. The download of a placed stream is served under the same
-deadline turned round, moved by every write that delivers bytes. So a
-reader that stops is cut inside the window. A slow one is served to the
-end rather than cut by the server's five-minute write timeout every five
-minutes and left to ask by `Range`. The server's five-minute read and write
-timeouts stand on every other route. A refusal before the body is read
-closes the connection, and the answer is written before any of the body
-is read. The standard library then reads up to 256 KiB of what was
-declared before it closes, which is the one cost a refused attempt has.
+Bytes that stop coming end inside the window too. The attempt runs under
+the relay's own stall deadline on the connection, sixty seconds, which no
+setting changes, and moved on by every read that delivers bytes. So a
+transfer of any length finishes while bytes keep arriving. A stalled one
+is cut and judged by the rule above, its answer written under a fresh
+deadline of its own for anyone still listening. The download of a placed
+stream is served under the same deadline turned round, moved by every
+write that delivers bytes. So a reader that stops is cut inside the
+window. A slow one is served to the end rather than cut by the server's
+five-minute write timeout every five minutes and left to ask by `Range`.
+The server's five-minute read and write timeouts stand on every other
+route. A refusal before the body is read closes the connection, and the
+answer is written before any of the body is read. The standard library
+then reads up to 256 KiB of what was declared before it closes, which is
+the one cost a refused attempt has.
 
 An interrupted upload resumes. The sealed copy stays in `outbox/` and
 `auu send --resume` carries on from the byte the relay says it has. That is
@@ -1292,13 +1339,15 @@ one arrive, and if they had already fetched the earlier knock — a fetch
 acknowledges every knock — then nothing is there to replace and they
 simply have two knocks from one stranger, which is what happened. To
 recognise a knocker the relay keeps their fingerprint on the row, for as
-long as the row lives and no longer; an owner who would rather it did not
-pushes a card that says no knocks. The allow list is
-never read on this route, and the card is never read on the post route.
+long as the row lives and no longer. An owner who would rather it did not
+pushes a card that says no knocks.
+
+The allow list is never read on this route, and the card is never read
+on the post route.
 No card, a card that says no and a card that does not verify are one
 refusal, `403 the
 recipient does not take knocks`, since the state of somebody else's card
-is not a stranger's to learn; the relay's own log says once a minute, under
+is not a stranger's to learn. The relay's own log says once a minute, under
 either access log mode, that the card for the mailbox does not verify,
 naming the mailbox and never the knocker.
 
