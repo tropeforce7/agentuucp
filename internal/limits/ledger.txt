@@ -196,6 +196,10 @@ internal/auu/cursor.go cursorJSON int Last *int64 = output
 internal/auu/cursor.go cursorJSON int Queued *int64 = output
 internal/auu/cursor.go cursorReset int strconv.ParseInt(*toText) = >= 0 shown by TestLimitCursorResetTo
 internal/auu/damaged.go keepNewer string senderFP[:16] = local: Fingerprint writes 64 hex characters
+internal/auu/damaged_cmds.go damagedJSON int ID int64 = output
+internal/auu/damaged_cmds.go damagedJSON int Size int64 = output
+internal/auu/damaged_cmds.go damagedReopen int strconv.ParseInt(positional[1]) = >= 0 shown by TestLimitDamagedIds
+internal/auu/damaged_cmds.go reopenJSON int ID int64 = output
 internal/auu/enrol.go fetchAnchor string got[:16] = local: SPKI writes 64 hex characters
 internal/auu/enrol.go fetchAnchor string want[:16] = local: isAnchor at Validate shown by TestLimitAnchorClaimOneShort
 internal/auu/identity_cmds.go cmdInit string (*anchor)[:16] = local: ValidFingerprint at cmdInit shown by TestLimitAnchorArgsOneShort
@@ -461,6 +465,9 @@ internal/store/anchor.go (*Store).AnchorFor string r.TrustAnchorSPKI[:16] = loca
 internal/store/cardpushed.go (*Store).CardPushed string text[:40] = local: len(text) > 40 by the check before
 internal/store/channelsettings.go ChannelSettings int V int = [1, 1] shown by TestLimitChannelSettingsV
 internal/store/damagedbox.go DamagedRecord int RelayID int64 = >= 0 shown by TestLimitDamagedRelayID
+internal/store/damagedbox.go (*Store).ReadDamaged cap io.LimitReader(f, DamagedBudget + 1) = local: DamagedBudget is the most KeepDamaged ever writes, and one over it is refused by name shown by TestLimitDamagedReadIsBounded
+internal/store/damagedbox.go DamagedRecord int Size int64 = >= 0 shown by TestLimitDamagedRecordFields
+internal/store/damagedbox.go damagedID int strconv.ParseInt(stem) = >= 0 shown by TestLimitDamagedIds
 internal/store/damagedbox.go recordPath string binPath[:len(binPath) - len(".bin")] = local: binPath ends in ".bin" from DamagedPath
 internal/store/leftbehind.go (*Store).LeftBehind int strconv.ParseInt(fields[0]) = > 0 shown by TestLimitLeftBehindIDs
 internal/store/leftbehind.go parseLeftEntry int strconv.ParseInt(fields[0]) = > 0 shown by TestLimitLeftBehindIDs

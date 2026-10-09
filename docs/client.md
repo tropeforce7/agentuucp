@@ -558,6 +558,8 @@ auu extract MESSAGE-ID       # save its attachments
 auu rm MESSAGE-ID            # remove it from the relay and from here
 auu reply MESSAGE-ID 'It is missing. Open an issue against home-java.'
 auu queue                    # mail a relay is still carrying onward
+auu damaged ls               # what the fetch kept because it could not open it
+auu damaged reopen --all     # open what needed a newer auu, once auu is updated
 ```
 
 **Mail that came by another relay** says so. `auu read` prints a `via` line
@@ -790,8 +792,9 @@ sender marked critical is one this build must not read past:
 - A message is kept under `damaged/` with the cause `newer` and the
   section's name, and acknowledged. The warning names the sender, your
   peer's name or "an unknown sender" and the start of the fingerprint, and
-  says to update `auu`. It never says to ask the sender to send it again.
-  `auu inbox` says every time how many are kept so.
+  says to update `auu` and open it with `auu damaged reopen RELAY ID`. It
+  never says to ask the sender to send it again. `auu inbox` says every
+  time how many are kept so, and names `auu damaged reopen --all`.
 - A stream waits on the relay, unacknowledged, with a record of it in your
   inbox, or in the quarantine if the sender is not your peer, marked
   `needs a newer auu` with the section's name. `auu read` and `auu reply`
@@ -801,6 +804,69 @@ sender marked critical is one this build must not read past:
   from the relay into the box it waited in, and a stranger's stream waits on
   in the quarantine as any stranger's does. If the relay no longer holds it
   by then, the fetch says so once.
+
+*What the fetch kept.* `auu damaged ls` lists what is under `damaged/`,
+oldest first: the relay, the relay's id for the message, when it was
+received, its size on this disk and its cause. It needs no key. A message
+whose keep was cut off before its record was written is listed with
+`no record:` for its cause, and one beside a record that does not read
+with `unreadable record:` and why. For both, the time is the file's own.
+Both count against the budget and are evicted as the rest are. A file
+there that is not a kept message is named on stderr, `warning: PATH is not
+a kept message and is not listed`, and left alone; it is not counted. When
+any were kept as `newer`, the listing ends with how many and `auu damaged
+reopen --all`. `--json` gives a list of `relay`, `id`, `received`,
+`size`, `cause` and `section`. `cause` is empty for a keep with no record
+or a record that does not read. `section` is there for a message kept as
+`newer` alone.
+
+`auu damaged reopen RELAY ID` opens one kept message again with this `auu`,
+and `--all` opens every one kept as `newer`. `newer` is the only cause it
+opens. A message that did not decrypt or was malformed cannot be opened by
+any `auu`, and one kept as misfiled was refused by a check that would
+refuse it again. Reopen refuses a message of any other cause by name, at
+exit 1:
+
+    work 7 was kept with the cause "malformed", which is never reopened; only a message kept as needing a newer auu is
+
+Bytes kept with no record, or beside a record that does not read, are
+refused the same way.
+
+Reopening runs the fetch's own checks on the kept bytes, with the relay and
+received time its record names. What opens is filed where the fetch would
+have filed it: the inbox for a peer, the quarantine for anybody else. Its
+two files under `damaged/` are then removed. Each message is one line:
+
+    work 41: opened and filed in the inbox
+    work 42: already held, so its kept copy is removed
+    work 43: still needs a newer auu (section "x-poll") and is left where it is
+    work 44: its id is held from another sender, so it is left where it is
+    work 45: it was filed under "a" and sealed for "b", and is left where it is
+
+Already held is a copy of a message you have, from the same sender, kept
+twice. What is left stays under `damaged/` as it was, and the command
+still exits 0. The record of a message kept as `newer` says what the
+relay's listing said of it: the kind and the channel it was listed under.
+A record an earlier release wrote does not. The checks against the listing
+cannot run for it, and its line ends `; its record does not say the kind
+it was listed under or the channel it was listed under, so that check
+could not run`. The envelope's own channel is still checked.
+
+Reopen fetches and acknowledges nothing. The fetch acknowledged each
+message when it kept it, so a filed message is not marked ` on relay`. A
+message from a relay since removed from this home still opens. Reopen
+needs the key as a fetch does, unlocked to receive at least. Locked, it
+exits 4. It takes the relay's `fetch.lock`, so it waits for a fetch from
+that relay to finish, up to a minute, and then exits 2 saying so. Under
+`--all`, what was filed before the key locked, or before a lock it waited
+for ran out, stays filed, and stderr says how many. When it files
+anything, it keeps a vouch, and with `auu vouch answer on` set it answers
+a peer's question, as after a fetch. That answer is the one thing reopen
+can send. `--json` gives a list of `relay`,
+`id`, `outcome`, `box`, `unchecked` and `detail`. `outcome` is `filed`,
+`already held`, `still newer`, `collided` or `left`. `box` is `inbox` or
+`quarantine` for a filed message. `unchecked` names the checks that could
+not run, and `detail` says why a message was left.
 
 *When the relay's numbering restarts.* The relay numbers the mail it holds,
 and your cursor, `relays/<name>/cursor`, is the number of the last message
@@ -1295,7 +1361,7 @@ Go's file modes say nothing about who can read.
 | `inbox/`, `sent/`, `quarantine/` | the message spool, one JSON file each; a record that will not read is said to be, once, and left out of the listing |
 | `inbox/<id>.d/` | a large message's files, written straight to disk |
 | `outbox/` | what is sealed but not yet delivered, waiting for `auu send --resume`; `auu outbox` lists it |
-| `damaged/<relay>/<id>.bin`, `.json` | a message your key could not open, as the relay served it, with a record of which relay's message it was, when, and why in a word — `did not decrypt`, `not addressed to this key`, `sender signature failed`, `malformed`, `newer: section "NAME"` for a message with a critical section this build does not know, which an updated `auu` reads, or `misfiled` for a message the relay listed under a channel it was not sealed for, or listed as a kind its sealed record is not — a knock that is not one inside, or one that is inside a row listed as an ordinary envelope; a stream keeps its manifest chunk only. `auu inbox` says how many are there until you remove them; the directory holds at most 64 MiB, the oldest going first, and a message that alone exceeds that is not kept, which the warning says |
+| `damaged/<relay>/<id>.bin`, `.json` | a message your key could not open, as the relay served it, with a record of which relay's message it was, when, and why in a word — `did not decrypt`, `not addressed to this key`, `sender signature failed`, `malformed`, `newer: section "NAME"` for a message with a critical section this build does not know, which `auu damaged reopen` opens once `auu` is updated, its record also saying the kind, channel, via and size the relay listed it with, or `misfiled` for a message the relay listed under a channel it was not sealed for, or listed as a kind its sealed record is not — a knock that is not one inside, or one that is inside a row listed as an ordinary envelope; a stream keeps its manifest chunk only. `auu damaged ls` lists them and `auu inbox` says how many are there until you remove them; nothing here is opened again but a `newer` one; the directory holds at most 64 MiB of kept messages, the oldest going first, and a message that alone exceeds that is not kept, which the warning says; a file there that is not a kept message is not counted and `ls` names it |
 
 `authorized_peers` is the file that matters. Nothing on the network can add to
 it. Back it up alongside `identity.json`. Back up `home.key` and

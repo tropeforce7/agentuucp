@@ -226,9 +226,14 @@ was not sealed for, and the warning names the relay; tell the user that,
 and not that the sender should resend. And one more: `newer` means the
 message carries a part a newer auu understands and this one does not.
 Tell the user who it is from, as the warning names them, and that updating
-auu is what reads it; nobody needs to send it again. A stream marked
-`needs a newer auu` in the inbox waits on the relay the same way: `auu read`
-says so and shows nothing of it, so do not try to read it another way.
+auu and running `auu damaged reopen` is what reads it; nobody needs to send
+it again. `auu damaged ls --json` lists what is kept, by relay, id and
+cause, and you may run it: it is a read. `auu damaged reopen RELAY ID` and
+`auu damaged reopen --all` are the user's commands, never yours, since they
+file mail in the inbox or the quarantine; report what each line says when
+the user runs one. A stream marked `needs a newer auu` in the inbox waits
+on the relay the same way: `auu read` says so and shows nothing of it, so
+do not try to read it another way.
 
 Every message carries `channel` in `--json`, `default` when the sender named
 none, and `auu inbox --channel NAME` lists one channel without changing the

@@ -995,10 +995,12 @@ critical it refuses by name, saying that the reader, this machine or the
 relay, needs a newer auu, rather than read the rest with that part
 dropped. A message that needs a newer auu is kept under `damaged/` with
 the cause `newer` and the section's name, and is not deleted: updating auu
-and reading it again is what to do about it, and asking the sender to send
-it again is not. The outer envelope a relay reads is four fields for good,
-and a relay carries an envelope whose version it does not know, since what
-the version means is between the sender and the recipient. The relay's
+and opening it with `auu damaged reopen` is what to do about it, and asking
+the sender to send it again is not. That is the one cause for which
+anything under `damaged/` is ever opened again. The outer envelope a relay
+reads is four fields for good, and a relay carries an envelope whose
+version it does not know, since what the version means is between the
+sender and the recipient. The relay's
 `wire_level` on its health answer says what it can do. And a refusal is
 told apart by its `code`, never by its words, so a relay may change its
 words and add codes without a client misreading either.
@@ -1199,6 +1201,19 @@ warning says `relay message N was filed under "a" by relay.example.com but
 is sealed for "b"; it was kept as PATH`. It is acknowledged like the other
 kept messages, so the mailbox is not blocked. A listing that names no
 channel for a message is refused by name before anything is filed.
+
+Nothing kept under `damaged/` is opened again, with one exception. A
+message kept with the cause `newer` needs a newer auu, not a new copy, and
+`auu damaged reopen` opens it once that auu is here. It runs the fetch's
+checks on the kept bytes and files what opens as the fetch would have. A
+record an earlier release wrote does not say what the relay's listing
+said, so for it the kind check cannot run and the channel is checked
+against the envelope's own alone. Named
+by its relay and id, a message kept for any other cause is refused by name,
+since no auu can open it or the check that kept it would keep it again,
+and `--all` passes those over. Reopening fetches and acknowledges nothing.
+The one thing it can send is the vouch answer a fetch sends, when `auu
+vouch answer on` is set.
 
 ### 2.2 A large message
 

@@ -94,14 +94,18 @@ func keepDamaged(s *store.Store, r *store.Relay, id int64, received time.Time, d
 // section's name, acknowledged as every kept message is. It is not damaged
 // and not its sender's to send again: the sentence names the sender as the
 // quarantine does, the peer's name for somebody admitted and the start of
-// the fingerprint for anybody else, and says to update auu. The sender is
-// the one Open verified, since nothing unsigned is ever kept as newer (R7).
-func keepNewer(s *store.Store, r *store.Relay, id int64, received time.Time, data []byte,
-	section, senderFP string, res *fetchResult) error {
+// the fingerprint for anybody else, and says to update auu and open it
+// with auu damaged reopen. The sender is the one Open verified, since
+// nothing unsigned is ever kept as newer (R7). The record carries what the
+// listing said of the row, its kind, channel, via and size, so that
+// reopening it runs the fetch's checks as the fetch would have.
+func keepNewer(s *store.Store, r *store.Relay, m client.Message, section, senderFP string, res *fetchResult) error {
+	id := m.ID
 	cause := fmt.Sprintf("%s: section %q", store.CauseNewer, section)
 	kept, _, err := s.KeepDamaged(store.DamagedRecord{
-		RelayID: id, Relay: r.Name, Received: received, Cause: cause,
-	}, data)
+		RelayID: id, Relay: r.Name, Received: m.Received, Cause: cause,
+		Kind: m.Kind, Channel: m.Channel, Via: m.Via, Size: m.Size,
+	}, m.Raw)
 	if err != nil {
 		return fmt.Errorf("keeping relay message %d under %s: %w", id, s.DamagedDir(), err)
 	}
@@ -113,7 +117,7 @@ func keepNewer(s *store.Store, r *store.Relay, id int64, received time.Time, dat
 	if !kept {
 		fmt.Fprintf(os.Stderr, "warning: relay message %d from %s needs a newer auu (section %q); it is %s and was not kept, "+
 			"since %s holds at most %s\n",
-			id, from, section, store.MiB(int64(len(data))), s.DamagedDir(), store.MiB(store.DamagedBudget))
+			id, from, section, store.MiB(int64(len(m.Raw))), s.DamagedDir(), store.MiB(store.DamagedBudget))
 		return nil
 	}
 	res.Kept++
@@ -122,7 +126,7 @@ func keepNewer(s *store.Store, r *store.Relay, id int64, received time.Time, dat
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "warning: relay message %d from %s needs a newer auu (section %q) and was kept as %s; "+
-		"update auu to read it\n", id, from, section, path)
+		"update auu and open it with %s damaged reopen %s %d\n", id, from, section, path, prog, r.Name, id)
 	return nil
 }
 

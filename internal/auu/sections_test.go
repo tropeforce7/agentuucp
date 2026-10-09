@@ -180,11 +180,11 @@ func TestAMessageThatNeedsANewerAuuIsKeptAndSaidSo(t *testing.T) {
 		t.Fatalf("damaged/ holds %d needing a newer auu (%v); want 1", n, err)
 	}
 	if !strings.Contains(stderr, `from alice needs a newer auu (section "must-know") and was kept as `) ||
-		!strings.Contains(stderr, "update auu to read it") || strings.Contains(stderr, "ask the sender") {
+		!strings.Contains(stderr, "update auu and open it with auu damaged reopen ") || strings.Contains(stderr, "ask the sender") {
 		t.Errorf("the warning:\n%s", stderr)
 	}
 	out := bob.run("inbox")
-	if !strings.Contains(out, "1 message(s) kept under "+bs.DamagedDir()+" need a newer auu; update auu to read them") ||
+	if !strings.Contains(out, "1 message(s) kept under "+bs.DamagedDir()+" need a newer auu; update auu and open them with auu damaged reopen --all") ||
 		strings.Contains(out, "ask their senders") {
 		t.Errorf("the summary:\n%s", out)
 	}

@@ -119,6 +119,8 @@ Usage:
   auu quarantine ls [--json]
   auu quarantine show MESSAGE-ID [--json]
   auu quarantine trust MESSAGE-ID
+  auu damaged ls [--json]           # what was kept because it could not be opened
+  auu damaged reopen RELAY ID | --all [--json]  # open what needed a newer auu, with this one
 
   auu passphrase set|change|remove   # encrypt this home's keys, or stop
   auu unlock [--ttl 8h] [--passphrase-file PATH]
@@ -355,6 +357,8 @@ func dispatch(args []string) error {
 		return cmdReply(rest)
 	case "outbox":
 		return cmdOutbox(rest)
+	case "damaged":
+		return cmdDamaged(rest)
 	case "inbox":
 		return cmdInbox(rest)
 	case "read":

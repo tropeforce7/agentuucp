@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -642,32 +643,85 @@ func TestLimitRelayNameIsNotAPath(t *testing.T) {
 }
 
 // TestLimitDamagedDirectoryEntries: the damaged box is read back by
-// keptMessages, which joins each entry's name onto the directory; an
-// entry that is not a kept message's pair of files — a stray directory,
-// a record with no bytes, a name that is no relay's — is listed for
-// eviction by its name or skipped, and nothing outside the directory is
-// touched.
+// damagedEntries, which joins each entry's name onto the directory, and the
+// budget, the counts and auu damaged ls all read it by that one rule. An
+// entry that is not a kept message's — a file where a relay's directory
+// belongs, a directory whose name is no relay's, a .bin whose stem is no id
+// as the store writes one, a directory where a .bin belongs, a record with
+// no bytes — is a stray: not counted, not evicted, and still there after a
+// keep that evicts. A .bin with an id's name in a relay's directory is a
+// kept message's whatever is beside it, and is counted and evicted: one
+// whose keep was cut off before its record was written, and one beside a
+// record that names another id, which is listed as a record that does not
+// read. Nothing outside the directory is touched.
 func TestLimitDamagedDirectoryEntries(t *testing.T) {
 	s, outside, witness := reviewHome(t)
 	restore := DamagedBudget
 	DamagedBudget = 1000
 	t.Cleanup(func() { DamagedBudget = restore })
-	if kept, _, err := s.KeepDamaged(DamagedRecord{RelayID: 7, Relay: "work", Received: time.Now(), Cause: "review"}, []byte("bytes")); err != nil || !kept {
+	old := time.Now().Add(-time.Hour)
+	if kept, _, err := s.KeepDamaged(DamagedRecord{RelayID: 7, Relay: "work", Received: old, Cause: "review"}, []byte("bytes")); err != nil || !kept {
 		t.Fatal(err)
 	}
 	dir := s.path(damagedDir)
+	var strays []string
+	plant := func(path string, data []byte) {
+		t.Helper()
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		strays = append(strays, path)
+	}
 	// Stray entries beside the relay's directory and inside it.
 	for _, name := range []string{"stray.txt", "..x", "CON"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "work", name+".bin"), []byte("x"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		plant(filepath.Join(dir, name), []byte("x"))
+		plant(filepath.Join(dir, "work", name+".bin"), []byte("x"))
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "work", "nested"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	strays = append(strays, filepath.Join(dir, "work", "nested"))
+	// A directory whose name is no relay's, holding what would otherwise
+	// be a kept message: said once, by the directory.
+	if err := os.MkdirAll(filepath.Join(dir, "a b"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	strays = append(strays, filepath.Join(dir, "a b"))
+	for _, f := range []string{"3.bin", "3.json"} {
+		if err := os.WriteFile(filepath.Join(dir, "a b", f), []byte(`{"relay_id":3,"relay":"a b","received":"2026-10-01T00:00:00Z","cause":"review"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Stems that are not an id as the store writes one, each with a
+	// record that would otherwise name it. The record is not said on its
+	// own, since the .bin beside it is.
+	for _, stem := range []string{"07", "-1", "+7", "9223372036854775808"} {
+		plant(filepath.Join(dir, "work", stem+".bin"), []byte("xx"))
+		if err := os.WriteFile(filepath.Join(dir, "work", stem+".json"), []byte(`{"relay_id":7,"relay":"work","received":"2026-10-01T00:00:00Z","cause":"review"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A record with no bytes: a stray.
+	plant(filepath.Join(dir, "work", "12.json"), []byte(`{"relay_id":12,"relay":"work","received":"2026-10-01T00:00:00Z","cause":"review"}`))
+	// Bytes whose record was never written, and bytes beside a record
+	// naming another id than the file it is beside: both a kept message's,
+	// counted, each at its file's own time, set here so that the order is
+	// the test's.
+	cutOff := filepath.Join(dir, "work", "9.bin")
+	misnamed := filepath.Join(dir, "work", "10.bin")
+	for i, f := range []struct{ path, data string }{{cutOff, "bytes"}, {misnamed, "xx"}} {
+		if err := os.WriteFile(f.path, []byte(f.data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		when := old.Add(time.Duration(i+1) * time.Minute)
+		if err := os.Chtimes(f.path, when, when); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(recordPath(misnamed), []byte(`{"relay_id":11,"relay":"work","received":"2026-10-01T00:00:00Z","cause":"review"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	have, err := s.keptMessages()
 	if err != nil {
 		t.Fatalf("keptMessages over stray entries: %v", err)
@@ -677,12 +731,265 @@ func TestLimitDamagedDirectoryEntries(t *testing.T) {
 			t.Errorf("a kept entry outside the damaged box: %s", k.bin)
 		}
 	}
-	// A second keep, over budget, evicts by the entries' own paths and
-	// stays inside the box.
-	if _, _, err := s.KeepDamaged(DamagedRecord{RelayID: 8, Relay: "work", Received: time.Now(), Cause: "review"}, bytes.Repeat([]byte{1}, 990)); err != nil {
+	n, size, err := s.DamagedKept()
+	if err != nil || n != 3 || size != 12 {
+		t.Fatalf("DamagedKept counts %d messages of %d bytes (%v); want 7, the record-less 9 and the misnamed 10, 12 bytes, and no stray", n, size, err)
+	}
+	entries, listed, err := s.DamagedEntries()
+	if err != nil {
 		t.Fatal(err)
 	}
+	if len(entries) != 3 || entries[0].RelayID != 7 || entries[0].NoRecord || entries[0].BadRecord ||
+		entries[1].RelayID != 9 || !entries[1].NoRecord || entries[1].BadRecord {
+		t.Fatalf("DamagedEntries: %+v; want 7 with its record, 9 without and 10 beside a record that does not read", entries)
+	}
+	bad := entries[2]
+	if bad.RelayID != 10 || bad.Relay != "work" || !bad.BadRecord || bad.NoRecord || bad.Bytes != 2 ||
+		!bad.Received.Equal(old.Add(2*time.Minute)) || bad.Cause != `the record names relay "work" and id 11` {
+		t.Fatalf("the misnamed record's entry: %+v; want 10 of 2 bytes at its file's time, said by what its record names", bad)
+	}
+	sort.Strings(strays)
+	if strings.Join(listed, "\n") != strings.Join(strays, "\n") {
+		t.Errorf("the strays said:\n%s\nwant:\n%s", strings.Join(listed, "\n"), strings.Join(strays, "\n"))
+	}
+	// A keep over budget evicts all three kept messages, by their own
+	// paths, the misnamed record with its bytes, and no stray, which was
+	// never counted.
+	_, evicted, err := s.KeepDamaged(DamagedRecord{RelayID: 8, Relay: "work", Received: time.Now(), Cause: "review"}, bytes.Repeat([]byte{1}, 999))
+	if err != nil || evicted != 3 {
+		t.Fatalf("the keep over budget evicted %d (%v); want 7, 9 and 10", evicted, err)
+	}
+	for _, gone := range []string{filepath.Join(dir, "work", "7.bin"), filepath.Join(dir, "work", "7.json"), cutOff, misnamed, recordPath(misnamed)} {
+		if _, err := os.Lstat(gone); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s was not evicted: %v", gone, err)
+		}
+	}
+	for _, p := range strays {
+		if _, err := os.Lstat(p); err != nil {
+			t.Errorf("the stray %s was evicted: %v", p, err)
+		}
+	}
 	outsideUntouched(t, outside, witness, "the damaged box's reader")
+}
+
+// writeDamagedPair writes a kept message's bytes and a record as given, by
+// hand, for a test of what the reader makes of a record the store would
+// not write.
+func writeDamagedPair(t *testing.T, s *Store, relay string, id int64, record string, data []byte) string {
+	t.Helper()
+	bin, err := s.DamagedPath(relay, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(bin), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(recordPath(bin), []byte(record), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return bin
+}
+
+// TestLimitDamagedRecordFields: what the listing said of a kept row is held
+// at the read to the listing's own rules again: a size of 0 or more, to the
+// type's maximum; a kind that is envelope or knock; a channel's name; and a
+// via that is an address. A record that breaks one does not read:
+// ReadDamaged refuses it naming the field, which is what keeps reopen from
+// it, and damagedEntries lists its pair as a record that does not read,
+// at its bytes' own time and with the reason, counted against the budget
+// and never a stray, so that no record can put bytes beyond the budget.
+// The type's extremes and the empty forms are fed.
+func TestLimitDamagedRecordFields(t *testing.T) {
+	s := newStore(t)
+	const head = `"relay":"work","received":"2026-10-01T00:00:00Z","cause":"newer: section \"x\""`
+	cases := []struct {
+		field string
+		ok    bool
+		want  string
+	}{
+		{`"size":-1`, false, "the record's size -1 is below zero"},
+		{`"size":-9223372036854775808`, false, "the record's size -9223372036854775808 is below zero"},
+		{`"size":0`, true, ""},
+		{`"size":9223372036854775807`, true, ""},
+		{`"kind":"envelope"`, true, ""},
+		{`"kind":"knock"`, true, ""},
+		{`"kind":"stream"`, false, `the record's kind "stream" is not one a kept row is listed under`},
+		{`"kind":"Envelope"`, false, `the record's kind "Envelope" is not one a kept row is listed under`},
+		{`"kind":""`, true, ""},
+		{`"channel":"default"`, true, ""},
+		{`"channel":"a/b"`, false, `the record's channel: name contains "/"`},
+		{`"channel":" x"`, false, "the record's channel: name begins with white space"},
+		{`"channel":"` + strings.Repeat("a", relayapi.MaxChannelNameBytes+1) + `"`, false, "the record's channel: name is "},
+		{`"channel":"` + strings.Repeat("a", relayapi.MaxChannelNameBytes) + `"`, true, ""},
+		{`"via":"other"`, true, ""},
+		{`"via":"other!more"`, true, ""},
+		{`"via":"../x"`, false, "the record's via: relay name "},
+		{`"via":"other!other"`, false, "the record's via: address repeats "},
+		{`"via":"` + strings.Repeat("r!", relayapi.MaxHops) + `r"`, false, "the record's via: an address names 33 relays"},
+	}
+	mtime := time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
+	for i, tc := range cases {
+		id := int64(i)
+		bin := writeDamagedPair(t, s, "work", id, `{"relay_id":`+strconv.FormatInt(id, 10)+`,`+head+`,`+tc.field+`}`, []byte("bytes"))
+		if err := os.Chtimes(bin, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := s.ReadDamaged("work", id)
+		if tc.ok != (err == nil) || (!tc.ok && !strings.Contains(err.Error(), tc.want)) {
+			t.Errorf("%s: ReadDamaged said %v; want ok=%v and %q", tc.field, err, tc.ok, tc.want)
+		}
+	}
+	entries, strays, err := s.DamagedEntries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(strays) != 0 {
+		t.Errorf("strays %v; want none, every pair a kept message's", strays)
+	}
+	listed := map[int64]DamagedEntry{}
+	for _, e := range entries {
+		listed[e.RelayID] = e
+	}
+	recorded := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for i, tc := range cases {
+		e, ok := listed[int64(i)]
+		switch {
+		case !ok:
+			t.Errorf("%s: not listed; want it listed and counted", tc.field)
+		case e.NoRecord || e.Bytes != int64(len("bytes")) || e.Relay != "work":
+			t.Errorf("%s: listed as %+v", tc.field, e)
+		case tc.ok && (e.BadRecord || !e.Received.Equal(recorded) || e.Cause != `newer: section "x"`):
+			t.Errorf("%s: listed as %+v; want its record as it reads", tc.field, e)
+		case !tc.ok && (!e.BadRecord || !e.Received.Equal(mtime) || !strings.HasPrefix(e.Cause, tc.want)):
+			t.Errorf("%s: listed as %+v; want a record that does not read, at its bytes' time, said by %q", tc.field, e, tc.want)
+		}
+	}
+	if n, size, err := s.DamagedKept(); err != nil || n != len(cases) || size != int64(len(cases)*len("bytes")) {
+		t.Errorf("DamagedKept counts %d of %d bytes (%v); want all %d, those that do not read with those that do", n, size, err, len(cases))
+	}
+}
+
+// TestAZeroReceivedTimeIsKeptWithinTheBudget: a relay that says no received
+// time cannot put bytes beyond the budget. KeepDamaged gives such a record
+// this machine's time, so every keep reads back, counts and is evicted
+// oldest first, and the box stays within the budget however many come. A
+// record on disk with a zero received time, which no keep writes now, does
+// not read: its pair is listed as a record that does not read, at its
+// bytes' own time, counted, and evicted by a later keep that needs room.
+func TestAZeroReceivedTimeIsKeptWithinTheBudget(t *testing.T) {
+	restore := DamagedBudget
+	DamagedBudget = 100
+	t.Cleanup(func() { DamagedBudget = restore })
+	data := bytes.Repeat([]byte{'z'}, 10)
+
+	s := newStore(t)
+	// Ids of two digits, so that the paths sort as the keeps were made.
+	const first, last = 10, 24
+	for id := int64(first); id <= last; id++ {
+		before := time.Now()
+		kept, _, err := s.KeepDamaged(DamagedRecord{RelayID: id, Relay: "work", Cause: "malformed"}, data)
+		after := time.Now()
+		if err != nil || !kept {
+			t.Fatalf("keep %d with no received time: kept=%v err=%v", id, kept, err)
+		}
+		e, _, err := s.ReadDamaged("work", id)
+		if err != nil {
+			t.Fatalf("keep %d does not read back: %v", id, err)
+		}
+		if e.Received.IsZero() || e.Received.Before(before.Truncate(time.Microsecond)) || e.Received.After(after) || e.Received.Location() != time.UTC {
+			t.Errorf("keep %d was given the received time %v; want this machine's, in UTC, between %v and %v", id, e.Received, before, after)
+		}
+		n, size, err := s.DamagedKept()
+		if err != nil || size > DamagedBudget || n != int(min(id-first+1, 10)) {
+			t.Fatalf("after keep %d: %d kept of %d bytes (%v); want within the budget of %d", id, n, size, err, DamagedBudget)
+		}
+	}
+	entries, strays, err := s.DamagedEntries()
+	if err != nil || len(strays) != 0 || len(entries) != 10 {
+		t.Fatalf("DamagedEntries: %d entries, strays %v (%v); want the ten newest", len(entries), strays, err)
+	}
+	for i, e := range entries {
+		if want := int64(last - 9 + i); e.RelayID != want || e.BadRecord || e.NoRecord {
+			t.Errorf("entry %d: %+v; want %d, the oldest five evicted", i, e, want)
+		}
+	}
+	for id := int64(first); id < last-9; id++ {
+		if _, _, err := s.ReadDamaged("work", id); !errors.Is(err, ErrNotDamaged) {
+			t.Errorf("the oldest, %d, was not evicted: %v", id, err)
+		}
+	}
+
+	// A record on disk that says no received time.
+	s = newStore(t)
+	for id := int64(1); id <= 9; id++ {
+		if kept, _, err := s.KeepDamaged(DamagedRecord{RelayID: id, Relay: "work", Received: time.Now(), Cause: "malformed"}, data); err != nil || !kept {
+			t.Fatalf("keep %d: kept=%v err=%v", id, kept, err)
+		}
+	}
+	bin := writeDamagedPair(t, s, "work", 50, `{"relay_id":50,"relay":"work","received":"0001-01-01T00:00:00Z","cause":"malformed"}`, data)
+	mtime := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := os.Chtimes(bin, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.ReadDamaged("work", 50); err == nil || !strings.HasSuffix(err.Error(), "the record has no received time") {
+		t.Errorf("ReadDamaged of a zero received time: %v; want it refused", err)
+	}
+	entries, strays, err = s.DamagedEntries()
+	if err != nil || len(strays) != 0 || len(entries) != 10 {
+		t.Fatalf("DamagedEntries: %d entries, strays %v (%v); want nine kept and the zero time's pair", len(entries), strays, err)
+	}
+	if e := entries[0]; e.RelayID != 50 || !e.BadRecord || e.NoRecord || !e.Received.Equal(mtime) ||
+		e.Bytes != int64(len(data)) || e.Cause != "the record has no received time" {
+		t.Errorf("the zero time's pair: %+v; want the oldest, a record that does not read at its bytes' time", e)
+	}
+	if n, size, err := s.DamagedKept(); err != nil || n != 10 || size != DamagedBudget {
+		t.Errorf("DamagedKept: %d of %d bytes (%v); want the zero time's pair counted, ten at the budget", n, size, err)
+	}
+	_, evicted, err := s.KeepDamaged(DamagedRecord{RelayID: 60, Relay: "work", Received: time.Now(), Cause: "malformed"}, data)
+	if err != nil || evicted != 1 {
+		t.Fatalf("the keep that needs room evicted %d (%v); want the zero time's pair alone", evicted, err)
+	}
+	for _, p := range []string{bin, recordPath(bin)} {
+		if _, err := os.Lstat(p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s was not evicted: %v", p, err)
+		}
+	}
+	if n, size, err := s.DamagedKept(); err != nil || n != 10 || size != DamagedBudget {
+		t.Errorf("after the eviction: %d of %d bytes (%v); want ten at the budget", n, size, err)
+	}
+}
+
+// TestLimitDamagedReadIsBounded: ReadDamaged reads the kept bytes through a
+// reader bounded one over DamagedBudget, the most a keep ever writes: bytes
+// at the budget read whole, and one byte over is refused by name, never
+// cut to the budget and handed on.
+func TestLimitDamagedReadIsBounded(t *testing.T) {
+	s := newStore(t)
+	restore := DamagedBudget
+	DamagedBudget = 1000
+	t.Cleanup(func() { DamagedBudget = restore })
+	record := func(id int64) string {
+		return `{"relay_id":` + strconv.FormatInt(id, 10) + `,"relay":"work","received":"2026-10-01T00:00:00Z","cause":"newer"}`
+	}
+	at := bytes.Repeat([]byte{'a'}, int(DamagedBudget))
+	writeDamagedPair(t, s, "work", 1, record(1), at)
+	e, data, err := s.ReadDamaged("work", 1)
+	if err != nil || !bytes.Equal(data, at) || e.Bytes != DamagedBudget {
+		t.Fatalf("bytes at the budget: %d bytes, %v; want all %d", len(data), err, DamagedBudget)
+	}
+	bin := writeDamagedPair(t, s, "work", 2, record(2), append(at, 'b'))
+	_, data, err = s.ReadDamaged("work", 2)
+	if err == nil || data != nil || err.Error() != bin+" is over 1 KiB, more than a keep ever writes" {
+		t.Fatalf("bytes one over the budget: %d bytes, %v; want the refusal by name", len(data), err)
+	}
+	// Nothing kept is not the same as nothing read.
+	writeDamagedPair(t, s, "work", 3, record(3), nil)
+	if _, data, err := s.ReadDamaged("work", 3); err != nil || len(data) != 0 {
+		t.Fatalf("empty bytes: %d, %v", len(data), err)
+	}
 }
 
 // TestLimitDefaultRelayNameFromURL: the name the store derives from a
@@ -935,4 +1242,68 @@ func recipientsList(t *testing.T, fps ...string) wire.Section {
 		t.Fatal(err)
 	}
 	return sec
+}
+
+// TestADamagedRecordIsReadStrictly: a record is read by the wire's strict
+// rule, the file this program wrote and nothing that only resembles it. A
+// record with a field this build does not know, a key given twice, a key
+// that matches a field only by case, or data after the object does not
+// read, though each would decode under encoding/json's own rule: its pair
+// is listed as a record that does not read, at its bytes' own time and
+// with the decoder's reason, counted against the budget, refused by
+// ReadDamaged naming the record, and evicted by a keep that needs room.
+func TestADamagedRecordIsReadStrictly(t *testing.T) {
+	restore := DamagedBudget
+	DamagedBudget = 20
+	t.Cleanup(func() { DamagedBudget = restore })
+	s := newStore(t)
+	const fields = `"relay":"work","received":"2026-10-01T00:00:00Z"`
+	cases := []struct {
+		name, record, want string
+	}{
+		{"an unknown field", `{"relay_id":1,` + fields + `,"cause":"newer","future":1}`, `json: unknown field "future"`},
+		{"a key twice", `{"relay_id":2,` + fields + `,"cause":"malformed","cause":"newer"}`, `key "cause" appears twice in an object at depth 1`},
+		{"a key by case", `{"relay_id":3,` + fields + `,"Cause":"newer"}`, `key "Cause" matches the field "cause" only by case, in an object at depth 1`},
+		{"trailing data", `{"relay_id":4,` + fields + `,"cause":"newer"} {}`, "trailing data after the value"},
+	}
+	mtime := time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC)
+	for i, tc := range cases {
+		id := int64(i + 1)
+		bin := writeDamagedPair(t, s, "work", id, tc.record, []byte("bytes"))
+		if err := os.Chtimes(bin, mtime, mtime); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := s.ReadDamaged("work", id)
+		if want := recordPath(bin) + ": " + tc.want; err == nil || err.Error() != want {
+			t.Errorf("%s: ReadDamaged said %v; want %q", tc.name, err, want)
+		}
+	}
+	entries, strays, err := s.DamagedEntries()
+	if err != nil || len(strays) != 0 || len(entries) != len(cases) {
+		t.Fatalf("DamagedEntries: %+v, strays %v (%v); want the %d pairs and no strays", entries, strays, err, len(cases))
+	}
+	for i, tc := range cases {
+		e := entries[i]
+		if e.RelayID != int64(i+1) || e.Relay != "work" || !e.BadRecord || e.NoRecord || !e.Received.Equal(mtime) ||
+			e.Bytes != int64(len("bytes")) || e.Cause != tc.want {
+			t.Errorf("%s: listed as %+v; want a record that does not read, at its bytes' time, said by %q", tc.name, e, tc.want)
+		}
+	}
+	if n, size, err := s.DamagedKept(); err != nil || n != len(cases) || size != int64(len(cases)*len("bytes")) {
+		t.Errorf("DamagedKept counts %d of %d bytes (%v); want all %d", n, size, err, len(cases))
+	}
+	// A keep the size of the whole budget evicts every one of them.
+	kept, evicted, err := s.KeepDamaged(DamagedRecord{RelayID: 9, Relay: "work", Received: time.Now(), Cause: "malformed"},
+		bytes.Repeat([]byte{'k'}, int(DamagedBudget)))
+	if err != nil || !kept || evicted != len(cases) {
+		t.Fatalf("a keep over the budget: kept=%v evicted=%d (%v); want kept, the %d evicted", kept, evicted, err, len(cases))
+	}
+	for i := range cases {
+		if _, _, err := s.ReadDamaged("work", int64(i+1)); !errors.Is(err, ErrNotDamaged) {
+			t.Errorf("%s: not evicted: %v", cases[i].name, err)
+		}
+	}
+	if n, size, err := s.DamagedKept(); err != nil || n != 1 || size != DamagedBudget {
+		t.Errorf("DamagedKept after the keep: %d of %d bytes (%v); want the new keep alone", n, size, err)
+	}
 }

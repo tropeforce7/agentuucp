@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,7 +12,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/regular"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // damaged/ holds what could not be opened.
@@ -22,8 +26,10 @@ import (
 // kept here instead, the bytes as they came off the wire and a record
 // beside them saying which relay's message it was, when, and why in a word,
 // so that a person can ask the sender to send it again or hand the bytes to
-// somebody who can say more. Nothing here is ever opened again by this
-// program; a person removes it with rm.
+// somebody who can say more. Nothing here is opened again by this program
+// but for one cause: a message kept as newer, which needs a later auu, is
+// opened again by auu damaged reopen once that auu is here. A person
+// removes the rest with rm.
 //
 // It is bounded, because a sender the relay accepts could otherwise fill
 // this disk with envelopes nothing can open and nothing removes: a budget
@@ -44,11 +50,23 @@ var DamagedBudget int64 = 64 << 20
 // it and the count of such messages reads it, so it is one constant.
 const CauseNewer = "newer"
 
+// DamagedRecord's last four fields are what the relay's listing said of
+// the row, which the fetch's checks read and the bytes do not carry: the
+// kind it was listed under, the channel it was filed under, the relays it
+// came through and its size on the relay. A message kept as newer records
+// them from this release, so that reopening it runs those checks as the
+// fetch would have. A record an earlier release wrote has none: reopen
+// then skips the kind check, which the envelope has no half of, checks the
+// channel against the envelope's own alone, and says which could not run.
 type DamagedRecord struct {
 	RelayID  int64     `json:"relay_id"`
 	Relay    string    `json:"relay"`
 	Received time.Time `json:"received"`
 	Cause    string    `json:"cause"`
+	Kind     string    `json:"kind,omitempty"`
+	Channel  string    `json:"channel,omitempty"`
+	Via      string    `json:"via,omitempty"`
+	Size     int64     `json:"size,omitempty"`
 }
 
 // DamagedDir is where damaged messages are kept.
@@ -83,51 +101,238 @@ type kept struct {
 	cause string
 }
 
-// keptMessages lists what is under damaged/, oldest first: by the record's
-// received time, and by the file's own time for a .bin whose record is
-// missing or unreadable, so that an interrupted keep still counts against
-// the budget and can still be evicted.
-func (s *Store) keptMessages() ([]kept, error) {
+// DamagedEntry is one message kept under damaged/, as auu damaged ls says
+// it: the record beside the bytes, and the size of the bytes on disk.
+type DamagedEntry struct {
+	DamagedRecord
+	// Bytes is the size of the kept bytes on this disk.
+	Bytes int64
+	// NoRecord is bytes whose keep was cut off before the record beside
+	// them was written: the relay and id are the path's, the received
+	// time is the file's own, and there is no cause.
+	NoRecord bool
+	// BadRecord is bytes beside a record that does not read by the rule,
+	// or names another relay or id; the relay and id are the path's, the
+	// received time the file's own, and the reason is in Cause. Like
+	// NoRecord, it counts, is evicted and is never reopened.
+	BadRecord bool
+	bin       string
+}
+
+// damagedEntries lists what is under damaged/ by one rule, which the
+// budget, the counts and auu damaged ls all read: a directory whose name
+// is a relay's name, a .bin in it whose name is an id of 0 or more written
+// as the store writes one, and a .json beside it that reads strictly and
+// names that relay and that id. A .bin whose keep was cut off before its
+// record was written is listed too, with NoRecord and its file's own time,
+// and so is one beside a record that does not read or names another
+// relay or id, with BadRecord: both still count against the budget and
+// are still evicted, as they always were, so that no record can put bytes
+// beyond the budget. Anything else is a stray: a name that is not an id, a
+// directory that is not a relay's, a record with no bytes. A stray is not
+// counted, not evicted and not listed, and is returned by its path so that
+// ls can say it is there.
+func (s *Store) damagedEntries() (entries []DamagedEntry, strays []string, err error) {
 	relays, err := os.ReadDir(s.path(damagedDir))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, relay := range relays {
+		dir := s.path(damagedDir, relay.Name())
+		if !relay.IsDir() || ValidRelayName(relay.Name()) != nil {
+			strays = append(strays, dir)
+			continue
+		}
+		files, err := os.ReadDir(dir)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, f := range files {
+			name := f.Name()
+			if filepath.Ext(name) == ".json" {
+				// A record is said with its bytes, or as a stray when
+				// the bytes beside it are not a kept message's.
+				if _, err := os.Lstat(filepath.Join(dir, strings.TrimSuffix(name, ".json")+".bin")); err != nil {
+					strays = append(strays, filepath.Join(dir, name))
+				}
+				continue
+			}
+			bin := filepath.Join(dir, name)
+			id, ok := damagedID(name)
+			if f.IsDir() || !ok {
+				strays = append(strays, bin)
+				continue
+			}
+			info, err := f.Info()
+			if err != nil {
+				return nil, nil, err
+			}
+			rec, err := readDamagedRecord(recordPath(bin))
+			if errors.Is(err, os.ErrNotExist) {
+				entries = append(entries, DamagedEntry{
+					DamagedRecord: DamagedRecord{RelayID: id, Relay: relay.Name(), Received: info.ModTime()},
+					Bytes:         info.Size(), NoRecord: true, bin: bin,
+				})
+				continue
+			}
+			if err == nil && (rec.Relay != relay.Name() || rec.RelayID != id) {
+				err = fmt.Errorf("the record names relay %q and id %d", rec.Relay, rec.RelayID)
+			}
+			if err != nil {
+				entries = append(entries, DamagedEntry{
+					DamagedRecord: DamagedRecord{RelayID: id, Relay: relay.Name(), Received: info.ModTime(), Cause: err.Error()},
+					Bytes:         info.Size(), BadRecord: true, bin: bin,
+				})
+				continue
+			}
+			entries = append(entries, DamagedEntry{DamagedRecord: rec, Bytes: info.Size(), bin: bin})
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Received.Equal(entries[j].Received) {
+			return entries[i].bin < entries[j].bin
+		}
+		return entries[i].Received.Before(entries[j].Received)
+	})
+	sort.Strings(strays)
+	return entries, strays, nil
+}
+
+// damagedID is the id a kept message's file name gives: a .bin whose stem
+// is an id of 0 or more written as strconv writes it, so that one id has
+// one name and 07.bin is not 7.bin.
+func damagedID(name string) (int64, bool) {
+	stem, ok := strings.CutSuffix(name, ".bin")
+	if !ok {
+		return 0, false
+	}
+	id, err := strconv.ParseInt(stem, 10, 64)
+	if err != nil || id < 0 || strconv.FormatInt(id, 10) != stem {
+		return 0, false
+	}
+	return id, true
+}
+
+// readDamagedRecord reads a record strictly: the file this program wrote,
+// and nothing that only resembles it.
+func readDamagedRecord(path string) (DamagedRecord, error) {
+	var rec DamagedRecord
+	data, err := regular.ReadFile(path)
+	if err != nil {
+		return rec, err
+	}
+	if err := wire.Decode(data, &rec); err != nil {
+		return rec, err
+	}
+	if rec.Received.IsZero() {
+		return rec, errors.New("the record has no received time")
+	}
+	// What the listing said is held to the listing's own rules again, as
+	// the client held it when it came: a kind that is a row's, a channel's
+	// name, a size of 0 or more, and relays' names that become a reply's
+	// path.
+	if rec.Kind != "" && rec.Kind != relayapi.KindEnvelope && rec.Kind != relayapi.KindKnock {
+		return rec, fmt.Errorf("the record's kind %q is not one a kept row is listed under", rec.Kind)
+	}
+	if rec.Channel != "" {
+		if err := channels.ValidName(rec.Channel); err != nil {
+			return rec, fmt.Errorf("the record's channel: %w", err)
+		}
+	}
+	if rec.Size < 0 {
+		return rec, fmt.Errorf("the record's size %d is below zero", rec.Size)
+	}
+	if rec.Via != "" {
+		if err := CheckAddress(nil, strings.Split(rec.Via, "!"), relayapi.MaxHops); err != nil {
+			return rec, fmt.Errorf("the record's via: %w", err)
+		}
+	}
+	return rec, nil
+}
+
+// keptMessages lists what is under damaged/ by damagedEntries' rule,
+// oldest first, for the budget and the counts.
+func (s *Store) keptMessages() ([]kept, error) {
+	entries, _, err := s.damagedEntries()
 	if err != nil {
 		return nil, err
 	}
-	var out []kept
-	for _, relay := range relays {
-		if !relay.IsDir() {
-			continue
-		}
-		entries, err := os.ReadDir(s.path(damagedDir, relay.Name()))
-		if err != nil {
-			return nil, err
-		}
-		for _, e := range entries {
-			if e.IsDir() || filepath.Ext(e.Name()) != ".bin" {
-				continue
-			}
-			info, err := e.Info()
-			if err != nil {
-				return nil, err
-			}
-			k := kept{bin: s.path(damagedDir, relay.Name(), e.Name()), size: info.Size(), when: info.ModTime()}
-			var rec DamagedRecord
-			if data, err := regular.ReadFile(recordPath(k.bin)); err == nil && json.Unmarshal(data, &rec) == nil && !rec.Received.IsZero() {
-				k.when = rec.Received
-				k.cause = rec.Cause
-			}
-			out = append(out, k)
-		}
+	out := make([]kept, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, kept{bin: e.bin, size: e.Bytes, when: e.Received, cause: e.Cause})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].when.Equal(out[j].when) {
-			return out[i].bin < out[j].bin
-		}
-		return out[i].when.Before(out[j].when)
-	})
 	return out, nil
+}
+
+// DamagedEntries is every message kept under damaged/, oldest first, and
+// the path of every stray beside them.
+func (s *Store) DamagedEntries() ([]DamagedEntry, []string, error) {
+	return s.damagedEntries()
+}
+
+// ErrNotDamaged is a relay and id with no kept message.
+var ErrNotDamaged = errors.New("nothing is kept under damaged/ for that relay and id")
+
+// ErrNoRecord is a relay and id whose bytes are kept with no record beside
+// them: a keep cut off before the record was written.
+var ErrNoRecord = errors.New("its bytes are kept with no record beside them")
+
+// ReadDamaged reads one kept message: its record, held to the entry rule,
+// and its bytes, read through regular and refused over DamagedBudget, the
+// most a keep ever writes.
+func (s *Store) ReadDamaged(relay string, id int64) (DamagedEntry, []byte, error) {
+	bin, err := s.DamagedPath(relay, id)
+	if err != nil {
+		return DamagedEntry{}, nil, err
+	}
+	rec, err := readDamagedRecord(recordPath(bin))
+	if errors.Is(err, os.ErrNotExist) {
+		if _, berr := os.Lstat(bin); berr == nil {
+			return DamagedEntry{}, nil, ErrNoRecord
+		}
+		return DamagedEntry{}, nil, ErrNotDamaged
+	}
+	if err != nil {
+		return DamagedEntry{}, nil, fmt.Errorf("%s: %w", recordPath(bin), err)
+	}
+	if rec.Relay != relay || rec.RelayID != id {
+		return DamagedEntry{}, nil, fmt.Errorf("%s names relay %q and id %d, not the file it is beside", recordPath(bin), rec.Relay, rec.RelayID)
+	}
+	f, err := regular.Open(bin)
+	if errors.Is(err, os.ErrNotExist) {
+		return DamagedEntry{}, nil, ErrNotDamaged
+	}
+	if err != nil {
+		return DamagedEntry{}, nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, DamagedBudget+1))
+	if err != nil {
+		return DamagedEntry{}, nil, err
+	}
+	if int64(len(data)) > DamagedBudget {
+		return DamagedEntry{}, nil, fmt.Errorf("%s is over %s, more than a keep ever writes", bin, MiB(DamagedBudget))
+	}
+	return DamagedEntry{DamagedRecord: rec, Bytes: int64(len(data)), bin: bin}, data, nil
+}
+
+// RemoveDamaged removes one kept message, bytes and record: once it has
+// been opened and filed, or found already held.
+func (s *Store) RemoveDamaged(relay string, id int64) error {
+	bin, err := s.DamagedPath(relay, id)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(bin); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Remove(recordPath(bin)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // KeepDamaged keeps the bytes of a message that could not be opened, with
@@ -140,6 +345,11 @@ func (s *Store) keptMessages() ([]kept, error) {
 func (s *Store) KeepDamaged(rec DamagedRecord, data []byte) (kept bool, evicted int, err error) {
 	if int64(len(data)) > DamagedBudget {
 		return false, 0, nil
+	}
+	// A relay that said no received time gets this machine's: the record
+	// is read strictly and wants one, and the budget orders by it.
+	if rec.Received.IsZero() {
+		rec.Received = time.Now().UTC()
 	}
 	have, err := s.keptMessages()
 	if err != nil {

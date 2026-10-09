@@ -112,6 +112,10 @@ var subcommands = []subcommand{
 		{name: "show", describe: "show a held message"},
 		{name: "trust", describe: "trust its sender and deliver it"},
 	}},
+	{name: "damaged", describe: "mail kept because it could not be opened", subs: []subcommand{
+		{name: "ls", describe: "list what is kept under damaged/"},
+		{name: "reopen", describe: "open what needed a newer auu, with this one"},
+	}},
 	{name: "passphrase", describe: "encrypt this home's keys under a passphrase", subs: []subcommand{
 		{name: "set", describe: "encrypt the keys"},
 		{name: "change", describe: "change the passphrase"},

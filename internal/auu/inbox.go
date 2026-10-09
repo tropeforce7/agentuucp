@@ -338,7 +338,7 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 			var newer *wire.NeedsNewerError
 			if errors.As(err, &newer) && sender != nil {
 				met.fresh++
-				if err := keepNewer(s, r, m.ID, m.Received, m.Raw, newer.Name, sender.Fingerprint(), &res); err != nil {
+				if err := keepNewer(s, r, m, newer.Name, sender.Fingerprint(), &res); err != nil {
 					return res, said, err
 				}
 				if err := c.Ack(ctx, m.ID); err != nil {
@@ -376,13 +376,25 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 				}
 			}
 			met.fresh++
-			if err != nil {
+			o := openOne(s, r, m, inner, sender, err, settings, fetchChecks)
+			switch o.verdict {
+			case unreadable:
 				// Nobody will ever be able to read this, so leaving it queued
 				// would block the mailbox forever. Keep the bytes, say why
 				// in a word, and acknowledge it.
-				if err := keepDamaged(s, r, m.ID, m.Received, m.Raw, openCause(err), &res); err != nil {
+				if err := keepDamaged(s, r, m.ID, m.Received, m.Raw, o.cause, &res); err != nil {
 					return res, said, err
 				}
+			case miskinded:
+				if err := keepMiskinded(s, r, m.ID, m.Received, m.Raw, m.Kind, o.typ, &res); err != nil {
+					return res, said, err
+				}
+			case misfiled:
+				if err := keepMisfiled(s, r, m.ID, m.Received, m.Raw, o.filedAs, o.sealed, &res); err != nil {
+					return res, said, err
+				}
+			}
+			if o.verdict != opened {
 				if err := c.Ack(ctx, m.ID); err != nil {
 					return res, said, transportErr(err)
 				}
@@ -392,82 +404,10 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 				}
 				continue
 			}
-
-			// The kind the relay listed it under, against the type inside
-			// the signature. A knock came in past the allow list because
-			// the owner's card admits knocks, so a row that says knock
-			// outside and something else inside, or the reverse, is
-			// obeyed in neither direction: kept, said to be, and
-			// acknowledged, as a message filed under the wrong channel is.
-			if !knockAgrees(m.Kind, inner.Body.Type) {
-				if err := keepMiskinded(s, r, m.ID, m.Received, m.Raw, m.Kind, inner.Body.Type, &res); err != nil {
-					return res, said, err
-				}
-				if err := c.Ack(ctx, m.ID); err != nil {
-					return res, said, transportErr(err)
-				}
-				cursor = m.ID
-				if err := s.SetCursorFor(r, cursor); err != nil {
-					return res, said, err
-				}
-				continue
-			}
-
-			// The channel it was sealed for, against the one the relay
-			// posted and listed it under. A relay that filed it elsewhere
-			// is found out here, not obeyed: the message is kept, said to
-			// be, and acknowledged like the other kept ones.
-			channel, filedAs, agrees := filedUnder(inner.Channel, m.Envelope.Ch, m)
-			if !agrees {
-				if err := keepMisfiled(s, r, m.ID, m.Received, m.Raw, filedAs, inner.Channel, &res); err != nil {
-					return res, said, err
-				}
-				if err := c.Ack(ctx, m.ID); err != nil {
-					return res, said, transportErr(err)
-				}
-				cursor = m.ID
-				if err := s.SetCursorFor(r, cursor); err != nil {
-					return res, said, err
-				}
-				continue
-			}
-
-			box := store.Quarantine
-			if s.IsAuthorized(sender.Fingerprint()) {
-				box = store.Inbox
-			}
-			// Kept on the relay, or acknowledged away, as this machine's
-			// setting for the channel says. Kept is the default, and the
-			// record says so, since nothing else would remember. A knock
-			// is never kept, whatever the channel says: the recipient's
-			// copy is the one that matters, and a kept knock would count
-			// against the relay's max_knocks_waiting for ever, closing
-			// the mailbox to every other knocker.
-			keep := keepFor(settings, channel) && inner.Body.Type != message.TypeKnock
-			// The sections it came with, kept as they came at or under the
-			// kept size and counted over it (D31).
-			var dropped int
-			inner.Sections, dropped = keptSections(inner.Sections)
-			stored := &store.Stored{
-				DroppedSections: dropped,
-				RelayID:         m.ID,
-				Relay:           r.Name,
-				Received:        m.Received,
-				RelaySize:       m.Size,
-				Inner:           inner,
-				SenderName:      s.PeerName(sender.Fingerprint()),
-				Channel:         channel,
-				OnRelay:         keep,
-				// Where it has been, which only the person receiving it
-				// can judge, and which a reply goes back along. The
-				// client held these names to the relay-name rule before
-				// this listing was read.
-				Via: m.Via,
-			}
-			if err := s.Save(box, stored); err != nil {
+			if err := s.Save(o.box, o.stored); err != nil {
 				return res, said, fmt.Errorf("saving message locally: %w", err)
 			}
-			if !keep {
+			if !o.stored.OnRelay {
 				if err := c.Ack(ctx, m.ID); err != nil {
 					return res, said, transportErr(err)
 				}
@@ -476,6 +416,8 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 			if err := s.SetCursorFor(r, cursor); err != nil {
 				return res, said, err
 			}
+			channel := o.stored.Channel
+			box := o.box
 			if box == store.Inbox {
 				res.Delivered++
 				res.noteGone(directory, channel)
@@ -484,6 +426,115 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 			}
 		}
 	}
+}
+
+// verdict is what the open path makes of one envelope.
+type verdict int
+
+const (
+	// opened is a message to file: stored, in box.
+	opened verdict = iota
+	// unreadable is one that did not open, for a reason in cause.
+	unreadable
+	// miskinded is one the relay listed under a kind its sealed type is
+	// not: typ is the sealed type.
+	miskinded
+	// misfiled is one the relay filed under a channel it was not sealed
+	// for: filedAs is where the relay put it, sealed where it was sealed.
+	misfiled
+)
+
+// opening is the open path's verdict on one envelope and what goes with it.
+type opening struct {
+	verdict         verdict
+	cause           string
+	typ             string
+	filedAs, sealed string
+	stored          *store.Stored
+	box             store.Box
+}
+
+// checks says which of the open path's checks against the listing can run.
+// The fetch has the listing and runs both. A message kept as newer by an
+// earlier release has no record of what the listing said: reopening it
+// skips the kind check, which the envelope has no half of, and checks the
+// channel against the envelope's own alone.
+type checks struct {
+	// kind is the listed kind against the sealed type.
+	kind bool
+	// listedChannel is the listed channel against the sealed one; the
+	// envelope's outer channel is checked against the sealed one always.
+	listedChannel bool
+}
+
+var fetchChecks = checks{kind: true, listedChannel: true}
+
+// openOne is the open path the fetch and auu damaged reopen share, from
+// Open's answer to the record that would be saved, in the fetch's order:
+// an envelope that did not open, then the kind the relay listed it under,
+// then the channel it was filed under, then the peer rule. It keeps
+// nothing, acknowledges nothing and counts nothing: those are the
+// caller's, since the fetch keeps what fails and reopen leaves it where
+// it is. Open has already been called, and its locked and newer answers,
+// and meeting an id already held, are the caller's too.
+func openOne(s *store.Store, r *store.Relay, m client.Message, inner *envelope.Inner, sender *identity.Public, openErr error,
+	settings store.ChannelSettings, run checks) opening {
+	if openErr != nil {
+		return opening{verdict: unreadable, cause: openCause(openErr)}
+	}
+	// The kind the relay listed it under, against the type inside the
+	// signature. A knock came in past the allow list because the owner's
+	// card admits knocks, so a row that says knock outside and something
+	// else inside, or the reverse, is obeyed in neither direction: kept,
+	// said to be, and acknowledged, as a message filed under the wrong
+	// channel is.
+	if run.kind && !knockAgrees(m.Kind, inner.Body.Type) {
+		return opening{verdict: miskinded, typ: inner.Body.Type}
+	}
+	// The channel it was sealed for, against the one the relay posted and
+	// listed it under. A relay that filed it elsewhere is found out here,
+	// not obeyed: the message is kept, said to be, and acknowledged like
+	// the other kept ones.
+	if !run.listedChannel {
+		m.Channel = inner.Channel
+		if m.Channel == "" {
+			m.Channel = channels.Default
+		}
+	}
+	channel, filedAs, agrees := filedUnder(inner.Channel, m.Envelope.Ch, m)
+	if !agrees {
+		return opening{verdict: misfiled, filedAs: filedAs, sealed: inner.Channel}
+	}
+	box := store.Quarantine
+	if s.IsAuthorized(sender.Fingerprint()) {
+		box = store.Inbox
+	}
+	// Kept on the relay, or acknowledged away, as this machine's setting
+	// for the channel says. Kept is the default, and the record says so,
+	// since nothing else would remember. A knock is never kept, whatever
+	// the channel says: the recipient's copy is the one that matters, and
+	// a kept knock would count against the relay's max_knocks_waiting for
+	// ever, closing the mailbox to every other knocker.
+	keep := keepFor(settings, channel) && inner.Body.Type != message.TypeKnock
+	// The sections it came with, kept as they came at or under the kept
+	// size and counted over it (D31).
+	var dropped int
+	inner.Sections, dropped = keptSections(inner.Sections)
+	return opening{verdict: opened, box: box, stored: &store.Stored{
+		DroppedSections: dropped,
+		RelayID:         m.ID,
+		Relay:           r.Name,
+		Received:        m.Received,
+		RelaySize:       m.Size,
+		Inner:           inner,
+		SenderName:      s.PeerName(sender.Fingerprint()),
+		Channel:         channel,
+		OnRelay:         keep,
+		// Where it has been, which only the person receiving it can
+		// judge, and which a reply goes back along. The client held these
+		// names to the relay-name rule before this listing was read.
+		Via: m.Via,
+	}}
 }
 
 type attachmentJSON struct {
@@ -938,7 +989,7 @@ func cmdInbox(args []string) error {
 			newer = 0
 		}
 		if newer > 0 {
-			fmt.Printf("%d message(s) kept under %s need a newer auu; update auu to read them\n", newer, s.DamagedDir())
+			fmt.Printf("%d message(s) kept under %s need a newer auu; update auu and open them with %s damaged reopen --all\n", newer, s.DamagedDir(), prog)
 		}
 		if rest := kept - newer; rest > 0 {
 			fmt.Printf("%d damaged message(s) kept under %s; ask their senders to send them again\n", rest, s.DamagedDir())

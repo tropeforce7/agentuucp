@@ -130,6 +130,21 @@ auu quarantine show MESSAGE-ID [--json]
 auu quarantine trust MESSAGE-ID                    # the user's decision; it prompts
 ```
 
+What the fetch kept under `damaged/` because it could not open it:
+
+```
+auu damaged ls [--json]                            # what is kept, and why in a word: a read, which you may run
+auu damaged reopen RELAY ID | --all [--json]       # open what needed a newer auu: the person's command, since it files mail; never run it
+```
+
+`damaged ls` needs no key and changes nothing. `damaged reopen` opens a
+message kept as `newer` again with this `auu`, once it is updated, and
+files what opens in the inbox or the quarantine as the fetch would have.
+It opens that cause alone: any other is refused by name, since no auu can
+open it or the check that kept it would keep it again, and `--all` passes
+those over. It fetches nothing from the relay. With `auu vouch answer on`
+it answers a peer's question after filing, as a fetch does.
+
 Answering a channel for a project, which is an expert host and not
 something a messaging agent starts on its own:
 
@@ -429,6 +444,24 @@ set), `queued` (a map of channel to count) and `error` (when set).
 `auu rm --json`: a list of `id`, `relay` (when one was involved),
 `removed_relay`, `removed_local`.
 
+`auu damaged ls --json`: a list, oldest first, of `relay`, `id` (the
+relay's id for the message), `received`, `size` (the kept bytes on this
+disk), `cause` (the record's, such as `malformed` or `newer: section
+"S"`; empty for a keep cut off before its record was written, or one beside a
+record that does not read) and
+`section` (when the cause is `newer`: the section's name). A file under
+`damaged/` that is not a kept message is not listed, and stderr says
+`warning: PATH is not a kept message and is not listed`.
+
+`auu damaged reopen --json`: a list, one per message, of `relay`, `id`,
+`outcome` (`filed`, `already held`, `still newer`, `collided` or `left`),
+`box` (when filed: `inbox` or `quarantine`), `unchecked` (when set: the
+checks against the relay's listing that could not run, because a record
+an earlier release wrote does not say what the listing said) and `detail`
+(when set: `section "S"` for one still newer, or why it was left). What
+the vouch keeping and the question answering print goes to stderr under
+`--json`.
+
 `auu cursor show --json`: a list of `relay`, `cursor` (absent when the
 file will not read, with `cursor_error` saying why), and `first`, `last`
 and `queued` as the relay said them, absent when it could not be asked,
@@ -604,16 +637,45 @@ Anywhere:
 On stderr while `auu inbox` fetches, for a message from a newer build:
 
 - `warning: relay message N from NAME needs a newer auu (section "S") and
-  was kept as PATH; update auu to read it`: a message with a critical
-  section this build does not know, from a peer by name or from `an unknown
-  sender, FP16`; the user updates auu, and nobody resends.
+  was kept as PATH; update auu and open it with auu damaged reopen RELAY
+  N`: a message with a critical section this build does not know, from a
+  peer by name or from `an unknown sender, FP16`; the user updates auu and
+  runs the reopen, and nobody resends.
 
 And on standard output: `N stream(s) wait on the relay for a newer auu
 (section "S"); update auu to fetch them`, and `N message(s) kept under DIR
-need a newer auu; update auu to read them`, every run until an updated auu
-reads them. `auu read`, `auu reply` and the quarantine's `show` and `trust`
-answer a waiting stream with `message ID waits on the relay for a newer auu
-(section "S"); update auu to fetch it`.
+need a newer auu; update auu and open them with auu damaged reopen --all`,
+every run until they are reopened or removed. `auu read`, `auu reply` and
+the quarantine's `show` and `trust` answer a waiting stream with `message
+ID waits on the relay for a newer auu (section "S"); update auu to fetch
+it`.
+
+From `auu damaged reopen`, which the person runs and you report:
+
+- `RELAY ID: opened and filed in the inbox` (or `the quarantine`), `already
+  held, so its kept copy is removed`, `still needs a newer auu (section
+  "S") and is left where it is`, `its id is held from another sender, so
+  it is left where it is`, or why else it was left, `and is left where it
+  is` — one line per message, exit 0 whatever each line says. A line that
+  ends `its record does not say the kind it was listed under or the
+  channel it was listed under, so that check could not run` is a record an
+  earlier release wrote; report it.
+- `RELAY ID was kept with the cause "CAUSE", which is never reopened;
+  only a message kept as needing a newer auu is` — exit 1. For one that
+  did not decrypt or was malformed, the sender is who to ask.
+- `RELAY ID is bytes kept with no record, a keep cut off before its record
+  was written, which is never reopened; only a message kept as needing a
+  newer auu is` — exit 1.
+- `RELAY ID is kept beside a record that does not read (REASON), which is
+  never reopened; only a message kept as needing a newer auu is` — exit 1.
+- `nothing is kept for RELAY ID; auu damaged ls lists what is` — exit 1.
+- A line beginning `another auu is fetching from RELAY; try again in a
+  moment` — exit 2, after a minute's wait for that fetch; one retry later
+  is enough.
+- `N reopened and filed before the key locked; the rest are where they
+  were` on stderr beside exit 4, or `… before this stopped; …` beside
+  exit 2, or exit 1 when a file could not be written — what was filed
+  stays filed; the user unlocks, or waits, and runs it again.
 
 On stderr after the messages of `auu inbox` or `auu wait`, once per run,
 about your own allow list on one relay; the exit code is the run's own:
