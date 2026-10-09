@@ -315,6 +315,10 @@ func TestLimitStoredRecordShapes(t *testing.T) {
 		{"a list that names nobody", func(m *Stored) {
 			m.Inner.Sections = []wire.Section{{Name: recipients.Name, Data: json.RawMessage(`{"to":[]}`)}}
 		}, "recipients section is malformed: it names nobody"},
+		{"a list with a fingerprint one short", func(m *Stored) {
+			m.Inner.Sections = []wire.Section{{Name: recipients.Name,
+				Data: json.RawMessage(`{"to":["` + m.Inner.To + `","` + strings.Repeat("e", 63) + `"]}`)}}
+		}, "entry 2 is not a fingerprint"},
 		{"a list on a knock", func(m *Stored) {
 			m.Inner.Body = message.Body{Type: message.TypeKnock, Thread: m.Inner.Body.Thread, Name: "alice", Text: "hello"}
 			m.Inner.Sections = []wire.Section{recipientsList(t, m.Inner.To, m.Inner.From)}

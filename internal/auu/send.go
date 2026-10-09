@@ -212,6 +212,7 @@ func cmdReply(args []string) error {
 	forceStream := fs.Bool("stream", false, "send as a chunked stream whatever the size")
 	forceInline := fs.Bool("inline", false, "send as a single envelope, failing if it is too large")
 	edit := fs.Bool("edit", false, "compose the reply in your editor, starting from any text given")
+	all := fs.Bool("all", false, "answer the sender and everyone else the message went to")
 	channel := channelFlag(fs)
 	relay := relayFlag(fs)
 	var attach stringList
@@ -222,6 +223,13 @@ func cmdReply(args []string) error {
 	}
 	if len(positional) == 0 {
 		return usageErrf("usage: %s reply MESSAGE-ID|THREAD-ID [TEXT]", prog)
+	}
+	// Everyone is answered as the message came, through the relay it
+	// arrived on: an address per person is not one a reply can be given,
+	// and a room, in the next release, carries one for each.
+	if *all && (*to != "" || *via != "") {
+		return usageErrf("--all answers everyone through the relay the message came by, and takes no --to " +
+			"or --via; a room, in the next release, carries an address for each person")
 	}
 	if err := validChannelFlag(*channel); err != nil {
 		return err
@@ -272,7 +280,19 @@ func cmdReply(args []string) error {
 	// wrote to. --to names one of them, and the follow-up goes the way that
 	// copy went unless --via says otherwise.
 	toArg := *to
-	if box == store.Sent && len(original.Copies) > 0 {
+	var several []addressed
+	if *all {
+		set, err := replyAllSet(s, box, original)
+		if err != nil {
+			return err
+		}
+		if len(set) == 1 {
+			otherFP = set[0].pub.Fingerprint()
+		} else {
+			several = set
+			otherFP = set[0].pub.Fingerprint()
+		}
+	} else if box == store.Sent && len(original.Copies) > 0 {
 		c, err := followUpCopy(s, original, *to)
 		if err != nil {
 			return err
@@ -291,9 +311,11 @@ func cmdReply(args []string) error {
 	if err != nil {
 		return err
 	}
-	path, err := replyPath(s, original, recipient, toArg, *via)
-	if err != nil {
-		return err
+	var path []string
+	if len(several) == 0 {
+		if path, err = replyPath(s, original, recipient, toArg, *via); err != nil {
+			return err
+		}
 	}
 	if viaThread && !*asJSON {
 		who := "you"
@@ -323,7 +345,11 @@ func cmdReply(args []string) error {
 			return err
 		}
 		var edited string
-		text, edited, err = composeIn(s, cfg, composeTemplate([]*identity.Public{recipient}, subj, attach, original, text))
+		to := []*identity.Public{recipient}
+		if len(several) > 0 {
+			to = publicsOf(several)
+		}
+		text, edited, err = composeIn(s, cfg, composeTemplate(to, subj, attach, original, text))
 		if err != nil {
 			return err
 		}
@@ -343,10 +369,16 @@ func cmdReply(args []string) error {
 	}
 	// A reply goes to the sender's default unless --channel says otherwise:
 	// a channel is the receiver's sorting, not a thread.
-	err = sealAndSend(s, id, r, recipient, body, attach,
-		sendMode{stream: *forceStream, inline: *forceInline, channel: *channel, path: path,
-			reply: *to == "" && *via == ""}, *asJSON)
-	if err != nil && compose {
+	if len(several) > 0 {
+		err = sendToSeveral(s, id, r, several, body, attach,
+			sendMode{stream: *forceStream, inline: *forceInline, channel: *channel, replyAll: true}, *asJSON)
+	} else {
+		err = sealAndSend(s, id, r, recipient, body, attach,
+			sendMode{stream: *forceStream, inline: *forceInline, channel: *channel, path: path,
+				reply: *to == "" && *via == ""}, *asJSON)
+	}
+	var waiting copiesWaiting
+	if err != nil && compose && !errors.As(err, &waiting) {
 		return draftKept(s, err)
 	}
 	return err
@@ -501,6 +533,10 @@ type sendMode struct {
 	// message to several, said to the first relay on a forward so that it
 	// can hold the sender to its max_recipients; zero for a message to one.
 	recipients int
+	// replyAll says this message to several is reply --all, whose copies
+	// all go through the relay the original came by, so that a recipient
+	// on another relay is told how to be reached.
+	replyAll bool
 }
 
 // sealAndSend is the common tail of send and reply: the message sent, and

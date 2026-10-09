@@ -92,6 +92,9 @@ type copyResult struct {
 	relayID int64
 	err     error
 	waiting bool
+	// notRegistered is a copy refused because its recipient has no mailbox
+	// on the relay, told before the error is rewritten as advice.
+	notRegistered bool
 }
 
 // recipientJSON is one recipient of a message to several in --json.
@@ -265,6 +268,7 @@ func sendToSeveral(s *store.Store, id *identity.Identity, r *store.Relay, to []a
 			continue
 		}
 		refuseCopy(s, p, err)
+		results[i].notRegistered = notRegistered(err)
 		if len(to[i].path) == 0 {
 			err = channelHint(err, s, id, c, r, to[i].pub, mode.channel)
 			err = notRegisteredHint(storageFullHint(err, to[i].pub), s, to[i].pub, r)
@@ -335,6 +339,11 @@ func sendToSeveral(s *store.Store, id *identity.Identity, r *store.Relay, to []a
 	}
 	msg := fmt.Sprintf("%d of %d copies were not sent and wait in the outbox; finish them with '%s send --resume'",
 		failed, len(results), prog)
+	if mode.replyAll && anyNotRegistered(results) {
+		msg += fmt.Sprintf("; a reply to everyone goes through %s, and somebody not registered there is reached "+
+			"by a new message with --to 'RELAY!NAME', or by a room, in the next release, which carries an "+
+			"address for each person", r.Name)
+	}
 	final := errors.New(msg)
 	if stop != nil {
 		// What stopped the send stays in the chain, so that the advice a
@@ -441,7 +450,7 @@ func followUpCopy(s *store.Store, original *store.Stored, to string) (store.Sent
 	}
 	if to == "" {
 		return store.SentCopy{}, usageErrf("the latest on thread %s is your own message to %d recipients (%s); "+
-			"name the one to follow up with, as --to PEER",
+			"name the one to follow up with, as --to PEER, or answer everyone with --all",
 			original.Inner.Body.Thread[:12], len(original.Copies), strings.Join(names, ", "))
 	}
 	_, peer := store.SplitAddress(to)
@@ -456,4 +465,76 @@ func followUpCopy(s *store.Store, original *store.Stored, to string) (store.Sent
 	}
 	return store.SentCopy{}, usageErrf("%s is not one of the %d recipients of your message on thread %s (%s)",
 		peerLabel(pub), len(original.Copies), original.Inner.Body.Thread[:12], strings.Join(names, ", "))
+}
+
+// anyNotRegistered says whether a copy was refused because its recipient has
+// no mailbox on the relay it was posted to.
+func anyNotRegistered(results []copyResult) bool {
+	for _, res := range results {
+		if res.notRegistered {
+			return true
+		}
+	}
+	return false
+}
+
+// notRegistered says whether a relay refused a post because its recipient
+// has no mailbox there, by the status the relay gives that and its absence
+// of a code, and nothing it said.
+func notRegistered(err error) bool {
+	var he *client.HTTPError
+	return errors.As(err, &he) && he.Status == http.StatusNotFound && he.Code == ""
+}
+
+// replyAllSet is everybody reply --all answers (D50): the sender of what is
+// answered and everybody its recipients section names, in that order, less
+// the replier, each once; for your own message to several, everybody it
+// went to but you. Each must be on the peer list, since sealing to somebody
+// needs their key and the peer list is where a key comes from here (D51):
+// one who is not refuses the whole reply, by name, before anything is
+// sealed, with the two things to do. A set of one is a message to one.
+func replyAllSet(s *store.Store, box store.Box, original *store.Stored) ([]addressed, error) {
+	var fps []string
+	switch {
+	case box == store.Sent && len(original.Copies) > 0:
+		for _, c := range original.Copies {
+			fps = append(fps, c.Fingerprint)
+		}
+	case box == store.Sent:
+		fps = []string{original.Inner.To}
+	default:
+		fps = append([]string{original.Inner.From}, recipientsOf(original)...)
+	}
+	self := ""
+	if me, err := s.Self(); err == nil {
+		self = me.Fingerprint()
+	}
+	seen := map[string]bool{self: true}
+	var out []addressed
+	var missing []string
+	for _, fp := range fps {
+		if seen[fp] {
+			continue
+		}
+		seen[fp] = true
+		if !s.IsAuthorized(fp) {
+			missing = append(missing, fp[:identity.ShortIDLen])
+			continue
+		}
+		pub, err := s.Resolve(fp)
+		if err != nil {
+			missing = append(missing, fp[:identity.ShortIDLen])
+			continue
+		}
+		out = append(out, addressed{pub: pub})
+	}
+	if len(missing) > 0 {
+		return nil, usageErrf("cannot answer everyone: %s %s not on your peer list, and a message is sealed to a key "+
+			"you hold; ask whoever wrote to you to vouch for them ('%s vouch'), or add them with '%s peers add', "+
+			"and nothing was sent", strings.Join(missing, ", "), isAre(len(missing)), prog, prog)
+	}
+	if len(out) == 0 {
+		return nil, usageErrf("nobody but you was written to; reply without --all")
+	}
+	return out, nil
 }

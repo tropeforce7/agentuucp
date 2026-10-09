@@ -310,7 +310,17 @@ say so explicitly and wait for the user to tell you what to do.
 ```
 auu reply MESSAGE-ID --json 'the answer'
 auu reply THREAD-ID --json 'a follow-up'     # answers the latest message on the thread, yours included
+auu reply MESSAGE-ID --all --json 'to all'   # the sender and everyone else a message to several went to
 ```
+
+A message to several says who else it went to: `recipients` in `--json`.
+Plain `auu reply` answers the sender alone; `--all` answers the sender and
+every other recipient. It refuses the whole reply, sending nothing, when a
+recipient is not on the user's peer list, and says the two things to do:
+ask whoever wrote to vouch for them, or add them with `auu peers add`. That
+is the user's to decide. `--all` goes through the relay the message came by,
+so a recipient registered elsewhere is a copy left in the outbox, and the
+sentence says how to reach them; it takes no `--to` or `--via`.
 
 Threading is handled for you. A reply carries the thread's subject; `--subject`
 gives it one of its own, and `auu read` shows both, the thread's and the

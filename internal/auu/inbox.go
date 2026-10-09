@@ -23,6 +23,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/lockfile"
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
@@ -41,6 +42,10 @@ type fetchResult struct {
 	// claims a file that is not there.
 	Unreadable int `json:"unreadable"`
 	Kept       int `json:"kept"`
+	// Duplicate counts the rows that were a message already held here from
+	// the same relay and sender, a copy posted twice: acknowledged, not
+	// delivered again, the record as it was.
+	Duplicate int `json:"duplicate"`
 	// Newer is the streams left on the relay for a newer auu (D42), by
 	// the critical section each carries, which a build that knows it
 	// fetches whole.
@@ -56,6 +61,7 @@ func (f *fetchResult) add(o fetchResult) {
 	f.Quarantined += o.Quarantined
 	f.Unreadable += o.Unreadable
 	f.Kept += o.Kept
+	f.Duplicate += o.Duplicate
 	f.Newer = append(f.Newer, o.Newer...)
 	for name, n := range o.Gone {
 		if f.Gone == nil {
@@ -358,6 +364,9 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 						return res, said, transportErr(err)
 					}
 				}
+				if meeting == metAgain {
+					res.Duplicate++
+				}
 				if meeting != notHeld {
 					cursor = m.ID
 					if err := s.SetCursorFor(r, cursor); err != nil {
@@ -544,6 +553,54 @@ type messageJSON struct {
 	// Copies is a sent message to several: each recipient, and whether the
 	// relay has their copy, as the sent record says. Absent for any other.
 	Copies []copyJSON `json:"copies,omitempty"`
+	// Recipients is everybody a message to several went to, as its sender
+	// listed them, each by fingerprint and the name this machine has for
+	// them, the reader's own among them; absent for a message to one.
+	Recipients []recipientNameJSON `json:"recipients,omitempty"`
+}
+
+// recipientNameJSON is one recipient of a message to several, the shape an
+// allow list's senders have.
+type recipientNameJSON struct {
+	Fingerprint string `json:"fingerprint"`
+	Name        string `json:"name,omitempty"`
+}
+
+// recipientsOf is the list a message to several names, as its sender wrote
+// it, held to its rule when the record was loaded; nothing for a message to
+// one.
+func recipientsOf(m *store.Stored) []string {
+	list, err := recipients.CheckSections(m.Inner.Sections, m.Inner.Body.Type, m.Inner.To)
+	if err != nil {
+		return nil
+	}
+	return list.To
+}
+
+// printRecipients says, for a message to several, who else it went to:
+// each by the name this machine has for them, the short fingerprint for one
+// it does not know, and you for the reader, every name escaped.
+func printRecipients(s *store.Store, m *store.Stored) {
+	list := recipientsOf(m)
+	if len(list) < 2 {
+		return
+	}
+	self := ""
+	if me, err := s.Self(); err == nil {
+		self = me.Fingerprint()
+	}
+	names := make([]string, len(list))
+	for i, fp := range list {
+		switch name := s.PeerName(fp); {
+		case fp == self:
+			names[i] = "you"
+		case name != "":
+			names[i] = identity.Printable(name)
+		default:
+			names[i] = "<" + fp[:16] + ">"
+		}
+	}
+	fmt.Printf("to:      %s\n", strings.Join(names, ", "))
 }
 
 // copyJSON is one copy of a sent message to several in --json.
@@ -607,6 +664,13 @@ func toJSON(s *store.Store, box store.Box, m *store.Stored, includeText bool) me
 
 		OnRelay:        m.OnRelay,
 		PayloadOnRelay: m.PayloadOnRelay,
+	}
+	for _, fp := range recipientsOf(m) {
+		name := ""
+		if s != nil {
+			name = s.PeerName(fp)
+		}
+		out.Recipients = append(out.Recipients, recipientNameJSON{Fingerprint: fp, Name: name})
 	}
 	for _, c := range m.Copies {
 		out.Copies = append(out.Copies, copyJSON{
@@ -791,10 +855,13 @@ func cmdInbox(args []string) error {
 		return printJSON(out)
 	}
 
-	if res.Delivered > 0 || res.Quarantined > 0 {
+	if res.Delivered > 0 || res.Quarantined > 0 || res.Duplicate > 0 {
 		fmt.Printf("fetched %d new message(s)", res.Delivered)
 		if res.Quarantined > 0 {
 			fmt.Printf(", %d quarantined from unknown senders", res.Quarantined)
+		}
+		if res.Duplicate > 0 {
+			fmt.Printf(", %d already held", res.Duplicate)
 		}
 		fmt.Println()
 	}
@@ -914,6 +981,10 @@ func printInboxLine(s *store.Store, m *store.Stored) {
 	ch := ""
 	if m.Channel != "" {
 		ch = fmt.Sprintf("  in %q", m.Channel)
+	}
+	// A message to several says how many it went to; read says who.
+	if n := len(recipientsOf(m)); n > 1 {
+		att += fmt.Sprintf("  (to %d)", n)
 	}
 	// A vouch's column is what it vouches for and what that is to this
 	// machine, judged here against the peer list, in place of a subject
@@ -1051,6 +1122,9 @@ func printMessage(s *store.Store, box store.Box, m *store.Stored) {
 	// before the rule, or written by hand, is still in the spool.
 	fmt.Printf("from:    %s <%s>\n", orNone(identity.Printable(m.SenderName)), m.Inner.From[:16])
 	printCopies(m)
+	if len(m.Copies) == 0 {
+		printRecipients(s, m)
+	}
 	fmt.Printf("type:    %s\n", m.Inner.Body.Type)
 	// A knock carries the sender's own name, which is a claim and not a
 	// label: said as theirs, escaped as every word from outside is, and

@@ -282,7 +282,10 @@ func fetchOneStream(ctx context.Context, s *store.Store, id *identity.Identity, 
 			}
 			return c.Ack(ctx, relayID)
 		}
-		if meeting == metHeld {
+		if meeting == metAgain {
+			res.Duplicate++
+		}
+		if meeting == metHeld || meeting == metAgain {
 			return nil
 		}
 		met.fresh++
@@ -325,7 +328,10 @@ func fetchOneStream(ctx context.Context, s *store.Store, id *identity.Identity, 
 		}
 		return c.Ack(ctx, relayID)
 	}
-	if meeting == metHeld {
+	if meeting == metAgain {
+		res.Duplicate++
+	}
+	if meeting == metHeld || meeting == metAgain {
 		return nil
 	}
 	met.fresh++

@@ -159,6 +159,7 @@ environment:
 | `AUU_SUBJECT` | the subject |
 | `AUU_FROM` | the sender's fingerprint |
 | `AUU_FROM_NAME` | the sender's name in your peer list |
+| `AUU_RECIPIENTS` | for a message to several, everybody it went to, as fingerprints separated by spaces in the sender's order, the expert among them and the sender only if they sent themselves a copy; empty for a message to one. The expert answers the sender alone. The shipped wrapper, `serve-claude.sh`, does not read it |
 | `AUU_CHANNEL` | the channel being served |
 | `AUU_RELAY` | the relay the message came through, by name — which is what `auu` itself reads that variable as |
 | `AUU_TURN` | 1 for the ask, 2 for the first follow-up, and so on |

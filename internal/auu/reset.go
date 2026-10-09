@@ -215,6 +215,12 @@ const (
 	notHeld meeting = iota
 	metHeld
 	collided
+	// metAgain is a second row on this relay of a message held here from
+	// it: a copy of a message to several posted again by --resume after
+	// its answer was lost (R5). It is acknowledged whatever the channel's
+	// keep setting, since it is not a message this machine keeps, and the
+	// record stays on its first row.
+	metAgain
 )
 
 // meet reports whether a message the fetch opened is one this machine
@@ -256,6 +262,25 @@ func (mt *meeter) meet(ctx context.Context, s *store.Store, c *client.Client, m 
 			return notHeld, nil
 		}
 		mt.met[innerID] = true
+		// A row the record does not name, while the relay still lists the
+		// record's own row as that very copy, is the message a second time:
+		// it is acknowledged and the record stays where it is. Anything else
+		// is the message under the one thing the relay changed, its id,
+		// after an acknowledgement lost, a numbering begun again or a
+		// restore, and the record moves to it below, so that it never names
+		// an id the relay may have given other mail.
+		if (rec.OnRelay || rec.PayloadOnRelay) && rec.RelayID > 0 && rec.RelayID != m.ID {
+			there, err := stillListed(ctx, c, relayCopy{ID: rec.RelayID, Received: rec.Received, Size: rec.RelaySize})
+			if err != nil {
+				return notHeld, transportErr(err)
+			}
+			if there {
+				if err := c.Ack(ctx, m.ID); err != nil {
+					return notHeld, transportErr(err)
+				}
+				return metAgain, nil
+			}
+		}
 		letGo := !rec.OnRelay && !rec.PayloadOnRelay
 		rec.RelayID, rec.Received, rec.RelaySize = m.ID, m.Received, m.Size
 		rec.PayloadGone = false
@@ -278,11 +303,45 @@ func (mt *meeter) meet(ctx context.Context, s *store.Store, c *client.Client, m 
 				return collided, nil
 			}
 			mt.met[innerID] = true
+			// The entry's row as this fetch has it, which an earlier row of
+			// the same message may already have moved. A second row while
+			// that one is still listed as that copy is the message again, as
+			// for a record: acknowledged, and the entry stays on its row. A
+			// reset keeps it, since a row still listed is at or after the
+			// relay's first id and so was met, and moved, before this one.
+			cur := e
+			if to, ok := mt.moved[innerID]; ok {
+				cur = to
+			}
+			if cur.RelayID > 0 && cur.RelayID != m.ID {
+				there, err := stillListed(ctx, c, relayCopy{ID: cur.RelayID, Received: cur.Received, Size: cur.Size})
+				if err != nil {
+					return notHeld, transportErr(err)
+				}
+				if there {
+					if err := c.Ack(ctx, m.ID); err != nil {
+						return notHeld, transportErr(err)
+					}
+					return metAgain, nil
+				}
+			}
 			mt.moved[innerID] = store.LeftEntry{RelayID: m.ID, ID: innerID, Received: m.Received, Size: m.Size, From: e.From}
 			return metHeld, nil
 		}
 	}
 	return notHeld, nil
+}
+
+// stillListed says whether the relay lists a row as the copy this machine
+// says it is: the id, the time the relay received it and its size all
+// agree, which a row under a numbering begun again does not. The id is one
+// or more, so the listing begins at zero at the least.
+func stillListed(ctx context.Context, c *client.Client, held relayCopy) (bool, error) {
+	page, err := c.ListWait(ctx, client.ListRequest{After: held.ID - 1, Limit: 1, Stubs: true})
+	if err != nil {
+		return false, err
+	}
+	return len(page.Messages) > 0 && copyOf(page.Messages[0]).same(held), nil
 }
 
 // keepCollided keeps a message that carries the id of one this machine

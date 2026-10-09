@@ -85,6 +85,11 @@ func (f runFacts) env(withMessage bool, status string) []string {
 		"AUU_TYPE":        f.m.Inner.Body.Type,
 		"AUU_FROM":        f.m.Inner.From,
 		"AUU_FROM_NAME":   f.m.SenderName,
+		// Who else a message to several went to, as its sender listed
+		// them, the asker among them only when they sent themselves a
+		// copy: fingerprints, separated by spaces, which carry no word of
+		// the sender's. Empty for a message to one (P7).
+		"AUU_RECIPIENTS":  strings.Join(recipientsOf(f.m), " "),
 		"AUU_CHANNEL":     f.channel,
 		"AUU_RELAY":       f.relay,
 		"AUU_TURN":        strconv.Itoa(f.turn),

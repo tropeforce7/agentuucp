@@ -75,7 +75,7 @@ auu send --to bob --via bar TEXT                   # the same address, no bang t
 auu send --resume                                  # finish what the outbox holds: from the relay's partial, or anew
 auu outbox [--json]                                # what waits in the outbox to be sent
 auu outbox drop ID [PEER] [--json]                 # give one up; PEER says whose, when one id has several waiting
-auu reply MESSAGE-ID|THREAD-ID [--subject S] [--channel NAME] [--attach FILE]... TEXT
+auu reply MESSAGE-ID|THREAD-ID [--all] [--subject S] [--channel NAME] [--attach FILE]... TEXT
 ```
 
 `send` and `reply` take `--json`. Always give the text: with no body and a
@@ -339,7 +339,9 @@ own line for each round that did something, and nothing for a quiet one.
 `turns`, `last` and `worktree` (a side-copy thread's own).
 
 `auu inbox --json`: `fetch` with `delivered`, `quarantined`, `unreadable`,
-`kept`, `newer` (when set: the critical section each stream left waiting on
+`kept`, `duplicate` (a message already held here arriving a second time
+while the relay still has the first, which a resent copy can be:
+acknowledged, not delivered again), `newer` (when set: the critical section each stream left waiting on
 the relay for a newer auu carries) and `channels_gone` (when set); `relays`, a list of `relay`, `url`,
 the same fetch counts, `queued` (what that relay still holds), `first`
 and `last` (the lowest and highest message ids it holds for you, both 0
@@ -385,7 +387,10 @@ stderr, since there is nowhere on it for anything to wait.
 
 `auu read --json` and `auu quarantine ls --json` print that same message
 shape: `read` one message with `text` and `thread_subject`, `quarantine ls`
-a list without either. A message you sent to several carries `copies`, one
+a list without either. A message to several carries `recipients`, everybody
+it went to in its sender's order, each `fingerprint` and `name` (the name
+on this machine's peer list, absent for somebody not on it, the reader's
+own for the reader). A message you sent to several carries `copies`, one
 per recipient: `fingerprint`, `name`, `path` (when by one), and `relay_id`
 once the relay has it, or `code` and `error` when it refused it, and
 `dropped` true for one given up with `auu outbox drop`. A reply given a subject of its own carries it in

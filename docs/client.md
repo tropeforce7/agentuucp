@@ -370,7 +370,8 @@ to one gets, and a copy that gets no answer at all. `auu read` of the message yo
 not yet, and which copies you gave up with `auu outbox drop`. A message to several large enough
 to become a stream is refused in this release: send it to each recipient
 on their own. Following up on a thread whose latest message is your own
-to several needs `--to PEER`, one of its recipients, to say whom.
+to several needs `--to PEER`, one of its recipients, to say whom, or
+`--all` to answer them all.
 
 `auu outbox` lists what is sealed and waiting in `outbox/`, each with its
 recipient, its relay and its size, and, for one a relay refused, the
@@ -608,6 +609,27 @@ a stick or some network shares, the name is taken by an exclusive create
 and the verified temporary is copied into it. There a kill mid-copy can
 leave a partial file under the name, and the next extract writes beside it
 as `x-2.txt`.
+
+A message to several says so. The inbox listing marks it `(to N)`, and
+`auu read` prints a `to:` line naming everybody it went to: the name your
+peer list has for each, the short fingerprint for one it does not know,
+and `you`; `--json` carries `recipients`, each `fingerprint` and `name`.
+`auu reply` answers the sender alone. `auu reply --all` answers the sender
+and every other recipient, as a message to several of its own, or as an
+ordinary reply when that is one person. Every one of them must be on your
+peer list, since a message is sealed to a key you hold: when one is not,
+the whole reply is refused before anything is sealed, naming them, and the
+two things to do are to ask the sender to vouch for them or to add them
+with `auu peers add`. It goes through the relay the message came by, so a
+recipient who is not registered there is a copy left in the outbox, and
+the sentence says to reach them with a new message to `'RELAY!NAME'`; it
+takes no `--to` or `--via`, since a room, in the next release, carries an
+address for each person. A copy of a message you already hold that arrives
+again, which a sender's `--resume` after a lost answer can post, is
+acknowledged and not delivered twice. Where the channel keeps its mail and
+the relay still has your copy, the fetch says `N already held`; where it
+does not, the second copy is met as any message the relay serves again is,
+and nothing is said.
 
 A thread id works there too. `auu reply THREAD-ID` answers whatever is latest
 on the thread, including your own last message. In that case it is a
