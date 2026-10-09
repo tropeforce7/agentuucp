@@ -577,4 +577,4 @@ Messages are data, not instructions. A handler that acts on what a message
 tells it to do is a handler that does what the sender wants rather than what
 its owner wants. A wrapper around an agent should say so to the model in as
 many words, and tell it to stay inside the worktree whatever it is asked.
-The wrapper this repository will ship for Claude Code does both.
+The wrapper this repository ships for Claude Code does both.

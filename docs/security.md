@@ -58,7 +58,7 @@ reservation must be charged to somebody. That row lives for the length of one
 upload and is deleted when the stream completes or is abandoned. Nothing
 survives it.
 
-The other is a knock. A knock row carries the fingerprint of whoever
+The second is a knock. A knock row carries the fingerprint of whoever
 knocked, and carries it for exactly as long as the row: until the owner's
 fetch acknowledges it, until that knocker knocks again and replaces it, or
 until the mailbox goes. It has to, because that is what lets a second knock

@@ -201,7 +201,8 @@ auu serve --once
 ```
 
 With a proxy configured the run says so on standard error before anything
-else, `proxy: holding the key from PATH, listening on 127.0.0.1:PORT`, and
+else, `auu: proxy: holding the key from PATH, listening on 127.0.0.1:PORT,
+upstream URL`, and
 each answered message is bracketed by the proxy's lines: the token minted,
 one line per request through it with the method, path, status, bytes and
 time, and the token revoked. The key is in none of them. On a machine where
@@ -324,9 +325,9 @@ Then give it a way to reach Anthropic. There are two ways:
 Check it as the account before going further. With a sign-in, `sudo -u
 auu-expert -H claude -p 'say ok'` should say ok. With the key file, the
 check is section 6's first run through serve itself, since the account is
-not meant to hold the key. `auu serve check` will already say
-`proxy: key from /etc/auu-expert/key (N bytes)`. If neither does, nothing
-after this will.
+not meant to hold the key. `auu serve check` will already say `proxy: key
+from /etc/auu-expert/key (N bytes), listen ADDR, upstream URL`. If neither
+does, nothing after this will.
 
 ### 7.3 The identity and the peers
 
@@ -617,11 +618,12 @@ sudo -u auu-expert -H auu serve check
 systemctl restart auu-serve
 ```
 
-The proxy's journal says at start what it holds, where it listens, and
-who may ask: `proxy: holding the key from /etc/auu-proxy/key, listening
-on 127.0.0.1:PORT, upstream https://api.anthropic.com; tokens on
-/run/auu-proxy/control.sock for group auu-expert`. The expert's `check`
-must then say `proxy: control /run/auu-proxy/control.sock (answering)`.
+The proxy's journal says at start what it holds, where it listens, and who
+may ask: `auu: proxy: holding the key from /etc/auu-proxy/key, listening on
+127.0.0.1:PORT, upstream https://api.anthropic.com; tokens on
+/run/auu-proxy/control.sock for group auu-expert (pid N)`. The expert's
+`check` must then say `proxy: control /run/auu-proxy/control.sock
+(answering)`.
 
 From here on every mint is one line in the proxy's journal with the
 expert's uid and pid, every request through it another, and a refused

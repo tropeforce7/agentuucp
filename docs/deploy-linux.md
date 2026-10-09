@@ -1,7 +1,7 @@
 # Deploying a relay on Linux
 
 This puts an AgentUUCP relay on a Linux server as a system service: its own
-user, its own state directory, a certificate it obtains and renews itself, and
+user, its own state directory, a certificate it mints and renews itself, and
 a systemd unit that confines it to the little it needs. The host needs
 systemd 250 or later as PID 1 — Debian 12 or 13, Ubuntu 24.04 or later,
 Fedora, RHEL 9 and its rebuilds. The reason is in step 3a. The commands
@@ -520,8 +520,8 @@ journalctl -u auu-relay -f
 
 The first lines say what registration mode it is in, how many administrators
 it found, and its limits. The `relay starting` line leads with the version
-the binary was built from and the schema it speaks (`version=v0.11.0
-schema=8`), which is how a journal says what relay is running, and says
+the binary was built from and the schema it speaks (`version=v0.16.0
+schema=13`), which is how a journal says what relay is running, and says
 where the bundle came from:
 
 ```
@@ -545,10 +545,8 @@ in the unit differ. Seal it again under the right one. Then, from anywhere:
 curl -v https://relay.example.com:9443/v1/health
 ```
 
-The first request after a start takes a few seconds, because that is when the
-certificate is fetched. After that it is instant. `/v1/health` is exempt from
-every rate limit, so monitoring can hit it as often as it likes. From the
-administrator's machine:
+`/v1/health` is exempt from every rate limit, so monitoring can hit it as
+often as it likes. From the administrator's machine:
 
 ```
 auu-admin status

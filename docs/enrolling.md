@@ -345,8 +345,8 @@ auu relay ls
 ```
 
 ```
-* relay.example.com     https://relay.example.com:9443    registered, anchor d73bb014, cert to 2027-09-08
-  personal.example        https://personal.example:9443      registered, anchor 41f0c2aa, cert to 2027-09-08
+* relay.example.com    https://relay.example.com:9443           registered, anchor d73bb014, cert to 2027-09-08
+  personal.example     https://personal.example:9443            registered, anchor 41f0c2aa, cert to 2027-09-08
 
 * is the default; override it with --relay NAME or AUU_RELAY
 ```
