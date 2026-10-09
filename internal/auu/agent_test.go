@@ -49,9 +49,17 @@ const parentEnv = "AUU_TEST_PARENT"
 // parentPoll is how often a helper on Unix looks for its test process.
 const parentPoll = 500 * time.Millisecond
 
+// helperWatchInterval is how often an agent the tests start checks its
+// socket.
+const helperWatchInterval = 100 * time.Millisecond
+
 func TestMain(m *testing.M) {
 	if os.Getenv(helperEnv) == "1" && !isHandlerRun(os.Args) {
 		watchTestParent()
+		// An agent this binary runs checks its socket often, so that a
+		// test of the watch waits a tick and not thirty seconds; auu
+		// itself never sets it and keeps the agent's default.
+		agentWatchInterval = helperWatchInterval
 		Main("auu")
 		return
 	}

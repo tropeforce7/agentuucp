@@ -85,6 +85,9 @@ type Options struct {
 	Log *log.Logger
 	// UID is whose connections are accepted. Zero means this process's.
 	UID int
+	// WatchInterval is how often Run checks its socket. Zero or less means
+	// the default, thirty seconds. A test sets it short.
+	WatchInterval time.Duration
 }
 
 // NewServer makes an agent for a home. It holds nothing until Unlock.

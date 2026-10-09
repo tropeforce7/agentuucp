@@ -619,6 +619,12 @@ func statusLine(st agent.Status) string {
 	return "unlocked to send " + send + " (receive " + receive + ")"
 }
 
+// agentWatchInterval is how often a running agent checks its socket. Zero
+// means the agent's own default. auu never sets it. TestMain sets it short
+// in the tests' helper process, so that a test of the watch waits a
+// fraction of a second and not thirty.
+var agentWatchInterval time.Duration
+
 // agentRun is the agent itself, in the foreground: what start runs
 // detached, and what a user service would run.
 func agentRun(args []string) error {
@@ -637,7 +643,7 @@ func agentRun(args []string) error {
 	if !enc {
 		return usageErrf("%v, so there is nothing for an agent to hold", store.ErrNotEncrypted)
 	}
-	if err := agent.Run(ctx(), s, agent.Options{}); err != nil {
+	if err := agent.Run(ctx(), s, agent.Options{WatchInterval: agentWatchInterval}); err != nil {
 		if errors.Is(err, agent.ErrAnotherAgent) {
 			return usageErrf("%v", err)
 		}

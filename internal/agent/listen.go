@@ -15,9 +15,10 @@ import (
 )
 
 // watchInterval is how often a running agent checks that its socket is
-// still there. The runtime directory is cleared at logout on Linux, and an
-// agent whose socket is gone is one nobody can reach and should not go on
-// holding keys.
+// still there and still its own. The runtime directory is cleared at logout
+// on Linux, and an agent whose socket is gone, or is another file now, is one
+// nobody can reach and should not go on holding keys. Options.WatchInterval
+// replaces it, for a test.
 const watchInterval = 30 * time.Second
 
 // Listener is a bound socket and the lock that makes it the only one.
@@ -25,6 +26,10 @@ type Listener struct {
 	net.Listener
 	paths *Paths
 	lock  *fileLock
+	// info is the socket file as it was bound, so that the watch can tell
+	// this socket from another file put at the same path, and Close removes
+	// the path only while it is still this socket.
+	info os.FileInfo
 
 	closeOnce sync.Once
 	closeErr  error
@@ -55,25 +60,54 @@ func Listen(home string) (*Listener, error) {
 		lock.release()
 		return nil, err
 	}
+	// Go removes a socket file it created when the listener closes, whatever
+	// is at the path by then. An agent stopping because its socket was
+	// replaced would remove the replacement, which may be another agent's
+	// socket, so Close removes the path itself and only while it is ours.
+	if ul, ok := l.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(false)
+	}
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(paths.Socket, 0o600); err != nil {
 			l.Close()
+			os.Remove(paths.Socket)
 			lock.release()
 			return nil, fmt.Errorf("agent: securing the socket: %w", err)
 		}
 	}
-	return &Listener{Listener: l, paths: paths, lock: lock}, nil
+	info, err := os.Lstat(paths.Socket)
+	if err != nil {
+		l.Close()
+		os.Remove(paths.Socket)
+		lock.release()
+		return nil, fmt.Errorf("agent: reading the socket it bound: %w", err)
+	}
+	return &Listener{Listener: l, paths: paths, lock: lock, info: info}, nil
 }
 
 // Paths is where this listener's files are.
 func (l *Listener) Paths() *Paths { return l.paths }
 
-// Close closes the socket and releases the lock. Go removes the socket
-// file, having created it. Serve closes the listener when the agent stops
-// and the caller closes it again on the way out; the second is a no-op.
+// Close removes the file at the socket's path if that is still this
+// socket, closes the socket, and releases the lock. The file is checked
+// and removed before the socket closes, as Go itself does, because the
+// open socket holds its file's inode and no new file can take that number
+// while it does. The check and the removal are two steps, so a file put at
+// the path between them would go; under the lock, only a runtime directory
+// removed and made again in that moment, with a new agent in it, could put
+// one there, and that agent would stop at its next look. Serve closes the
+// listener when the agent stops and the caller closes it again on the way
+// out; the second is a no-op.
 func (l *Listener) Close() error {
 	l.closeOnce.Do(func() {
-		l.closeErr = l.Listener.Close()
+		if state, _ := l.stat(); state == socketOurs {
+			if err := os.Remove(l.paths.Socket); err != nil && !errors.Is(err, os.ErrNotExist) {
+				l.closeErr = err
+			}
+		}
+		if err := l.Listener.Close(); l.closeErr == nil {
+			l.closeErr = err
+		}
 		if lerr := l.lock.release(); l.closeErr == nil {
 			l.closeErr = lerr
 		}
@@ -81,8 +115,35 @@ func (l *Listener) Close() error {
 	return l.closeErr
 }
 
+// socketState is what is at the socket's path now.
+type socketState int
+
+const (
+	socketOurs     socketState = iota // the file this listener bound
+	socketGone                        // nothing, or a path through something that is no longer a directory
+	socketReplaced                    // another file
+	socketUnknown                     // the path could not be read
+)
+
+// stat says what is at the socket's path: the socket this listener bound,
+// nothing, another file, or something that cannot be read, whose error is
+// returned with it.
+func (l *Listener) stat() (socketState, error) {
+	cur, err := os.Lstat(l.paths.Socket)
+	switch {
+	case errors.Is(err, os.ErrNotExist), errors.Is(err, syscall.ENOTDIR):
+		return socketGone, nil
+	case err != nil:
+		return socketUnknown, err
+	case !os.SameFile(cur, l.info):
+		return socketReplaced, nil
+	}
+	return socketOurs, nil
+}
+
 // Run is the whole of a foreground agent: harden, listen, serve until told
-// to stop, until SIGTERM or SIGINT, or until the socket disappears. It
+// to stop, until SIGTERM or SIGINT, or until its socket is gone or another
+// file is at its path. It
 // returns nil when it stopped for one of those reasons and the error when
 // it could not start.
 func Run(ctx context.Context, home Home, opts Options) error {
@@ -105,9 +166,17 @@ func Run(ctx context.Context, home Home, opts Options) error {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
 	defer signal.Stop(signals)
+	interval := opts.WatchInterval
+	if interval <= 0 {
+		interval = watchInterval
+	}
 	go func() {
-		ticker := time.NewTicker(watchInterval)
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		// An error reading the path is logged once for the agent's life,
+		// not at every tick. The watch goes on, since the socket may still
+		// be there.
+		said := false
 		for {
 			select {
 			case <-s.stopped:
@@ -121,10 +190,20 @@ func Run(ctx context.Context, home Home, opts Options) error {
 				s.Stop()
 				return
 			case <-ticker.C:
-				if _, err := os.Stat(l.paths.Socket); errors.Is(err, os.ErrNotExist) {
+				switch state, err := l.stat(); state {
+				case socketGone:
 					logger.Printf("stopping: the socket %s is gone", l.paths.Socket)
 					s.Stop()
 					return
+				case socketReplaced:
+					logger.Printf("stopping: the socket %s was replaced by another file", l.paths.Socket)
+					s.Stop()
+					return
+				case socketUnknown:
+					if !said {
+						logger.Printf("cannot check the socket, still serving: %v", err)
+						said = true
+					}
 				}
 			}
 		}
