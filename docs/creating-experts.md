@@ -4,7 +4,7 @@ An expert is a Claude Code instance that speaks for one project. It runs
 on a machine that holds the project's checkout, it is reachable over
 AgentUUCP as a channel on that machine's identity, and it answers each
 message it is sent from the code in front of it. A colleague's agent
-sends an ask to the channel and waits on the thread; the expert reads the
+sends an ask to the channel and waits on the thread. The expert reads the
 code, answers, and in one mode hands back the change it made as a patch.
 
 `auu serve` is the program that does the listening, the handing over and
@@ -40,9 +40,9 @@ the command, its file and its state.
   runaway thread cannot spend past the limit. It goes in a file the proxy
   reads, never in the handler's environment; 7.2 and 7.6a say where.
 - **A clone of the project on that machine**, owned by the expert's
-  account. The expert never writes to it; every answer is worked out in a
+  account. The expert never writes to it. Every answer is worked out in a
   git worktree made from it.
-- **The askers on the peer list.** Serve answers only mail from peers; a
+- **The askers on the peer list.** Serve answers only mail from peers. A
   stranger's ask sits in quarantine and is never read. `auu allow push`
   keeps strangers off the relay altogether.
 
@@ -58,7 +58,7 @@ CLAUDE.md so every session reads it first.
 Write it for a competent engineer who has never seen the code: the
 purpose, the packages and what each owns, the entry points, the data that
 persists and where, how to run and test it, and the conventions the code
-follows. Keep it current; an expert reading a stale map gives stale
+follows. Keep it current. An expert reading a stale map gives stale
 answers with confidence.
 
 The project's CLAUDE.md is what turns a general Claude into this project's
@@ -120,7 +120,7 @@ a tool list. The tool list is yours to set. A read-only expert needs
 expert needs `Edit` and `Write` as well. With a proxy configured, serve
 hands the wrapper `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY`, the
 proxy's address with a token for this run and the same token as the key,
-and Claude Code reads both from its environment; the wrapper sets
+and Claude Code reads both from its environment. The wrapper sets
 `ENABLE_TOOL_SEARCH=auto` when it sees the base URL, since Claude Code
 turns that search off behind a proxy unless told the proxy forwards
 requests untouched, which serve's does. Never put `auu` or `auu-admin`
@@ -167,7 +167,7 @@ container.
 `dir` is the clone, `exec` the wrapper, `mode` one of the two. The rest
 of a channel is optional and defaults as shown. The `proxy` section names
 the key file of 7.2 and is what gives the handler a way to reach Anthropic
-without holding the key; a file without one hands it nothing, and with the
+without holding the key. A file without one hands it nothing, and with the
 split proxy of 7.6a it names the control socket instead. Then:
 
 ```
@@ -189,7 +189,7 @@ Use `before` to bring the worktree up to date or start something the
 project needs, and `after` to stop it or to check the work. If `before`
 fails the handler does not run and the message is tried again next round.
 If `after` fails the reply is not sent, so an `after` that runs the tests
-is a gate on a side copy; a script that only tidies up should exit 0
+is a gate on a side copy. A script that only tidies up should exit 0
 whatever it finds. Each runs under the channel's timeout.
 
 ## 6. Try it
@@ -206,32 +206,34 @@ each answered message is bracketed by the proxy's lines: the token minted,
 one line per request through it with the method, path, status, bytes and
 time, and the token revoked. The key is in none of them. On a machine where
 `claude` is also signed in to claude.ai, the handler's own standard error
-carries a warning that the login is overridden because a key is set; that
+carries a warning that the login is overridden because a key is set. That
 is the proxy's variables taking precedence, it is expected, and serve
 keeps it out of the reply.
 
 It fetches, answers everything pending in order, and exits. The first
-run with mail already in the inbox skips that mail and says so; `auu serve
+run with mail already in the inbox skips that mail and says so. `auu serve
 --once --backlog` on a first run answers it instead, and only then: once
-there is a ledger there is no backlog and the flag is refused. Then without
-`--once` it stays up: it holds on the relay, answers as mail arrives, and
-needs nothing from you. Run it that way by hand once, send it an ask, and
-stop it with an interrupt before you make it a service.
+there is a ledger there is no backlog and the flag is refused.
+
+Then without `--once` it stays up: it holds on the relay, answers as mail
+arrives, and needs nothing from you. Run it that way by hand once, send it
+an ask, and stop it with an interrupt before you make it a service.
 
 `auu serve ls` shows what is served and, under each channel, the threads
 it has answered on: how many turns each has had, when it was last touched,
 and where its worktree is when the channel is a side copy.
+
 A handler's failure leaves its message unread in the inbox with the reason
-on serve's standard error; after three failures it is given up and stays
+on serve's standard error. After three failures it is given up and stays
 there for you to see.
 
 ## 7. Run it as a service
 
 This is the relay's shape, and for the same reasons: a system account that
 owns one directory and nothing else, a unit that runs as it, and the rest
-of the machine read-only to it. Serve cannot sandbox the handler, so the
+of the machine read-only to it. Serve cannot sandbox the handler. The
 account is the sandbox. Everything the expert can read, an asker can be
-told about; everything it can write, a message can make it write. Give it
+told about. Everything it can write, a message can make it write. Give it
 the project and its own home, and no more.
 
 ### 7.1 The account and its directory
@@ -254,7 +256,7 @@ runs.
 
 Everything below that is the expert's own is run as that account. The
 shell is `nologin`, so the form is `sudo -u auu-expert -H COMMAND`, which
-needs no shell, and `-H` is what makes `$HOME` the expert's rather than
+needs no shell. `-H` is what makes `$HOME` the expert's rather than
 yours, which is where `auu`, `git` and `claude` all keep their state.
 
 ### 7.2 The programs
@@ -266,20 +268,22 @@ on your own machine as `deploy-linux.md` builds the relay, installed with
 enough and puts the tools in `/usr/local/bin` when it is run as root.
 Working from a clone of the repository instead? See [Installing from a
 clone](install-from-clone.md). `git` and the project's toolchain come from the
-distribution or from wherever the project's own instructions put them;
-they must be on the PATH the unit sets below, so note where they land.
+distribution or from wherever the project's own instructions put them.
+They must be on the PATH the unit sets below, so note where they land.
 
 `claude` is installed for the expert's account, not for yours: its
 installer puts the binary under that account's home and its state beside
 it. Run the installer as the account, with `-H`, the way Claude Code's own
 instructions say to run it. The account needs no `auu skill install`: the
 wrapper drives `claude` directly, and the skills are for a person's own
-agent. Then give it a way to reach Anthropic. There are two ways:
+agent.
+
+Then give it a way to reach Anthropic. There are two ways:
 
 - **An API key in a file that serve holds**, which is the service way:
   nothing interactive, the key is a file root owns, and the handler never
-  sees it. Serve reads the file once at start and runs a proxy on loopback;
-  each time the handler runs it is given a URL with a token of its own,
+  sees it. Serve reads the file once at start and runs a proxy on loopback.
+  Each time the handler runs it is given a URL with a token of its own,
   live for that run alone, and the proxy puts the real key on the request
   on the way out. `serve.md` says the whole of it under *The proxy*.
 
@@ -306,9 +310,9 @@ agent. Then give it a way to reach Anthropic. There are two ways:
   ask would otherwise have it go — but it does not stop a handler with a
   shell that knows the file's path and is told to `cat` it. The path is in
   `serve.json`, which the handler can also read, so the defence is not
-  obscurity; and the model has a shell only in side-copy mode. For a host
+  obscurity. The model has a shell only in side-copy mode. For a host
   where that is not enough, the proxy runs as an account of its own, with
-  the key readable by it alone; that is 7.6a.
+  the key readable by it alone. That is 7.6a.
 
 - **An interactive sign-in**, once, as the account:
   `sudo -u auu-expert -H claude`. It prints a URL to open on any machine
@@ -320,7 +324,7 @@ agent. Then give it a way to reach Anthropic. There are two ways:
 Check it as the account before going further. With a sign-in, `sudo -u
 auu-expert -H claude -p 'say ok'` should say ok. With the key file, the
 check is section 6's first run through serve itself, since the account is
-not meant to hold the key; `auu serve check` will already say
+not meant to hold the key. `auu serve check` will already say
 `proxy: key from /etc/auu-expert/key (N bytes)`. If neither does, nothing
 after this will.
 
@@ -334,17 +338,18 @@ sudo -u auu-expert -H auu enrol --name jostle-host TOKEN
 sudo -u auu-expert -H auu id export
 ```
 
-It shows what the token says and asks before it writes anything; `--yes`
+It shows what the token says and asks before it writes anything. `--yes`
 skips that where an operator is scripting it.
 
 No passphrase. `auu enrol` leaves the key unencrypted and ends by printing
-the line that would encrypt it, `auu passphrase set`; here you do not run
+the line that would encrypt it, `auu passphrase set`. Here you do not run
 that line. The service starts after a reboot with nobody there to unlock
 it, and `/var/lib/auu-expert` at mode 0750 owned by the account is what
-keeps the key from everyone but root. Give the export
-line to the askers, who add it as a peer; add theirs the same way, each
-fingerprint confirmed with its owner as `auu-setup` says, and then keep
-strangers off the relay:
+keeps the key from everyone but root.
+
+Give the export line to the askers, who add it as a peer. Add theirs the
+same way, each fingerprint confirmed with its owner as `auu-setup` says,
+and then keep strangers off the relay:
 
 ```
 sudo -u auu-expert -H auu peers add 'THEIR EXPORT LINE'
@@ -352,7 +357,7 @@ sudo -u auu-expert -H auu allow push
 ```
 
 The peer list is the whole of the access control. Anyone on it can ask
-the expert anything about the project; nobody else can reach it at all.
+the expert anything about the project. Nobody else can reach it at all.
 
 ### 7.4 The checkout
 
@@ -364,7 +369,7 @@ A private repository needs a credential the account holds. A read-only
 deploy key is the right one: an SSH key made as the account (`sudo -u
 auu-expert -H ssh-keygen -t ed25519 -N ''`), its public half added to the
 repository as a deploy key without write access, so that even a handler
-that ran `git push` could not. The expert never needs to push; its work
+that ran `git push` could not. The expert never needs to push. Its work
 comes back as a patch.
 
 Keeping the checkout current is the `before` hook's job, one line:
@@ -402,14 +407,14 @@ sudo -u auu-expert -H auu serve --once
 ```
 
 The first says what would be served and warns about anything that would
-not work; the second is one round, and the ledger it writes is what
+not work. The second is one round. The ledger it writes is what
 turns the service's first round from a first start into an ordinary one.
 
 ### 7.6 The unit
 
 `/etc/systemd/system/auu-serve.service`, a **system** unit running as the
 account. The user unit `serve.md` shows is for an encrypted key on a
-person's own account; a dedicated account with an unencrypted key needs no
+person's own account. A dedicated account with an unencrypted key needs no
 agent and no session, and a system unit is simpler and survives a reboot
 with nothing to remember.
 
@@ -503,7 +508,7 @@ Send the expert an ask from a peer and watch the reply go out.
 account as serve, so a shell that is told where the key file is can read
 it. The split proxy closes that. The key is readable by one account,
 `auu-proxy`, whose only job is to hold it and to hand `auu serve` a token
-per invocation over a Unix socket; the expert's account never holds the
+per invocation over a Unix socket. The expert's account never holds the
 key, cannot read the file, and does not even know its path.
 
 The account, the directory, the key and the proxy's file:
@@ -526,7 +531,7 @@ END
 ```
 
 Everything in `/etc/auu-proxy` is the proxy's group's to read and nobody
-else's, and the expert's account is **not** put in that group: a caller
+else's. The expert's account is **not** put in that group: a caller
 admitted to the proxy's group to reach the socket would be in the group
 that may read the key, which is the whole of what this section exists to
 prevent. Instead the socket is given to the callers' group: `allow_group`
@@ -534,10 +539,12 @@ names it, the proxy makes the socket (and its directory) that group's,
 0660 in a directory 0750, and the unit below puts the proxy in that
 group so it may. Two lines then admit the expert — the file mode, and
 the kernel's account of who is asking — and neither touches the key.
-`sudo -u auu-expert cat /etc/auu-proxy/key` must say permission denied,
-and that is the check to make before going on. Remove the in-process key
-file of 7.2 if you made one; the expert's `serve.json` now says only
-where to ask:
+
+`sudo -u auu-expert cat /etc/auu-proxy/key` must say permission denied.
+That is the check to make before going on.
+
+Remove the in-process key file of 7.2 if you made one. The expert's
+`serve.json` now says only where to ask:
 
 ```json
 "proxy": { "control": "/run/auu-proxy/control.sock" }
@@ -615,14 +622,17 @@ who may ask: `proxy: holding the key from /etc/auu-proxy/key, listening
 on 127.0.0.1:PORT, upstream https://api.anthropic.com; tokens on
 /run/auu-proxy/control.sock for group auu-expert`. The expert's `check`
 must then say `proxy: control /run/auu-proxy/control.sock (answering)`.
+
 From here on every mint is one line in the proxy's journal with the
 expert's uid and pid, every request through it another, and a refused
-caller another; the serve journal says only that it asked. A stop of the
+caller another. The serve journal says only that it asked. A stop of the
 proxy fails each message serve tries until it is back — `the proxy's
 control socket /run/auu-proxy/control.sock: ...` in serve's journal, the
-message tried again next round — and never stops serve. This unit, like
-the serve unit, has been checked against systemd's documentation and not
-yet started on a live host: watch the first `systemctl status`.
+message tried again next round — and never stops serve.
+
+This unit, like the serve unit, has been checked against systemd's
+documentation and not yet started on a live host: watch the first
+`systemctl status`.
 
 ### 7.7 A second relay, and a second identity
 
@@ -631,7 +641,7 @@ group, and they have different answers.
 
 **A second relay is the same expert.** One home holds one identity, and
 that identity can have a mailbox on several relays. Enrol it on the other
-relay with a token from that relay's administrator; the token names its
+relay with a token from that relay's administrator. The token names its
 relay, and `auu enrol` adds it under the name of its host:
 
 ```
@@ -644,12 +654,14 @@ sudo -u auu-expert -H auu relay ls
 Nothing changes in `serve.json` and nothing changes in the unit. Serve
 fetches from every relay the home is on, holds a listing open on all of
 them between rounds, and answers an ask back through the relay it came in
-on; the handler is told which in `AUU_RELAY`. The channel directory is
-pushed to every relay, so askers on both see the same channels, and a
-channel is one channel however its mail arrived: "jostle" on the first
-relay and "jostle" on the second share one worktree, one warm session and
-one ledger. The same fingerprint is registered on both, so anyone who can
-see both relays can tell it is one expert.
+on. The handler is told which in `AUU_RELAY`.
+
+The channel directory is pushed to every relay, so askers on both see
+the same channels. A channel is one channel however its mail arrived:
+"jostle" on the first relay and "jostle" on the second share one
+worktree, one warm session and one ledger. The same fingerprint is
+registered on both, so anyone who can see both relays can tell it is one
+expert.
 
 What this shape cannot do is treat the same channel differently by relay:
 the file keys on the channel's name and nowhere else. Two audiences that
@@ -660,9 +672,9 @@ still sees one channel.
 
 **A second identity is a second home.** When two projects must look like
 different senders, keep different peer lists, or be answered with the same
-channel name in different ways, they are two identities, and an identity
+channel name in different ways, they are two identities. An identity
 is a home: its own key, its own `serve.json`, its own ledger, its own
-serve. The account can stay one account; the homes are what differ.
+serve. The account can stay one account. The homes are what differ.
 
 ```
 install -d -m 0700 -o auu-expert -g auu-expert /var/lib/auu-expert/homes/one
@@ -674,14 +686,16 @@ sudo -u auu-expert -H env AUU_HOME=/var/lib/auu-expert/homes/one auu enrol --nam
 sudo -u auu-expert -H env AUU_HOME=/var/lib/auu-expert/homes/two auu enrol --name two-host TOKEN-B
 ```
 
-`AUU_HOME` is how `auu` is told which home it is working in; every
+`AUU_HOME` is how `auu` is told which home it is working in. Every
 command in sections 7.3 to 7.5 is run the same way, with the variable set,
-once for each home. Each home gets its own `serve.json`, so "jostle" in
-the first names one project and mode and "jostle" in the second names
-another, and nothing connects them: askers address an identity by name,
-so `--to one-host --channel jostle` and `--to two-host --channel jostle`
-are two different questions to two different experts. Which relays each
-identity is on is independent too; one can be on relay A alone and the
+once for each home.
+
+Each home gets its own `serve.json`, so "jostle" in the first names one
+project and mode and "jostle" in the second names another, and nothing
+connects them: askers address an identity by name, so
+`--to one-host --channel jostle` and `--to two-host --channel jostle` are
+two different questions to two different experts. Which relays each
+identity is on is independent too. One can be on relay A alone and the
 other on relay B alone, or either on both.
 
 Two units, one per home: 7.6's unit copied to a name of its own, with one
@@ -720,12 +734,12 @@ not be able to see each other's files at all.
   version` to see it, `systemctl start auu-serve`. A stop mid-answer loses
   nothing: the message is answered on the next start.
 - **Updating the project:** the `before` hook does it. To move the
-  checkout by hand, do it as the account; the next new thread sees it.
+  checkout by hand, do it as the account. The next new thread sees it.
 - **Changing `serve.json`:** edit, `auu serve check` as the account, then
-  `systemctl restart auu-serve`; the file is read at start.
+  `systemctl restart auu-serve`. The file is read at start.
 - **A thread's side copy:** under `/var/lib/auu-expert/.auu/serve/worktrees`,
   by thread id, until nothing has touched it for the channel's
-  `thread_ttl`. It is the account's; look, do not edit.
+  `thread_ttl`. It is the account's. Look, do not edit.
 - **Rotating the key:** a new key in `/etc/auu-expert/key` and a restart
   of `auu-serve`, or with the split proxy a new key in `/etc/auu-proxy/key`
   and a restart of `auu-proxy`, since each reads its file once at start.
@@ -747,7 +761,7 @@ auu wait --thread THREAD-ID --timeout 30m
 ```
 
 A reply with a `.patch` attached is a side copy's change. The connect
-skill knows all this; a Claude Code agent with it installed asks an
+skill knows all this. A Claude Code agent with it installed asks an
 expert the way it asks a colleague.
 
 ## What to expect
