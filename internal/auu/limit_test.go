@@ -630,6 +630,48 @@ func TestLimitPendingRecordShapes(t *testing.T) {
 			t.Errorf("%s: waiting %d, broken %v, %v; want the copy read", tc.name, len(waiting), broken, err)
 		}
 	}
+
+	// A stream copy of a message to several (D49): named as a copy, a
+	// .stream beside it, a count and an upload's numbers, and no path,
+	// since a stream crosses no relay. The count is held to [2, 32] at
+	// both edges.
+	streamCopy := with(func(p *pending) { p.ChunkSize = stream.DefaultChunkSize; p.Chunks = 2; p.Upload = "u" })
+	streamWith := func(change func(p *pending)) pending {
+		p := streamCopy
+		change(&p)
+		return p
+	}
+	for _, tc := range []struct {
+		name string
+		p    pending
+	}{
+		{"a stream copy by a path", streamWith(func(p *pending) { p.Path = "bar!baz" })},
+		{"a stream copy with a chunk size one under", streamWith(func(p *pending) { p.ChunkSize = stream.MinChunkSize - 1 })},
+		{"a stream copy with a chunk size one over", streamWith(func(p *pending) { p.ChunkSize = stream.MaxChunkSize + 1 })},
+		{"a stream copy to one", streamWith(func(p *pending) { p.RecipientCount = 1 })},
+		{"a stream copy to one over the ceiling", streamWith(func(p *pending) { p.RecipientCount = relayapi.MaxRecipients + 1 })},
+		{"a stream copy with no count", streamWith(func(p *pending) { p.RecipientCount = 0 })},
+	} {
+		writeCopy(t, stem, tc.p, ".stream")
+		if waiting, broken, err := listPending(s); err != nil || len(waiting) != 0 || len(broken) != 1 || broken[0] != stem {
+			t.Errorf("%s: waiting %d, broken %v, %v; want the record broken by its name", tc.name, len(waiting), broken, err)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		p    pending
+	}{
+		{"a stream copy as written", streamCopy},
+		{"a stream copy to two", streamWith(func(p *pending) { p.RecipientCount = 2 })},
+		{"a stream copy to the ceiling", streamWith(func(p *pending) { p.RecipientCount = relayapi.MaxRecipients })},
+		{"a stream copy refused", streamWith(func(p *pending) { p.RefusedCode = relayapi.CodeMailboxFull; p.Refused = "full" })},
+	} {
+		writeCopy(t, stem, tc.p, ".stream")
+		if waiting, broken, err := listPending(s); err != nil || len(waiting) != 1 || len(broken) != 0 || waiting[0].kind != kindStream ||
+			waiting[0].name() != stem {
+			t.Errorf("%s: waiting %d, broken %v, %v; want the stream copy read under its stem", tc.name, len(waiting), broken, err)
+		}
+	}
 }
 
 // TestLimitAnchorArgsOneShort: the anchor hash auu init, auu relay add and

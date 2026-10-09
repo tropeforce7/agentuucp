@@ -131,13 +131,129 @@ func sendStream(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 	return finishStream(s, id, r, p, true)
 }
 
+// sealStreams seals one stream for each recipient of a message to several
+// (D49) and writes every one to the outbox before any is uploaded (D48):
+// one manifest pass, so one id, one time and the sources hashed once, and
+// then a seal for each, which reads the sources again and is signed for its
+// recipient. Each sealed stream is made exclusively under the id and its
+// recipient's short fingerprint, beside a record that says how many the
+// message went to. A seal that fails part way, a key that locked after the
+// first signature, a disk that filled, takes every stream and record of the
+// message with it and says so, so nothing of a message to several is left
+// half sealed. It answers the records in the order given and the first
+// recipient's record of the message, for the sent record.
+func sealStreams(s *store.Store, id *identity.Identity, r *store.Relay, to []addressed,
+	body message.Body, paths []string, set streamSettings, channel string) ([]*pending, *envelope.Inner, error) {
+
+	messageID, err := envelope.NewID()
+	if err != nil {
+		return nil, nil, err
+	}
+	sources, err := sourcesFor(paths)
+	if err != nil {
+		return nil, nil, err
+	}
+	manifests, err := stream.BuildManifestMany(id, publicsOf(to), messageID, stream.Body{
+		Type:      body.Type,
+		Subject:   body.Subject,
+		Thread:    body.Thread,
+		InReplyTo: body.InReplyTo,
+		Text:      body.Text,
+	}, sources, set.chunkSize, nil)
+	if err != nil {
+		if errors.Is(err, stream.ErrForm) {
+			return nil, nil, usageErrf("%v", err)
+		}
+		return nil, nil, err
+	}
+	// The sent copy names the files without carrying them, as a stream to
+	// one does; every manifest names the same ones.
+	for _, a := range manifests[0].Attachments {
+		body.Attachments = append(body.Attachments, message.Attachment{
+			Name: a.Name, Media: a.Media, Size: a.Size, SHA256: a.SHA256,
+		})
+	}
+	if err := os.MkdirAll(outboxDir(s), 0o700); err != nil {
+		return nil, nil, err
+	}
+
+	var written []*pending
+	fail := func(who string, err error) error {
+		for _, p := range written {
+			p.remove(s)
+		}
+		if errors.Is(err, stream.ErrForm) {
+			return usageErrf("%v", err)
+		}
+		return fmt.Errorf("sealing the copy for %s: %w; nothing was sent, and the outbox keeps none of this message",
+			identity.Printable(who), err)
+	}
+	started := time.Now().UTC().Truncate(time.Second)
+	for i, m := range manifests {
+		// Under the signature, so the receiver can check it against what
+		// the relay says; absent for default.
+		m.Channel = channel
+		p := &pending{
+			MessageID:      messageID,
+			To:             m.To,
+			ToName:         to[i].pub.Name,
+			Relay:          r.Name,
+			Channel:        channel,
+			Started:        started,
+			Time:           m.Time,
+			Body:           body,
+			Bytes:          m.PayloadBytes,
+			Chunks:         m.Chunks,
+			ChunkSize:      m.ChunkSize,
+			RecipientCount: len(to),
+			stem:           copyStem(messageID, m.To),
+			kind:           kindStream,
+		}
+		path := streamPath(s, p.stem)
+		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			return nil, nil, fail(peerLabel(to[i].pub), fmt.Errorf("two recipients' fingerprints begin with %s, "+
+				"which names a copy's file in the outbox; send to them in separate messages", m.To[:identity.ShortIDLen]))
+		}
+		if err != nil {
+			return nil, nil, fail(peerLabel(to[i].pub), err)
+		}
+		sealErr := stream.Seal(f, id, to[i].pub, m, sources)
+		if closeErr := f.Close(); sealErr == nil {
+			sealErr = closeErr
+		}
+		if sealErr != nil {
+			os.Remove(path)
+			return nil, nil, fail(peerLabel(to[i].pub), sealErr)
+		}
+		// The record goes down after the sealed stream, so a crash between
+		// the two leaves a file nothing lists, never a record with nothing
+		// to upload.
+		if err := p.save(s); err != nil {
+			os.Remove(path)
+			return nil, nil, fail(peerLabel(to[i].pub), err)
+		}
+		written = append(written, p)
+	}
+	first := &envelope.Inner{
+		ID: messageID, From: id.Fingerprint(), FromBundle: id.Public().Bundle(),
+		To: manifests[0].To, Time: manifests[0].Time, Body: body, Channel: channel,
+	}
+	first.Sections, _ = keptSections(manifests[0].Sections)
+	return written, first, nil
+}
+
 // finishStream uploads a sealed stream and records it as sent. It is the tail
 // of sendStream and the whole of --resume: a stream that has been sealed is in
 // the same state whether it was sealed a moment ago or before a crash.
 //
 // fresh says this stream was sealed by this call rather than found in the
-// outbox, which decides what a failure leaves behind.
+// outbox, which decides what a failure leaves behind. A copy of a message to
+// several is finished as a copy, whose message has one sent record already.
 func finishStream(s *store.Store, id *identity.Identity, r *store.Relay, p *pending, fresh bool) (sentJSON, error) {
+	if p.RecipientCount != 0 {
+		return finishStreamCopy(s, id, r, p)
+	}
 	c, err := dial(s, id, r)
 	if err != nil {
 		if fresh {
@@ -334,7 +450,10 @@ func uploadStream(c *client.Client, s *store.Store, p *pending) (int64, error) {
 	resumed := false
 	for failed := 0; ; {
 		if p.Upload == "" {
-			opened, err := c.OpenStream(ctx(), p.To, p.Channel, info.Size(), 0)
+			// A copy of a message to several says how many it went to on
+			// every open, a resumed one too, for the relay to hold to its
+			// max_recipients as it held the first.
+			opened, err := c.OpenStream(ctx(), p.To, p.Channel, info.Size(), p.RecipientCount)
 			if err != nil {
 				return 0, err
 			}
@@ -352,6 +471,13 @@ func uploadStream(c *client.Client, s *store.Store, p *pending) (int64, error) {
 			return relayID, nil
 		}
 		if wait, ok := relayAskedToWait(err); ok {
+			// A copy of a message to several does not sit through a wait
+			// over a minute (R7): the relay's refusal goes back with its
+			// wait in it, and the send stops with this copy and the rest
+			// in the outbox.
+			if p.RecipientCount != 0 && wait > manyWait {
+				return 0, err
+			}
 			if wait <= 0 {
 				wait = time.Second
 			}

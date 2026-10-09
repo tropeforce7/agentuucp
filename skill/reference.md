@@ -317,8 +317,9 @@ the knock, which happens when this machine has pushed one there before).
 
 `auu send --json` and `auu reply --json`: `id`, `thread`, `to`, `to_name`,
 `relay_id`, `bytes`, `in_reply_to` (when set), `kind` (`envelope` or
-`stream`), `chunks` and `chunk_size` (a stream only), `channel` (when not
-default). `to` and `to_name` are present exactly when the message went to
+`stream`), `chunks` and `chunk_size` (a stream only, and once for a
+stream to several, the same for every copy), `channel` (when not
+default). `bytes` is a stream's payload, for each copy of one to several. `to` and `to_name` are present exactly when the message went to
 one; a message to several has `recipients` in their place, a list of
 `fingerprint`, `name`, `path` (when by one), and `relay_id` for a copy the
 relay took, or `code` and `error` for one it refused, and `waiting` true
@@ -326,7 +327,9 @@ for a copy left in the outbox because the relay refused the sender rather
 than the copy, with that refusal's `code` and `error` beside it.
 A send to several exits 2 when any copy was not sent, and `auu send
 --resume` finishes what waits. A message to several that would be a stream
-is refused in this release; send it to each recipient on their own.
+goes as one stream to each, and a stream copy the relay refuses waits in
+the outbox, the whole payload on disk, until `--resume` or `auu outbox
+drop ID PEER`.
 
 `auu serve --json`: one object of `answered`, `failed` and `skipped`, each
 a list of `id`, `channel` and `thread`. A message in `failed` is tried

@@ -400,21 +400,6 @@ func TestOutboxDropTakesSelf(t *testing.T) {
 	}
 }
 
-// A message to several that would become a stream is refused in this
-// release, before anything is read or written, with what to do instead.
-func TestAStreamToSeveralIsRefusedForNow(t *testing.T) {
-	alice, _, _ := threePeers(t)
-	_, err := alice.tryRun("send", "--to", "bob,carol", "--stream", "hello")
-	var e *exitError
-	if !asExit(err, &e) || e.code != exitUsage || !strings.Contains(err.Error(), "a message to several goes as one envelope to each in this release") ||
-		!strings.Contains(err.Error(), "send it to each recipient on their own") {
-		t.Fatalf("a stream to several: %v", err)
-	}
-	if waiting, _ := outboxOf(t, alice); len(waiting) != 0 || len(sentBox(t, alice)) != 0 {
-		t.Errorf("a refused stream to several wrote something")
-	}
-}
-
 // What stops a send to several, decided by status, code and the wait the
 // relay asked for and never by the sentence: an over-budget 429 whatever its
 // Retry-After, a 429 asking for more than a minute, and nothing else.

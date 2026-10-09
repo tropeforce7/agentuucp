@@ -95,6 +95,9 @@ type copyResult struct {
 	// notRegistered is a copy refused because its recipient has no mailbox
 	// on the relay, told before the error is rewritten as advice.
 	notRegistered bool
+	// code is the relay's code for a refused copy, kept before the error is
+	// rewritten as advice, which may not carry the relay's error with it.
+	code string
 }
 
 // recipientJSON is one recipient of a message to several in --json.
@@ -114,12 +117,15 @@ type recipientJSON struct {
 // sentManyJSON is a message to several as --json prints it: no to and no
 // to_name, which a message to one has, and recipients in their place.
 type sentManyJSON struct {
-	ID         string          `json:"id"`
-	Thread     string          `json:"thread"`
-	InReplyTo  string          `json:"in_reply_to,omitempty"`
-	Kind       string          `json:"kind"`
-	Bytes      int             `json:"bytes"`
-	Channel    string          `json:"channel,omitempty"`
+	ID        string `json:"id"`
+	Thread    string `json:"thread"`
+	InReplyTo string `json:"in_reply_to,omitempty"`
+	Kind      string `json:"kind"`
+	Bytes     int64  `json:"bytes"`
+	Channel   string `json:"channel,omitempty"`
+	// Chunks and ChunkSize are a stream's, the same for every copy.
+	Chunks     int64           `json:"chunks,omitempty"`
+	ChunkSize  int             `json:"chunk_size,omitempty"`
 	Recipients []recipientJSON `json:"recipients"`
 }
 
@@ -162,23 +168,30 @@ func sendToSeveral(s *store.Store, id *identity.Identity, r *store.Relay, to []a
 		return err
 	}
 	estimate := raw + raw/3
-	// A stream to several is a later release's (D49); until then a message
-	// that would be one is refused here, before anything is read.
-	if mode.stream || (!mode.inline && estimate > set.threshold) {
-		return usageErrf("a message to several goes as one envelope to each in this release, and this one is "+
-			"about %s, over the %s at which a message becomes a stream; send it to each recipient on their own, "+
-			"or wait for the release that sends a stream to several",
-			term.HumanBytes(estimate), term.HumanBytes(set.threshold))
+	// A message to several that would be a stream goes as one stream to
+	// each (D49). A stream does not cross a relay, as for a message to one,
+	// so a recipient by bang path among several refuses the whole send here,
+	// before anything is read.
+	becomesStream := mode.stream || (!mode.inline && estimate > set.threshold)
+	if becomesStream {
+		for _, a := range to {
+			if len(a.path) > 0 {
+				return usageErrf("a large message does not cross a relay yet, and %s is reached by %s; "+
+					"send them a smaller message on its own%s",
+					identity.Printable(peerLabel(a.pub)), store.JoinAddress(a.path), largestAttachmentHint(attachments))
+			}
+		}
+	} else {
+		if estimate > relayapi.DefaultMaxBytes {
+			return usageErrf("message is about %s once encoded, over the %s relay limit%s",
+				term.HumanBytes(estimate), term.HumanBytes(relayapi.DefaultMaxBytes), largestAttachmentHint(attachments))
+		}
+		loaded, err := loadAttachments(attachments)
+		if err != nil {
+			return err
+		}
+		body.Attachments = loaded
 	}
-	if estimate > relayapi.DefaultMaxBytes {
-		return usageErrf("message is about %s once encoded, over the %s relay limit%s",
-			term.HumanBytes(estimate), term.HumanBytes(relayapi.DefaultMaxBytes), largestAttachmentHint(attachments))
-	}
-	loaded, err := loadAttachments(attachments)
-	if err != nil {
-		return err
-	}
-	body.Attachments = loaded
 
 	// The relay's number, asked before anything is sealed: a list it would
 	// refuse is said here, naming the relay and the number, and not by a
@@ -196,34 +209,47 @@ func sendToSeveral(s *store.Store, id *identity.Identity, r *store.Relay, to []a
 		return usageErrf("%d recipients; %s takes at most %d in one message (its max_recipients)", len(to), r.Name, limit)
 	}
 
-	pubs := make([]*identity.Public, len(to))
-	for i, a := range to {
-		pubs[i] = a.pub
-	}
-	envs, inners, err := envelope.SealMany(id, pubs, mode.channel, body, nil)
-	if err != nil {
-		return usageErrf("%v", err)
-	}
-	size := 0
-	for _, env := range envs {
-		n, err := client.EnvelopeSize(env)
+	// size is what --json and the plain line say of each copy: an
+	// envelope's as it is posted, a stream's payload, the same for every
+	// copy, as a stream's chunks are, since one manifest pass set them all.
+	var (
+		written []*pending
+		first   *envelope.Inner
+		kind    = kindEnvelope
+		size    int64
+	)
+	if becomesStream {
+		kind = kindStream
+		written, first, err = sealStreams(s, id, r, to, body, attachments, set, mode.channel)
 		if err != nil {
 			return err
 		}
-		if int64(n) > relayapi.DefaultMaxBytes {
-			return usageErrf("message is %s, over the %s relay limit%s",
-				term.HumanBytes(int64(n)), term.HumanBytes(relayapi.DefaultMaxBytes), largestAttachmentHint(attachments))
+		size = written[0].Bytes
+	} else {
+		envs, inners, err := envelope.SealMany(id, publicsOf(to), mode.channel, body, nil)
+		if err != nil {
+			return usageErrf("%v", err)
 		}
-		size = n
-	}
-
-	copies := make([]sealedCopy, len(envs))
-	for i := range envs {
-		copies[i] = sealedCopy{env: envs[i], inner: inners[i], toName: to[i].pub.Name, path: to[i].path}
-	}
-	written, err := writeCopies(s, r, mode.channel, copies)
-	if err != nil {
-		return err
+		for _, env := range envs {
+			n, err := client.EnvelopeSize(env)
+			if err != nil {
+				return err
+			}
+			if int64(n) > relayapi.DefaultMaxBytes {
+				return usageErrf("message is %s, over the %s relay limit%s",
+					term.HumanBytes(int64(n)), term.HumanBytes(relayapi.DefaultMaxBytes), largestAttachmentHint(attachments))
+			}
+			size = int64(n)
+		}
+		copies := make([]sealedCopy, len(envs))
+		for i := range envs {
+			copies[i] = sealedCopy{env: envs[i], inner: inners[i], toName: to[i].pub.Name, path: to[i].path}
+		}
+		written, err = writeCopies(s, r, mode.channel, copies)
+		if err != nil {
+			return err
+		}
+		first = inners[0]
 	}
 	// The sent record, before the first post: every copy is in the outbox
 	// and none is placed, and each landing or refusal from here on updates
@@ -232,7 +258,8 @@ func sendToSeveral(s *store.Store, id *identity.Identity, r *store.Relay, to []a
 		Relay:      r.Name,
 		Received:   time.Now().UTC().Truncate(time.Second),
 		Read:       true,
-		Inner:      inners[0],
+		Streamed:   becomesStream,
+		Inner:      first,
 		SenderName: to[0].pub.Name,
 		Channel:    mode.channel,
 	}
@@ -253,7 +280,13 @@ func sendToSeveral(s *store.Store, id *identity.Identity, r *store.Relay, to []a
 			results[i].waiting = true
 			continue
 		}
-		relayID, err := postCopy(c, s, p)
+		var relayID int64
+		var err error
+		if p.kind == kindStream {
+			relayID, err = uploadStream(c, s, p)
+		} else {
+			relayID, err = postCopy(c, s, p)
+		}
 		if err == nil {
 			landCopy(s, p, relayID)
 			results[i].relayID = relayID
@@ -269,6 +302,9 @@ func sendToSeveral(s *store.Store, id *identity.Identity, r *store.Relay, to []a
 		}
 		refuseCopy(s, p, err)
 		results[i].notRegistered = notRegistered(err)
+		if he := (*client.HTTPError)(nil); errors.As(err, &he) {
+			results[i].code = he.Code
+		}
 		if len(to[i].path) == 0 {
 			err = channelHint(err, s, id, c, r, to[i].pub, mode.channel)
 			err = notRegisteredHint(storageFullHint(err, to[i].pub), s, to[i].pub, r)
@@ -284,8 +320,11 @@ func sendToSeveral(s *store.Store, id *identity.Identity, r *store.Relay, to []a
 	}
 	if asJSON {
 		out := sentManyJSON{
-			ID: inners[0].ID, Thread: body.Thread, InReplyTo: body.InReplyTo,
-			Kind: kindEnvelope, Bytes: size, Channel: mode.channel,
+			ID: first.ID, Thread: body.Thread, InReplyTo: body.InReplyTo,
+			Kind: kind, Bytes: size, Channel: mode.channel,
+		}
+		if kind == kindStream {
+			out.Chunks, out.ChunkSize = written[0].Chunks, written[0].ChunkSize
 		}
 		for _, res := range results {
 			rj := recipientJSON{
@@ -302,9 +341,7 @@ func sendToSeveral(s *store.Store, id *identity.Identity, r *store.Relay, to []a
 				}
 			case res.err != nil:
 				rj.Error = res.err.Error()
-				if errors.As(res.err, &he) {
-					rj.Code = he.Code
-				}
+				rj.Code = res.code
 			}
 			out.Recipients = append(out.Recipients, rj)
 		}
@@ -327,9 +364,9 @@ func sendToSeveral(s *store.Store, id *identity.Identity, r *store.Relay, to []a
 				fmt.Printf("  %s: sent\n", identity.Printable(label))
 			}
 		}
-		fmt.Printf("message: %s\n", inners[0].ID)
+		fmt.Printf("message: %s\n", first.ID)
 		fmt.Printf("thread:  %s\n", body.Thread)
-		fmt.Printf("size:    %s each\n", term.HumanBytes(int64(size)))
+		fmt.Printf("size:    %s each\n", term.HumanBytes(size))
 		if newThread && failed < len(results) {
 			fmt.Printf("\nWait for an answer with: %s wait --thread %s\n", prog, body.Thread)
 		}
@@ -339,6 +376,12 @@ func sendToSeveral(s *store.Store, id *identity.Identity, r *store.Relay, to []a
 	}
 	msg := fmt.Sprintf("%d of %d copies were not sent and wait in the outbox; finish them with '%s send --resume'",
 		failed, len(results), prog)
+	if kind == kindStream {
+		// What waits is the whole payload once for each copy, on this
+		// machine's disk until it goes or is given up.
+		msg += fmt.Sprintf(", or give one up with '%s outbox drop %s PEER', since each holds the whole payload on disk",
+			prog, first.ID[:12])
+	}
 	if mode.replyAll && anyNotRegistered(results) {
 		msg += fmt.Sprintf("; a reply to everyone goes through %s, and somebody not registered there is reached "+
 			"by a new message with --to 'RELAY!NAME', or by a room, in the next release, which carries an "+

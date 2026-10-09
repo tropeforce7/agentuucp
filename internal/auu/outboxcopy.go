@@ -134,6 +134,35 @@ func finishCopy(s *store.Store, id *identity.Identity, r *store.Relay, p *pendin
 	}, nil
 }
 
+// finishStreamCopy uploads one stream of a message to several from the
+// outbox, as --resume finishes it, and lands it in the message's sent record
+// as finishCopy lands an envelope: never a record of its own, which would
+// write over the message's one record with a copy's. A refusal keeps the
+// sealed stream with the relay's code and sentence, as an envelope copy's is
+// kept (D48), whatever it costs on disk, since the sealed bytes are the only
+// ones that will open and the person decides whether to give them up.
+func finishStreamCopy(s *store.Store, id *identity.Identity, r *store.Relay, p *pending) (sentJSON, error) {
+	c, err := dial(s, id, r)
+	if err != nil {
+		return sentJSON{}, err
+	}
+	relayID, err := uploadStream(c, s, p)
+	if err != nil {
+		refuseCopy(s, p, err)
+		// What stays is the whole payload on disk, so the sentence names
+		// the drop beside --resume, as the send that sealed it did.
+		return sentJSON{}, transportErr(fmt.Errorf("%w; the sealed stream waits in the outbox: finish it with '%s send --resume', "+
+			"or give it up with '%s outbox drop %s %s'",
+			streamFullHint(streamChannelHint(err, s, id, c, r, p), p.label()), prog, prog, p.MessageID[:12], p.label()))
+	}
+	landCopy(s, p, relayID)
+	return sentJSON{
+		ID: p.MessageID, Thread: p.Body.Thread, To: p.To, ToName: p.ToName,
+		RelayID: relayID, Bytes: int(p.Bytes), InReplyTo: p.Body.InReplyTo,
+		Kind: kindStream, Chunks: p.Chunks, ChunkSize: p.ChunkSize, Channel: p.Channel,
+	}, nil
+}
+
 // postCopy posts one sealed copy as its record says: by its path or into
 // its recipient's mailbox, saying how many the message went to on a
 // forward. The file is this program's own, written beside the record; it is
@@ -392,9 +421,10 @@ func outboxDrop(args []string) error {
 	}
 	p := hits[0]
 	p.remove(s)
-	// A copy of a message to several is given up in its sent record too,
+	// A copy of a message to several, an envelope or a stream, is given up
+	// in its sent record too,
 	// so that auu read does not go on saying it waits.
-	if p.kind == kindEnvelope {
+	if p.RecipientCount != 0 {
 		// A copy another process placed while this one dropped it is
 		// placed, and stays so.
 		updateSentCopy(s, p.MessageID, p.To, dropCopy)

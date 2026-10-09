@@ -368,8 +368,13 @@ says how long the relay asked for; so does a relay that refuses this
 machine itself, its certificate or its identity, with the advice a message
 to one gets, and a copy that gets no answer at all. `auu read` of the message you sent says who has it, who does
 not yet, and which copies you gave up with `auu outbox drop`. A message to several large enough
-to become a stream is refused in this release: send it to each recipient
-on their own. Following up on a thread whose latest message is your own
+to become a stream goes as one stream to each recipient, every one sealed
+to `outbox/` before the first upload, so `outbox/` holds the payload once
+for each recipient until the uploads finish. A recipient by bang path
+refuses the whole send, since a stream does not cross a relay. A stream
+copy the relay refuses stays in the outbox with the relay's words, as an
+envelope copy does, until `auu send --resume` finishes it or `auu outbox
+drop ID PEER` gives it up, and the command names both. Following up on a thread whose latest message is your own
 to several needs `--to PEER`, one of its recipients, to say whom, or
 `--all` to answer them all.
 

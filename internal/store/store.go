@@ -930,7 +930,7 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	// for each copy, a sent record keeping the first copy's: a record whose
 	// list says otherwise was not written by this program.
 	if _, err := recipients.CheckSections(m.Inner.Sections, m.Inner.Body.Type, m.Inner.To); err != nil {
-		return nil, fmt.Errorf("the record's %v", err)
+		return nil, fmt.Errorf("in the record, %v", err)
 	}
 	if err := validCopies(box, &m); err != nil {
 		return nil, fmt.Errorf("the record's copies: %v", err)

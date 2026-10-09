@@ -151,30 +151,73 @@ func TestRoundTripRandom(t *testing.T) {
 		}
 		// A made-up section rides on every round trip (D35).
 		madeUp := testutil.MadeUpSection(r)
-		blob, _ := buildWith(t, from, to, cs, files, []wire.Section{madeUp})
+		// The number of recipients is drawn too, one to four (D49): one is
+		// the stream to one, with no list; more is a stream for each, every
+		// one opening for its own recipient alone.
+		k := 1 + r.IntN(4)
+		whom := []*identity.Identity{to}
+		if k > 1 {
+			whom = append(whom, readers(t, k-1)...)
+		}
+		blobs := sealForEach(t, from, whom, cs, files, []wire.Section{madeUp})
 
-		o, out, err := openAll(t, to, blob)
-		if err != nil {
-			t.Fatalf("seed %d: payload %d bytes: %v", seed, n, err)
-		}
-		if len(o.Manifest.Sections) != 1 || o.Manifest.Sections[0].Name != madeUp.Name || !bytes.Equal(o.Manifest.Sections[0].Data, madeUp.Data) {
-			t.Fatalf("seed %d: the made-up section %q did not survive", seed, madeUp.Name)
-		}
-		if o.Sender.Fingerprint() != from.Fingerprint() {
-			t.Fatalf("seed %d: wrong sender", seed)
-		}
-		if o.Manifest.Body.Text != body().Text {
-			t.Fatalf("seed %d: body did not survive", seed)
-		}
-		if len(out) != len(files) {
-			t.Fatalf("seed %d: %d attachments out, %d in", seed, len(out), len(files))
-		}
-		for name, want := range files {
-			if !bytes.Equal(out[name], want) {
-				t.Fatalf("seed %d: %q did not survive at payload %d", seed, name, n)
+		for i, blob := range blobs {
+			o, out, err := openAll(t, whom[i], blob)
+			if err != nil {
+				t.Fatalf("seed %d: payload %d bytes, copy %d of %d: %v", seed, n, i+1, k, err)
+			}
+			wantSections := 1
+			if k > 1 {
+				wantSections = 2
+			}
+			if len(o.Manifest.Sections) != wantSections || o.Manifest.Sections[0].Name != madeUp.Name || !bytes.Equal(o.Manifest.Sections[0].Data, madeUp.Data) {
+				t.Fatalf("seed %d: the made-up section %q did not survive, or the list is wrong for %d recipients", seed, madeUp.Name, k)
+			}
+			if o.Sender.Fingerprint() != from.Fingerprint() {
+				t.Fatalf("seed %d: wrong sender", seed)
+			}
+			if o.Manifest.Body.Text != body().Text {
+				t.Fatalf("seed %d: body did not survive", seed)
+			}
+			if len(out) != len(files) {
+				t.Fatalf("seed %d: %d attachments out, %d in", seed, len(out), len(files))
+			}
+			for name, want := range files {
+				if !bytes.Equal(out[name], want) {
+					t.Fatalf("seed %d: %q did not survive at payload %d", seed, name, n)
+				}
+			}
+			// The next recipient's key does not open this copy.
+			if k > 1 {
+				if _, _, err := openAll(t, whom[(i+1)%k], blob); err == nil {
+					t.Fatalf("seed %d: copy %d of %d opened for another recipient", seed, i+1, k)
+				}
 			}
 		}
 	}
+}
+
+// sealForEach seals one stream for each reader from one manifest pass, as a
+// send to several does, and answers them in the readers' order.
+func sealForEach(t *testing.T, from *identity.Identity, to []*identity.Identity, chunkSize int, files map[string][]byte, sections []wire.Section) [][]byte {
+	t.Helper()
+	var sources []Source
+	for _, name := range sortedNames(files) {
+		sources = append(sources, source(name, files[name]))
+	}
+	ms, err := BuildManifestMany(from, publics(to), strings.Repeat("a", 32), body(), sources, chunkSize, sections)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out [][]byte
+	for i, m := range ms {
+		var buf bytes.Buffer
+		if err := Seal(&buf, from, to[i].Public(), m, sources); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, buf.Bytes())
+	}
+	return out
 }
 
 // The wire size must be predictable from the manifest alone: a receiver checks

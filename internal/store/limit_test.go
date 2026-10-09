@@ -329,6 +329,14 @@ func TestLimitStoredRecordShapes(t *testing.T) {
 			t.Errorf("%s: %v; want %q", tc.name, err, tc.says)
 		}
 	}
+	// The list's refusal reads as one sentence: the rule's words after where
+	// they were found, never joined to the record's possessive (ruling 77).
+	if err := write(t, func(m *Stored) {
+		m.Inner.Sections = []wire.Section{{Name: recipients.Name, Data: json.RawMessage(`{"to":[]}`)}}
+	}); err == nil || !strings.Contains(err.Error(), "in the record, the recipients section is malformed: it names nobody") ||
+		strings.Contains(err.Error(), "record's the") {
+		t.Errorf("a list that names nobody: %v; want the rule's sentence after \"in the record,\"", err)
+	}
 	// A text keeps its lines and its tab; an attachment's name is held to
 	// what any text is, and no further: what it would do as a path is
 	// SafeName's at the write, and the terminal escapes it.
