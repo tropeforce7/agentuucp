@@ -661,7 +661,22 @@ A refused send names what to change, and nothing was queued:
   can be, as `auu` sends it), and any other request by 64 KiB. From `auu`
   itself the body was under the cap; a `413` means another client, or an
   indented document. `431 Request Header Fields Too Large` is the relay's
-  32 KiB header cap, which nothing `auu` sends approaches.
+  32 KiB header cap, which nothing `auu` sends approaches. On every route
+  under `/v1/mailbox/`, on `/v1/forward` and `/v1/forward/failed` and on
+  the admin routes the refusal comes before the signature is checked, so
+  it is charged as a refused signature is, to the source address's
+  `unauthenticated_per_minute`, and answered `429` once that is spent; a
+  body whose read failed there is charged the same way. The admin routes
+  read the body before they look up the administrator, so there it is the
+  same answer for every fingerprint.
+- `a request to an admin route declares its body's length` (a `411`) —
+  the admin routes refuse a body with no declared length, a chunked one,
+  before the administrator is looked up, alike for every caller and
+  charged as a refused signature is; one declared over the cap is the
+  `413` above, and the rest is read whole, at most 64 KiB, so every byte
+  is bounded and read alike before the administrator is known. `auu-admin`
+  always declares a length, so nothing of ours meets it; a `411` means
+  another client.
 - `the directory is N bytes; at most 524288, so send it compact` (or `the
   allow list is ... at most 131072`, or `the card is ... at most 512`) —
   the signed document's own cap, which is not the body's: it is the bytes

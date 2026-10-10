@@ -534,6 +534,6 @@ internal/client/stream.go (*Client).Blob cap io.LimitReader(resp.Body, streamAns
 internal/client/stream.go (*Client).Blob cap io.LimitReader(resp.Body, span) = local: span is end-start+1 of a Content-Range checkRange held to the range asked for shown by TestLimitContentRange
 internal/client/stream.go parseContentRange int strconv.ParseInt(s) = >= 0 shown by TestLimitContentRange
 internal/client/stream.go (*Client).PutStream cap io.LimitReader(resp.Body, streamAnswerHold + 1) = <= 65537 shown by TestLimitAStreamAnswerIsHeldTo64KiB
-internal/relay/server.go (*Server).readBody cap http.MaxBytesReader(r.Body, limit) = one of inline_max + 65536, knock_max_bytes + 65536, 1048576, 65536, 3200 shown by TestLimitBodyCapsPerRoute
+internal/relay/server.go (*Server).readBodyCharged cap http.MaxBytesReader(r.Body, limit) = one of inline_max + 65536, knock_max_bytes + 65536, 1048576, 65536, 3200 shown by TestLimitBodyCapsPerRoute
 internal/relay/streamapi.go (*Server).handlePutStream cap io.LimitReader(body, want - int64(n)) = local: want is the row's size less the offset, which Content-Length was held equal to before a byte, less the header's n already read shown by TestLimitAnAttemptRunsToTheEndOrKeepsNothing
 internal/relay/streamapi.go (*Server).handlePutStream cap io.LimitReader(body, want) = local: want is the row's size less the offset, which Content-Length was held equal to before a byte shown by TestLimitAnAttemptRunsToTheEndOrKeepsNothing

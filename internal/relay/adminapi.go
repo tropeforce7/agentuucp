@@ -20,19 +20,48 @@ import (
 // An administrator therefore need not be a user of the relay at all.
 func (s *Server) adminAuthed(fn func(w http.ResponseWriter, r *http.Request, body []byte, adminFP string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Every refusal before the body closes the connection behind it,
+		// and every refusal before the signature costs the source address
+		// one token of its unauthenticated budget, whoever is named, so that nothing on these routes says
+		// who administers the relay, or whether anybody does, for less than
+		// a refused signature costs.
+		unread(w, r)
 		if !s.admins.enabled() {
-			s.refuse(w, http.StatusForbidden, relayapi.RefusalNoAdministrators)
+			if s.chargeUnauthenticated(w, r) {
+				s.refuse(w, http.StatusForbidden, relayapi.RefusalNoAdministrators)
+			}
 			return
 		}
-		// The header and the administrator before the body, the one order
-		// every authenticated route keeps; the signature after it. A
-		// refusal before the body closes the connection behind it.
-		unread(w, r)
 		auth, err := relayapi.ParseAuth(r.Header.Get(relayapi.AuthHeader))
 		if err != nil {
 			s.authFailed(w, r, errUnauthorized)
 			return
 		}
+		// The body before the administrator, here alone of the three
+		// wrappers, so every byte is bounded and read alike before the
+		// administrator is known (R12). Read after the lookup, a body
+		// declared and not sent was waited for under an administrator's
+		// fingerprint and refused 401 at once under anybody else's; judged
+		// after it, one declared over the cap was 413 for an administrator
+		// and 401 for the rest (T11). So a body of no declared length is
+		// refused 411 for every caller alike, which auu-admin never meets
+		// since it always declares one (R11), one declared over the cap
+		// 413, and the rest is read whole, each refusal charged as a
+		// refused signature is.
+		if r.ContentLength < 0 {
+			if s.chargeUnauthenticated(w, r) {
+				s.refuseUnread(w, http.StatusLengthRequired, "a request to an admin route declares its body's length")
+			}
+			return
+		}
+		body, ok := s.unsignedBody(w, r, relayapi.FramingAllowance, "")
+		if !ok {
+			return
+		}
+		// The body is read: the connection may be kept after the answer,
+		// whoever is named, so the 401 below and a refused signature's look
+		// alike down to that header.
+		w.Header().Del("Connection")
 		// 401 and not 403: an outsider must not learn who administers a relay
 		// by watching which fingerprints are told they are not one.
 		pub, ok := s.admins.lookup(auth.FP)
@@ -40,11 +69,6 @@ func (s *Server) adminAuthed(fn func(w http.ResponseWriter, r *http.Request, bod
 			s.authFailed(w, r, errUnauthorized)
 			return
 		}
-		body, ok := s.readBody(w, r, relayapi.FramingAllowance, "")
-		if !ok {
-			return
-		}
-		w.Header().Del("Connection")
 		if err := s.checkSignature(auth, pub, r, body); err != nil {
 			s.authFailed(w, r, err)
 			return

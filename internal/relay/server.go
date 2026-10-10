@@ -674,13 +674,38 @@ func (s *Server) rateLimitedCode(w http.ResponseWriter, which string, retryAfter
 // body is judged by Content-Length against the size the open declared
 // and streamed to disk, in handlePutStream.
 func (s *Server) readBody(w http.ResponseWriter, r *http.Request, limit int64, hint string) ([]byte, bool) {
+	return s.readBodyCharged(w, r, limit, hint, nil)
+}
+
+// unsignedBody is readBody for a body read before its signature is
+// checked, on the three authenticated wrappers: a body refused there, for
+// its declared length, its read length or a read that failed, is charged
+// to the address's unauthenticated budget as a refused signature is, and
+// answered 429 when that is spent. A refusal of the body then costs what a
+// refused signature costs whoever is named; without the charge the free
+// 413 said, as often as anyone liked, which fingerprints the relay knows.
+func (s *Server) unsignedBody(w http.ResponseWriter, r *http.Request, limit int64, hint string) ([]byte, bool) {
+	return s.readBodyCharged(w, r, limit, hint, s.chargeUnauthenticated)
+}
+
+// readBodyCharged is readBody with charge, when given, run before any
+// refusal is written; a charge that answers itself refuses in its place.
+func (s *Server) readBodyCharged(w http.ResponseWriter, r *http.Request, limit int64, hint string,
+	charge func(w http.ResponseWriter, r *http.Request) bool) ([]byte, bool) {
+
+	charged := func() bool { return charge == nil || charge(w, r) }
 	if r.ContentLength > limit {
-		s.refuseUnread(w, http.StatusRequestEntityTooLarge, tooLarge(limit, hint))
+		if charged() {
+			s.refuseUnread(w, http.StatusRequestEntityTooLarge, tooLarge(limit, hint))
+		}
 		return nil, false
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, limit)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		if !charged() {
+			return nil, false
+		}
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			s.fail(w, http.StatusRequestEntityTooLarge, tooLarge(limit, hint))
@@ -803,11 +828,22 @@ func (s *Server) authFailed(w http.ResponseWriter, r *http.Request, err error) {
 		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
-	if ok, retry := s.lim.unauthenticated.Allow(s.clientIP(r)); !ok {
-		s.rateLimited(w, limitUnauthenticated, retry, "")
+	if !s.chargeUnauthenticated(w, r) {
 		return
 	}
 	s.fail(w, http.StatusUnauthorized, "unauthorized")
+}
+
+// chargeUnauthenticated spends one token of the source address's
+// unauthenticated budget, for a refusal made before any signature is
+// verified, and answers 429 itself when the budget is spent. It reports
+// whether the caller may still be answered with the refusal.
+func (s *Server) chargeUnauthenticated(w http.ResponseWriter, r *http.Request) bool {
+	if ok, retry := s.lim.unauthenticated.Allow(s.clientIP(r)); !ok {
+		s.rateLimited(w, limitUnauthenticated, retry, "")
+		return false
+	}
+	return true
 }
 
 // chargeIdentity spends one request token against a caller who has proved who
@@ -840,9 +876,10 @@ func (s *Server) authedBody(limit int64, hint string, fn func(w http.ResponseWri
 // authedWithCert is authed for the handlers that need to know which
 // certificate the request arrived on.
 //
-// The order is one order on every authenticated route: the certificate,
-// the auth header parsed, the identity it names looked up, then the body
-// under the route's cap, then the signature over it. Everything that can
+// The order is one order on every authenticated route but the admin
+// routes, which read the body before the administrator (adminAuthed): the
+// certificate, the auth header parsed, the identity it names looked up,
+// then the body under the route's cap, then the signature over it. Everything that can
 // be judged without the body is judged before it, so a caller the relay
 // would refuse anyway — no honoured certificate, a header that will not
 // parse, a fingerprint no mailbox has — is refused without the relay
@@ -886,7 +923,7 @@ func (s *Server) authedWithCert(limit int64, hint string, fn func(w http.Respons
 			s.authFailed(w, r, errUnauthorized)
 			return
 		}
-		body, ok := s.readBody(w, r, limit, hint)
+		body, ok := s.unsignedBody(w, r, limit, hint)
 		if !ok {
 			return
 		}

@@ -657,7 +657,7 @@ func (s *Server) callerAuthedBody(limit int64, hint string, fn func(w http.Respo
 			s.authFailed(w, r, errUnauthorized)
 			return
 		}
-		body, ok := s.readBody(w, r, limit, hint)
+		body, ok := s.unsignedBody(w, r, limit, hint)
 		if !ok {
 			return
 		}

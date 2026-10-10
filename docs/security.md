@@ -938,15 +938,52 @@ The stream `PUT` is bounded by the size its open declared. On every
 authenticated route the order is the certificate, the auth header parsed,
 the identity it names looked up, then the body, then the signature, the
 stream PUT excepted, whose signature is over an empty body and comes
-before it. Everything that can be judged without the body is
-judged before it, so a stranger's sixteen megabytes are refused unread.
+before it, and the admin routes excepted, which read the body before the
+administrator is looked up. Everything that can be judged without the body
+is judged before it, so a stranger's sixteen megabytes are refused unread.
 The signature comes after the body because it is over the body. Every
 refusal before the body closes the connection behind its answer, the
-`413`, the `401` and the in-flight `503` alike. The standard library would
+`413`, the admin routes' `411`, the `401`, the in-flight `503` and a `429`
+once the address's budget is spent alike. The standard library would
 otherwise read up to 256 KiB of the body the handler declined before
 writing the answer on a connection it meant to keep, and wait for a body
 that never came. That is what a refusal that leaves the body unread must
 not do.
+
+A caller who has not proved who they are learns nothing about the
+fingerprint it names that costs less than a refused signature. Every
+refusal before the signature that turns on the fingerprint named is
+charged to the source address's unauthenticated budget,
+`unauthenticated_per_minute`, and answered `429` once that is spent: the
+`401`, and a body refused before its signature is checked, for its
+declared length, for a read over the route's cap or for a read that
+failed. The `401` is charged on every authenticated route, `/v1/uploads`,
+`/v1/listed` and `/v1/couriers` among them; the body refusals are charged
+on every route under `/v1/mailbox/`, on `/v1/forward` and
+`/v1/forward/failed`, and on the admin routes, the routes that read a body
+before its signature. A refusal that does not turn on the fingerprint,
+such as a `400` for a malformed fingerprint in the path, a storage `500`
+or the in-flight `503`, is not charged. On a route under `/v1/mailbox/`
+the identity is looked up before the body, so a registered fingerprint is
+told `413` where an unknown one is told `401`, at the same price; that
+says whether a mailbox exists, which a key lookup says on the same budget.
+The admin routes read the body before the administrator is looked up. A
+body that declares no length, a chunked one, is refused `411` `a request
+to an admin route declares its body's length`, one declared over the cap
+`413`, and the rest is read whole, at most 64 KiB. So every byte is
+bounded and read alike before the administrator is known, and every
+refusal before the signature, the `400` for a read that failed among them,
+is charged and the same for every fingerprint. The `403` `this relay has
+no administrators` is charged as well. One difference remains past the
+read and the lookup: an administrator's fingerprint costs the relay a
+signature verification, Ed25519 and tens of microseconds, that anyone
+else's does not, so a patient caller from many addresses could in
+principle tell them apart by timing, each probe still at a refused
+signature's price. `auu-admin` always declares a length, so nothing of
+ours meets the `411`. A relay before this release answered the `413` free
+and only once the fingerprint was found, which told a registered
+fingerprint, or an administrator's, from a stranger's at no cost when the
+fingerprint was known.
 
 The client holds the same bounds from its side. Its transports offer
 http/1.1 alone by ALPN and never attempt h2. A response's headers are

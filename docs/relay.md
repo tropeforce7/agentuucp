@@ -380,7 +380,7 @@ switch the lot off.
 | `requests_per_minute` | authenticated requests, per identity | 120 |
 | `posts_per_minute` | posts, per identity | 30 |
 | `post_bytes_per_hour` | posted bytes, per identity: an envelope's size, and a stream's declared size when it is opened, of which an upload with kept bytes is given back the size less them when it goes unplaced, while one that goes holding no byte gives nothing back | 256 MiB |
-| `unauthenticated_per_minute` | registrations, key lookups and failed authentications, per source address | 30 |
+| `unauthenticated_per_minute` | registrations, key lookups, failed authentications, and bodies refused before their signature is checked (a `413` or `411` for the length, or a read that failed), per source address | 30 |
 | `registrations_per_hour` | registrations, per source address | 5 |
 | `max_mailboxes` | mailboxes on the relay | unlimited |
 | `mailbox_max_messages` | messages queued for one recipient | 1000 |
@@ -611,17 +611,36 @@ The HTTP layer has bounds of its own, none of them settings:
 
 A body that declares itself over its cap is refused `413` before a byte of
 it is read, the sentence naming the cap in bytes. One that arrives without
-a length is cut at the cap. On every authenticated route the relay checks
-what it can before the body. That is the client certificate, that the auth
+a length is cut at the cap, except on the admin routes and the stream PUT,
+which refuse it `411`. On every authenticated route the relay checks what
+it can before the body. That is the client certificate, that the auth
 header parses, and that the identity it names has a mailbox. It reads the
 body only then, so a stranger's sixteen megabytes are refused unread. The
-signature, which is over the body, is checked after it, the stream PUT
-excepted, whose signature is over an empty body and comes before it. Every refusal before
-the body closes the connection behind its answer. Those refusals are that
-`413`, a `401` for a header that will not parse or an identity no mailbox
-has, and a `503` from the in-flight cap. Go's `net/http` would otherwise
-read up to 256 KiB of the unread body before answering on a connection it
-meant to keep, and wait for a body that never came.
+admin routes read the body before they look up the administrator, as
+below. The signature, which is over the body, is checked after it, the
+stream PUT excepted, whose signature is over an empty body and comes
+before it. Every refusal before the body closes the connection behind its
+answer. Those refusals are that `413`, the `411`, a `401` for a header
+that will not parse or an identity no mailbox has, a `503` from the
+in-flight cap, and a `429` once the address's budget is spent. Go's
+`net/http` would otherwise read up to 256 KiB of the unread body before
+answering on a connection it meant to keep, and wait for a body that never
+came.
+
+A body refused before its signature is checked, for its declared length,
+for a read over the cap or for a read that failed, is charged to the
+source address's `unauthenticated_per_minute` exactly as a `401` is, and
+answered `429` once that is spent. That holds on every route under
+`/v1/mailbox/`, on `/v1/forward` and `/v1/forward/failed`, and on the
+admin routes. The admin routes read the body before the administrator is
+looked up: a body that declares no length is refused `411` with `a request
+to an admin route declares its body's length`, one declared over the cap
+`413`, and the rest is read whole, at most 64 KiB. So every byte is
+bounded and read alike before the administrator is known, and every
+refusal before the signature, the `400` for a read that failed among them,
+is charged and the same for every fingerprint. The `403` `this relay has
+no administrators` is charged as well. `auu-admin` always declares a
+length, so nothing of ours meets the `411`.
 
 The relay speaks HTTP/1.1 alone. HTTP/2 is off on the listener and not
 offered by ALPN, so a client that offers `h2` is answered over HTTP/1.1.
