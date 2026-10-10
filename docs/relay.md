@@ -270,7 +270,7 @@ carrying the sealed bytes from an offset to the end. Three settings govern it:
 |---|---|
 | `streams` | whether the relay accepts stream uploads at all. Turn it off and an open is refused with a 403 naming this setting |
 | `max_stream_bytes` | the largest stream the relay will reserve space for, declared up front and refused before a byte is sent. `0` is unlimited, under a cap of 2^62 bytes no setting lifts |
-| `max_bytes` | besides being the largest envelope a post, a forward delivered here, a courier's delivery or a knock may carry (never above 64 MiB whatever the setting), the resume threshold: an attempt that stops short after at least this many bytes, when it was the first, leaves a partial the sender may resume once within sixty seconds; one that stops short of it, or a resumed one that stops short, leaves nothing, and the upload and its reservation go with the answer. The relay announces it at the open as `resume_threshold`, with the window as `resume_window`. A listing page follows it too: a page ends before an envelope that would take its inline bytes past `max_bytes`, or past 64 MiB whatever `max_bytes` is, admitting the first whatever its size, so a page's envelopes never exceed that unless the first alone does, which only one stored under a larger earlier `max_bytes`, or before this release, can; the health answer says the setting so a client can size what it holds of a page to this relay, and raising `max_bytes` grows every client's page with it up to 64 MiB, half of the most `auu` holds of a page. Above 64 MiB the setting raises the resume threshold and nothing inline (below the table) |
+| `max_bytes` | besides being the largest envelope a post, a forward, delivered here or carried on, a courier's delivery or a knock may carry (never above 64 MiB whatever the setting), the resume threshold: an attempt that stops short after at least this many bytes, when it was the first, leaves a partial the sender may resume once within sixty seconds; one that stops short of it, or a resumed one that stops short, leaves nothing, and the upload and its reservation go with the answer. The relay announces it at the open as `resume_threshold`, with the window as `resume_window`. A listing page follows it too: a page ends before an envelope that would take its inline bytes past `max_bytes`, or past 64 MiB whatever `max_bytes` is, admitting the first whatever its size, so a page's envelopes never exceed that unless the first alone does, which only one stored under a larger earlier `max_bytes`, or before this release, can; the health answer says the setting so a client can size what it holds of a page to this relay, and raising `max_bytes` grows every client's page with it up to 64 MiB, half of the most `auu` holds of a page. Above 64 MiB the setting raises the resume threshold and nothing inline (below the table) |
 
 The window is not a setting. It is sixty seconds from the open, and sixty
 from the moment a partial is kept. Past it the relay refuses the next attempt
@@ -295,10 +295,14 @@ that stops is cut inside the window. The server's five-minute read and write
 timeouts stand on every other route.
 
 A relay takes a `max_bytes` above 64 MiB, but it holds every inline row
-to 64 MiB whatever the setting: a post, a forward delivered here and a
-courier's delivery over it are refused `413` with `envelope too large`,
-and a knock over it `413` naming `knock_max_bytes`, a set
-`knock_max_bytes` above 64 MiB included. Above 64 MiB the setting raises
+to 64 MiB whatever the setting: a post, a forward, delivered here or
+carried on, and a courier's delivery over it are refused `413` with
+`envelope too large`, and a knock over it `413` naming
+`knock_max_bytes`, a set `knock_max_bytes` above 64 MiB included. A
+forward with a path still to go is refused before its neighbour is
+looked up and before anything is charged to the carried share, queued
+or written, so nothing over the operator's ceiling waits here for a
+neighbour to refuse it. Above 64 MiB the setting raises
 a stream's resume threshold and nothing else, and the health answer
 still says it, with `knock_max_bytes` as it is in force. A courier
 carrying a larger row from a relay before this release is refused `413`

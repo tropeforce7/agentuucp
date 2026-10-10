@@ -88,7 +88,12 @@ recipient is what *your* relay calls the next one, with no global directory,
 so the names come from whoever gave you the address and nothing lists them;
 a wrong one comes back as `no neighbour named "bar" on this relay` with
 nothing queued. Quote the address, or use `--via`, since `!` is history
-expansion in a shell; both at once is refused.
+expansion in a shell; both at once is refused. An envelope over your
+relay's `max_bytes`, never above 64 MiB, is refused `relay returned 413:
+envelope too large`, or, far over it, the body-size sentence `request
+body larger than this route takes` (under "Sentences that end a
+command" below), with nothing queued, by way of a relay as on a post;
+the relay's operator sets that cap, not `auu`.
 The `id` in `--json` is then a row in your relay's queue, not a message in a
 mailbox, and `path` beside it is where it went. A message large enough to
 become a stream, which is 64 KiB unless the user has changed it, does not

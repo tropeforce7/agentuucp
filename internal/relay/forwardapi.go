@@ -33,6 +33,8 @@ import (
 //   - the hash against the carried table, so that an envelope this relay has
 //     already taken is refused before anything is stored and before any
 //     bound is spent on it;
+//   - for a path still to go, the envelope held to inlineMax, as the
+//     delivery and the post hold it;
 //   - then the neighbour, the poster's carried share, the carried ceiling
 //     and the queue's room; or the delivery, which takes the carried share
 //     after its own checks.
@@ -119,6 +121,17 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, body []by
 
 	if len(req.Path) == 0 {
 		s.deliver(w, r, env, req.Envelope, JoinPath(via), hash, callerFP, courierName, isCourier)
+		return
+	}
+	// A forward with a path still to go is held to the cap deliver and the
+	// post hold an envelope to, before the neighbour is looked up and before
+	// the carried share is charged, the row, the hash or the file: the
+	// route's body cap is that and the framing allowance, so without this
+	// an envelope up to 64 KiB over the operator's ceiling was queued here
+	// and offered to the neighbour, whose delivery refused it. The post
+	// budgets already spent stay spent, as a malformed forward's do.
+	if int64(len(req.Envelope)) > s.inlineMax() {
+		s.fail(w, http.StatusRequestEntityTooLarge, "envelope too large")
 		return
 	}
 

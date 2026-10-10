@@ -903,7 +903,11 @@ protocol carries, the request signature, is Ed25519 and about 200 bytes.
 The relay refuses an auth header longer than its five fields can be before
 it cuts a field from it. Every body is read under the cap of its route. A
 post is read at `max_bytes`, never above 64 MiB, plus 64 KiB of framing,
-and so are a forward delivered here and a courier's delivery. An allow
+and so are every forward, delivered here or carried on, and a courier's
+delivery; the envelope each carries is then held to `max_bytes`, never
+above 64 MiB, and refused `413` with `envelope too large` over it, a
+forward with a path still to go before anything of it is charged to
+the carried share, queued or written. An allow
 list or a channel directory is read at 1 MiB, the envelope those documents
 travel in. Every other request is read at 64 KiB, a card among them, since
 one at its maximum is a few hundred bytes. A body that declares itself
