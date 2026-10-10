@@ -94,8 +94,9 @@ func (s *Server) handleSetChannels(w http.ResponseWriter, r *http.Request, body 
 // handleGetChannels is GET /v1/mailbox/{fp}/channels, for anyone who may
 // post to the mailbox.
 //
-// Order: the mailbox must exist and not be blocked, and the allow list must
-// admit the caller, before anything about the directory is said — a refused
+// Order: the mailbox must exist and not be blocked, must not be a
+// neighbouring relay's courier's, and the allow list must admit the
+// caller, before anything about the directory is said — a refused
 // sender gets the sentence a refused post gets, and learns nothing new. A
 // mailbox with no directory is a 404 with a sentence of its own, since it
 // has default and nothing else. The owner's own answer adds how many
@@ -113,6 +114,16 @@ func (s *Server) handleGetChannels(w http.ResponseWriter, r *http.Request, body 
 	}
 	if blocked {
 		s.fail(w, http.StatusForbidden, "recipient is blocked on this relay")
+		return
+	}
+	// A courier's mailbox answers as a refusing one, in the post route's
+	// words, so it looks the same on every route. Every caller here is
+	// registered and may read GET /v1/couriers, so this hides nothing from
+	// them; it keeps the contrast with this route from undercutting the
+	// silence that matters, a forward's delivery, which a sender with no
+	// mailbox here reads through its report.
+	if s.isCourierMailbox(fp) {
+		s.fail(w, http.StatusForbidden, msgNotAllowed)
 		return
 	}
 	allowed, err := s.store.MayPost(fp, callerFP)

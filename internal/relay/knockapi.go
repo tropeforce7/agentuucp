@@ -84,10 +84,14 @@ func (s *Server) handleKnock(w http.ResponseWriter, r *http.Request, body []byte
 	// says no, and a card that does not verify, because the state of
 	// somebody else's card is not a stranger's to learn. A courier pushes
 	// no card, so this is what it answered before this commit and what it
-	// answers now. The post and the stream do the same thing with the
-	// sentence they have: a courier's mailbox refuses every sender exactly
-	// as a mailbox whose allow list named nobody would, so on none of the
-	// four routes does an answer say which relays this one peers with.
+	// answers now. The post, the stream, a forward's delivery and the
+	// channels route do the same thing with the sentence they have, and the
+	// watch drops it as a peer: a courier's mailbox refuses every sender
+	// exactly as a mailbox whose allow list named nobody would, so it looks
+	// the same on every route. The callers of all but a forward's delivery
+	// are registered here and may read GET /v1/couriers; the one this keeps
+	// the peering from is a sender with no mailbox here, who reads a
+	// forward's delivery through its report.
 	if s.isCourierMailbox(fp) {
 		s.refuse(w, http.StatusForbidden, relayapi.RefusalNoKnocks)
 		return

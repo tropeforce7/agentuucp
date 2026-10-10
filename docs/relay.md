@@ -1357,7 +1357,10 @@ courier's is a side effect of enrolling. Left ordinary it is a mailbox any
 registered identity can fill at your expense, so a listed courier's mailbox
 refuses every sender, as a mailbox with an allow list naming nobody would,
 and nothing distinguishes it from one on the wire. A post, a post to a
-channel and a stream get the sentence a refused sender always gets:
+channel, a stream, a forward delivered into it and a fetch of its channel
+directory get the sentence a refused sender always gets, the fetch with
+the `403` a restricted mailbox answers rather than the `404` of a mailbox
+with no directory:
 
 ```
 sender is not on the recipient's allow list
@@ -1373,13 +1376,20 @@ which is also what a mailbox with no card, a card that says no and a card
 that does not verify each get. There is no list to write: an allow list
 naming nobody cannot be signed, since an empty one admits every registered
 sender and one naming only the owner is refused, so the relay holds that
-list for a courier's mailbox itself and answers as it would.
+list for a courier's mailbox itself and answers as it would. A watch that
+names a courier's mailbox among its peers drops it without a word, as it
+drops any peer that has not admitted the watcher.
 
-Saying more would cost you something. Before this, a post to a courier's
-mailbox was simply taken, so the answer said nothing about your couriers
-file. A refusal of its own would turn these routes into a way for anyone
-holding a courier's fingerprint to ask which relays you accept forwards
-from, one fingerprint at a time.
+Saying more would cost you something on one route, a forward's delivery.
+A sender on another relay, with no mailbox here, reads its answer through
+the forward's report, so a refusal of its own there would let anyone
+holding a courier's fingerprint ask which relays you accept forwards from,
+one fingerprint at a time. The other routes tell their callers nothing
+new: each answers only your registered identities, and `GET /v1/couriers`,
+below, lists every courier to all of them. They answer as the forward
+does so that a courier's mailbox looks like a refusing one wherever it is
+asked about, and no route only your users reach sets it apart beside the
+forward's silence.
 
 This is a refusal the relay can make because the mailbox that needs it is
 always at the relay whose file names its owner: a courier enrols at its
@@ -1402,8 +1412,10 @@ every other relay until they admit your couriers by name, which they do with
 forwarding work for them.
 
 It is not the disclosure the silent courier mailbox above exists to prevent.
-That one was an oracle open to anybody holding a fingerprint, who needed no
-mailbox here to use it. This route answers only identities that have one.
+That one was an oracle on a forward's delivery, open to a sender on any
+relay that forwards here who held a fingerprint and needed no mailbox here
+to use it. This route answers only identities that have one, as the post,
+the stream, the knock and the channels route do.
 
 **How much that narrows it is your `registration` setting.** With `token` or
 `closed` it is the identities an administrator let in, or the ones already there.

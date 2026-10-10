@@ -1223,9 +1223,18 @@ Anyone the allow list admits fetches it with `GET
 verify against the key they hold for the owner. A sender the allow list
 refuses gets the refusal a post would, and learns nothing about channels. A
 mailbox whose owner has pushed none answers `404` with
-`no directory: the mailbox has the one channel, default`. The owner's own
-fetch adds `queued`, how many messages wait under each channel. Nobody
-else's does.
+`no directory: the mailbox has the one channel, default`. A courier's
+mailbox answers every caller `403` with the post's refusal instead, as a
+post, a stream and a forward delivered into it are answered. That tells
+its callers nothing new: each is a registered identity of this relay, and
+`GET /v1/couriers` lists every courier's fingerprint to all of them. What
+the `403` keeps is the same face on every route, so that no route only
+this relay's users reach sets a courier's mailbox apart beside the one
+silence that matters, a forward's delivery, whose answer a sender on
+another relay with no mailbox here reads through the forward's report.
+`docs/relay.md` section 1.10 says why.
+The owner's own fetch adds `queued`, how many messages wait under each
+channel. Nobody else's does.
 
 The allow list travels the same way. `PUT /v1/mailbox/{fp}/allow` carries
 two fields, `document` and `signature`, the list as the owner signed it
@@ -1342,7 +1351,9 @@ nanoseconds. A push that replaces one of them wakes the hold. The answer
 names in `directories_changed` every watched peer whose directory is
 issued later than the caller said. A peer the caller may not post to is
 dropped without a word, never named and never woken on, since the
-directory fetch the caller made first has already told it `403`.
+directory fetch the caller made first has already told it `403`. A
+courier's mailbox is dropped the same way, for the reason that fetch
+refuses it.
 
 `stubs=1` answers every row without its `envelope`, for a caller that
 wants the ids and nothing else. That is what checking whether mail it left

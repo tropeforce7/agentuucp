@@ -121,7 +121,10 @@ func (s *Server) watchParams(w http.ResponseWriter, r *http.Request, callerFP st
 			s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 			return 0, nil, false
 		}
-		if !exists || blocked {
+		// A courier's mailbox is dropped as a refused sender's peer is,
+		// saying nothing, so that it looks on this route as it does on the
+		// channels route and the post.
+		if !exists || blocked || s.isCourierMailbox(e.fp) {
 			continue
 		}
 		allowed, err := s.store.MayPost(e.fp, callerFP)
