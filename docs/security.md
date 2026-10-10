@@ -769,6 +769,27 @@ expert originates unattended by design, to the channel it serves, and is
 unlocked with `--send --ttl 0` on a machine that is nobody's desktop. Serve
 refuses to start under receive scope and says so.
 
+**The agent's directory.** The key agent's socket, lock and log live in a
+runtime directory: `$XDG_RUNTIME_DIR/auu`, or with none,
+`%LOCALAPPDATA%\auu` on Windows and `auu` under the temporary directory
+elsewhere, which on Linux is `/tmp/auu`, where every user of the machine
+can make a name. That directory must be this user's own directory and
+never a symbolic link. What stands at the path is looked at without
+following a link before anything is made there, and a symbolic link is
+refused by name, a dangling one included; a Windows junction, which Go
+reports as an irregular directory, is not, and needs none, since
+`%LOCALAPPDATA%` is the user's own. A link another user planted at `/tmp/auu`
+pointing at a directory this user owns would pass an owner check that
+followed it, and the agent would write its socket, lock and log there and
+make that directory 0700; on Linux that needs only `fs.protected_symlinks`
+off. Off Windows the directory is then opened without following a link,
+and its owner and mode are judged, and a loose mode made 0700, through
+that handle, so what is checked is what is changed and a link put at the
+path after the look is refused by the open. A directory another user owns
+is refused too. Each of these refusals names the path and says to set
+`XDG_RUNTIME_DIR` to a directory of the user's own, since every command
+that reaches the agent makes the same check.
+
 ## 2. The wire, in detail
 
 What the relay stores for one message is three fields, and a fourth on a

@@ -1408,7 +1408,30 @@ this feature. An older `auu` sees an identity file with no keys in it.
 
 On Linux and macOS the agent refuses connections from any other user by the
 kernel's word (`SO_PEERCRED`, `LOCAL_PEERCRED`) and refuses debugger
-attachment. On Windows the socket is an `AF_UNIX` socket under
+attachment. Its socket, lock and log live in `$XDG_RUNTIME_DIR/auu`, or,
+when `XDG_RUNTIME_DIR` is unset, in `auu` under the temporary directory,
+which on Linux is `/tmp/auu`, where every user of the machine can make a
+name. That directory must be a directory of your own and never a symbolic
+link. Before it makes anything there, every command that reaches the
+agent looks at what stands at the path without following a link. A link
+is refused by name, even one that points nowhere, since a link another
+user planted at `/tmp/auu` could point at a directory of yours and have
+the agent write there. The directory is then opened without following a
+link, its owner and mode are judged on what was opened, and a loose mode
+is made 0700 through that handle. A directory another user owns is
+refused too:
+
+*Listing 1.9d*
+```
+auu: agent: /tmp/auu is a symbolic link, not a directory; remove it, or set XDG_RUNTIME_DIR to a directory of your own
+auu: agent: /tmp/auu belongs to another user; set XDG_RUNTIME_DIR to a directory of your own
+```
+
+A link you made yourself you can remove. One another user put in `/tmp`
+you cannot, any more than their directory, and `XDG_RUNTIME_DIR` set to a
+directory of your own is the way past both.
+
+On Windows the socket is an `AF_UNIX` socket under
 `%LOCALAPPDATA%\auu`, which is yours by construction. That directory is
 the whole of the same-user check. Windows gives a socket no peer
 credentials, and there is no attachment guard. CI runs the agent's tests on
