@@ -1078,3 +1078,77 @@ func TestLimitContentRange(t *testing.T) {
 		t.Errorf("a chunked 206 of bytes 2-5 with a body of 8: n=%d, read %q (%v); want 4 and %q", n, got, err, "2345")
 	}
 }
+
+// TestLimitListingOrder: a listing's rows are held to the order the relay
+// promised, each id above the After the request asked for and above the
+// row before it. A row at After, one below it, a page that goes down, and
+// a page that repeats a row are each refused whole as a malformed answer
+// naming the id, and nothing of the page is returned; an ascending page
+// above After is taken, at the floor (After 0, id 1) and at the ceiling
+// (After one below the type's maximum, the maximum).
+func TestLimitListingOrder(t *testing.T) {
+	alice, err := identity.Generate("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := alice.Fingerprint()
+	page := func(ids ...int64) relayapi.ListResponse {
+		first, last := int64(1), int64(math.MaxInt64)
+		l := relayapi.ListResponse{Queued: int64(len(ids)), First: &first, Last: &last,
+			Allow: relayapi.AllowNone, Card: relayapi.CardNone, Directory: relayapi.DirectoryNone}
+		for _, id := range ids {
+			l.Messages = append(l.Messages, relayapi.StoredMessage{ID: id, Size: 10, Kind: relayapi.KindStream, Channel: "default"})
+		}
+		return l
+	}
+	for _, tc := range []struct {
+		name  string
+		after int64
+		ids   []int64
+		taken bool
+	}{
+		{"a row at the id asked after", 7, []int64{7}, false},
+		{"a row below the id asked after", 7, []int64{6}, false},
+		{"a page that goes down", 7, []int64{9, 8}, false},
+		{"a page that repeats a row", 7, []int64{8, 8}, false},
+		{"a later row that falls back to after", 7, []int64{8, 9, 7}, false},
+		{"an honest page above after", 7, []int64{8, 9, 12}, true},
+		{"the first id of a mailbox from zero", 0, []int64{1}, true},
+		{"the largest id after the one below it", math.MaxInt64 - 1, []int64{math.MaxInt64}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := fakeRelay(t, map[string]any{"/v1/mailbox/" + fp: page(tc.ids...)})
+			c, err := New(srv.URL, alice, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			l, err := c.ListWait(context.Background(), ListRequest{After: tc.after, Limit: 10})
+			if tc.taken {
+				if err != nil {
+					t.Fatalf("after %d, ids %v: %v; want the page taken", tc.after, tc.ids, err)
+				}
+				if len(l.Messages) != len(tc.ids) {
+					t.Fatalf("after %d, ids %v: %d rows returned", tc.after, tc.ids, len(l.Messages))
+				}
+				for i, m := range l.Messages {
+					if m.ID != tc.ids[i] {
+						t.Errorf("row %d is id %d; want %d", i, m.ID, tc.ids[i])
+					}
+				}
+				return
+			}
+			if !errors.Is(err, ErrMalformedAnswer) {
+				t.Fatalf("after %d, ids %v: %v; want a malformed answer", tc.after, tc.ids, err)
+			}
+			if want := "id is not " + wantRising; !strings.Contains(err.Error(), want) {
+				t.Errorf("%v; want it to say %q", err, want)
+			}
+			if !strings.Contains(err.Error(), "the listing") || !strings.Contains(err.Error(), srv.URL) {
+				t.Errorf("%v; want the listing and the relay named", err)
+			}
+			if l.Messages != nil || l.Queued != 0 || l.First != 0 || l.Last != 0 {
+				t.Errorf("a refused page returned %+v; want nothing", l)
+			}
+		})
+	}
+}

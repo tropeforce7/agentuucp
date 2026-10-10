@@ -251,7 +251,14 @@ of the three, and an upload's offset a byte count. So an answer with a
 two-byte fingerprint or a negative queue is refused whole as malformed,
 naming the field and the relay. It is not sliced by a command that
 expected sixty-four characters or seeked to by one that expected an
-offset.
+offset. A listing page is held to the order the relay promises as well:
+every row's id above the `after` the request asked for and above the row
+before it. A page that repeats an id, the one at the cursor among them,
+or goes back is refused whole as malformed, naming `id`, and the fetch
+treats that as a transport failure: nothing of it is acknowledged or
+kept. So a relay that answers the row at the cursor again and again stops
+the fetch there, and cannot have it acknowledge the row and write it
+under `damaged/` again on every turn for ever.
 
 Every integer that enters the program from outside has a row in
 `internal/limits/ledger.txt`, and so does every slice of a string or a
@@ -1026,11 +1033,13 @@ default a channel keeps its mail, so the fetch leaves it queued. The
 `DELETE` is then what [`auu rm`](client.md#15-receive) sends when you
 remove it.
 
-The answer at step 7 lists what is after this machine's cursor and, beside
-it, how many messages the mailbox holds in all (`queued`) and the lowest and
-highest ids among them (`first` and `last`, both 0 for an empty mailbox,
-read from the rows in the same transaction as the page). All three are
-required, and a listing without one is refused by name.
+The answer at step 7 lists what is after this machine's cursor, each id
+above the one before, and, beside it, how many messages the mailbox holds
+in all (`queued`) and the lowest and highest ids among them (`first` and
+`last`, both 0 for an empty mailbox, read from the rows in the same
+transaction as the page). All three are required, and a listing without
+one is refused by name, as is a page whose ids do not rise from the
+cursor.
 
 A cursor above `last` is past everything the relay holds. That happens on
 an ordinary day, when the newest mail kept on the relay is removed, and

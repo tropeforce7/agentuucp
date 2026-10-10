@@ -358,6 +358,11 @@ stops at the stream, and the stream and everything after it wait on the
 relay for the next fetch. A fetch through a path that honours ranges
 delivers them, so the remedy is a path with no proxy that strips `Range`.
 
+A listing page whose ids do not rise from the cursor, each above the one
+before, is a malformed answer naming the relay and the field `id`. It is
+a transport failure too. Nothing of the page is acknowledged or kept, and
+the fetch from that relay stops there.
+
 A message to several goes to each recipient as a copy sealed for them,
 and each copy names everybody it went to:
 
@@ -916,7 +921,8 @@ not run, and `detail` says why a message was left.
 
 *When the relay's numbering restarts.* The relay numbers the mail it holds,
 and your cursor, `relays/<name>/cursor`, is the number of the last message
-this machine fetched there. Every listing says the lowest and highest numbers
+this machine fetched there. Every listing gives what is after your cursor,
+each number above the one before, and says the lowest and highest numbers
 the relay holds for you. A cursor above the highest is past everything there.
 That happens on an ordinary day, when you `auu rm` the newest message kept on
 the relay. It also happens when the relay's operator deleted its database and

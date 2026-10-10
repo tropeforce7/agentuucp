@@ -695,6 +695,14 @@ A refused send names what to change, and nothing was queued:
   damaged and nothing is acknowledged; the fetch from that relay stops
   there, and the stream and everything after it stay on the relay. A
   fetch through a path that honours ranges delivers it.
+- `malformed answer from the relay at URL: in the listing, id is not
+  above the id asked after and above the row before it, in the order the
+  relay promised; nothing of the answer was used` (exit 2) — a page of
+  the mailbox listing repeated an id or went back. A relay lists ids in
+  ascending order, each above the `after` the fetch asked for; a page
+  that does not is refused whole, nothing of it is acknowledged or kept,
+  and the mail stays on the relay. What is at URL is not this relay, or
+  is damaged; its operator looks.
 - `malformed answer: the relay at URL answered METHOD PATH in a shape this
   build cannot read: ...` — the answer carries a field this `auu` does not
   know outside its `sections`; the same advice as the line above.

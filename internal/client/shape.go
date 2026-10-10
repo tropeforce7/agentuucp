@@ -54,6 +54,7 @@ const (
 	wantSeconds       = "a number of seconds within a hundred years"
 	wantCount         = "a count (zero or more)"
 	wantID            = "a message id (one or more)"
+	wantRising        = "above the id asked after and above the row before it, in the order the relay promised"
 	wantMLDSA         = "an ML-DSA parameter set (44, 65 or 87, or 0 for none)"
 	wantKind          = "a message kind (envelope, stream or knock)"
 	wantChannelName   = "a channel name"
@@ -285,14 +286,6 @@ func (c *Client) checkCard(r *relayapi.CardResponse) error {
 	return nil
 }
 
-// checkListing is a page of a mailbox: how much is queued, the state of
-// the allow list and of the card each as one of its words, and each
-// message's id, size, kind
-// as one of its two words and channel held to the name rule, every one
-// of which the relay always sends and is refused by name when absent. A
-// page asked for as stubs carries no envelope: a row with one is a relay
-// that ignored the parameter, refused by name.
-
 // queueStates are the words a queued row's state may be. The relay writes
 // them and nothing else does, so a fourth is a relay saying something this
 // client has no meaning for, and printing it to a person would be printing a
@@ -394,7 +387,20 @@ func checkVia(via string) error {
 	return store.CheckAddress(nil, strings.Split(via, "!"), relayapi.MaxHops)
 }
 
-func (c *Client) checkListing(page *relayapi.ListResponse, stubs bool) error {
+// checkListing is a page of a mailbox: how much is queued, the state of
+// the allow list and of the card each as one of its words, and each
+// message's id, size, kind as one of its two words and channel held to
+// the name rule, every one of which the relay always sends and is refused
+// by name when absent. A page asked for as stubs carries no envelope: a
+// row with one is a relay that ignored the parameter, refused by name.
+//
+// Its rows are held to the order the relay promised: each id above the
+// after the request asked for and above the row before it. The fetch
+// moves its cursor to each row's id and asks again, so a page that repeats
+// an id, the one at the cursor among them, or goes back would be met again
+// on every turn, each time acknowledged and kept again; it is refused
+// whole, as malformed, before any row of it is used.
+func (c *Client) checkListing(page *relayapi.ListResponse, after int64, stubs bool) error {
 	const answer = "the listing"
 	if err := c.counts(answer, count{"queued", page.Queued}); err != nil {
 		return err
@@ -420,11 +426,16 @@ func (c *Client) checkListing(page *relayapi.ListResponse, stubs bool) error {
 	if !oneOf(page.Directory, directoryWords) {
 		return c.malformed(answer, "directory", wantOneOf(directoryWords))
 	}
+	prev := after
 	for i := range page.Messages {
 		m := &page.Messages[i]
 		if m.ID <= 0 {
 			return c.malformed(answer, "id", wantID)
 		}
+		if m.ID <= prev {
+			return c.malformed(answer, "id", wantRising)
+		}
+		prev = m.ID
 		if m.Size < 0 {
 			return c.malformed(answer, "size", wantCount)
 		}

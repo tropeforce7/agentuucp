@@ -1355,7 +1355,7 @@ func (c *Client) ListWait(ctx context.Context, req ListRequest) (Listing, error)
 	if err != nil {
 		return Listing{}, err
 	}
-	if err := c.checkListing(&resp, req.Stubs); err != nil {
+	if err := c.checkListing(&resp, req.After, req.Stubs); err != nil {
 		return Listing{}, err
 	}
 	out := make([]Message, 0, len(resp.Messages))
