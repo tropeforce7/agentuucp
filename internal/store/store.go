@@ -481,35 +481,21 @@ func (s *Store) AddPeerNoted(pub *identity.Public, note string) (added bool, err
 	return s.addPeer(pub, note)
 }
 
+// CheckPeer says what AddPeer would refuse pub for, without writing
+// anything: the person's own key, a name the export line's rule refuses, a
+// peer list it cannot read, a name another peer's folds equal to, or a
+// room's. A key already held is not refused, as AddPeer takes it as added
+// already. A command that must do something the person cannot take back
+// before the peer is written asks this first, so the one refusal that is
+// the person's to fix comes before it, and the peer is written last.
+func (s *Store) CheckPeer(pub *identity.Public) error {
+	_, err := s.checkPeer(pub)
+	return err
+}
+
 func (s *Store) addPeer(pub *identity.Public, note string) (added bool, err error) {
-	if self, err := s.Self(); err == nil && self.Fingerprint() == pub.Fingerprint() {
-		return false, ErrSelfPeer
-	}
-	// The name is written into the file as part of an export line, and a
-	// line the reader cannot parse makes the whole file unreadable: every
-	// peer then reads as a stranger and every message is quarantined
-	// until somebody edits it by hand. So a name this rule refuses never
-	// reaches the file, whichever command asked for it.
-	if pub.Name != "" {
-		if err := identity.ValidName(pub.Name); err != nil {
-			return false, err
-		}
-	}
-	peers, err := s.Peers()
-	if err != nil {
-		return false, err
-	}
-	for _, existing := range peers {
-		if existing.Fingerprint() == pub.Fingerprint() {
-			return false, nil
-		}
-		if existing.Name != "" && pub.Name != "" && strings.EqualFold(existing.Name, pub.Name) {
-			return false, fmt.Errorf("peer name %q is already used by %s; choose a different name",
-				pub.Name, existing.Short())
-		}
-	}
-	// One name means one thing: a peer may not take a room's (D56).
-	if err := s.roomNameTaken(pub.Name); err != nil {
+	held, err := s.checkPeer(pub)
+	if err != nil || held {
 		return false, err
 	}
 	line := pub.ExportLine()
@@ -529,6 +515,42 @@ func (s *Store) addPeer(pub *identity.Public, note string) (added bool, err erro
 		return false, err
 	}
 	return true, nil
+}
+
+// checkPeer is AddPeer's every refusal, in its order, and whether the key
+// is held already.
+func (s *Store) checkPeer(pub *identity.Public) (held bool, err error) {
+	if self, err := s.Self(); err == nil && self.Fingerprint() == pub.Fingerprint() {
+		return false, ErrSelfPeer
+	}
+	// The name is written into the file as part of an export line, and a
+	// line the reader cannot parse makes the whole file unreadable: every
+	// peer then reads as a stranger and every message is quarantined
+	// until somebody edits it by hand. So a name this rule refuses never
+	// reaches the file, whichever command asked for it.
+	if pub.Name != "" {
+		if err := identity.ValidName(pub.Name); err != nil {
+			return false, err
+		}
+	}
+	peers, err := s.Peers()
+	if err != nil {
+		return false, err
+	}
+	for _, existing := range peers {
+		if existing.Fingerprint() == pub.Fingerprint() {
+			return true, nil
+		}
+		if existing.Name != "" && pub.Name != "" && strings.EqualFold(existing.Name, pub.Name) {
+			return false, fmt.Errorf("peer name %q is already used by %s; choose a different name",
+				pub.Name, existing.Short())
+		}
+	}
+	// One name means one thing: a peer may not take a room's (D56).
+	if err := s.roomNameTaken(pub.Name); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // RemovePeer drops a peer by fingerprint. It reports whether anything went.

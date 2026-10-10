@@ -758,7 +758,17 @@ need a newer auu; update auu and open them with auu damaged reopen --all`,
 every run until they are reopened or removed. `auu read`, `auu reply` and
 the quarantine's `show` and `trust` answer a waiting stream with `message
 ID waits on the relay for a newer auu (section "S"); update auu to fetch
-it`.
+it`. `trust`, which the person runs, refuses a stream whose manifest on
+the relay differs from the quarantined record in sender, id or channel
+with `ID: the stream on the relay is not the one that was quarantined;
+nothing was delivered and the record is as it was`, the record left in
+the quarantine. One whose manifest disagrees with the size the relay
+listed when it was quarantined is kept under `damaged/` with the fetch's
+warning, acknowledged and taken out of the quarantine, exit 2, with `ID:
+its manifest says the stream is N bytes on the wire and the relay listed
+M; it was kept as damaged and acknowledged, and nobody was added`. ID is
+the start of the message's id. Neither adds anybody, since `trust` adds
+the sender only once the message is delivered.
 
 From `auu damaged reopen`, which the person runs and you report:
 

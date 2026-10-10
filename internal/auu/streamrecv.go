@@ -345,6 +345,23 @@ func fetchOneStream(ctx context.Context, s *store.Store, id *identity.Identity, 
 		}
 		return c.Ack(ctx, relayID)
 	}
+	// What the signed manifest says the stream weighs, against what the
+	// relay listed the stored file at. They agree for every stream a
+	// sender's own client made; one that disagrees was made to — a
+	// manifest that declares more than was uploaded used to turn the
+	// download's end into a 416 the fetch took as a transport failure,
+	// and every later fetch of the mailbox stopped at it. It is the
+	// sender's fault and the stream is refused before a byte of payload
+	// is asked for, and before anybody is asked whether its sender is
+	// admitted, so a stranger's is not quarantined for a person to trust
+	// into a fetch that cannot finish: kept under damaged/ with the two
+	// numbers, acknowledged, and the fetch goes on.
+	if want := stream.Size(opened.SealedManifestBytes, opened.Manifest.PayloadBytes, opened.Manifest.ChunkSize); want != m.Size {
+		if err := keepDamaged(s, r, relayID, m.Received, manifest, sizeCause(want, m.Size), res); err != nil {
+			return err
+		}
+		return c.Ack(ctx, relayID)
+	}
 	if !s.IsAuthorized(opened.Sender.Fingerprint()) {
 		// Recorded, not fetched, and deliberately not acknowledged: the
 		// payload waits on the relay until a person decides.
@@ -353,21 +370,6 @@ func fetchOneStream(ctx context.Context, s *store.Store, id *identity.Identity, 
 		}
 		res.Quarantined++
 		return nil
-	}
-	// What the signed manifest says the stream weighs, against what the
-	// relay listed the stored file at. They agree for every stream a
-	// sender's own client made; one that disagrees was made to — a
-	// manifest that declares more than was uploaded, from a sender on the
-	// allow list, used to turn the download's end into a 416 the fetch
-	// took as a transport failure, and every later fetch of the mailbox
-	// stopped at it. It is the sender's fault and the stream is refused
-	// before a byte of payload is asked for: kept under damaged/ with the
-	// two numbers, acknowledged, and the fetch goes on.
-	if want := stream.Size(opened.SealedManifestBytes, opened.Manifest.PayloadBytes, opened.Manifest.ChunkSize); want != m.Size {
-		if err := keepDamaged(s, r, relayID, m.Received, manifest, sizeCause(want, m.Size), res); err != nil {
-			return err
-		}
-		return c.Ack(ctx, relayID)
 	}
 	// Kept on the relay, or acknowledged away, as this machine's setting
 	// for the manifest's channel says.

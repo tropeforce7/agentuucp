@@ -2022,10 +2022,14 @@ func cmdQuarantine(args []string) error {
 				identity.Printable(m.Inner.Body.Name))
 		}
 		pub.Name = promptName(pub.Fingerprint(), offered)
-		if _, err := s.AddPeer(pub); err != nil {
+		// The peer is written last, once the message is delivered, so a
+		// trust that fails before it is delivered leaves the peer list as
+		// it was. The one refusal that is the person's to fix, a name a
+		// peer or a room has or the list unreadable, is asked here, before
+		// anything is fetched or acknowledged.
+		if err := s.CheckPeer(pub); err != nil {
 			return usageErrf("%v", err)
 		}
-		m.SenderName = pub.Name
 		// A quarantined stream has only its manifest: the payload is still on
 		// the relay, deliberately, so that a stranger cannot make anybody
 		// download two gigabytes. Trusting them is what fetches it.
@@ -2054,7 +2058,7 @@ func cmdQuarantine(args []string) error {
 			if err != nil {
 				return err
 			}
-			opened, _, err := fetchManifest(ctx(), c, id, m.RelayID)
+			opened, manifest, err := fetchManifest(ctx(), c, id, m.RelayID)
 			if err != nil {
 				// The body was never fetched, and the relay no longer
 				// has it: an administrator's purge, or another machine
@@ -2065,8 +2069,38 @@ func cmdQuarantine(args []string) error {
 				}
 				return transportErr(err)
 			}
-			if opened.Sender.Fingerprint() != m.Inner.From {
-				return fmt.Errorf("the stream on the relay is no longer the one that was quarantined")
+			// What is on the relay under the record's id is held to the
+			// record before a byte of payload is asked for: its sender,
+			// its id and its channel, so a relay that put another
+			// stream's file under the row cannot make the person trust
+			// one message and receive another.
+			if !isQuarantined(m, opened) {
+				return fmt.Errorf("%s: the stream on the relay is not the one that was quarantined; "+
+					"nothing was delivered and the record is as it was", m.Inner.ID[:12])
+			}
+			// The same stream, whose signed manifest disagrees with the
+			// size the relay listed when it was quarantined: the
+			// sender's fault, which the fetch now finds before it asks
+			// whether the sender is admitted, and a build from v0.14.0
+			// to v0.17.0 quarantined. It is done with as the fetch does
+			// it, kept under damaged/ with the two numbers and
+			// acknowledged, and taken out of the quarantine; nobody is
+			// added. A record from before v0.14.0 kept no size, and only
+			// its size goes unchecked.
+			if want := stream.Size(opened.SealedManifestBytes, opened.Manifest.PayloadBytes, opened.Manifest.ChunkSize); m.RelaySize != 0 && want != m.RelaySize {
+				var res fetchResult
+				if err := keepDamaged(s, r, m.RelayID, m.Received, manifest, sizeCause(want, m.RelaySize), &res); err != nil {
+					return err
+				}
+				if err := c.Ack(ctx(), m.RelayID); err != nil {
+					return transportErr(err)
+				}
+				if err := s.Remove(store.Quarantine, m.Inner.ID); err != nil {
+					return err
+				}
+				return &exitError{code: exitTransport, err: fmt.Errorf(
+					"%s: its manifest says the stream is %d bytes on the wire and the relay listed %d; "+
+						"it was kept as damaged and acknowledged, and nobody was added", m.Inner.ID[:12], want, m.RelaySize)}
 			}
 			// The body is here now, so the payload is no longer on the
 			// relay; whether the message is depends on the channel, as
@@ -2094,10 +2128,13 @@ func cmdQuarantine(args []string) error {
 			if err != nil {
 				return err
 			}
-			trusted.SenderName = pub.Name
 			m = trusted
 		}
+		m.SenderName = pub.Name
 		if err := s.Save(store.Quarantine, m); err != nil {
+			return err
+		}
+		if _, err := s.AddPeer(pub); err != nil {
 			return err
 		}
 		if err := s.Move(store.Quarantine, store.Inbox, m.Inner.ID); err != nil {
@@ -2109,6 +2146,16 @@ func cmdQuarantine(args []string) error {
 	default:
 		return usageErrf("unknown quarantine subcommand %q", sub)
 	}
+}
+
+// isQuarantined reports whether the stream fetched from the relay is the
+// one its quarantine record was made from: the same sender, id and channel.
+// Its size is the caller's to hold, since a size that disagrees on the same
+// stream is the sender's fault and not the relay's.
+func isQuarantined(m *store.Stored, opened *stream.Opened) bool {
+	got := opened.Manifest
+	return opened.Sender.Fingerprint() == m.Inner.From && got.ID == m.Inner.ID &&
+		storedChannel(got.Channel) == m.Channel
 }
 
 // knockName is the name offered at the local-name prompt when a knock is

@@ -713,6 +713,36 @@ knock offers the claimed name as the local name and, when this machine
 has pushed an allow list to that relay, asks whether to push it again so
 they can reply. Answering no prints the `auu allow push` to run later.
 
+`trust` asks the local name first, and refuses a name another peer or a
+room already has, a name the export line's rule refuses, or a peer list
+it cannot read, before anything is fetched or acknowledged. For a stream
+it then fetches the manifest again and holds it to the quarantined record
+before asking for any of the payload. A
+different sender, message id or channel is refused, naming the message by
+the start of its id, with `the stream on the relay is not the one that
+was quarantined; nothing was delivered and the record is as it was`. The
+same stream whose manifest disagrees with the size the relay listed when
+it was quarantined is done with as the fetch does it: kept under
+`damaged/` with both numbers and acknowledged, taken out of the
+quarantine, and the command exits 2 with `its manifest says the stream is
+N bytes on the wire and the relay listed M; it was kept as damaged and
+acknowledged, and nobody was added`. That clears such a stream from a
+stranger that a build from v0.14.0 to v0.17.0 quarantined. A record made
+by a build before v0.14.0 kept no size, and for it only the size goes
+unchecked. The sender is added to your peer list once the message is
+delivered and, where its channel does not keep it on the relay,
+acknowledged, so a trust refused for any of these adds nobody and leaves
+the list as it was: a transport failure, a body no longer on the relay, a
+stream on the relay that is not the one quarantined, a size that
+disagrees, or a name already taken. To trust the sender anyway, add them
+with `auu peers add` and their export line, `ccx2.<base64>.name`, as for
+any colleague. A stream whose signed manifest disagrees with the size the
+relay lists is not quarantined: the fetch keeps it under `damaged/` with
+both numbers and acknowledges it, whoever sent it. The exception is a
+stream that waits for a newer auu, which is recorded before its size is
+checked; from a stranger, `trust` checks it once a build knows its
+section, and from a peer the newer build's fetch does.
+
 *Listing 1.5c*
 ```
 auu rm MESSAGE-ID...               # from the relay and from here

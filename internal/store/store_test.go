@@ -104,6 +104,75 @@ func TestAddPeerDedupeAndConflicts(t *testing.T) {
 	}
 }
 
+// CheckPeer refuses what AddPeer refuses, in the same words, and writes
+// nothing: the store's own key, a name the export line's rule refuses, a
+// name another peer's folds equal to, a room's name. A key already held
+// and a fresh one are not refused, and checking either writes nothing.
+func TestCheckPeerRefusesWhatAddPeerRefusesWithoutWriting(t *testing.T) {
+	s := newStore(t)
+	self, err := identity.Generate("me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveIdentity(self); err != nil {
+		t.Fatal(err)
+	}
+	alice := peer(t, "alice")
+	if _, err := s.AddPeer(alice); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveRooms([]Room{{Name: "Team", Members: []RoomMember{{FP: roomFP(0)}}}}); err != nil {
+		t.Fatal(err)
+	}
+	file := s.path(peersFile)
+	before, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unchanged := func(what string) {
+		t.Helper()
+		after, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(after) != string(before) {
+			t.Fatalf("CheckPeer of %s wrote the peers file:\n%s", what, after)
+		}
+	}
+
+	invalid := peer(t, "x")
+	invalid.Name = "-bad name"
+	for _, tc := range []struct {
+		what string
+		pub  *identity.Public
+	}{
+		{"its own key", self.Public()},
+		{"an invalid name", invalid},
+		{"a name folding equal to a peer's", peer(t, "Alice")},
+		{"a room's name", peer(t, "team")},
+	} {
+		checked := s.CheckPeer(tc.pub)
+		unchanged(tc.what)
+		if checked == nil {
+			t.Fatalf("CheckPeer took %s", tc.what)
+		}
+		_, added := s.AddPeer(tc.pub)
+		if added == nil || added.Error() != checked.Error() {
+			t.Fatalf("for %s CheckPeer said %q and AddPeer %v", tc.what, checked, added)
+		}
+		unchanged(tc.what)
+	}
+
+	if err := s.CheckPeer(alice); err != nil {
+		t.Fatalf("CheckPeer of a held key: %v", err)
+	}
+	unchanged("a held key")
+	if err := s.CheckPeer(peer(t, "carol")); err != nil {
+		t.Fatalf("CheckPeer of a fresh key: %v", err)
+	}
+	unchanged("a fresh key")
+}
+
 func TestPeersFileIgnoresCommentsAndBlanks(t *testing.T) {
 	s := newStore(t)
 	alice := peer(t, "alice")

@@ -279,6 +279,35 @@ What they can make a receiver keep is the manifest record in quarantine.
 The first chunk it came in is capped at 1 MiB, so the disk they can spend
 is bounded by that.
 
+Before it asks whether a stream's sender is a peer, the receiver holds
+the size the signed manifest implies to the size the relay listed. A
+stream on which the two disagree is kept under `damaged/` with both
+numbers and acknowledged, whoever sent it, so a stranger's that could
+never be fetched whole is not quarantined for a person to trust. The one
+exception is a stream that waits for a newer auu: it is recorded before
+any size check, and its size is checked when a build that knows its
+section fetches it from a peer, or when a person trusts it from a
+stranger.
+
+Trusting a quarantined stream fetches its manifest again and holds it to
+the record before a byte of payload is asked for. A different sender,
+message id or channel is refused by name: nothing is delivered and the
+record is left as it was, so a relay that put another stream's file under
+the row cannot make a person trust one message and receive another. The
+same stream whose manifest disagrees with the size the relay listed when
+it was quarantined is done with as the fetch does it: kept under
+`damaged/` with both numbers, acknowledged, taken out of the quarantine,
+and nobody added. That is what clears such a stream from a stranger that
+a build from v0.14.0 to v0.17.0 quarantined before the size was checked
+first. A record made by a build before v0.14.0 kept no size, and for it
+only the size goes unchecked. What trust holds is the sender, the id, the
+channel and the size, not the content: the relay alone cannot swap the
+stream, but a sender working with the relay can put a second manifest it
+signed under the same id, channel and size. The sender is added to the
+peer list only once the message is delivered and, where its channel does
+not keep it on the relay, acknowledged, so a trust refused before then
+adds nobody.
+
 **What protects a message.** Every message is sealed with HPKE (RFC 9180) in
 single-shot mode, straight from the standard library's `crypto/hpke`. The
 ciphersuite is MLKEM768-X25519, better known as X-Wing, with HKDF-SHA256 and
