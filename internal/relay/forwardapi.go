@@ -33,8 +33,9 @@ import (
 //   - the hash against the carried table, so that an envelope this relay has
 //     already taken is refused before anything is stored and before any
 //     bound is spent on it;
-//   - then the neighbour, the carried ceiling and the queue's room, or the
-//     delivery.
+//   - then the neighbour, the poster's carried share, the carried ceiling
+//     and the queue's room; or the delivery, which takes the carried share
+//     after its own checks.
 //
 // Everything that can be judged without storing is judged before anything is
 // stored or charged to anybody.
@@ -144,7 +145,18 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, body []by
 		quotas = s.cfg.CourierLimits.CourierQuotasFor()
 	}
 	expires := now.Add(s.cfg.CourierLimits.CarriedWindow(len(req.Path) - 1))
+	// The hash this row writes is charged to its poster here, after every
+	// check made before the store and immediately before the one write,
+	// one token for each ForwardTTL it will be kept. Every store answer but
+	// success wrote no hash, so each gives the tokens back.
+	tokens := s.cfg.CourierLimits.carriedHops(len(req.Path) - 1)
+	if !s.chargeCarried(w, callerFP, tokens, isCourier) {
+		return
+	}
 	id, err := s.store.Enqueue(row, req.Envelope, quotas, expires)
+	if err != nil {
+		s.returnCarried(callerFP, tokens, isCourier)
+	}
 	switch {
 	case errors.Is(err, ErrCarried):
 		// A retry after a lost answer, or a loop dying. A row's id and how
@@ -247,6 +259,14 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, env *relayapi.C
 	if !ok {
 		return
 	}
+	// The hash this delivery writes is charged to the courier here, after
+	// every check made before the store and immediately before the write:
+	// one token, since a hash for an envelope at its last hop is kept one
+	// ForwardTTL. Every store answer but success wrote no hash, so each
+	// gives it back.
+	if !s.chargeCarried(w, callerFP, 1, isCourier) {
+		return
+	}
 	put := func() (int64, error) {
 		return s.store.Put(fp, channel, relayapi.KindEnvelope, "", raw, s.cfg.Limits.Quotas(),
 			Forwarded{
@@ -259,6 +279,9 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, env *relayapi.C
 	id, err := put()
 	if s.roomFreed(err) {
 		id, err = put()
+	}
+	if err != nil {
+		s.returnCarried(callerFP, 1, isCourier)
 	}
 	switch {
 	case errors.Is(err, ErrCarried):
@@ -605,6 +628,36 @@ func (s *Server) chargeForward(w http.ResponseWriter, callerFP string, size int6
 		return false
 	}
 	return true
+}
+
+// chargeCarried spends a poster's share of the carried hashes, a user's or
+// a courier's, keyed by the fingerprint the signature proved, and answers
+// 429 with Retry-After when the share is spent. It is the last check before
+// the write of a forward or a delivery, so a refusal here stores nothing.
+// The share is spent only on a write that is tried, and returnCarried
+// gives it back when the write fails.
+func (s *Server) chargeCarried(w http.ResponseWriter, callerFP string, tokens int64, isCourier bool) bool {
+	bucket, setting := s.lim.carried, "courier.carried_rows_per_poster"
+	if isCourier {
+		bucket, setting = s.lim.courierCarried, "courier.carried_rows_per_courier"
+	}
+	ok, retry := bucket.AllowN(callerFP, tokens)
+	if !ok {
+		s.rateLimited(w, limitCarried, retry, fmt.Sprintf(
+			"; this relay keeps a hash of every envelope it carries, and %s bounds "+
+				"how many one poster's may stand", setting))
+	}
+	return ok
+}
+
+// returnCarried gives back what chargeCarried spent, for a write that wrote
+// no hash.
+func (s *Server) returnCarried(callerFP string, tokens int64, isCourier bool) {
+	bucket := s.lim.carried
+	if isCourier {
+		bucket = s.lim.courierCarried
+	}
+	bucket.Return(callerFP, tokens)
 }
 
 // alreadyCarried answers a 409 for an envelope this relay has taken before,

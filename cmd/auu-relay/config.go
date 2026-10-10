@@ -145,6 +145,18 @@ type CourierConfig struct {
 	// what makes a retry idempotent and a loop die. A hash is never
 	// evicted, so at the ceiling the relay refuses to carry anything new.
 	CarriedMaxRows int64 `json:"carried_max_rows"`
+	// CarriedRowsPerPoster and CarriedRowsPerCourier are one user's and
+	// one neighbour's share of those hashes, a hash costing one for each
+	// forward_ttl it is kept. A share neither the file nor a flag sets is
+	// a sixteenth and a quarter of carried_max_rows as configured, worked
+	// out in Resolve, so a relay that lowers the ceiling lowers the shares
+	// with it rather than being refused for leaving them where they were.
+	CarriedRowsPerPoster  int64 `json:"carried_rows_per_poster"`
+	CarriedRowsPerCourier int64 `json:"carried_rows_per_courier"`
+
+	// posterShareSet and courierShareSet say the file or a flag set the
+	// share, so Resolve leaves it as written.
+	posterShareSet, courierShareSet bool
 }
 
 // maxQueuePerCourierCeiling is the most queue_max_messages_per_courier may
@@ -203,6 +215,8 @@ func (c CourierConfig) Relay() (relay.CourierLimits, error) {
 		PostBytesPerHour:           c.PostBytesPerHour,
 		ReportsPerMinute:           c.ReportsPerMinute,
 		CarriedMaxRows:             c.CarriedMaxRows,
+		CarriedRowsPerPoster:       c.CarriedRowsPerPoster,
+		CarriedRowsPerCourier:      c.CarriedRowsPerCourier,
 	}, nil
 }
 
@@ -416,6 +430,8 @@ func Defaults() Config {
 			PostBytesPerHour:           c.PostBytesPerHour,
 			ReportsPerMinute:           c.ReportsPerMinute,
 			CarriedMaxRows:             c.CarriedMaxRows,
+			CarriedRowsPerPoster:       c.CarriedRowsPerPoster,
+			CarriedRowsPerCourier:      c.CarriedRowsPerCourier,
 		},
 		ClientCerts: ClientCertsConfig{
 			Mode:     relayapi.ClientCertsOff,
@@ -547,6 +563,7 @@ func Load(path string) (Config, string, error) {
 	if err := checkCourierNumbersAlone(raw); err != nil {
 		return cfg, "", fmt.Errorf("%s: %w", path, err)
 	}
+	cfg.Courier.posterShareSet, cfg.Courier.courierShareSet = courierSharesSet(raw)
 
 	// A misspelled key is a silent misconfiguration otherwise, and the whole
 	// point of this file is to be the record of what the relay is doing: so
@@ -717,6 +734,12 @@ func (c *Config) Merge(fs *flag.FlagSet, f *flagValues) {
 			c.Courier.PostBytesPerHour = f.courierPostBytesPerHour
 		case "courier-carried-max-rows":
 			c.Courier.CarriedMaxRows = f.courierCarriedMaxRows
+		case "courier-carried-rows-per-poster":
+			c.Courier.CarriedRowsPerPoster = f.courierCarriedRowsPerPoster
+			c.Courier.posterShareSet = true
+		case "courier-carried-rows-per-courier":
+			c.Courier.CarriedRowsPerCourier = f.courierCarriedRowsPerCourier
+			c.Courier.courierShareSet = true
 		case "access-log":
 			c.AccessLog = f.accessLog
 		}
@@ -748,6 +771,59 @@ func (c *Config) Resolve() {
 	if c.TLS.Mode == "" {
 		c.TLS.Mode = ModeFiles
 	}
+	c.Courier.resolveShares()
+}
+
+// resolveShares works out a carried share nobody set from the ceiling as
+// configured: a sixteenth of carried_max_rows for a user and a quarter for
+// a neighbour, the fractions the defaults were decided as. An unlimited
+// ceiling has no sixteenth, so the share is then the fraction of the
+// default ceiling. A share below relay.CarriedShareFloor is raised to it,
+// since a share whose bucket cannot pay for the longest path is a refusal
+// of every such path written as a number. A raised share stops at a
+// nonzero ceiling.
+func (c *CourierConfig) resolveShares() {
+	ceiling := c.CarriedMaxRows
+	if ceiling == 0 {
+		ceiling = relay.DefaultCourierLimits().CarriedMaxRows
+	}
+	least := relay.CarriedShareFloor(c.MaxHops)
+	derive := func(share int64) int64 {
+		if share < least {
+			share = least
+		}
+		if c.CarriedMaxRows > 0 && share > c.CarriedMaxRows {
+			share = c.CarriedMaxRows
+		}
+		return share
+	}
+	if !c.posterShareSet {
+		c.CarriedRowsPerPoster = derive(ceiling / 16)
+	}
+	if !c.courierShareSet {
+		c.CarriedRowsPerCourier = derive(ceiling / 4)
+	}
+}
+
+// courierSharesSet reports whether a settings file names each carried
+// share, read from the raw courier block, since after the decode a share
+// the file left out and one it set to the default are the same number.
+// Malformed JSON is the strict decode's to report.
+func courierSharesSet(raw []byte) (poster, courier bool) {
+	var probe struct {
+		Courier map[string]json.RawMessage `json:"courier"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return false, false
+	}
+	// A key whose value is null is read as absent: the strict decode
+	// leaves the field as it was for a null, so it would otherwise keep the
+	// default ceiling's fraction under a ceiling the file lowered.
+	set := func(key string) bool {
+		v, ok := probe.Courier[key]
+		return ok && string(bytes.TrimSpace(v)) != "null"
+	}
+	return set("carried_rows_per_poster"), set("carried_rows_per_courier")
 }
 
 // msgNoTLS is what a relay started with no bundle and no certificate says.
@@ -1060,6 +1136,8 @@ func (c Config) courierValidate() error {
 		{"courier.reports_per_minute", c.Courier.ReportsPerMinute},
 		{"courier.post_bytes_per_hour", c.Courier.PostBytesPerHour},
 		{"courier.carried_max_rows", c.Courier.CarriedMaxRows},
+		{"courier.carried_rows_per_poster", c.Courier.CarriedRowsPerPoster},
+		{"courier.carried_rows_per_courier", c.Courier.CarriedRowsPerCourier},
 	} {
 		if f.value < 0 {
 			return fmt.Errorf("%s must not be negative, got %d (use 0 for unlimited)", f.name, f.value)
@@ -1091,6 +1169,43 @@ func (c Config) courierValidate() error {
 		return fmt.Errorf("courier.max_hops must be between 1 and %d, got %d: it is the relays one "+
 			"address may name, and every client holds an address to the same ceiling",
 			relayapi.MaxHops, c.Courier.MaxHops)
+	}
+	// A carried share's bucket is the share over 1 + H(max_hops), and a
+	// hash on the longest path costs max_hops of it, so a nonzero share
+	// below relay.CarriedShareFloor refuses every such path whatever the
+	// wait; and a share above a nonzero ceiling is one the ceiling always
+	// meets first, a setting with no effect. Where the ceiling is itself
+	// below the floor, the floor is the ceiling: a nonzero share there
+	// cannot pay for the longest path, and the ceiling is the most it can
+	// be, as Resolve works one out.
+	least := relay.CarriedShareFloor(c.Courier.MaxHops)
+	floor := least
+	if c.Courier.CarriedMaxRows > 0 && c.Courier.CarriedMaxRows < floor {
+		floor = c.Courier.CarriedMaxRows
+	}
+	for _, f := range []struct {
+		name  string
+		value int64
+	}{
+		{"courier.carried_rows_per_poster", c.Courier.CarriedRowsPerPoster},
+		{"courier.carried_rows_per_courier", c.Courier.CarriedRowsPerCourier},
+	} {
+		if f.value > 0 && f.value < floor {
+			if floor < least {
+				return fmt.Errorf("%s must be courier.carried_max_rows (%d) or 0, got %d: the ceiling "+
+					"is below %d, the least share that pays for a path of courier.max_hops (%d) relays, "+
+					"so a share must be the ceiling itself", f.name, floor, f.value, least, c.Courier.MaxHops)
+			}
+			return fmt.Errorf("%s must be at least %d, got %d: a hash costs one for each "+
+				"forward_ttl it is kept, one on the longest path is kept courier.max_hops (%d) of "+
+				"them, and a poster may spend at most the share over 1 + H(max_hops) at once "+
+				"(use 0 for unlimited)", f.name, floor, f.value, c.Courier.MaxHops)
+		}
+		if c.Courier.CarriedMaxRows > 0 && f.value > c.Courier.CarriedMaxRows {
+			return fmt.Errorf("%s must be at most courier.carried_max_rows (%d), got %d: the "+
+				"ceiling is reached first, so a larger share has no effect", f.name,
+				c.Courier.CarriedMaxRows, f.value)
+		}
 	}
 	ttl, err := c.Courier.ParsedForwardTTL()
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/ratelimit"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/stream"
 )
@@ -455,6 +456,548 @@ func TestRoomFreedPurgesOnlyForAFullRefusalAndSaysWhetherItLetGo(t *testing.T) {
 			if wantRows := map[bool]int{true: 0, false: 1}[c.want]; rows != wantRows {
 				t.Fatalf("after roomFreed(%v) the reservation's rows are %d, want %d", c.err, rows, wantRows)
 			}
+		})
+	}
+}
+
+// tableCounts is how many rows each table a forward or a delivery writes holds,
+// so a refusal can be shown to have written none of them.
+type tableCounts struct{ carried, outbound, messages, uploads int }
+
+func (h *harness) tableCounts(t *testing.T) tableCounts {
+	t.Helper()
+	var s tableCounts
+	for _, c := range []struct {
+		table string
+		n     *int
+	}{{"carried", &s.carried}, {"outbound", &s.outbound}, {"messages", &s.messages}, {"uploads", &s.uploads}} {
+		if err := h.store.db.QueryRow(`SELECT COUNT(*) FROM ` + c.table).Scan(c.n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return s
+}
+
+// refusedCarried asserts a forward was refused for the caller's carried
+// share, in the words the setting is named by, with a Retry-After to wait
+// by and the limit named in the access log line this request wrote, and
+// that it stored nothing.
+func refusedCarried(t *testing.T, h *harness, id *identity.Identity, req *relayapi.ForwardRequest, setting string) {
+	t.Helper()
+	before, mark := h.tableCounts(t), len(h.logs.String())
+	status, body, header := h.send(id, "POST", "/v1/forward", req, nil)
+	if status != http.StatusTooManyRequests {
+		t.Fatalf("a forward past the carried share: %d %s; want 429", status, body)
+	}
+	if msg := errorText(t, body); !strings.HasPrefix(msg, "rate limited: carried") || !strings.Contains(msg, setting) {
+		t.Fatalf("the refusal says %q; want it to start \"rate limited: carried\" and name %s", msg, setting)
+	}
+	if retry, err := strconv.Atoi(header.Get("Retry-After")); err != nil || retry < 1 {
+		t.Fatalf("the refusal's Retry-After is %q; want a whole number of seconds", header.Get("Retry-After"))
+	}
+	if since := h.logs.String()[mark:]; !strings.Contains(since, "limit=carried") {
+		t.Fatalf("the refusal was not logged by its limit:\n%s", since)
+	}
+	if after := h.tableCounts(t); after != before {
+		t.Fatalf("the refusal stored something: before %+v, after %+v", before, after)
+	}
+}
+
+// TestACarriedHashIsChargedToItsPoster: every per-poster queue bound
+// counted waiting rows alone, while the carried hash a forward writes lives
+// for CarriedWindow (72h at the defaults) whatever became of the row, and
+// the only bound on the hashes was the relay-wide carried_max_rows. So a
+// user whose rows were handed at once spent that ceiling alone at
+// posts_per_minute, and from then every forward and every neighbour's
+// delivery, to anybody, was refused 507 until the hashes expired. Now a hash
+// is charged to its poster when it is written, from a share of its own: a
+// user's next fresh forward past the share is refused 429 and stores
+// nothing, the ceiling is left for everybody else, and a neighbour's
+// delivery to a mailbox here is taken.
+func TestACarriedHashIsChargedToItsPoster(t *testing.T) {
+	limits := DefaultCourierLimits()
+	limits.CarriedMaxRows = 2
+	limits.QueueMaxMessagesPerPoster = 1
+	limits.CarriedRowsPerPoster = 1
+	courier := neighbourID(t, "alpha")
+	h := peered(t, []string{"bar"}, []*identity.Identity{courier}, &limits)
+	h.enroll(courier)
+	user := h.user(t, "alice")
+	bob := h.user(t, "bob")
+	far := h.fpOf(t, "far")
+
+	status, answer, body := h.forward(user, request(sealedFor(far, "ct0"), []string{"bar"}, nil))
+	if status != http.StatusCreated {
+		t.Fatalf("the first forward: %d %s", status, body)
+	}
+	// The neighbour takes it, as the worker records: the row leaves the
+	// waiting state and the poster's share of the queue is free again,
+	// while the hash stays.
+	if err := h.store.Handed(answer.ID, 100, h.clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	refusedCarried(t, h, user, request(sealedFor(far, "ct1"), []string{"bar"}, nil), "courier.carried_rows_per_poster")
+
+	// A neighbour delivering unrelated mail to bob, who is on this relay.
+	status, _, body = h.forward(courier, request(sealedFor(bob.Fingerprint(), "from-afar"), nil, nil))
+	if status != http.StatusCreated {
+		t.Fatalf("one user with a carried share of %d has the neighbour's delivery to another user refused: %d %s",
+			limits.CarriedRowsPerPoster, status, body)
+	}
+}
+
+// TestACourierIsChargedFromItsOwnCarriedShare: a neighbour's delivery
+// writes a hash as a user's forward does, and is charged to the courier's
+// share, carried_rows_per_courier, which is its own and not a user's: a
+// courier past it is refused 429 and stores nothing, and a user's forward
+// is taken after it.
+func TestACourierIsChargedFromItsOwnCarriedShare(t *testing.T) {
+	limits := DefaultCourierLimits()
+	limits.CarriedRowsPerCourier = 1
+	limits.CarriedRowsPerPoster = 100
+	courier := neighbourID(t, "alpha")
+	h := peered(t, []string{"bar"}, []*identity.Identity{courier}, &limits)
+	h.enroll(courier)
+	user := h.user(t, "alice")
+	bob := h.user(t, "bob")
+
+	if status, _, body := h.forward(courier, request(sealedFor(bob.Fingerprint(), "one"), nil, nil)); status != http.StatusCreated {
+		t.Fatalf("the courier's first delivery: %d %s", status, body)
+	}
+	refusedCarried(t, h, courier, request(sealedFor(bob.Fingerprint(), "two"), nil, nil), "courier.carried_rows_per_courier")
+	if got, want := left(h.server.lim.carried, user.Fingerprint()), h.server.cfg.CourierLimits.carriedBurst(limits.CarriedRowsPerPoster); got != want {
+		t.Fatalf("the courier's deliveries left the user %d of a bucket of %d", got, want)
+	}
+	if status, _, body := h.forward(user, request(sealedFor(h.fpOf(t, "far"), "mine"), []string{"bar"}, nil)); status != http.StatusCreated {
+		t.Fatalf("a user's forward after the courier's share was spent: %d %s", status, body)
+	}
+}
+
+// TestARetryOfACarriedEnvelopeCostsNoShare: a retry after a lost answer is
+// one of the two callers the forward route expects, and the envelope's hash
+// was charged when it was written. The retry is answered with the row it
+// already has and spends nothing of the share.
+func TestARetryOfACarriedEnvelopeCostsNoShare(t *testing.T) {
+	limits := DefaultCourierLimits()
+	limits.CarriedRowsPerPoster = CarriedShareFloor(limits.MaxHops)
+	h := peered(t, []string{"bar"}, nil, &limits)
+	if b := h.server.cfg.CourierLimits.carriedBurst(limits.CarriedRowsPerPoster); b < 2 {
+		t.Fatalf("a share of %d is a bucket of %d; the retry needs one left after the forward", limits.CarriedRowsPerPoster, b)
+	}
+	user := h.user(t, "alice")
+	req := request(sealedFor(h.fpOf(t, "far"), "once"), []string{"bar"}, nil)
+
+	status, first, body := h.forward(user, req)
+	if status != http.StatusCreated {
+		t.Fatalf("the forward: %d %s", status, body)
+	}
+	before := left(h.server.lim.carried, user.Fingerprint())
+	status, again, body := h.forward(user, req)
+	if status != http.StatusConflict || again.ID != first.ID {
+		t.Fatalf("the retry: %d %s; want 409 naming row %d", status, body, first.ID)
+	}
+	if after := left(h.server.lim.carried, user.Fingerprint()); after != before {
+		t.Fatalf("the retry of a carried envelope spent %d of the share", before-after)
+	}
+}
+
+// TestACarriedHashCostsAShareForEachWindowItIsKept: a hash is kept one
+// ForwardTTL for each hop left and this one, so a long path costs as many
+// tokens as windows: a path of three relays spends three of the share and
+// a path of one spends one.
+func TestACarriedHashCostsAShareForEachWindowItIsKept(t *testing.T) {
+	limits := DefaultCourierLimits()
+	limits.MaxHops = 8
+	limits.CarriedRowsPerPoster = CarriedShareFloor(limits.MaxHops)
+	h := peered(t, []string{"bar"}, nil, &limits)
+	if b := h.server.cfg.CourierLimits.carriedBurst(limits.CarriedRowsPerPoster); b < 3 {
+		t.Fatalf("a share of %d is a bucket of %d; a path of three needs three", limits.CarriedRowsPerPoster, b)
+	}
+	far := h.fpOf(t, "far")
+	for _, c := range []struct {
+		path []string
+		want int64
+	}{
+		{[]string{"bar", "next", "last"}, 3},
+		{[]string{"bar"}, 1},
+	} {
+		user := h.user(t, "poster-"+strconv.Itoa(len(c.path)))
+		before := left(h.server.lim.carried, user.Fingerprint())
+		if status, _, body := h.forward(user, request(sealedFor(far, strings.Join(c.path, "!")), c.path, nil)); status != http.StatusCreated {
+			t.Fatalf("a forward by %v: %d %s", c.path, status, body)
+		}
+		if spent := before - left(h.server.lim.carried, user.Fingerprint()); spent != c.want {
+			t.Fatalf("a forward by %v spent %d of the share; want %d", c.path, spent, c.want)
+		}
+	}
+}
+
+// TestAStoreRefusalGivesTheCarriedShareBack: the share is spent before the
+// write, and a write the store refuses writes no hash, so every refusal of
+// it gives the tokens back: the poster's own queue share full and the
+// relay's carried ceiling reached each leave the bucket as it was, and a
+// courier's delivery refused at the ceiling leaves the courier's as it was.
+func TestAStoreRefusalGivesTheCarriedShareBack(t *testing.T) {
+	cases := []struct {
+		name   string
+		set    func(*CourierLimits)
+		filler bool
+	}{
+		{"the poster's queue share", func(c *CourierLimits) { c.QueueMaxMessagesPerPoster = 1 }, false},
+		{"the carried ceiling", func(c *CourierLimits) { c.CarriedMaxRows = 1 }, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			limits := DefaultCourierLimits()
+			limits.CarriedRowsPerPoster = CarriedShareFloor(limits.MaxHops)
+			c.set(&limits)
+			h := peered(t, []string{"bar"}, nil, &limits)
+			if b := h.server.cfg.CourierLimits.carriedBurst(limits.CarriedRowsPerPoster); b < 2 {
+				t.Fatalf("a share of %d is a bucket of %d; the refused forward needs one left", limits.CarriedRowsPerPoster, b)
+			}
+			far := h.fpOf(t, "far")
+			user := h.user(t, "alice")
+			first := user
+			if c.filler {
+				first = h.user(t, "filler")
+			}
+			if status, _, body := h.forward(first, request(sealedFor(far, "first"), []string{"bar"}, nil)); status != http.StatusCreated {
+				t.Fatalf("the first forward: %d %s", status, body)
+			}
+			before, rows := left(h.server.lim.carried, user.Fingerprint()), h.tableCounts(t)
+			status, _, body := h.forward(user, request(sealedFor(far, "second"), []string{"bar"}, nil))
+			if status != http.StatusInsufficientStorage {
+				t.Fatalf("the forward past %s: %d %s; want 507", c.name, status, body)
+			}
+			if after := left(h.server.lim.carried, user.Fingerprint()); after != before {
+				t.Fatalf("the refused forward kept %d of the share", before-after)
+			}
+			if after := h.tableCounts(t); after != rows {
+				t.Fatalf("the refused forward stored something: before %+v, after %+v", rows, after)
+			}
+		})
+	}
+	t.Run("a courier's delivery against the carried ceiling", func(t *testing.T) {
+		limits := DefaultCourierLimits()
+		limits.CarriedMaxRows = 1
+		limits.CarriedRowsPerCourier = CarriedShareFloor(limits.MaxHops)
+		courier := neighbourID(t, "alpha")
+		h := peered(t, []string{"bar"}, []*identity.Identity{courier}, &limits)
+		h.enroll(courier)
+		bob := h.user(t, "bob")
+		filler := h.user(t, "filler")
+		if status, _, body := h.forward(filler, request(sealedFor(h.fpOf(t, "far"), "first"), []string{"bar"}, nil)); status != http.StatusCreated {
+			t.Fatalf("the filler's forward: %d %s", status, body)
+		}
+		before, rows := left(h.server.lim.courierCarried, courier.Fingerprint()), h.tableCounts(t)
+		status, _, body := h.forward(courier, request(sealedFor(bob.Fingerprint(), "delivery"), nil, nil))
+		if status != http.StatusInsufficientStorage {
+			t.Fatalf("a delivery past the carried ceiling: %d %s; want 507", status, body)
+		}
+		if after := left(h.server.lim.courierCarried, courier.Fingerprint()); after != before {
+			t.Fatalf("the refused delivery kept %d of the courier's share", before-after)
+		}
+		if after := h.tableCounts(t); after != rows {
+			t.Fatalf("the refused delivery stored something: before %+v, after %+v", rows, after)
+		}
+	})
+}
+
+// TestTheCarriedShareRefillsOverTheWindow: a share's bucket is refilled its
+// own size per ForwardTTL, the time a hash at its last hop is kept, and no
+// faster: a poster refused for its share is still refused a minute short of
+// that, and taken again once it has passed. A user's share and a courier's
+// alike.
+func TestTheCarriedShareRefillsOverTheWindow(t *testing.T) {
+	cases := []struct {
+		name    string
+		courier bool
+		setting string
+	}{
+		{"a user's", false, "courier.carried_rows_per_poster"},
+		{"a courier's", true, "courier.carried_rows_per_courier"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			limits := DefaultCourierLimits()
+			limits.CarriedRowsPerPoster = 1
+			limits.CarriedRowsPerCourier = 1
+			courier := neighbourID(t, "alpha")
+			h := peered(t, []string{"bar"}, []*identity.Identity{courier}, &limits)
+			h.enroll(courier)
+			poster := h.user(t, "alice")
+			bob := h.user(t, "bob")
+			far := h.fpOf(t, "far")
+			req := func(ct string) *relayapi.ForwardRequest {
+				return request(sealedFor(far, ct), []string{"bar"}, nil)
+			}
+			if c.courier {
+				poster = courier
+				req = func(ct string) *relayapi.ForwardRequest {
+					return request(sealedFor(bob.Fingerprint(), ct), nil, nil)
+				}
+			}
+			if status, _, body := h.forward(poster, req("one")); status != http.StatusCreated {
+				t.Fatalf("the first: %d %s", status, body)
+			}
+			refusedCarried(t, h, poster, req("two"), c.setting)
+			h.clock.advance(limits.CarriedWindow(0) - time.Minute)
+			refusedCarried(t, h, poster, req("three"), c.setting)
+			h.clock.advance(time.Minute)
+			if status, _, body := h.forward(poster, req("four")); status != http.StatusCreated {
+				t.Fatalf("a window after the share was spent: %d %s", status, body)
+			}
+		})
+	}
+}
+
+// TestACourierForwardingOnwardIsChargedToItsOwnShare: a neighbour's courier
+// that forwards an envelope onward, a path still ahead of it, reaches the
+// queue as a courier, and the hash that row writes is charged to the
+// courier's share by the path's cost, never to a user's bucket under the
+// courier's fingerprint.
+func TestACourierForwardingOnwardIsChargedToItsOwnShare(t *testing.T) {
+	limits := DefaultCourierLimits()
+	limits.CarriedRowsPerCourier = CarriedShareFloor(limits.MaxHops)
+	courier := neighbourID(t, "alpha")
+	h := peered(t, []string{"bar"}, []*identity.Identity{courier}, &limits)
+	h.enroll(courier)
+	path := []string{"bar", "next"}
+	cost := h.server.cfg.CourierLimits.carriedHops(len(path) - 1)
+	if b := h.server.cfg.CourierLimits.carriedBurst(limits.CarriedRowsPerCourier); b < cost {
+		t.Fatalf("a share of %d is a bucket of %d; the path costs %d", limits.CarriedRowsPerCourier, b, cost)
+	}
+	fp := courier.Fingerprint()
+	courierBefore, userBefore := left(h.server.lim.courierCarried, fp), left(h.server.lim.carried, fp)
+	if status, _, body := h.forward(courier, request(sealedFor(h.fpOf(t, "far"), "onward"), path, nil)); status != http.StatusCreated {
+		t.Fatalf("the courier's onward forward: %d %s", status, body)
+	}
+	if spent := courierBefore - left(h.server.lim.courierCarried, fp); spent != cost {
+		t.Fatalf("the onward forward spent %d of the courier's share; want the path's %d", spent, cost)
+	}
+	if after := left(h.server.lim.carried, fp); after != userBefore {
+		t.Fatalf("the onward forward spent %d of a user's bucket under the courier's fingerprint", userBefore-after)
+	}
+}
+
+// carriedSpender is one poster's carried share as the adversary sees it:
+// buy one hash of a cost, say how many of its hashes stand now, and move
+// the clock. With a bound, the count is held to it after every hash bought
+// and the test stops at the first that passes it, so a share that never
+// refuses fails at once rather than spending forever.
+type carriedSpender struct {
+	spend    func(cost int64) bool
+	standing func() int
+	advance  func(time.Duration)
+	t        *testing.T
+	bound    int
+}
+
+// spendAll buys hashes of one cost until the share refuses one, calling
+// after with the standing count after every hash bought, and answers how
+// many it bought.
+func (c carriedSpender) spendAll(cost int64, after func(int)) int {
+	n := 0
+	for c.spend(cost) {
+		n++
+		standing := c.standing()
+		if c.bound > 0 && standing > c.bound {
+			c.t.Fatalf("%d hashes stood at once on a share of %d, the last of cost %d", standing, c.bound, cost)
+		}
+		after(standing)
+	}
+	return n
+}
+
+// harmonicAdversary is the spending R4 found: the bucket full at the
+// start, the window m back from the end spent whole on hashes costing m,
+// each window after on hashes costing its own distance from the end, and a
+// minute short of the end the last window's refill on one-hop hashes. Every
+// hash bought is still standing at that last moment. It answers the most
+// that stood at once, checked after every hash.
+func harmonicAdversary(c carriedSpender, m int64, window time.Duration) int {
+	most := 0
+	note := func(n int) { most = max(most, n) }
+	for k := m; k >= 1; k-- {
+		c.spendAll(k, note)
+		if k > 1 {
+			c.advance(window)
+		}
+	}
+	c.advance(window - time.Minute)
+	c.spendAll(1, note)
+	return most
+}
+
+// steadySpender is the plain spending: the bucket whole on hashes of one
+// cost, then a minute short of a window later its refill on the same.
+func steadySpender(c carriedSpender, cost int64, window time.Duration) int {
+	most := 0
+	note := func(n int) { most = max(most, n) }
+	c.spendAll(cost, note)
+	c.advance(window - time.Minute)
+	c.spendAll(cost, note)
+	return most
+}
+
+// limiterSpender is a share at the limiter alone, with each hash's expiry
+// kept by the test as the route would keep it, for a max_hops whose paths
+// the route's harness does not lay out. A burst of 0 is the relay's own
+// bucket, as newLimiters builds it; any other is a bucket of that size
+// refilled as much per window, the sizing R4 replaced.
+func limiterSpender(cl CourierLimits, burst int64) carriedSpender {
+	clock := newTestClock()
+	lim := newLimiters(Limits{}, cl, clock.Now).carried
+	if burst != 0 {
+		lim = ratelimit.New(burst, cl.CarriedWindow(0), cl.CarriedWindow(0), clock.Now)
+	}
+	var expiries []time.Time
+	return carriedSpender{
+		spend: func(cost int64) bool {
+			if ok, _ := lim.AllowN("poster", cost); !ok {
+				return false
+			}
+			expiries = append(expiries, clock.Now().Add(time.Duration(cost)*cl.ForwardTTL))
+			return true
+		},
+		standing: func() int {
+			n := 0
+			for _, e := range expiries {
+				if e.After(clock.Now()) {
+					n++
+				}
+			}
+			return n
+		},
+		advance: clock.advance,
+	}
+}
+
+// routeSpender is a user's share through the forward route, each hash of
+// cost k a fresh envelope by a path naming k relays, and the standing count
+// the carried table's rows not yet expired.
+func routeSpender(t *testing.T, h *harness) carriedSpender {
+	user := h.user(t, "adversary")
+	far := h.fpOf(t, "far")
+	n := 0
+	return carriedSpender{
+		spend: func(cost int64) bool {
+			t.Helper()
+			path := []string{"bar"}
+			for i := int64(2); i <= cost; i++ {
+				path = append(path, fmt.Sprintf("r%d", i))
+			}
+			n++
+			status, _, body := h.forward(user, request(sealedFor(far, fmt.Sprintf("hash-%d", n)), path, nil))
+			switch status {
+			case http.StatusCreated:
+				return true
+			case http.StatusTooManyRequests:
+				if !strings.HasPrefix(errorText(t, body), "rate limited: carried") {
+					t.Fatalf("a forward refused for something other than its carried share: %s", body)
+				}
+				return false
+			}
+			t.Fatalf("a forward of cost %d: %d %s", cost, status, body)
+			return false
+		},
+		standing: func() int {
+			var rows int
+			if err := h.store.db.QueryRow(`SELECT COUNT(*) FROM carried WHERE expires > ?`, h.clock.Now().Unix()).Scan(&rows); err != nil {
+				t.Fatal(err)
+			}
+			return rows
+		},
+		advance: h.clock.advance,
+	}
+}
+
+// unmetered is a peered relay whose only bound on a user's forwards is the
+// carried share: the posting rates, the request rate and the queue's
+// per-poster shares are off, so a thousand forwards in one instant are
+// refused for nothing but the share being measured.
+func unmetered(t *testing.T, cl CourierLimits) *harness {
+	t.Helper()
+	h := peered(t, []string{"bar"}, nil, &cl)
+	l := DefaultLimits()
+	l.PostsPerMinute, l.PostBytesPerHour, l.RequestsPerMinute = 0, 0, 0
+	h.server.lim = newLimiters(l, cl, h.clock.Now)
+	return h
+}
+
+// TestACarriedShareBoundsTheStandingHashesAtEveryMoment: ruling R4. A
+// carried share is the most a poster may have standing at once, and a hash
+// costs one token for each window it is kept, so a hash bought j windows
+// ago still stands only if it cost at least j. harmonicAdversary spends
+// the full bucket first on hashes costing M, each later window's refill on
+// hashes costing that window's distance from the end, and the last refill
+// on one-hop hashes. Every hash is still standing at the end, b(1 + H(M))
+// of them, b the bucket and H the harmonic number at max_hops M. The
+// bucket sized at the share itself, as it first was, let that reach
+// (1 + H(M)) × S: 3.72 S at max_hops 8 and 5.06 S at 32. Sized by
+// carriedBurst, the share over 1 + H(M), the count never passes S, checked
+// after every hash bought: through the forward route at max_hops 8, at the
+// limiter at max_hops 32, whose 32-relay paths the harness does not lay
+// out, and at both for the old sizing, to show the adversary is real. The
+// plain spendings, all one-hop and all max_hops, each spent at once and
+// again a minute short of a window later, stay under it too.
+func TestACarriedShareBoundsTheStandingHashesAtEveryMoment(t *testing.T) {
+	const share = 1000
+	limitsAt := func(m int64) CourierLimits {
+		cl := DefaultCourierLimits()
+		cl.MaxHops = m
+		cl.CarriedRowsPerPoster = share
+		cl.CarriedMaxRows = 0
+		cl.QueueMaxMessagesPerPoster = 1 << 30
+		cl.QueueMaxBytesPerPoster = 1 << 40
+		cl.QueueMaxBytes = 1 << 40
+		return cl
+	}
+	window := DefaultCourierLimits().CarriedWindow(0)
+	type spending struct {
+		name string
+		run  func(c carriedSpender, m int64) int
+		// least is what the spending must reach for the bound to have
+		// been pressed, as a fraction of the share in tenths.
+		least int
+	}
+	spendings := []spending{
+		{"the harmonic adversary", func(c carriedSpender, m int64) int { return harmonicAdversary(c, m, window) }, 9},
+		{"one-hop hashes", func(c carriedSpender, m int64) int { return steadySpender(c, 1, window) }, 0},
+		{"max_hops hashes", func(c carriedSpender, m int64) int { return steadySpender(c, m, window) }, 0},
+	}
+	for _, sp := range spendings {
+		t.Run("the route at max_hops 8, "+sp.name, func(t *testing.T) {
+			h := unmetered(t, limitsAt(8))
+			c := routeSpender(t, h)
+			c.t, c.bound = t, share
+			most := sp.run(c, 8)
+			if most > share || most < share*sp.least/10 {
+				t.Fatalf("%d hashes stood at once on a share of %d; want at most the share and at least %d tenths of it",
+					most, share, sp.least)
+			}
+			t.Logf("%d stood at once", most)
+		})
+		for _, m := range []int64{8, 32} {
+			t.Run(fmt.Sprintf("the limiter at max_hops %d, %s", m, sp.name), func(t *testing.T) {
+				c := limiterSpender(limitsAt(m), 0)
+				c.t, c.bound = t, share
+				most := sp.run(c, m)
+				if most > share || most < share*sp.least/10 {
+					t.Fatalf("%d hashes stood at once on a share of %d; want at most the share and at least %d tenths of it",
+						most, share, sp.least)
+				}
+				t.Logf("%d stood at once", most)
+			})
+		}
+	}
+	for _, m := range []int64{8, 32} {
+		t.Run(fmt.Sprintf("a bucket of the share itself at max_hops %d", m), func(t *testing.T) {
+			most := harmonicAdversary(limiterSpender(limitsAt(m), share), m, window)
+			if reach := (1 + harmonic(m)) * share; float64(most) < 0.95*reach {
+				t.Fatalf("the adversary stood %d against a bucket of the share; the sizing it replaced reached about %.0f", most, reach)
+			}
+			t.Logf("a bucket of %d stood %d at once at max_hops %d", share, most, m)
 		})
 	}
 }

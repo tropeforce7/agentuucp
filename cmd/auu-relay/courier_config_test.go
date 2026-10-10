@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"flag"
 	"fmt"
 	"log/slog"
 	"math"
@@ -359,6 +361,7 @@ func TestLimitCourierSettingRanges(t *testing.T) {
 			"--courier-queue-max-messages-per-poster",
 			"--courier-queue-max-messages-per-courier",
 			"--courier-reports-per-minute",
+			"--courier-carried-rows-per-poster", "--courier-carried-rows-per-courier",
 		} {
 			// Zero is unlimited and is taken; a negative one is refused with
 			// the sentence that says what zero means.
@@ -400,6 +403,201 @@ func TestLimitCourierSettingRanges(t *testing.T) {
 			}
 		}
 	})
+	// The carried shares are bounded below by relay.CarriedShareFloor,
+	// the least share whose bucket pays for a hash on the longest path, and
+	// above by a nonzero carried_max_rows, which a larger share could never
+	// reach.
+	t.Run("the carried shares", func(t *testing.T) {
+		hops := relay.DefaultCourierLimits().MaxHops
+		ceiling := relay.DefaultCourierLimits().CarriedMaxRows
+		if hops != 8 || ceiling != 1_000_000 {
+			t.Fatalf("the defaults moved: max_hops %d, carried_max_rows %d", hops, ceiling)
+		}
+		floor := relay.CarriedShareFloor(int64(hops))
+		// The docs say 30 at max_hops 8, ceil(8 × (1 + H(8))); this pins it.
+		if floor != 30 {
+			t.Fatalf("CarriedShareFloor(8) is %d; the guides say 30", floor)
+		}
+		atLeast := func(name string, got int64) string {
+			return fmt.Sprintf("%s must be at least %d, got %d: a hash costs one for each "+
+				"forward_ttl it is kept, one on the longest path is kept courier.max_hops (8) of "+
+				"them, and a poster may spend at most the share over 1 + H(max_hops) at once "+
+				"(use 0 for unlimited)", name, floor, got)
+		}
+		for _, f := range []string{"--courier-carried-rows-per-poster", "--courier-carried-rows-per-courier"} {
+			name := "courier.carried_rows_per_poster"
+			if f == "--courier-carried-rows-per-courier" {
+				name = "courier.carried_rows_per_courier"
+			}
+			for _, tc := range []struct {
+				share int64
+				want  string // "" for taken
+			}{
+				{floor, ""},
+				{floor - 1, atLeast(name, floor-1)},
+				{int64(hops), atLeast(name, int64(hops))},
+				{ceiling, ""},
+				{ceiling + 1, "at most courier.carried_max_rows (1000000), got 1000001"},
+				{math.MaxInt64, "at most courier.carried_max_rows (1000000)"},
+			} {
+				_, err := resolve(t, "", f, strconv.FormatInt(tc.share, 10))
+				switch {
+				case tc.want == "" && err != nil:
+					t.Errorf("%s %d: %v; want it taken", f, tc.share, err)
+				case tc.want != "" && err == nil:
+					t.Errorf("%s %d was taken; want %q", f, tc.share, tc.want)
+				case tc.want != "" && !strings.Contains(err.Error(), tc.want):
+					t.Errorf("%s %d: %v; want %q", f, tc.share, err, tc.want)
+				}
+			}
+			// An unlimited ceiling has no top for a share to pass.
+			if _, err := resolve(t, "", f, strconv.FormatInt(math.MaxInt64, 10),
+				"--courier-carried-max-rows", "0"); err != nil {
+				t.Errorf("%s MaxInt64 under an unlimited ceiling: %v; want it taken", f, err)
+			}
+			// A ceiling below the floor is the floor itself: a share at it,
+			// or 0, is taken, and anything smaller is refused with the
+			// sentence that says why a share must be the ceiling itself.
+			want := fmt.Sprintf("%s must be courier.carried_max_rows (5) or 0, got 3: the ceiling "+
+				"is below %d, the least share that pays for a path of courier.max_hops (8) relays, "+
+				"so a share must be the ceiling itself", name, floor)
+			_, err := resolve(t, "", "--courier-carried-max-rows", "5", f, "3")
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("%s 3 under a ceiling of 5: %v; want %q", f, err, want)
+			}
+			for _, share := range []string{"5", "0"} {
+				if _, err := resolve(t, "", "--courier-carried-max-rows", "5", f, share); err != nil {
+					t.Errorf("%s %s under a ceiling of 5: %v; want it taken", f, share, err)
+				}
+			}
+		}
+		// A share a settings file sets is the file's and is held to the
+		// same bounds, not derived over: one under the floor is refused
+		// where a derived share would have been the default sixteenth.
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "couriers"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		file := filepath.Join(dir, "relay.json")
+		for _, tc := range []struct {
+			key   string
+			share int64
+			want  string
+		}{
+			{"carried_rows_per_poster", floor - 1, atLeast("courier.carried_rows_per_poster", floor-1)},
+			{"carried_rows_per_courier", floor - 1, atLeast("courier.carried_rows_per_courier", floor-1)},
+			{"carried_rows_per_poster", 1_000_001, "courier.carried_rows_per_poster must be at most courier.carried_max_rows (1000000)"},
+			{"carried_rows_per_courier", 1_000_001, "courier.carried_rows_per_courier must be at most courier.carried_max_rows (1000000)"},
+			{"carried_rows_per_poster", floor, ""},
+			{"carried_rows_per_courier", floor, ""},
+		} {
+			body := fmt.Sprintf(`{"tls": {"mode": "off"}, "registration": "closed", "courier": {
+				"authorized_file": "couriers", %q: %d}}`, tc.key, tc.share)
+			if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := resolve(t, file)
+			if tc.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Errorf("file %s %d: %v; want %q", tc.key, tc.share, err, tc.want)
+				}
+				continue
+			}
+			if err != nil {
+				t.Errorf("file %s %d: %v; want it taken", tc.key, tc.share, err)
+				continue
+			}
+			got := cfg.Courier.CarriedRowsPerPoster
+			if tc.key == "carried_rows_per_courier" {
+				got = cfg.Courier.CarriedRowsPerCourier
+			}
+			if got != tc.share {
+				t.Errorf("file %s %d resolved to %d; want the file's own value", tc.key, tc.share, got)
+			}
+		}
+	})
+}
+
+// printedShares is the two carried shares as --print-config prints them.
+func printedShares(t *testing.T, cfg Config) (poster, courier int64, printed string) {
+	t.Helper()
+	var out bytes.Buffer
+	if err := Encode(&out, cfg.Redacted()); err != nil {
+		t.Fatal(err)
+	}
+	var probe struct {
+		Courier map[string]json.RawMessage `json:"courier"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &probe); err != nil {
+		t.Fatalf("the printed configuration is not JSON: %v", err)
+	}
+	read := func(key string) int64 {
+		raw, ok := probe.Courier[key]
+		if !ok {
+			t.Fatalf("--print-config output has no courier.%s:\n%s", key, out.String())
+		}
+		var n int64
+		if err := json.Unmarshal(raw, &n); err != nil {
+			t.Fatalf("courier.%s printed as %s: %v", key, raw, err)
+		}
+		return n
+	}
+	return read("carried_rows_per_poster"), read("carried_rows_per_courier"), out.String()
+}
+
+// TestTheCarriedSharesFollowTheCeiling: a share nobody set is a sixteenth
+// and a quarter of carried_max_rows as configured, so an operator who
+// lowers the ceiling lowers the shares with it; an unlimited ceiling uses
+// the default one's; a derived share is raised to relay.CarriedShareFloor
+// and no further than a nonzero ceiling; a share somebody set is kept; and
+// the printed configuration, loaded again, gives the same numbers.
+func TestTheCarriedSharesFollowTheCeiling(t *testing.T) {
+	floor := relay.CarriedShareFloor(relay.DefaultCourierLimits().MaxHops)
+	for _, tc := range []struct {
+		name            string
+		args            []string
+		poster, courier int64
+	}{
+		{"the defaults", nil, 62_500, 250_000},
+		{"a ceiling of 1600", []string{"--courier-carried-max-rows", "1600"}, 100, 400},
+		{"a ceiling of 127, the sixteenth under the floor",
+			[]string{"--courier-carried-max-rows", "127"}, floor, 31},
+		{"a ceiling below the floor", []string{"--courier-carried-max-rows", "5"}, 5, 5},
+		{"an unlimited ceiling", []string{"--courier-carried-max-rows", "0"}, 62_500, 250_000},
+		{"a poster share set", []string{"--courier-carried-max-rows", "1600",
+			"--courier-carried-rows-per-poster", strconv.FormatInt(floor+1, 10)}, floor + 1, 400},
+		{"a courier share set", []string{"--courier-carried-max-rows", "1600",
+			"--courier-carried-rows-per-courier", "1600"}, 100, 1600},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := resolve(t, "", tc.args...)
+			if err != nil {
+				t.Fatalf("%v: %v; want the derived shares to validate", tc.args, err)
+			}
+			poster, courier, printed := printedShares(t, cfg)
+			if poster != tc.poster || courier != tc.courier {
+				t.Fatalf("%v printed per poster %d, per courier %d; want %d and %d",
+					tc.args, poster, courier, tc.poster, tc.courier)
+			}
+			limits, err := cfg.Courier.Relay()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if limits.CarriedRowsPerPoster != tc.poster || limits.CarriedRowsPerCourier != tc.courier {
+				t.Errorf("the library is handed %d and %d; want what is printed, %d and %d",
+					limits.CarriedRowsPerPoster, limits.CarriedRowsPerCourier, tc.poster, tc.courier)
+			}
+			back, err := resolve(t, writeFile(t, printed))
+			if err != nil {
+				t.Fatalf("the printed configuration does not load again: %v", err)
+			}
+			bp, bc, _ := printedShares(t, back)
+			if bp != tc.poster || bc != tc.courier {
+				t.Errorf("loaded again, per poster %d, per courier %d; want %d and %d",
+					bp, bc, tc.poster, tc.courier)
+			}
+		})
+	}
 }
 
 // TestPrintedConfigCarriesTheCourierNumbers: the printed configuration is the
@@ -417,7 +615,8 @@ func TestPrintedConfigCarriesTheCourierNumbers(t *testing.T) {
 	for _, key := range []string{"max_hops", "forward_ttl", "queue_max_bytes", "queue_max_messages",
 		"queue_max_messages_per_poster", "queue_max_messages_per_courier",
 		"queue_max_bytes_per_poster", "posts_per_minute",
-		"post_bytes_per_hour", "carried_max_rows"} {
+		"post_bytes_per_hour", "carried_max_rows",
+		"carried_rows_per_poster", "carried_rows_per_courier"} {
 		if !strings.Contains(out.String(), key) {
 			t.Errorf("--print-config output is missing %q", key)
 		}
@@ -430,6 +629,67 @@ func TestPrintedConfigCarriesTheCourierNumbers(t *testing.T) {
 	// print it: the printed configuration is their file back again.
 	if back.Courier.MaxHops != 3 || back.Courier.ForwardTTL != "5h" || back.Courier.CarriedMaxRows != 7 {
 		t.Fatalf("the courier's numbers did not round trip: %+v", back.Courier)
+	}
+	// A ceiling of 7 has a sixteenth of 0 and a quarter of 1, each under
+	// the floor at max_hops 3, which is itself above the ceiling, so each
+	// share stops at the ceiling, 7; and 7 is what comes back.
+	if f := relay.CarriedShareFloor(3); f <= 7 {
+		t.Fatalf("CarriedShareFloor(3) is %d; this case wants it above the ceiling of 7", f)
+	}
+	if cfg.Courier.CarriedRowsPerPoster != 7 || cfg.Courier.CarriedRowsPerCourier != 7 {
+		t.Errorf("the derived shares are %d and %d; want the ceiling, 7 and 7",
+			cfg.Courier.CarriedRowsPerPoster, cfg.Courier.CarriedRowsPerCourier)
+	}
+	if back.Courier.CarriedRowsPerPoster != 7 || back.Courier.CarriedRowsPerCourier != 7 {
+		t.Errorf("the shares loaded again are %d and %d; want 7 and 7",
+			back.Courier.CarriedRowsPerPoster, back.Courier.CarriedRowsPerCourier)
+	}
+}
+
+// TestANullCarriedShareIsAbsent: a share key the file gives as null is a
+// share the file did not set, so it is derived from the file's ceiling and
+// does not keep the default ceiling's fraction the decode left in place.
+func TestANullCarriedShareIsAbsent(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "couriers"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "relay.json")
+	body := `{"tls": {"mode": "off"}, "registration": "closed", "courier": {
+		"authorized_file": "couriers", "carried_max_rows": 1600,
+		"carried_rows_per_poster": null, "carried_rows_per_courier": null}}`
+	if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := resolve(t, file)
+	if err != nil {
+		t.Fatalf("a null share under a ceiling of 1600: %v; want it read as absent", err)
+	}
+	poster, courier, _ := printedShares(t, cfg)
+	if poster != 100 || courier != 400 {
+		t.Errorf("null shares under a ceiling of 1600 printed %d and %d; want the derived 100 and 400",
+			poster, courier)
+	}
+}
+
+// TestTheCarriedShareFlagsDefaultToZero: a share's default is worked out
+// from the ceiling, so the flag set's own default is 0 and the help says
+// derived rather than printing a number that holds only at the default
+// ceiling.
+func TestTheCarriedShareFlagsDefaultToZero(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	registerFlags(fs)
+	for _, name := range []string{"courier-carried-rows-per-poster", "courier-carried-rows-per-courier"} {
+		fl := fs.Lookup(name)
+		if fl == nil {
+			t.Fatalf("--%s is not a flag", name)
+		}
+		if fl.DefValue != "0" {
+			t.Errorf("--%s defaults to %q; want \"0\"", name, fl.DefValue)
+		}
+		if !strings.Contains(fl.Usage, "derived") {
+			t.Errorf("--%s help %q does not say the share is derived", name, fl.Usage)
+		}
 	}
 }
 

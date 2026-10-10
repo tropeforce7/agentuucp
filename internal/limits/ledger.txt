@@ -113,6 +113,8 @@ cmd/auu-relay/config.go (CourierConfig).ParsedForwardTTL int time.ParseDuration(
 cmd/auu-relay/config.go Config int MaxBytes int64 = [1, 1073741824] shown by TestLimitMaxBytesBoundaries
 cmd/auu-relay/config.go Config int MaxStreamBytes int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go CourierConfig int CarriedMaxRows int64 = 0 or >= 0 shown by TestLimitCourierSettingRanges
+cmd/auu-relay/config.go CourierConfig int CarriedRowsPerCourier int64 = 0 or >= 0 shown by TestLimitCourierSettingRanges
+cmd/auu-relay/config.go CourierConfig int CarriedRowsPerPoster int64 = 0 or >= 0 shown by TestLimitCourierSettingRanges
 cmd/auu-relay/config.go CourierConfig int MaxHops int64 = [1, 32] shown by TestLimitCourierSettingRanges
 cmd/auu-relay/config.go CourierConfig int PostBytesPerHour int64 = 0 or >= 0 shown by TestLimitCourierSettingRanges
 cmd/auu-relay/config.go CourierConfig int PostsPerMinute int64 = 0 or >= 0 shown by TestLimitCourierSettingRanges
@@ -140,6 +142,8 @@ cmd/auu-relay/config.go LimitsConfig int RequestsPerMinute int64 = >= 0 shown by
 cmd/auu-relay/config.go LimitsConfig int UnauthenticatedPerMinute int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/main.go logClientCerts string parts.loaded.AnchorSPKI[:16] = local: equal to SPKI of the anchor, checked at load
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierCarriedMaxRows) = 0 or >= 0 shown by TestLimitCourierSettingRanges
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierCarriedRowsPerCourier) = 0 or >= 0 shown by TestLimitCourierSettingRanges
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierCarriedRowsPerPoster) = 0 or >= 0 shown by TestLimitCourierSettingRanges
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierMaxHops) = [1, 32] shown by TestLimitCourierSettingRanges
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierPostBytesPerHour) = 0 or >= 0 shown by TestLimitCourierSettingRanges
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.courierPostsPerMinute) = 0 or >= 0 shown by TestLimitCourierSettingRanges

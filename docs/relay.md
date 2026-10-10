@@ -53,6 +53,8 @@ Later ones win. A flag you do not type never overrides the file.
 | `--courier-reports-per-minute N` | `courier.reports_per_minute` | 60, a neighbour's rate for undeliverables, a tenth of its posting rate; see 1.10, 0 is unlimited |
 | `--courier-post-bytes-per-hour N` | `courier.post_bytes_per_hour` | 0, unlimited; see 1.10 |
 | `--courier-carried-max-rows N` | `courier.carried_max_rows` | 1000000, 0 is unlimited |
+| `--courier-carried-rows-per-poster N` | `courier.carried_rows_per_poster` | a sixteenth of `courier.carried_max_rows`, 62500 at its default, raised to 30 at the default `courier.max_hops` when that is less, and never above a nonzero ceiling; the most one person's hashes may stand at once, a hash costing one for each relay the envelope's path still names; the sustained rate is the share over 1 + H(`courier.max_hops`) each `courier.forward_ttl`; see 1.10, 0 is unlimited |
+| `--courier-carried-rows-per-courier N` | `courier.carried_rows_per_courier` | a quarter of `courier.carried_max_rows`, 250000 at its default, raised to 30 at the default `courier.max_hops` when that is less, and never above a nonzero ceiling; the most one neighbour's hashes may stand at once, a hash costing one for each relay the envelope's path still names; the sustained rate is the share over 1 + H(`courier.max_hops`) each `courier.forward_ttl`; see 1.10, 0 is unlimited |
 | `--client-certs off\|required` | `client_certs.mode` | `off`; `required` needs `registration` `token` or `closed` |
 | `--client-cert-lifetime DURATION` | `client_certs.lifetime` | `8760h`, between `1h` and `87600h` |
 | `--tls-mode off\|files` | `tls.mode` | `files`; `off` only when said, see below |
@@ -1230,6 +1232,52 @@ and `courier.carried_max_rows` bounds how many there are. At that ceiling
 the relay refuses to take anything new rather than forgetting one, since
 forgetting is what the table exists to prevent. The refusal names the
 setting.
+
+A hash outlives the row that wrote it, so a share of the queue does not
+bound it. A row handed on leaves the queue at once, and its hash stays.
+So each poster has a share of the hashes as well:
+`courier.carried_rows_per_poster` for a person, by the fingerprint their
+signature proved, and `courier.carried_rows_per_courier` for a
+neighbour, by its courier's. A share is the most hashes a poster may
+have standing at once. A forward's hash is kept one
+`courier.forward_ttl` for each relay the envelope's path still names,
+and costs one for each. So an envelope whose path still names three
+relays costs three, and none costs more than `courier.max_hops`. A
+delivery into a mailbox here, whose path names none, is kept one
+`courier.forward_ttl` and costs one. The charge is the last thing before
+the write. A refusal takes nothing from the share, and neither does a
+retry of an envelope this relay already carries.
+
+What a poster may spend is the share divided by 1 + H, where H is
+1 + 1/2 + … + 1/`courier.max_hops`. 1 + H is 3.72 at the default eight
+hops. The poster may spend that much at once, and that much again each
+`courier.forward_ttl`. Sized so, a poster's standing hashes never pass
+its share, whatever its mix of paths. The price is the sustained rate:
+about 27% of the share each `courier.forward_ttl` at the default eight
+hops. At the default shares that is 16,810 every 72 hours for a person
+and 67,243 for a neighbour: as many hashes on a path of one relay, an
+eighth as many on a path of eight.
+
+Over the share the relay answers `429` with a `Retry-After`, and the
+sentence names the setting. The access log says `limit=carried`. Left
+unset, the shares are a sixteenth and a quarter of
+`courier.carried_max_rows` as you set it: 62,500 and 250,000 at the
+default. Since standing hashes never pass the share, nobody fills the
+ceiling alone: sixteen people's shares, or four neighbours', add up to
+it. An unlimited ceiling takes the default ceiling's fractions.
+`--print-config` prints the numbers.
+
+The floor of a share is `courier.max_hops` × (1 + H), rounded up: 30 at
+the default eight hops. Below it, what a poster may spend at once cannot
+pay for a hash on the longest path. A share worked out from the ceiling
+is raised to that floor and stops at a nonzero ceiling. A share you set
+must be at least the floor. It must be no more than a nonzero ceiling,
+since the ceiling would always be met first. Where the ceiling is itself
+below the floor, a share you set must equal the ceiling or be 0. Such a
+relay forwards no path naming more relays than its share over 1 + H:
+with a ceiling of 20, five. With shares of 0 it forwards any path. The
+ceiling stays the last word: a poster within their share is still
+refused `507` when the relay holds `courier.carried_max_rows` hashes.
 
 A neighbour offered an envelope this relay already holds answers `409`, and
 what the relay behind makes of it depends on what comes with it, because a

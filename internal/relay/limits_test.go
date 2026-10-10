@@ -869,3 +869,25 @@ func TestTheReportingRateIsATenthOfThePostingRate(t *testing.T) {
 			atPosting)
 	}
 }
+
+// TestTheCarriedSharesAreFractionsOfTheCeiling: a person's share of the
+// carried hashes is a sixteenth of carried_max_rows and a neighbour's a
+// quarter. Since standing hashes never pass the share, nobody fills the
+// ceiling alone: sixteen people's shares, or four neighbours', add up to
+// it. The shares were decided as those fractions and not as numbers, so
+// what is held is the relationship: change the ceiling or either share for
+// a good reason and this fails, which asks whether the fraction was meant
+// to go too.
+func TestTheCarriedSharesAreFractionsOfTheCeiling(t *testing.T) {
+	d := DefaultCourierLimits()
+	if d.CarriedRowsPerPoster*16 != d.CarriedMaxRows {
+		t.Errorf("carried_rows_per_poster is %d of carried_max_rows %d; it is decided as a sixteenth, "+
+			"and a change to either number asks whether the fraction was meant to go too",
+			d.CarriedRowsPerPoster, d.CarriedMaxRows)
+	}
+	if d.CarriedRowsPerCourier*4 != d.CarriedMaxRows {
+		t.Errorf("carried_rows_per_courier is %d of carried_max_rows %d; it is decided as a quarter, "+
+			"and a change to either number asks whether the fraction was meant to go too",
+			d.CarriedRowsPerCourier, d.CarriedMaxRows)
+	}
+}

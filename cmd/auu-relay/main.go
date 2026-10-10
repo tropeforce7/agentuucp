@@ -90,6 +90,8 @@ type flagValues struct {
 	courierReportsPerMinute           int64
 	courierPostBytesPerHour           int64
 	courierCarriedMaxRows             int64
+	courierCarriedRowsPerPoster       int64
+	courierCarriedRowsPerCourier      int64
 }
 
 func registerFlags(fs *flag.FlagSet) *flagValues {
@@ -131,6 +133,15 @@ func registerFlags(fs *flag.FlagSet) *flagValues {
 		"bytes one neighbouring relay may forward an hour; 0 is unlimited")
 	fs.Int64Var(&f.courierCarriedMaxRows, "courier-carried-max-rows", d.Courier.CarriedMaxRows,
 		"envelopes this relay remembers carrying, which is what stops a loop; 0 is unlimited")
+	// The two shares' defaults are derived from carried_max_rows in
+	// Resolve, so the flag's own default is never applied and is 0 here
+	// rather than a number that is wrong whenever the ceiling is lowered.
+	fs.Int64Var(&f.courierCarriedRowsPerPoster, "courier-carried-rows-per-poster", 0,
+		"the most hashes one user's forwards may have standing (derived: a sixteenth of "+
+			"carried_max_rows, at least 30 at max_hops 8 and at most that ceiling); 0 is unlimited")
+	fs.Int64Var(&f.courierCarriedRowsPerCourier, "courier-carried-rows-per-courier", 0,
+		"the most hashes one neighbouring relay's forwards may have standing (derived: a quarter "+
+			"of carried_max_rows, at least 30 at max_hops 8 and at most that ceiling); 0 is unlimited")
 	fs.Int64Var(&f.maxBytes, "max-bytes", d.MaxBytes, "largest accepted envelope, in bytes")
 	fs.StringVar(&f.registration, "registration", d.Registration,
 		"who may create a mailbox: open, token, or closed")

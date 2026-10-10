@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -176,13 +177,25 @@ type CourierLimits struct {
 	// idempotent and a loop die, so at the ceiling the relay refuses to
 	// carry anything new until the oldest expire.
 	CarriedMaxRows int64
+	// CarriedRowsPerPoster and CarriedRowsPerCourier are one poster's
+	// share of those hashes, the most it may have standing at once: a
+	// user's, keyed by the fingerprint its signature proved, and a
+	// neighbour's, keyed by its courier's. A hash outlives the row that
+	// wrote it, by up to CarriedWindow, so a share of the queue's waiting
+	// rows bounds nothing here: a poster whose rows are handed at once
+	// would spend the relay-wide ceiling alone. Each is a token bucket, a
+	// hash costing one token for each ForwardTTL it is kept, sized by
+	// carriedBurst so that no way of spending it holds more than the share
+	// at once. 0 is unlimited.
+	CarriedRowsPerPoster  int64
+	CarriedRowsPerCourier int64
 }
 
 // DefaultCourierLimits is the policy a relay peered with another should
 // start with. Every number here is a guess to be corrected by running two
 // relays, and the container suite is where that happens.
 func DefaultCourierLimits() CourierLimits {
-	return CourierLimits{
+	c := CourierLimits{
 		MaxHops:       8,
 		ForwardTTL:    72 * time.Hour,
 		QueueMaxBytes: 1 << 30,
@@ -224,6 +237,14 @@ func DefaultCourierLimits() CourierLimits {
 		PostBytesPerHour: 0,
 		CarriedMaxRows:   1_000_000,
 	}
+	// A sixteenth of the ceiling for a person and a quarter for a
+	// neighbour. Since standing hashes never pass the share, nobody fills
+	// the ceiling alone: sixteen people's shares, or four neighbours', add
+	// up to it. The shares are decided as these fractions, and a test
+	// holds them so.
+	c.CarriedRowsPerPoster = c.CarriedMaxRows / 16
+	c.CarriedRowsPerCourier = c.CarriedMaxRows / 4
+	return c
 }
 
 // Quotas extracts what the queue and the carried table are bounded by.
@@ -269,6 +290,55 @@ func (c CourierLimits) CourierQuotasFor() CourierQuotas {
 // the ceilings, and hold the poster's fingerprint on a handed row for just
 // as long. An envelope cannot outlive the hops that are left to carry it.
 func (c CourierLimits) CarriedWindow(pathLeft int) time.Duration {
+	return time.Duration(c.carriedHops(pathLeft)) * c.ForwardTTL
+}
+
+// carriedBurst is the size of a carried bucket, its burst and its refill
+// per ForwardTTL, for a share: the share over 1 + H(M), where H is the
+// harmonic number and M is max_hops, the longest a hash may cost.
+//
+// A hash bought j windows ago is standing now only if it cost at least j,
+// so a poster who keeps its bucket full and spends each earlier window's
+// refill on hashes costing that window's age, then the burst and a refill
+// on one-hop hashes now, has b + b(1/1 + 1/2 + ... + 1/M) standing, and no
+// spending has more. Sizing the bucket at share/(1 + H(M)) holds that to
+// the share at every moment, for every mix of paths. A bucket of the share
+// itself would let a poster stand at 1 + H(M) times it, 3.7 at max_hops 8.
+// The price is the sustained rate, the share over 1 + H(M) per ForwardTTL;
+// a share at or above CarriedShareFloor leaves a burst of at least M, so
+// the longest path can be paid for. Below that floor, which auu-relay
+// takes only as a share equal to a ceiling under it, the burst is at least
+// one; a burst of one on a share under 1 + H(M) can stand past the share,
+// and the ceiling, being that share, holds it.
+func (c CourierLimits) carriedBurst(share int64) int64 {
+	if share <= 0 {
+		return 0
+	}
+	b := int64(float64(share) / (1 + harmonic(c.carriedHops(relayapi.MaxHops))))
+	return max(b, 1)
+}
+
+// CarriedShareFloor is the least share whose bucket pays for a hash on the
+// longest path, max_hops tokens: ceil(max_hops × (1 + H(max_hops))), 30 at
+// max_hops 8. max_hops is clamped as carriedHops clamps it.
+func CarriedShareFloor(maxHops int64) int64 {
+	m := CourierLimits{MaxHops: maxHops}.carriedHops(relayapi.MaxHops)
+	return int64(math.Ceil(float64(m) * (1 + harmonic(m))))
+}
+
+// harmonic is 1 + 1/2 + ... + 1/n.
+func harmonic(n int64) float64 {
+	h := 0.0
+	for k := int64(1); k <= n; k++ {
+		h += 1 / float64(k)
+	}
+	return h
+}
+
+// carriedHops is how many ForwardTTLs a hash is kept for an envelope with
+// pathLeft hops ahead of it, which is also what the hash costs its poster
+// from the carried share.
+func (c CourierLimits) carriedHops(pathLeft int) int64 {
 	// The ceiling is clamped both ways, as the route clamps it: a zero or a
 	// nonsense MaxHops is the zero value of this struct, which an embedder
 	// can hand over and auu-relay never does, and a window of zero would
@@ -281,7 +351,7 @@ func (c CourierLimits) CarriedWindow(pathLeft int) time.Duration {
 	if left := int64(pathLeft) + 1; left < hops {
 		hops = left
 	}
-	return time.Duration(hops) * c.ForwardTTL
+	return hops
 }
 
 // Quotas extracts the storage limits the store enforces.
@@ -338,6 +408,10 @@ const (
 	// answered at once because a cap on holds was reached. The request
 	// was not refused; the field says why a held request was not held.
 	limitWaiting = "waiting"
+	// limitCarried is a poster's share of the hashes this relay keeps of
+	// the envelopes it carries, carried_rows_per_poster for a user and
+	// carried_rows_per_courier for a neighbour.
+	limitCarried = "carried"
 )
 
 // maxWaitingPerIdentity caps the listings one identity may have held at
@@ -368,6 +442,12 @@ type limiters struct {
 	courierPosts     *ratelimit.Limiter
 	courierPostBytes *ratelimit.Limiter
 	courierReports   *ratelimit.Limiter
+	// A poster's share of the carried hashes, a user's and a courier's,
+	// keyed by the verified fingerprint. Sized by carriedBurst, refilled
+	// that much per ForwardTTL and idle as long, the point at which an
+	// untouched bucket is full.
+	carried        *ratelimit.Limiter
+	courierCarried *ratelimit.Limiter
 }
 
 func newLimiters(l Limits, c CourierLimits, now func() time.Time) limiters {
@@ -375,6 +455,8 @@ func newLimiters(l Limits, c CourierLimits, now func() time.Time) limiters {
 		courierPosts:     ratelimit.New(c.PostsPerMinute, time.Minute, time.Minute, now),
 		courierPostBytes: ratelimit.New(c.PostBytesPerHour, time.Hour, time.Hour, now),
 		courierReports:   ratelimit.New(c.ReportsPerMinute, time.Minute, time.Minute, now),
+		carried:          ratelimit.New(c.carriedBurst(c.CarriedRowsPerPoster), c.CarriedWindow(0), c.CarriedWindow(0), now),
+		courierCarried:   ratelimit.New(c.carriedBurst(c.CarriedRowsPerCourier), c.CarriedWindow(0), c.CarriedWindow(0), now),
 		requests:         ratelimit.New(l.RequestsPerMinute, time.Minute, time.Minute, now),
 		posts:            ratelimit.New(l.PostsPerMinute, time.Minute, time.Minute, now),
 		postBytes:        ratelimit.New(l.PostBytesPerHour, time.Hour, time.Hour, now),

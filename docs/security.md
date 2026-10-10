@@ -397,6 +397,29 @@ reads `refused: …: already carried`, which is true about the outcome and silen
 about its cause. The sender's own relay had every retry before then, at least
 one an hour, to learn the code.
 
+That answer rests on the relay's memory of what it has carried: a hash of
+the recipient and the ciphertext of every envelope it forwards or
+delivers, kept as long as the envelope could still be alive ahead of it.
+A hash is never evicted, so `courier.carried_max_rows` is a ceiling the
+relay refuses new mail at. A hash outlives the row that wrote it, so the
+queue's shares do not bound it, and one person or one neighbour could
+otherwise fill the ceiling alone and stop every forward and every
+delivery from a neighbour for days. So a hash is charged to whoever
+posted it, by the fingerprint the signature proved, against
+`courier.carried_rows_per_poster` for a person and
+`courier.carried_rows_per_courier` for a neighbour. It costs one for each
+`courier.forward_ttl` it is kept, and over the share the answer is `429`.
+One poster's standing hashes stay at or under its share at every moment,
+across any window and any mix of paths. `docs/relay.md` section 1.10
+gives the numbers.
+
+What remains is this. The shares are kept in memory and the hashes on
+disk, so a restart refills every share while the hashes stay. A
+poster's bucket is forgotten when it is the least recently seen of
+100,000 and another poster arrives, and it comes back full. Both let one
+poster past their share, and neither lets anybody past
+`courier.carried_max_rows`.
+
 One boundary of the couriers route rests on a setting, and it is the same setting
 the rest of this document's disclosures rest on. The route answers a relay's
 registered identities, which is how it avoids being the oracle a silent courier
