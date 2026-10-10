@@ -381,10 +381,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // purgeUploads lets go of every upload past its expiry whose lock is not
-// held, and gives each sender back what its rows were charged for and
-// never held. It runs every hundredth request, and at an open refused
-// for the sender's count when the soonest of that sender's expiries has
-// passed, so that the count the refusal promised would fall by then has.
+// held, and settles each sender's budget for its rows by returnUnheld. It
+// runs every hundredth request, and at an open refused for the sender's
+// count when the soonest of that sender's expiries has passed, so that
+// the count the refusal promised would fall by then has.
 // Failures are logged and not answered: it runs inside an unrelated
 // caller's request, or one that will be answered by its own count.
 func (s *Server) purgeUploads(now time.Time) {
@@ -405,17 +405,27 @@ func (s *Server) purgeUploads(now time.Time) {
 	}
 }
 
-// returnUnheld gives a sender back the post bytes an upload was charged
-// for and the relay never held, when its row goes unplaced: the declared
-// size less what the relay received, as the row stood when it went. The
-// budget charges what the relay ends up holding or placing; the open
-// charged the whole declared size, so a sender cannot open past its
-// budget, and this is the other half. A kept partial's bytes were held,
-// so they stay charged while it is kept and come back with the rest when
-// it expires unplaced; a placed stream gives nothing back. n is a
-// difference of two values the relay wrote, and a return never fills a
-// bucket past its burst.
+// returnUnheld settles a sender's post bytes when an upload's row goes
+// unplaced, by abort, by expiry at a route or the purge, or by an attempt
+// that deleted it whole, as the row stood when it went.
+//
+// An upload the relay never fed, its row holding no byte, gives nothing
+// back: it cost the relay a reservation of the recipient's room and the
+// sender nothing, and the open's charge is what it costs. Refunded, it
+// made holding a mailbox full free, opened, dropped and opened again at
+// once. That includes a first attempt that ended short of the resume
+// threshold, and one the relay's own disk failed, which are charged the
+// declared size for the hour; an open the budget then cannot afford is
+// refused 429 "rate limited: post bytes", with Retry-After saying when
+// the budget allows it. An upload with kept bytes is given back what it
+// declared above them: those bytes were held, so they stay charged, and
+// a placed stream gives nothing back. n is a difference of two values
+// the relay wrote, and a return never fills a bucket past its burst.
 func (s *Server) returnUnheld(u *Upload) {
+	if u.Received == 0 {
+		s.store.faults.noteUnfed(u.From, u.Size, s.minimal)
+		return
+	}
 	s.lim.postBytes.Return(u.From, u.Size-u.Received)
 }
 

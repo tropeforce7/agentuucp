@@ -27,9 +27,9 @@ import (
 // stream is told so now rather than after uploading most of it. What the
 // store then refuses — the mailbox or the relay full, no mailbox, the
 // sender's count of open uploads at the cap, a storage error — is an
-// upload the relay never made a row for, and the charge comes back: the
-// budget charges what the relay ends up holding, and a refused open costs
-// a post and no bytes.
+// upload the relay never made a row for, and the charge comes back, so a
+// refused open costs a post and no bytes. An upload that was opened has
+// its charge settled by returnUnheld when it goes unplaced.
 func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {
 	if !s.cfg.Streams {
 		s.fail(w, http.StatusForbidden, "this relay does not accept streams; ask the operator to set streams")

@@ -96,6 +96,26 @@ func (f *faultLog) noteCarriedAgain(neighbour string) {
 		"neighbour", neighbour)
 }
 
+// noteUnfed says an upload went unplaced with no byte held, its declared
+// size charged to its sender and not given back, so that an operator can
+// see who is holding mailboxes full with reservations. It is the one line
+// here that names a sender, and only under the full access log, which
+// names the caller of every request anyway; under minimal it names nobody
+// and is one line a minute for every sender together. Keyed by the
+// sender's fingerprint, which a signature proved when the upload was
+// opened, so one sender's line a minute does not hide another's.
+func (f *faultLog) noteUnfed(from string, size int64, minimal bool) {
+	if minimal {
+		if f.due("unfed") {
+			f.log.Warn("upload abandoned unfed", "size", size)
+		}
+		return
+	}
+	if f.due("unfed:" + from) {
+		f.log.Warn("upload abandoned unfed", "fp", from, "size", size)
+	}
+}
+
 // noteDirectory logs that a mailbox's channel directory does not verify,
 // so every post to the mailbox is refused, default included, unless that
 // was logged for the mailbox inside the last minute; keyed apart from the

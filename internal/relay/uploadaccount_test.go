@@ -240,16 +240,18 @@ func TestLimitOpenUploadsAtTheCapAndOneOver(t *testing.T) {
 }
 
 // TestThePostBytesBudgetChargesWhatTheRelayHolds: an open charges the
-// declared size, so a sender cannot open past its budget; what the relay
-// never held comes back when the row goes unplaced. A placement gives
+// declared size, so a sender cannot open past its budget; when the row goes
+// unplaced, a row that had received bytes gives back the size less them,
+// and a row the relay never fed gives back nothing (D64). A placement gives
 // nothing back. An abort, an expiry met at the route, the purge, a first
-// attempt that leaves nothing and a resumed attempt that stops short each
-// give back the size less what the row had received when it went: the
-// whole size for a row at zero, the size less the kept bytes for a kept
-// partial, whose bytes stay charged while it is kept. A placement that
-// failed keeps the row and gives nothing back. A return after the hour
-// fills the budget and no more. Two abandoned opens no longer spend the
-// hour: the N01 row's gigabyte, in miniature.
+// attempt that leaves nothing and a placement whose file went from under it
+// each go with the row at zero, and the declared size stays charged; a
+// kept partial's expiry, by the route or the purge, and a resumed attempt
+// that stops short give back the size less the kept bytes, which stay
+// charged while they are kept. A placement that failed keeps the row and
+// gives nothing back. A return after the hour fills the budget and no
+// more. Two abandoned opens spend the hour: a reservation the relay never
+// fed is not free to make again.
 func TestThePostBytesBudgetChargesWhatTheRelayHolds(t *testing.T) {
 	people := ids(t, "alice", "bob")
 	alice, bob := people[0], people[1]
@@ -299,15 +301,24 @@ func TestThePostBytesBudgetChargesWhatTheRelayHolds(t *testing.T) {
 		}
 		budget(t, h, burst-size, "the placement")
 	})
-	t.Run("an abort gives back the whole size", func(t *testing.T) {
+	t.Run("an abort of an upload never fed gives nothing back", func(t *testing.T) {
 		h := fresh(t)
 		id := h.openOrFail(alice, to, size)
 		if status, body, _ := h.sendRaw(alice, "DELETE", "/v1/uploads/"+id, nil, nil); status != http.StatusNoContent {
 			t.Fatalf("abort: %d %s", status, body)
 		}
-		budget(t, h, burst, "the abort")
+		budget(t, h, burst-size, "the abort")
 	})
-	t.Run("an expiry met at the route gives back what the row never held", func(t *testing.T) {
+	t.Run("an abort of a kept partial gives back the size less the kept bytes", func(t *testing.T) {
+		h := fresh(t)
+		id := h.openOrFail(alice, to, size)
+		keep(t, h, id)
+		if status, body, _ := h.sendRaw(alice, "DELETE", "/v1/uploads/"+id, nil, nil); status != http.StatusNoContent {
+			t.Fatalf("abort: %d %s", status, body)
+		}
+		budget(t, h, burst-kept, "the abort of a kept partial")
+	})
+	t.Run("an expiry met at the route gives back what a fed row never held", func(t *testing.T) {
 		h := fresh(t)
 		untouched := h.openOrFail(alice, to, size)
 		partial := h.openOrFail(alice, to, size)
@@ -321,10 +332,10 @@ func TestThePostBytesBudgetChargesWhatTheRelayHolds(t *testing.T) {
 				}
 			}
 		}
-		gains(t, h, expired(untouched), size, "the expiry of an untouched upload")
+		gains(t, h, expired(untouched), 0, "the expiry of an untouched upload")
 		gains(t, h, expired(partial), size-kept, "the expiry of a kept partial")
 	})
-	t.Run("the purge gives back what each row never held", func(t *testing.T) {
+	t.Run("the purge gives back what each fed row never held", func(t *testing.T) {
 		h := fresh(t)
 		h.openOrFail(alice, to, size)
 		keep(t, h, h.openOrFail(alice, to, size))
@@ -334,16 +345,16 @@ func TestThePostBytesBudgetChargesWhatTheRelayHolds(t *testing.T) {
 			if n := h.openCount(from); n != 0 {
 				t.Fatalf("%d uploads left after the purge, want none", n)
 			}
-		}, size+size-kept, "the purge of an untouched upload and a kept partial")
+		}, size-kept, "the purge of an untouched upload and a kept partial")
 	})
-	t.Run("a first attempt that leaves nothing gives back the whole size", func(t *testing.T) {
+	t.Run("a first attempt that leaves nothing gives nothing back", func(t *testing.T) {
 		h := fresh(t)
 		id := h.openOrFail(alice, to, size)
 		status, body, _ := h.putPartial(alice, id, blob, 0, 1000)
 		if status != http.StatusBadRequest || !strings.Contains(string(body), "nothing is kept") {
 			t.Fatalf("the short attempt: %d %s; want 400 nothing kept", status, body)
 		}
-		budget(t, h, burst, "the short attempt")
+		budget(t, h, burst-size, "the short attempt")
 	})
 	t.Run("a resumed attempt that stops short gives back the size less the kept bytes", func(t *testing.T) {
 		h := fresh(t)
@@ -358,14 +369,17 @@ func TestThePostBytesBudgetChargesWhatTheRelayHolds(t *testing.T) {
 		}
 		budget(t, h, burst-kept, "the resumed attempt that stopped short")
 	})
-	t.Run("a placement that failed with the file gone aborts the upload and gives back the size", func(t *testing.T) {
+	t.Run("a placement that failed with the file gone on a first attempt aborts the upload and gives nothing back", func(t *testing.T) {
 		h := fresh(t)
 		id := h.openOrFail(alice, to, size)
 		// The attempt reaches the end with the upload's file gone from
 		// under its name: the copy lands on the open handle, the rename
 		// into the mailbox fails, and there is no file to put back to
 		// what the row says, so the upload goes whole and the sender
-		// opens anew; what the relay never held comes back.
+		// opens anew. The row held nothing when it went, so the
+		// declared size stays charged: the relay's own fault on a first
+		// attempt costs the sender the hour, the residual D64 accepted
+		// so that no way of ending an unfed upload refunds it.
 		status, body := h.putRemovingTheFile(alice, id, blob, 100)
 		if status != http.StatusInternalServerError {
 			t.Fatalf("the attempt whose placement failed: %d %s; want 500", status, body)
@@ -373,7 +387,7 @@ func TestThePostBytesBudgetChargesWhatTheRelayHolds(t *testing.T) {
 		if row, file := h.uploadLeft(id); row || file >= 0 {
 			t.Fatalf("after the failed placement with the file gone: row %v, file %d; want the upload gone", row, file)
 		}
-		budget(t, h, burst, "the failed placement with the file gone")
+		budget(t, h, burst-size, "the failed placement with the file gone")
 	})
 	t.Run("a placement that failed with the file present keeps the row, the file at what the row says, and the charge", func(t *testing.T) {
 		h := fresh(t)
@@ -429,7 +443,7 @@ func TestThePostBytesBudgetChargesWhatTheRelayHolds(t *testing.T) {
 		}
 		budget(t, h, burst, "an expiry after the hour")
 	})
-	t.Run("two abandoned opens no longer spend the hour", func(t *testing.T) {
+	t.Run("two abandoned opens spend the hour", func(t *testing.T) {
 		h := newHarness(t, Config{Limits: Limits{PostBytesPerHour: 2 * size}})
 		h.register(alice)
 		h.register(bob)
@@ -439,10 +453,14 @@ func TestThePostBytesBudgetChargesWhatTheRelayHolds(t *testing.T) {
 				t.Fatalf("abort: %d %s", status, body)
 			}
 		}
-		// The third open, which the budget refused before what an
-		// abandoned upload never held came back.
-		if id := h.uploadStream(alice, to, blob); id <= 0 {
-			t.Fatalf("the third stream after two abandoned opens: %d", id)
+		// The third open is refused for the sender's budget, and the
+		// refusal leaves no row behind it.
+		status, body := h.do(alice, "POST", "/v1/mailbox/"+to+"/streams", relayapi.OpenStreamRequest{Size: size}, nil)
+		if status != http.StatusTooManyRequests || errorText(t, body) != "rate limited: "+limitPostBytes {
+			t.Fatalf("the third open after two abandoned opens: %d %s; want 429 rate limited: %s", status, body, limitPostBytes)
+		}
+		if n := h.openCount(from); n != 0 {
+			t.Fatalf("%d uploads open after the refused open, want none", n)
 		}
 	})
 }

@@ -56,7 +56,9 @@ uploaded, the relay holds a row naming the *sender* as well as the recipient.
 It has to, because only the sender may append to their own upload and the
 reservation must be charged to somebody. That row lives for the length of one
 upload and is deleted when the stream completes or is abandoned. Nothing
-survives it.
+in the database survives it. An upload that goes without a byte held
+leaves its charge in the sender's byte budget, which is memory, and under
+a `full` access log one line naming the sender, both described below.
 
 The second is a knock. A knock row carries the fingerprint of whoever
 knocked, and carries it for exactly as long as the row: until the owner's
@@ -104,9 +106,34 @@ answers both, so neither can be filled into the other's reservation. What
 bounds one identity's uploads is the count, `max_open_uploads`, beside its
 byte budget. The count is four unless the operator sets
 `max_open_uploads`, across every mailbox it sends to. The open
-charges the declared size. What the relay never ends up holding comes back
-when the upload goes unplaced. So the budget charges what the relay holds,
-and an abandoned upload does not spend the hour.
+charges the declared size. An upload with kept bytes is given back its
+size less them when it goes unplaced, so there the budget charges what the
+relay held. An upload that goes with no byte held gives nothing back: the
+open's charge is what its reservation of the recipient's room costs.
+Refunded, it would let a sender hold a mailbox full for nothing, opening,
+sending nothing, aborting and opening again at once. So one identity's
+reservations cost its `post_bytes_per_hour`, 256 MiB at the defaults,
+however little it uploads. A reservation nobody feeds expires sixty
+seconds after the open, the resume window. It still holds the room until
+the sender's next request on it or the purge meets it. The purge runs
+every hundredth request, so on a quiet relay that can be later.
+
+What remains is this. Each hour one identity may reserve, unfed, as many
+bytes of a recipient's room as its `post_bytes_per_hour`, and hold each
+reservation a minute or more. At the defaults that is a quarter of a
+mailbox, so it takes four identities to hold one full. That holds only on
+a mailbox whose owner admits them. A reservation fed to the resume
+threshold, `max_bytes`, and then dropped is kept for one resume. When it
+goes it is given back its size less the kept bytes, which were held. So
+it costs its sender only the threshold, and an identity may hold room
+for longer each hour that way, paying `max_bytes` each time. The allow
+list is the owner's answer to both, and the registration budget the
+operator's. The rule costs honest senders something too. A first attempt
+that ends short of the resume threshold leaves nothing, and so is charged
+the declared size for the hour. So is a first attempt the relay's own disk
+fails. An open the budget then cannot afford is refused `429`
+`rate limited: post bytes`, with `Retry-After` saying when the budget
+allows it.
 
 **What the relay sees.** More than it stores, and this is worth being plain
 about. Posting is authenticated, so at the moment a message is accepted the
@@ -117,6 +144,10 @@ Anybody holding the logs of a `full`-mode relay holds the social graph. Nothing
 of that is written to the database, and no limiter key is ever written
 anywhere. The one thing a stored row says about a sender is the knocker on a
 knock, above, which lives as long as the knock does.
+Of the lines the relay logs about faults, one names a sender, and only
+under `full`: `upload abandoned unfed`, about once a minute for each
+sender whose upload went with no byte held, with the declared size. Under
+`minimal` that line names nobody.
 
 The channel a message was posted to is the one thing about a message's
 content the relay learns beyond its size. It is written to the row, served
@@ -1273,13 +1304,16 @@ sender's link dropped, or whose bytes stopped coming. If it was the first
 attempt and what the relay holds is at least the threshold, the partial is
 kept for one resume, for sixty seconds from that moment and no longer.
 Otherwise nothing is kept, and the upload, its file, its row and its
-reservation go together. The sender's budget is then given back what the
-relay never held, the size less what it had kept before that attempt. A
-kept partial stays charged while it is kept. So the relay never holds less
-than a threshold's worth of an upload that did not finish. A stream is
-placed by at most two attempts on one id. A sender that trickles a byte at
-a time builds nothing up. A budget is spent on what the relay holds or
-places and on nothing else. The sender learns what the relay kept the way
+reservation go together. If the relay had kept a partial before that
+attempt, the sender's budget is given back the size less it. If it had
+kept nothing, as after a first attempt short of the threshold or one the
+relay's own disk failed, nothing comes back and the declared size stays
+charged for the hour. A kept partial stays charged while it is kept. So
+the relay never holds less than a threshold's worth of an upload that did
+not finish. A stream is placed by at most two attempts on one id. A sender
+that trickles a byte at a time builds nothing up. A budget is spent on
+what the relay holds or places, and on the whole of a reservation that
+never held a byte. The sender learns what the relay kept the way
 this wire tells it, by the next attempt. One from zero on the same id is
 `409` with the kept offset, from which it resumes once. It is `404` or
 `410` when the relay has let the upload go, on which it opens anew. It is

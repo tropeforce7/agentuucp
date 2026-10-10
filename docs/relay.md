@@ -339,7 +339,7 @@ switch the lot off.
 |---|---|---|
 | `requests_per_minute` | authenticated requests, per identity | 120 |
 | `posts_per_minute` | posts, per identity | 30 |
-| `post_bytes_per_hour` | posted bytes, per identity: an envelope's size, and a stream's declared size when it is opened, of which what the relay never ends up holding — the size less what it received — comes back when the upload goes unplaced | 256 MiB |
+| `post_bytes_per_hour` | posted bytes, per identity: an envelope's size, and a stream's declared size when it is opened, of which an upload with kept bytes is given back the size less them when it goes unplaced, while one that goes holding no byte gives nothing back | 256 MiB |
 | `unauthenticated_per_minute` | registrations, key lookups and failed authentications, per source address | 30 |
 | `registrations_per_hour` | registrations, per source address | 5 |
 | `max_mailboxes` | mailboxes on the relay | unlimited |
@@ -360,19 +360,39 @@ and bytes and against the relay's total exactly as a queued message is. That
 holds for an envelope posted beside it and for another stream alike. So a
 sender cannot fill a mailbox to its quota under an open reservation and then
 complete the stream on top. The reservation is released when the upload
-completes, is abandoned, or expires.
+completes or is abandoned, or, once expired, when a route or the purge
+meets it.
 
 The sender's byte budget is charged the same way at the open, with the
-whole declared size, so a sender cannot open past it. But the budget
-charges what the relay ends up holding, and what it never held comes back.
-An upload that goes unplaced gives back its size less what the relay had
-received. Unplaced means aborted, expired, purged, or an attempt that
-stopped short and left nothing. A partial kept for a resume stays charged
-while it is kept and gives back the rest when it expires unplaced. A placed
-stream gives nothing back. An open the relay refuses after the charge, for a
-full mailbox or the sender's own count, gives back the whole size. So a
-refused open costs a post and no bytes. A sender whose link drops three
-times on a 100 MB stream has spent 100 MB of its hour, not 300.
+whole declared size, so a sender cannot open past it. What comes back when
+an upload goes unplaced depends on what the relay held of it. Unplaced
+means aborted, expired, purged, an attempt that stopped short and left
+nothing, or an attempt that ended with the upload deleted whole. An upload
+with kept bytes gives back its size less them. A partial kept for a resume
+stays charged while it is kept and gives back the rest when it expires
+unplaced. An upload that goes holding no byte gives nothing back. Its
+reservation held the recipient's room, and the open's charge is what that
+costs. Were it refunded, a sender could hold a mailbox full for nothing,
+opening, sending nothing, aborting and opening again at once. So one
+identity's reservations cost its `post_bytes_per_hour` however little it
+uploads. The rule takes in honest senders too. A first attempt that ends
+short of the resume threshold leaves nothing, and neither does a first
+attempt the relay's own disk fails, so each is charged the declared size
+for the hour. An open the budget then cannot afford is refused `429`
+`rate limited: post bytes`, with `Retry-After` saying when the budget
+allows it. A placed stream gives nothing back. An open the relay refuses
+before any upload exists, a full mailbox, a full relay or the sender's own
+count among the reasons, gives back the whole size. So a refused open
+costs a post and no bytes.
+
+When an upload goes holding no byte, the relay logs one `WARN` line,
+`upload abandoned unfed`, with the declared size (`size`). Under
+`access_log: "full"` it carries the sender's fingerprint (`fp`) and comes
+about once a minute for each sender, so an operator can see who is
+holding mailboxes full with reservations. Under `minimal` it carries no
+fingerprint and comes about once a minute for every sender together. It
+is the one fault line that names a sender, and only under `full`, which
+names the caller of every request anyway.
 
 `max_open_uploads` bounds the count. A sender at it is refused `429 rate
 limited: open uploads` with `Retry-After` set to the seconds until its

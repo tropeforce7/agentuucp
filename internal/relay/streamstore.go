@@ -261,7 +261,8 @@ type Received struct {
 	// attempt. It is false when the row survives the attempt's failure
 	// — a sync that failed with the file put back, a placement that
 	// failed — and when the row was already gone. The caller charged the
-	// sender for the row and gives back on Gone what the row never held.
+	// sender for the row and settles that charge on Gone by the row as it
+	// stood, giving nothing back for a row at zero.
 	Gone bool
 }
 
@@ -507,9 +508,8 @@ func (s *Store) placeUpload(u *Upload) (int64, error) {
 
 // AbortUpload drops an upload and releases its reservation, and hands
 // back the row as it stood, nil when there was none, so the caller can
-// give back what the row was charged for and never held. Under the
-// upload's lock, as an attempt is, and the lock's entry goes with the
-// upload.
+// settle what it was charged. Under the upload's lock, as an attempt is,
+// and the lock's entry goes with the upload.
 func (s *Store) AbortUpload(id string) (*Upload, error) {
 	unlock := s.uploadLock(id)
 	defer s.forgetUploadLock(id, unlock)
@@ -606,8 +606,8 @@ func (s *Store) forgetUploadLock(id string, unlock func()) {
 // PurgeUploads abandons uploads nobody finished. Their reservations go with
 // them, which is what stops a forgotten upload holding a mailbox's quota for
 // ever. It hands back the rows it removed, as each stood, so the caller
-// can give back what each was charged for and never held, and says how
-// many it left for next time.
+// can settle what each was charged, and says how many it left for next
+// time.
 //
 // Housekeeping never waits on a sender. The purge runs inside an unrelated
 // caller's request, and an attempt holds its upload's lock across the copy
