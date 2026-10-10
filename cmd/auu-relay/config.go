@@ -65,7 +65,8 @@ const (
 type Config struct {
 	Listen string `json:"listen"`
 	DB     string `json:"db"`
-	// MaxBytes caps one posted envelope.
+	// MaxBytes caps one posted envelope, never above 64 MiB inline, and is
+	// a stream's resume threshold.
 	MaxBytes int64 `json:"max_bytes"`
 	// MessagesDir holds one file per stored message. Empty means derive it
 	// from the database path.

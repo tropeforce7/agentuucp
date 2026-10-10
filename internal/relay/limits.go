@@ -42,7 +42,8 @@ type Limits struct {
 	// KnockMaxBytes caps one knock envelope on the knock route, a stranger's
 	// one message; zero means MaxBytes, the post's cap, since zero is
 	// unlimited everywhere and a knock is a post. auu-relay holds it to
-	// MaxBytes at the config's read.
+	// MaxBytes at the config's read, and the relay never takes a knock over
+	// relayapi.MaxPageBytes whatever it says.
 	KnockMaxBytes int64
 	// MaxKnocksWaiting caps the knockers one mailbox holds a knock from,
 	// rows the relay has whatever the owner has read: one knocker holds

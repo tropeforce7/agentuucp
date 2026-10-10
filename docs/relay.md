@@ -33,7 +33,7 @@ Later ones win. A flag you do not type never overrides the file.
 | `--listen ADDR` | `listen` | `:8080` |
 | `--db PATH` | `db` | `relay.db` |
 | `--messages-dir PATH` | `messages_dir` | `messages/` beside the database |
-| `--max-bytes N` | `max_bytes` | 16 MiB, at most 1 GiB |
+| `--max-bytes N` | `max_bytes` | 16 MiB, at most 1 GiB; an inline envelope is held to 64 MiB whatever it is |
 | `--streams` | `streams` | true |
 | `--max-stream-bytes N` | `max_stream_bytes` | 4 GiB, 0 is unlimited |
 | `--registration open\|token\|closed` | `registration` | `open`; the health answer carries the word, since it is what a name listed on this relay rests on; `open` refuses to start with `courier.home` set |
@@ -74,7 +74,7 @@ Later ones win. A flag you do not type never overrides the file.
 | `--max-open-uploads N` | `limits.max_open_uploads` | 4, at most 1000 |
 | `--max-inflight N` | `limits.max_inflight` | 256 |
 | `--max-waiting N` | `limits.max_waiting` | 64 |
-| `--knock-max-bytes N` | `limits.knock_max_bytes` | 20480, at most `max_bytes`; 0 is `max_bytes` |
+| `--knock-max-bytes N` | `limits.knock_max_bytes` | 20480, at most `max_bytes`; 0 is `max_bytes`; never above 64 MiB in force |
 | `--max-knocks-waiting N` | `limits.max_knocks_waiting` | 10, at most 1000 |
 | `--knocks-per-hour N` | `limits.knocks_per_hour` | 10 |
 | `--max-recipients N` | `limits.max_recipients` | 16, at most 32; 0 is 32 |
@@ -270,7 +270,7 @@ carrying the sealed bytes from an offset to the end. Three settings govern it:
 |---|---|
 | `streams` | whether the relay accepts stream uploads at all. Turn it off and an open is refused with a 403 naming this setting |
 | `max_stream_bytes` | the largest stream the relay will reserve space for, declared up front and refused before a byte is sent. `0` is unlimited, under a cap of 2^62 bytes no setting lifts |
-| `max_bytes` | besides being the largest envelope a post may carry, the resume threshold: an attempt that stops short after at least this many bytes, when it was the first, leaves a partial the sender may resume once within sixty seconds; one that stops short of it, or a resumed one that stops short, leaves nothing, and the upload and its reservation go with the answer. The relay announces it at the open as `resume_threshold`, with the window as `resume_window`. A listing page follows it too: a page ends before an envelope that would take its inline bytes past `max_bytes`, admitting the first whatever its size, so a page's envelopes never exceed `max_bytes` unless the first alone does, which only one posted under a larger earlier `max_bytes` can; the health answer says the figure so a client can size what it holds of a page to this relay, and raising `max_bytes` grows every client's page with it |
+| `max_bytes` | besides being the largest envelope a post, a forward delivered here, a courier's delivery or a knock may carry (never above 64 MiB whatever the setting), the resume threshold: an attempt that stops short after at least this many bytes, when it was the first, leaves a partial the sender may resume once within sixty seconds; one that stops short of it, or a resumed one that stops short, leaves nothing, and the upload and its reservation go with the answer. The relay announces it at the open as `resume_threshold`, with the window as `resume_window`. A listing page follows it too: a page ends before an envelope that would take its inline bytes past `max_bytes`, or past 64 MiB whatever `max_bytes` is, admitting the first whatever its size, so a page's envelopes never exceed that unless the first alone does, which only one stored under a larger earlier `max_bytes`, or before this release, can; the health answer says the setting so a client can size what it holds of a page to this relay, and raising `max_bytes` grows every client's page with it up to 64 MiB, half of the most `auu` holds of a page. Above 64 MiB the setting raises the resume threshold and nothing inline (below the table) |
 
 The window is not a setting. It is sixty seconds from the open, and sixty
 from the moment a partial is kept. Past it the relay refuses the next attempt
@@ -293,6 +293,39 @@ placed stream is served under the same deadline turned round, moved by every
 write that delivers bytes. So a slow reader is served to the end and a reader
 that stops is cut inside the window. The server's five-minute read and write
 timeouts stand on every other route.
+
+A relay takes a `max_bytes` above 64 MiB, but it holds every inline row
+to 64 MiB whatever the setting: a post, a forward delivered here and a
+courier's delivery over it are refused `413` with `envelope too large`,
+and a knock over it `413` naming `knock_max_bytes`, a set
+`knock_max_bytes` above 64 MiB included. Above 64 MiB the setting raises
+a stream's resume threshold and nothing else, and the health answer
+still says it, with `knock_max_bytes` as it is in force. A courier
+carrying a larger row from a relay before this release is refused `413`
+too, which it takes as final: the message ends there and its sender is
+told which relay refused it and why. `auu` sends at most 16 MiB inline,
+so what it sends this relay stores and every client lists. `auu` holds a
+listing page to twice `max_bytes` plus 64 KiB, at most 128 MiB and
+64 KiB, and a page carries its envelopes as the JSON they were posted
+as, so every page this relay builds fits but one whose first row alone
+is over that hold. An `auu` asks a relay not yet upgraded, which fills a
+page to its whole `max_bytes`, for fewer rows at a time until the page
+fits. What is left is a single row over the hold, stored before the
+relay's upgrade, on a relay not yet upgraded, or under a larger
+`max_bytes` than the relay says now: a relay whose `max_bytes` was
+lowered still holds rows stored under the larger setting, and a client
+sizes its hold to the figure it says now. Every `auu` that lists the
+mailbox refuses it, and each fetch stops at it until the row goes or the
+cursor is moved past it. Its owner can step past it with
+`auu cursor reset --relay NAME --to ID`, losing that message alone and
+letting the mail after it through, but the row stays queued here: until
+it goes, every fetch from this relay ends at exit 5 saying the cursor
+skips mail, an `auu inbox` across several relays stops here without
+fetching the ones after it, and `auu watch` stops watching this relay,
+and ends when it is the only one. The recovery that ends it is yours:
+`auu-admin mailboxes purge FP` discards every message queued for that
+mailbox and keeps the mailbox, so tell the owner first, and purge once
+they have stepped past it, or instead of it.
 
 **At the shipped defaults a 2 GB file is refused**, and deliberately so. A
 sender's whole `post_bytes_per_hour` budget is 256 MiB and one recipient's
@@ -356,7 +389,7 @@ switch the lot off.
 | `max_open_uploads` | uploads one sender may have open at once, across every mailbox it sends to; each is a file and a reservation the relay holds for that sender, so 0, unlimited like the rest, lets one sender hold as many as it likes; at most 1000 | 4 |
 | `max_inflight` | requests being handled at once | 256 |
 | `max_waiting` | listings held open at once for watchers; over it the next is answered at once rather than held, and each held listing keeps an in-flight slot, so keep this well under `max_inflight` | 64 |
-| `knock_max_bytes` | the largest knock envelope, on the knock route's own cap, so a stranger's one message is read under a bound of its own; 0 is `max_bytes`, since a knock is a post, and a value over `max_bytes` is refused at startup naming both; the default takes a knock at its longest with four vouches and not five | 20480 |
+| `knock_max_bytes` | the largest knock envelope, on the knock route's own cap, so a stranger's one message is read under a bound of its own; 0 is `max_bytes`, since a knock is a post, and a value over `max_bytes` is refused at startup naming both; in force it is never above 64 MiB, since a knock is a row like any other, and the health answer says the figure in force; the default takes a knock at its longest with four vouches and not five | 20480 |
 | `max_knocks_waiting` | knockers one mailbox holds a knock from, counted as rows the relay has whatever the owner has read. One knocker holds one row however often they knock: a second knock from a key replaces the first, so this counts knockers and one identity cannot fill it. A knock from somebody the mailbox holds none from is refused `429` at the cap, with no `Retry-After`, since the relay cannot say when the owner will fetch or remove them, and the sender's knock is not charged for it; 0 is unlimited; at most 1000, for the reason `max_open_uploads` has a ceiling | 10 |
 | `knocks_per_hour` | knocks one sender may post in an hour, across every mailbox, beside the post budgets every knock is charged as a post; 0 is unlimited | 10 |
 | `max_recipients` | the most recipients one message to several may name. The relay can hold it only where a request has a body to carry the count, opening a stream and a forward from a user: there a request that says it is one copy of a message to more is refused `413`. A plain post's body is the envelope alone and carries no count, so there the relay cannot see the number, and the health answer gives it for a client to hold itself to. A client that leaves the count out is, as far as the relay can tell, sending to one; the setting binds an honest client, and the post budget binds every client. 0 is unlimited, which is the protocol's own ceiling of 32, and a value over 32 is refused at startup; the health answer and `auu-admin status` give the number in force. The default sends to the most in about half of `posts_per_minute` | 16 |
@@ -507,8 +540,8 @@ on the administrator's status answer. `auu` reads every answer strictly, ignores
 does not know, and refuses an answer with a section marked critical,
 naming it and saying to update `auu`. A refusal whose words it cannot
 read is said with its status and the request. All of a body's sections
-together are held to 16 KiB, and a listing page counts them within
-`max_bytes`.
+together are held to 16 KiB, and a listing page counts them within the
+smaller of `max_bytes` and 64 MiB.
 
 Every request body may carry `sections` the same way, and so may what one
 relay sends another: a hand-over on `POST /v1/forward` and a report on
@@ -568,8 +601,8 @@ The HTTP layer has bounds of its own, none of them settings:
 | bound | value | what it does |
 |---|---|---|
 | request line and headers | 32 KiB | over it the answer is `431`, written by Go's `net/http` before the relay sees the request (it reads the block through a 4 KiB buffer, so the cut lands at 36 KiB); the largest header the protocol carries, the request signature, is about 200 bytes, and the relay refuses an auth header longer than its five fields can be before it reads one |
-| body of a post | `max_bytes` + 64 KiB | the envelope with its JSON and base64 framing |
-| body of a knock | `knock_max_bytes` + 64 KiB | the same framing over a knock envelope, which the handler then holds to `knock_max_bytes` itself, refusing one over it `413` naming the setting |
+| body of a post | `max_bytes`, never above 64 MiB, + 64 KiB | the envelope with its JSON framing; a forward and a courier's delivery are read the same way |
+| body of a knock | `knock_max_bytes` + 64 KiB | the same framing over a knock envelope, which the handler then holds to `knock_max_bytes`, never above 64 MiB, itself, refusing one over it `413` naming the setting |
 | body of an allow list or a channel directory | 1 MiB | the envelope the document travels in, base64 and all: sized so that either document at its own cap below fits inside it — a full directory of 64 channels at every cap is 568,030 bytes as the client sends it, and one padded to its own cap below 699,170. Over it the answer is `413` naming the bytes and saying to send the document compact |
 | body of every other request | 64 KiB | a registration, a certificate request, an admin token, a stream's open, and a card, whose document has its own cap below; none reaches a tenth of it |
 | the signed document inside, per kind | 512 KiB directory, 128 KiB allow list, 512 B card | the bytes the owner signed, which is a different thing from the body that carries them and is checked before the signature rather than after: over it the answer is `400` naming the bytes, the cap and to send it compact. Each is the document at every maximum as a client marshals it compact — 425,934 bytes for a directory, 67,141 for an allow list, 199 for a card, measured — with room above for a signer whose encoder indents |

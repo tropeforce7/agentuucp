@@ -694,13 +694,43 @@ reply's own indented beneath it. `--json` adds `thread_subject` beside
 `subject`, which is always the message's own.
 
 A fetch reads the mailbox in pages of up to 200 messages, and a page is
-also bounded in bytes by the relay. It ends before an envelope that would
-take it past the relay's `max_bytes`, admitting the first whatever its
-size. So a page's envelopes never exceed `max_bytes` unless the first
-alone does. `auu` learns the relay's `max_bytes` from its health answer
-the first time it lists, and holds a page to twice that. A relay that does
-not say its `max_bytes` is one from before this version and is refused by
-name.
+also bounded in bytes by the relay. It ends before an envelope that
+would take it past the relay's `max_bytes`, or past 64 MiB on a relay of
+this release whatever its `max_bytes`, admitting the first whatever its
+size. So a page's envelopes never exceed that unless the first alone
+does. A relay of this release stores no message over 64 MiB inline, and
+`auu` sends at most 16 MiB inline. `auu` learns the relay's `max_bytes`
+from its health answer the first time it lists, and holds a page to
+twice that plus 64 KiB, up to 128 MiB and 64 KiB whatever the relay
+says. A relay that does not say its `max_bytes` is one from before this
+version and is refused by name.
+
+A page over the hold is asked for again, with half as many messages each
+time, down to one, when the hold is already at 128 MiB and 64 KiB: at
+most seven more asks from 200. That is how `auu` reads a relay not yet
+upgraded, which fills a page to its whole `max_bytes`. A page still over
+the hold is refused as a malformed answer naming the hold, and nothing
+of it is acknowledged or kept. So a single message over the hold, stored
+before the relay's upgrade, on a relay not yet upgraded, or under a
+larger `max_bytes` than the relay says now, is refused whatever the
+page, and every fetch from that relay stops at it until the message goes
+or the cursor is moved past it. Until then the fetch is a transport
+failure on that relay alone, and your other relays are fetched as usual.
+
+The recovery that ends it is the relay's operator's:
+`auu-admin mailboxes purge FP` discards every message queued for you
+there, not that one alone. `auu cursor reset --relay NAME --to ID`, with
+ID that message's relay id, which `auu cursor show` gives as the relay's
+lowest number when nothing before it is still there, steps past it in
+the meantime. It lets the mail after the message through and loses that
+message alone, at a cost: the message stays on the relay and is counted
+there, so every fetch from that relay then ends at exit 5, saying a
+message is waiting before the cursor, until the operator removes it. In
+a home with several relays `auu inbox` stops at that relay and does not
+fetch the ones after it, and `auu watch` stops watching that relay, and
+ends when it is the only one. That exit's sentence advises
+`auu cursor reset --relay NAME`, from the beginning, which leads
+straight back to the message.
 
 Mail from a sender who is not on your peer list is held back:
 

@@ -196,12 +196,15 @@ func (s *Server) listing(w http.ResponseWriter, r *http.Request, fp string, afte
 // answer with rather than hold for, which a cursor past the highest id
 // held is.
 func (s *Server) look(fp string, after int64, limit int, stubs bool, peers map[string]time.Time) (resp relayapi.ListResponse, found bool, err error) {
-	// A page follows max_bytes: as many envelopes as fit the budget, and
-	// one at least, so a client sized to the relay's max_bytes holds it.
-	// What the page says in its sections comes out of the same budget, so
-	// a full page and its sections together are never over what an older
-	// client holds (R4).
-	listing, err := s.store.ListingWithin(fp, after, limit, stubs, pageBudget(s.cfg.MaxBytes, listingSections))
+	// A page follows max_bytes, and never more than MaxPageBytes: as many
+	// envelopes as fit the budget, and one at least, so a client sized to
+	// the relay's max_bytes holds it, and a client of this release, which
+	// holds no more than MaxListingHold whatever max_bytes is, holds every
+	// page but one whose lone first row is over it. What the page says in
+	// its sections comes out of the same budget, so a full page and its
+	// sections together are never over what an older client holds (R4).
+	listing, err := s.store.ListingWithin(fp, after, limit, stubs,
+		pageBudget(min(s.cfg.MaxBytes, relayapi.MaxPageBytes), listingSections))
 	if err != nil {
 		return resp, false, err
 	}

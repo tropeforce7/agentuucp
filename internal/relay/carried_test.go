@@ -339,3 +339,83 @@ func TestAListingPagesBudgetCountsItsSections(t *testing.T) {
 			len(page.Messages), len(page.Sections.Sections), err)
 	}
 }
+
+// R9: a page follows max_bytes and never passes relayapi.MaxPageBytes, so
+// that every page but one whose lone first row is over it fits a client's
+// MaxListingHold, whatever the relay's max_bytes. On a relay at the
+// ceiling, a mailbox of legal envelopes of about 7 MiB each, more than
+// MaxPageBytes in all, is listed a page at a time: each page's envelopes
+// total at most MaxPageBytes and the next row would have passed it, and
+// the answer, rows and fields, is under MaxListingHold. A lone first row
+// over MaxPageBytes is still listed, alone.
+func TestAListingPageIsCutAtMaxPageBytes(t *testing.T) {
+	h := newHarness(t, Config{MaxBytes: relayapi.MaxBytesCeiling})
+	people := ids(t, "alice", "bob", "carol")
+	alice, bob, carol := people[0], people[1], people[2]
+	for _, id := range people {
+		h.register(id)
+	}
+	env := sealed(t, alice, bob.Public(), strings.Repeat("m", 5<<20))
+	const count = 12
+	for range count {
+		if _, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", env, Quotas{}, Forwarded{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if total := int64(count * len(env)); total <= relayapi.MaxPageBytes {
+		t.Fatalf("the mailbox holds %d bytes; the test needs more than MaxPageBytes, %d", total, relayapi.MaxPageBytes)
+	}
+	var after int64
+	listed := 0
+	for listed < count {
+		status, body := h.do(bob, "GET", "/v1/mailbox/"+bob.Fingerprint()+"?after="+strconv.FormatInt(after, 10)+"&limit=200", nil, nil)
+		if status != http.StatusOK {
+			t.Fatalf("listing after %d: %d %s", after, status, body)
+		}
+		if int64(len(body)) >= relayapi.MaxListingHold {
+			t.Fatalf("a page of %d bytes; want it under MaxListingHold, %d", len(body), relayapi.MaxListingHold)
+		}
+		var page relayapi.ListResponse
+		if err := json.Unmarshal(body, &page); err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Messages) == 0 {
+			t.Fatalf("an empty page after %d with %d of %d listed", after, listed, count)
+		}
+		var inline int64
+		for _, m := range page.Messages {
+			inline += int64(len(m.Envelope))
+		}
+		if inline > relayapi.MaxPageBytes {
+			t.Fatalf("a page of %d envelopes, %d bytes; want at most MaxPageBytes, %d", len(page.Messages), inline, relayapi.MaxPageBytes)
+		}
+		listed += len(page.Messages)
+		if listed < count && inline+int64(len(env)) <= relayapi.MaxPageBytes {
+			t.Fatalf("a page of %d bytes ended with room for the next row of %d under MaxPageBytes", inline, len(env))
+		}
+		after = page.Messages[len(page.Messages)-1].ID
+	}
+	if listed != count {
+		t.Fatalf("listed %d rows; want %d", listed, count)
+	}
+
+	// A lone first row over MaxPageBytes, as one posted under a large
+	// max_bytes is, is listed alone; the row after it is the next page's.
+	big := sealed(t, alice, carol.Public(), strings.Repeat("b", 49<<20))
+	if int64(len(big)) <= relayapi.MaxPageBytes {
+		t.Fatalf("the big envelope is %d bytes; the test needs it over MaxPageBytes", len(big))
+	}
+	small := sealed(t, alice, carol.Public(), "small")
+	for _, raw := range [][]byte{big, small} {
+		if _, err := h.store.Put(carol.Fingerprint(), "default", relayapi.KindEnvelope, "", raw, Quotas{}, Forwarded{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, _, err := h.server.look(carol.Fingerprint(), 0, 200, false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Messages) != 1 || len(page.Messages[0].Envelope) != len(big) {
+		t.Fatalf("a lone first row over MaxPageBytes: %d rows; want it listed alone", len(page.Messages))
+	}
+}

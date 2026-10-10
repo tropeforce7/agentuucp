@@ -23,7 +23,9 @@ import (
 
 // Config configures a relay server.
 type Config struct {
-	// MaxBytes caps one posted envelope. Zero means relayapi.DefaultMaxBytes.
+	// MaxBytes caps one posted envelope, never above relayapi.MaxPageBytes
+	// (inlineMax), and is a stream's resume threshold. Zero means
+	// relayapi.DefaultMaxBytes.
 	MaxBytes int64
 	// Registration is open, token, or closed. Empty means open.
 	Registration string
@@ -664,8 +666,8 @@ func (s *Server) rateLimitedCode(w http.ResponseWriter, which string, retryAfter
 // about it.
 //
 // The caps are per route and are the wire's constants: the post route
-// takes max_bytes plus relayapi.FramingAllowance, the knock route
-// knock_max_bytes plus it, two of the three owner-signed documents
+// takes inlineMax, max_bytes and never above relayapi.MaxPageBytes, plus
+// relayapi.FramingAllowance, the knock route knockMax plus it, two of the three owner-signed documents
 // relayapi.MaxDocumentBytes, and every other body route
 // relayapi.FramingAllowance alone, the card among them, since a card
 // is a few hundred bytes. The stream PUT never comes here: its
@@ -718,18 +720,28 @@ func tooLarge(limit int64, hint string) string {
 // is refused was indented past it.
 const hintCompact = "send the document compact, without indentation"
 
-// postCap is the post route's body cap: an envelope of max_bytes with the
-// framing allowance for its JSON and base64.
-func (s *Server) postCap() int64 { return s.cfg.MaxBytes + relayapi.FramingAllowance }
+// inlineMax is the largest envelope this relay stores in a mailbox row:
+// max_bytes, and never more than relayapi.MaxPageBytes. A row over that
+// is one no client of this release lists, since its page would pass the
+// client's MaxListingHold whatever else it held, so the post, a courier's
+// delivery, the forward and the knock refuse it rather than store what
+// would stop every fetch of the mailbox. A max_bytes above it still sets
+// a stream's resume threshold, and the health answer still says it.
+func (s *Server) inlineMax() int64 { return min(s.cfg.MaxBytes, relayapi.MaxPageBytes) }
+
+// postCap is the post route's body cap: an envelope of inlineMax with the
+// framing allowance for its JSON.
+func (s *Server) postCap() int64 { return s.inlineMax() + relayapi.FramingAllowance }
 
 // knockMax is the largest knock envelope: knock_max_bytes, or max_bytes
 // when that is zero, since zero is unlimited everywhere and a knock is a
-// post, so unlimited is the post's cap.
+// post, so unlimited is the post's cap; and either way never more than
+// inlineMax, since a knock is a row like any other.
 func (s *Server) knockMax() int64 {
 	if s.cfg.Limits.KnockMaxBytes > 0 {
-		return s.cfg.Limits.KnockMaxBytes
+		return min(s.cfg.Limits.KnockMaxBytes, s.inlineMax())
 	}
-	return s.cfg.MaxBytes
+	return s.inlineMax()
 }
 
 // knockCap is the knock route's body cap: knockMax with the framing
@@ -1237,7 +1249,7 @@ func (s *Server) handleKeys(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {
 	fp := r.PathValue("fp")
 	size := int64(len(body))
-	if size > s.cfg.MaxBytes {
+	if size > s.inlineMax() {
 		s.fail(w, http.StatusRequestEntityTooLarge, "envelope too large")
 		return
 	}

@@ -659,10 +659,13 @@ type capBound struct {
 // plus a constant, and the name is given here once, so that an entry whose
 // body adds to some other value cannot keep a setting's name. What the
 // setting's own accessor returns is not held here: knockMax is read as
-// knock_max_bytes on the strength of its comment and its test.
+// knock_max_bytes, and inlineMax as inline_max, the smaller of max_bytes
+// and relayapi.MaxPageBytes, on the strength of their comments and their
+// tests.
 var capSettings = map[string]string{
 	"max_bytes":       "s.cfg.MaxBytes",
 	"knock_max_bytes": "s.knockMax()",
+	"inline_max":      "s.inlineMax()",
 }
 
 // capBounds is the table of bounds for the tree, keyed by the method's
@@ -671,8 +674,8 @@ var capSettings = map[string]string{
 // of the tree as it stands fails on an entry no one-of row's walk
 // reaches.
 var capBounds = map[string]capBound{
-	"internal/relay (*Server).postCap":    {body: "s.cfg.MaxBytes + relayapi.FramingAllowance", name: "max_bytes"},
-	"internal/relay (*Server).forwardCap": {body: "s.cfg.MaxBytes + relayapi.FramingAllowance", name: "max_bytes"},
+	"internal/relay (*Server).postCap":    {body: "s.inlineMax() + relayapi.FramingAllowance", name: "inline_max"},
+	"internal/relay (*Server).forwardCap": {body: "s.inlineMax() + relayapi.FramingAllowance", name: "inline_max"},
 	"internal/relay (*Server).knockCap":   {body: "s.knockMax() + relayapi.FramingAllowance", name: "knock_max_bytes"},
 }
 
@@ -682,7 +685,7 @@ var capBounds = map[string]capBound{
 // row says the set they pass. The test of the tree as it stands fails on
 // an entry no <= row takes.
 var spelledBounds = map[string]string{
-	"internal/client/client.go (*Client).attempt cap io.LimitReader(resp.Body, hold + 1)": "its callers pass locals read from the relay's health answer (client.go listingCap), which no walk can render, and the row names the hold each caller computes",
+	"internal/client/client.go (*Client).attempt cap io.LimitReader(resp.Body, hold + 1)": "its callers pass locals read from the relay's health answer (client.go listingCap, through holdFor, never above relayapi.MaxListingHold), which no walk can render, and the row names the hold each caller computes",
 }
 
 // check walks the tree under root, reads the ledger, and returns every

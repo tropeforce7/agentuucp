@@ -142,7 +142,7 @@ func registerFlags(fs *flag.FlagSet) *flagValues {
 	fs.Int64Var(&f.courierCarriedRowsPerCourier, "courier-carried-rows-per-courier", 0,
 		"the most hashes one neighbouring relay's forwards may have standing (derived: a quarter "+
 			"of carried_max_rows, at least 30 at max_hops 8 and at most that ceiling); 0 is unlimited")
-	fs.Int64Var(&f.maxBytes, "max-bytes", d.MaxBytes, "largest accepted envelope, in bytes")
+	fs.Int64Var(&f.maxBytes, "max-bytes", d.MaxBytes, "largest accepted envelope, in bytes; an inline one is held to 64 MiB whatever it is")
 	fs.StringVar(&f.registration, "registration", d.Registration,
 		"who may create a mailbox: open, token, or closed")
 	fs.BoolVar(&f.streams, "streams", d.Streams, "accept chunked stream uploads for large messages")

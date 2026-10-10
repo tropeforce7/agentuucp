@@ -895,15 +895,16 @@ relay speaks HTTP/1.1 alone. HTTP/2 is off on the listener and not offered
 by ALPN, so a client offering `h2` is answered over HTTP/1.1. Every
 property below holds under the one protocol the relay's tests run rather
 than a second one with its own stream, reset and header semantics. Those
-properties are the refusal before the body, the drain, `Connection:
-close` behind a refusal, and the stall deadline on the connection. The
-request line and headers together are capped at 32 KiB, answered `431` by
-the standard library before the relay sees the request. The largest header
-the protocol carries, the request signature, is Ed25519 and about 200
-bytes. The relay refuses an auth header longer than its five fields can be
-before it cuts a field from it. Every body is read under the cap of its
-route. A post is read at `max_bytes` plus 64 KiB of framing. An allow list
-or a channel directory is read at 1 MiB, the envelope those documents
+properties are the refusal before the body, the drain, `Connection: close`
+behind a refusal, and the stall deadline on the connection. The request
+line and headers together are capped at 32 KiB, answered `431` by the
+standard library before the relay sees the request. The largest header the
+protocol carries, the request signature, is Ed25519 and about 200 bytes.
+The relay refuses an auth header longer than its five fields can be before
+it cuts a field from it. Every body is read under the cap of its route. A
+post is read at `max_bytes`, never above 64 MiB, plus 64 KiB of framing,
+and so are a forward delivered here and a courier's delivery. An allow
+list or a channel directory is read at 1 MiB, the envelope those documents
 travel in. Every other request is read at 64 KiB, a card among them, since
 one at its maximum is a few hundred bytes. A body that declares itself
 over the cap is refused `413` before a byte of it is read, the sentence
@@ -952,11 +953,33 @@ http/1.1 alone by ALPN and never attempt h2. A response's headers are
 capped at the same 32 KiB, and a relay whose answer runs past it is
 refused as a malformed answer. A JSON answer is read under twice the
 default `max_bytes`. A listing page, the one answer that grows with the
-relay's setting, is read under twice the relay's own `max_bytes`. The
-relay says that figure in its health answer, and the client learns it
-once. It asks again only when a page is refused for its size, in case the
-setting was raised under a client that runs for days. The relay's page
-follows the same figure, so the two agree. A relay that does not say its
+relay's setting, is read under twice the relay's own `max_bytes` plus
+64 KiB, and never more than 128 MiB and 64 KiB whatever the relay says. So
+the memory a relay can make a client spend on a page, on an `auu serve` or
+`auu watch` host that lists for days among them, is bounded by the client
+and not by the relay: a relay that says a gigabyte on its health answer
+cannot have a page of two read whole. The relay says that figure in its
+health answer, and the client learns it once. It asks for that figure
+again only when a page is refused for its size, in case the setting was
+raised under a client that runs for days. A relay of this release stores
+no inline row over 64 MiB, whatever its `max_bytes`, and ends a page at
+its `max_bytes` and never past 64 MiB, so the envelopes of a page it
+builds never pass half the client's hold but a lone first row's. A relay
+not yet upgraded fills a page to its whole `max_bytes`; a page of it over
+a hold already at the ceiling is asked for again with half as many rows,
+down to one. A lone row over the hold, stored before the relay's upgrade,
+on a relay not yet upgraded, or under a larger `max_bytes` than the relay
+says now, is the one size failure left: every fetch of that mailbox stops
+at it, as a transport failure on that relay alone, until the row goes or
+the cursor is moved past it. The operator's
+`auu-admin mailboxes purge FP`, which discards all the mailbox's queued
+mail, is the recovery that ends it. The owner can step past the row with
+`auu cursor reset --relay NAME --to ID`, losing that row alone and letting
+the mail after it through, but the row stays counted on the relay, so
+until the operator removes it every fetch from that relay ends at exit 5
+with the cursor said to skip mail, a multi-relay `auu inbox` stops there
+without fetching the relays after it, and `auu watch` stops watching that
+relay, and ends when it is the only one. A relay that does not say its
 `max_bytes` is refused by name. A stream route's answer, the placed
 stream's id or an error's sentence, is read under 64 KiB. The trust anchor
 answer is read under 1 MiB. Each is refused by name over it, the same rule
@@ -1450,13 +1473,14 @@ the relay can, and TLS to the relay is what keeps anyone else from it.
 A knock is the one message that reaches a mailbox from somebody its owner
 has not admitted, and it reaches it only where the owner has said so on
 their signed card. On the wire it is an ordinary sealed envelope, sign
-then encrypt like every message, posted to a route of its own, `POST
-/v1/mailbox/{fp}/knock`, and stored with the kind `knock`. It is a route
-and not a field of the post because everything that can be judged without
-the body is judged before it, and a kind inside the body would have the
-relay read a whole post before learning it was a knock. So the route has a
-cap of its own, `knock_max_bytes` plus 64 KiB of framing, and a body that
-declares itself over it is refused `413` before a byte of it is read.
+then encrypt like every message, posted to a route of its own,
+`POST /v1/mailbox/{fp}/knock`, and stored with the kind `knock`. It is a
+route and not a field of the post because everything that can be judged
+without the body is judged before it, and a kind inside the body would
+have the relay read a whole post before learning it was a knock. So the
+route has a cap of its own, `knock_max_bytes`, never above 64 MiB, plus
+64 KiB of framing, and a body that declares itself over it is refused
+`413` before a byte of it is read.
 
 The relay checks, in this order, after the certificate, the auth header,
 the identity, the body under the knock cap, the signature and the

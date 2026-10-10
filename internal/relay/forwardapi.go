@@ -219,8 +219,11 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, env *relayapi.C
 	// framing a request costs, so without this a neighbour's courier could
 	// place a message that much over the setting into a mailbox here, and
 	// an operator's number would mean one thing for their own users and
-	// another for everybody reached through a peer.
-	if int64(len(raw)) > s.cfg.MaxBytes {
+	// another for everybody reached through a peer. It is inlineMax, as the
+	// post's is: a row from an older relay over MaxPageBytes is refused, and
+	// the courier that carries it takes the 413 as final and tells its
+	// sender.
+	if int64(len(raw)) > s.inlineMax() {
 		s.fail(w, http.StatusRequestEntityTooLarge, "envelope too large")
 		return
 	}
@@ -749,11 +752,11 @@ func parseCarried(raw []byte) (*relayapi.Carried, error) {
 	return &env, nil
 }
 
-// forwardCap is what the forward route reads: a post's cap and the framing
-// allowance, as the post route reads, since what it carries is a post's
-// envelope with two short lists beside it. max_hops names of 64 bytes and
-// their JSON fit inside the allowance many times over.
-func (s *Server) forwardCap() int64 { return s.cfg.MaxBytes + relayapi.FramingAllowance }
+// forwardCap is what the forward route reads: a post's cap, inlineMax, and
+// the framing allowance, as the post route reads, since what it carries is
+// a post's envelope with two short lists beside it. max_hops names of 64
+// bytes and their JSON fit inside the allowance many times over.
+func (s *Server) forwardCap() int64 { return s.inlineMax() + relayapi.FramingAllowance }
 
 // wake nudges the worker for one neighbour. A nil set of workers is a relay
 // that dials nobody, which is every relay without a courier home and every

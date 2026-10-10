@@ -620,19 +620,21 @@ func (c *Client) doWithin(ctx context.Context, method, path string, payload any,
 var errOverHold = errors.New("answer over the hold")
 
 // listingCap is the most the client holds of a listing page: twice the
-// relay's max_bytes plus the framing allowance. The relay ends a page
-// before an envelope that would take its inline bytes past max_bytes,
+// relay's max_bytes plus the framing allowance, up to MaxListingHold. The
+// relay ends a page before an envelope that would take its inline bytes
+// past max_bytes, or past MaxPageBytes on a relay of this release,
 // admitting the first whatever its size, so a page's envelopes never
-// exceed max_bytes unless the first alone does, which only one posted
-// under a larger earlier max_bytes can; in the answer they travel as
-// base64, four thirds of their bytes, under twice. This holds the page
-// for the relay the client talks to rather than for the ceiling, which
-// is a gigabyte the client should never allocate. The relay's figure
-// comes from its health answer, fetched once per Client on the first
-// listing and kept; a page refused for its size asks once more, since an
-// operator may have raised the setting under a client that runs for
-// days, and grew reports whether the figure rose. A figure that fell is
-// not taken: the hold only ever widens to what the relay says now.
+// exceed that unless the first alone does; in the answer they travel as
+// the JSON they were posted as, so twice holds them with room for the
+// rows around them. This holds the page for the relay the client talks to
+// rather than for the ceiling, which is a gigabyte the client should
+// never allocate, and never above MaxListingHold whatever the relay says.
+// The relay's figure comes from its health answer, fetched once per
+// Client on the first listing and kept; a page refused for its size asks
+// once more, since an operator may have raised the setting under a client
+// that runs for days, and grew reports whether the hold it sizes rose. A
+// figure that fell is not taken: the hold only ever widens to what the
+// relay says now.
 func (c *Client) listingCap(ctx context.Context, again bool) (hold int64, grew bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -644,12 +646,22 @@ func (c *Client) listingCap(ctx context.Context, again bool) (hold int64, grew b
 		if err := c.checkHealth(&resp); err != nil {
 			return 0, false, err
 		}
+		before := holdFor(c.maxBytes)
 		if resp.MaxBytes > c.maxBytes {
 			c.maxBytes = resp.MaxBytes
-			grew = true
 		}
+		grew = holdFor(c.maxBytes) > before
 	}
-	return 2*c.maxBytes + relayapi.FramingAllowance, grew, nil
+	return holdFor(c.maxBytes), grew, nil
+}
+
+// holdFor is the listing hold for a relay's max_bytes: twice it plus the
+// framing allowance, and never more than MaxListingHold, so a relay that
+// says a gigabyte on its health answer cannot have a page of two read
+// whole. maxBytes is held to [1, MaxBytesCeiling] by checkHealth, or is
+// the zero no health answer has set, so the product does not overflow.
+func holdFor(maxBytes int64) int64 {
+	return min(2*maxBytes+relayapi.FramingAllowance, relayapi.MaxListingHold)
 }
 
 // verifiedRoute says whether the relay verifies a signature on this
@@ -1307,14 +1319,12 @@ func (c *Client) ListWait(ctx context.Context, req ListRequest) (Listing, error)
 	if limit <= 0 {
 		limit = relayapi.DefaultListLimit
 	}
-	path := "/v1/mailbox/" + c.id.Fingerprint() +
-		"?after=" + strconv.FormatInt(req.After, 10) +
-		"&limit=" + strconv.Itoa(limit)
+	var rest string
 	if req.Wait > 0 {
-		path += "&wait=" + min(req.Wait, relayapi.MaxWait).String()
+		rest += "&wait=" + min(req.Wait, relayapi.MaxWait).String()
 	}
 	if req.Stubs {
-		path += "&stubs=1"
+		rest += "&stubs=1"
 	}
 	if len(req.Peers) > 0 {
 		// Sorted, so the same watch is the same request: the signature
@@ -1334,23 +1344,43 @@ func (c *Client) ListWait(ctx context.Context, req ListRequest) (Listing, error)
 			}
 			entries = append(entries, fp+":"+strconv.FormatInt(nanos, 10))
 		}
-		path += "&peers=" + strings.Join(entries, ",")
+		rest += "&peers=" + strings.Join(entries, ",")
+	}
+	pathFor := func(limit int) string {
+		return "/v1/mailbox/" + c.id.Fingerprint() +
+			"?after=" + strconv.FormatInt(req.After, 10) +
+			"&limit=" + strconv.Itoa(limit) + rest
 	}
 	var resp relayapi.ListResponse
 	hold, _, err := c.listingCap(ctx, false)
 	if err != nil {
 		return Listing{}, err
 	}
-	err = c.doWithin(ctx, "GET", path, nil, &resp, nil, hold)
+	err = c.doWithin(ctx, "GET", pathFor(limit), nil, &resp, nil, hold)
 	if errors.Is(err, errOverHold) {
 		// A page over the hold this client sized to the relay's max_bytes
 		// as it learned it. The relay's setting may have been raised
 		// since: ask once more, and take the page under the new hold
-		// when the figure grew; when it did not, the refusal stands, the
-		// page being over what the relay itself says it builds.
-		if wider, grew, herr := c.listingCap(ctx, true); herr == nil && grew {
-			err = c.doWithin(ctx, "GET", path, nil, &resp, nil, wider)
+		// when the figure grew.
+		wider, grew, herr := c.listingCap(ctx, true)
+		if herr == nil && grew {
+			hold = wider
+			err = c.doWithin(ctx, "GET", pathFor(limit), nil, &resp, nil, hold)
 		}
+	}
+	// A page over a hold already at MaxListingHold is one a relay built
+	// past it: a relay before this release fills a page to its whole
+	// max_bytes, which may be a gigabyte, where an upgraded one stops at
+	// MaxPageBytes. Fewer rows make a smaller page, so the same page is
+	// asked for again with the limit halved, the same after and the same
+	// stubs, down to one row; there the refusal stands, since a lone row
+	// over the hold is over it whatever the page. The limit is taken from
+	// no more than MaxListLimit, the most a relay lists, so from 200 that
+	// is seven asks more at the most: 100, 50, 25, 12, 6, 3 and 1.
+	for errors.Is(err, errOverHold) && hold == relayapi.MaxListingHold && limit > 1 {
+		limit = min(limit, relayapi.MaxListLimit) / 2
+		resp = relayapi.ListResponse{}
+		err = c.doWithin(ctx, "GET", pathFor(limit), nil, &resp, nil, hold)
 	}
 	if err != nil {
 		return Listing{}, err

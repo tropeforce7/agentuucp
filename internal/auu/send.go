@@ -667,7 +667,9 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 	// Reading a payload we already know is too big wastes time and memory on
 	// large attachments, so the estimate decides before anything is loaded.
 	// Attachments travel base64 encoded, which costs about a third again on
-	// top of the raw bytes.
+	// top of the raw bytes. DefaultMaxBytes is under relayapi.MaxPageBytes,
+	// so what this client sends inline is what a relay of this release
+	// stores and every client of it lists.
 	if estimate > relayapi.DefaultMaxBytes {
 		return sentJSON{}, newThread, usageErrf("message is about %s once encoded, over the %s relay limit%s; "+
 			"drop --inline to send it as a stream instead",

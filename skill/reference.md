@@ -654,14 +654,14 @@ A refused send names what to change, and nothing was queued:
   `token ls` prints it, whole; nothing was sent to the relay.
 - `request body larger than this route takes: at most N bytes` (a `413`),
   with `; send the document compact, without indentation` on `allow push`
-  or `channel push` — the relay reads every body under its route's cap
-  and refuses one over it before reading a byte: an envelope is bounded by
-  the relay's `max_bytes` plus 64 KiB, a signed allow list or channel
-  directory by 1 MiB (room enough for the largest either can be, as `auu`
-  sends it), and any other request by 64 KiB. From `auu` itself the body
-  was under the cap; a `413` means another client, or an indented
-  document. `431 Request Header Fields Too Large` is the relay's 32 KiB
-  header cap, which nothing `auu` sends approaches.
+  or `channel push` — the relay reads every body under its route's cap and
+  refuses one over it before reading a byte: an envelope is bounded by the
+  relay's `max_bytes`, never above 64 MiB, plus 64 KiB, a signed allow
+  list or channel directory by 1 MiB (room enough for the largest either
+  can be, as `auu` sends it), and any other request by 64 KiB. From `auu`
+  itself the body was under the cap; a `413` means another client, or an
+  indented document. `431 Request Header Fields Too Large` is the relay's
+  32 KiB header cap, which nothing `auu` sends approaches.
 - `the directory is N bytes; at most 524288, so send it compact` (or `the
   allow list is ... at most 131072`, or `the card is ... at most 512`) —
   the signed document's own cap, which is not the body's: it is the bytes
@@ -685,6 +685,38 @@ A refused send names what to change, and nothing was queued:
   from before, so `auu` refuses the answer whole rather than reading the
   absence as an older relay. What is at URL is not this relay, or is
   damaged; its operator looks.
+- `answer over the hold: malformed answer from the relay at URL: in the
+  answer, the body is not under N bytes, the most this route holds;
+  nothing of the answer was used` (exit 2 with `--relay`, or when every
+  relay failed; otherwise `auu: NAME could not be reached: …` and the
+  fetch goes on to the other relays), from a fetch (`auu inbox`,
+  `auu watch`, `auu serve`; a watch that ends on it puts the relay's name
+  before it) with N twice the relay's `max_bytes` plus 65536 and at most
+  134283264 (128 MiB and 64 KiB) — one message in the mailbox listing is
+  over what `auu` holds of a page. When the hold is at its ceiling `auu`
+  has already asked for fewer rows, down to one, so this is a row over the
+  hold whatever the page, stored before the relay's upgrade, on a relay
+  not yet upgraded, or under a larger `max_bytes` than the relay says now,
+  since a relay of this release stores no inline row over 64 MiB. It is
+  the relay's, not anything on this machine; nothing of it is acknowledged
+  or kept, and every fetch from that relay stops at it, a transport
+  failure on that relay alone with the user's other relays still fetched,
+  until it goes or the cursor is moved past it. The recovery that ends it
+  is the relay's operator's: `auu-admin mailboxes purge FP` discards all
+  the mailbox's queued mail, not the one message, so the person asks the
+  operator and agrees to that loss first. In the meantime
+  `auu cursor reset --relay NAME --to ID`, ID that message's relay id
+  (`auu cursor show` gives it as the relay's lowest number when nothing
+  before it is still there), loses that message alone and lets the mail
+  after it through, at a cost: the row stays on the relay, so until the
+  operator removes it every fetch from that relay ends at exit 5 with
+  `1 message is waiting on RELAY before this machine's cursor`, an
+  `auu inbox` across several relays stops there without fetching the ones
+  after it, and `auu watch` stops watching that relay, and ends when it is
+  the only one. That sentence's advice, to reset the cursor to the
+  beginning, leads straight back to the row. The step is the person's to
+  choose, and the purge is still needed after it. The same sentence from
+  any other route is the entry above.
 - `malformed answer from the relay at URL: in the answer to a range
   request (bytes N-M or N-), ... is not the range asked for; a relay, or a proxy
   between, that does not honour a range is a transport failure, and the

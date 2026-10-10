@@ -422,14 +422,15 @@ type (
 	HealthResponse struct {
 		Sections
 		OK bool `json:"ok"`
-		// MaxBytes is the relay's max_bytes: the largest envelope it takes
-		// and the budget a listing page follows, so a client can size what
-		// it will hold of a page to the relay it talks to rather than to
-		// the ceiling. Always sent; a health answer without it is refused
-		// by name.
+		// MaxBytes is the relay's max_bytes as set: the largest envelope it
+		// takes and the budget a listing page follows, each never above
+		// MaxPageBytes, so a client can size what it will hold of a page to
+		// the relay it talks to rather than to the ceiling. Always sent; a
+		// health answer without it is refused by name.
 		MaxBytes int64 `json:"max_bytes"`
 		// KnockMaxBytes is the largest knock envelope the relay takes:
-		// knock_max_bytes, or max_bytes when that is zero. A client seals a
+		// knock_max_bytes, or max_bytes when that is zero, and never above
+		// MaxPageBytes. A client seals a
 		// knock and holds it to this before sending, so that a knock that
 		// carries vouches is refused here with the number to drop rather
 		// than by the relay with a 413. Always sent; a health answer
@@ -998,6 +999,23 @@ const (
 // registration, a certificate request, an admin token, a stream's open —
 // none of which reaches a tenth of it.
 const FramingAllowance = 1 << 16
+
+// MaxPageBytes is the most a relay puts in one listing page of envelopes,
+// whatever its max_bytes: the page ends before an envelope that would take
+// it past the smaller of the two, and only a lone first row passes it. A
+// relay whose max_bytes is above it is not refused for that; its pages
+// are cut at it, so that every page fits a client's MaxListingHold.
+const MaxPageBytes = 64 << 20
+
+// MaxListingHold is the most a client holds of one listing page, whatever
+// a relay says its max_bytes is: twice MaxPageBytes plus the framing
+// allowance, 2*64 MiB + 64 KiB = 134283264 bytes, 128 MiB and 64 KiB. A
+// page carries its envelopes as the JSON they were posted as, so a page
+// from a relay of this release, at most MaxPageBytes of envelopes and the
+// fields of its rows, is half the hold; only a lone first row over it, or
+// a page from an older relay that fills its whole max_bytes, is refused,
+// and the client asks for fewer rows before it refuses one of those.
+const MaxListingHold = 2*MaxPageBytes + FramingAllowance
 
 // MaxDirectoryBytes caps a channel directory's document, the bytes the
 // owner signed. A directory at every maximum — MaxChannels channels, each

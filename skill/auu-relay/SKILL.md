@@ -217,8 +217,10 @@ the relay refuses to start when it does not, naming both. Three bound the
 knock, a stranger's one message to a mailbox whose card says knocks:
 `limits.knock_max_bytes` (20480, room for a knock carrying four vouches; 0
 is `max_bytes`, and over `max_bytes` the relay refuses to start naming both,
-so a `max_bytes` set under 20480 needs `knock_max_bytes` set beside it), `limits.max_knocks_waiting` (10, at most
-1000; a knock at it is refused without a `Retry-After`) and
+so a `max_bytes` set under 20480 needs `knock_max_bytes` set beside it; in
+force it is never above 64 MiB, since a knock is a row like any other, and
+the health answer says the figure in force), `limits.max_knocks_waiting`
+(10, at most 1000; a knock at it is refused without a `Retry-After`) and
 `limits.knocks_per_hour` (10, per sender across every mailbox). The two
 knock refusals are `limit=knocks` and `limit=knocks_waiting` in the access
 log, and a card that no longer verifies is one line a minute naming the
