@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -814,5 +815,266 @@ func TestLimitACourierListingIsHeldToItsShape(t *testing.T) {
 	}
 	if got, err := c.Couriers(context.Background()); err != nil || len(got) != 2 {
 		t.Errorf("a good listing: %+v %v", got, err)
+	}
+}
+
+// TestLimitContentRange: the answer to a range request is held to the span
+// asked for. The three numbers of "bytes start-end/size" are decimals at
+// or above zero within int64: 0, 1 and MaxInt64 are taken where the rest
+// of the header allows them, and a sign, a space, a negative, an overflow
+// past int64, an unknown size, a list and a header without its "bytes "
+// are refused; end below start is refused, and size must pass end, so
+// size == end is refused and size == end+1 taken. Then checkRange: the
+// status is 206, the header is present, start is the from asked for and
+// end the to asked for or the file's last byte where the file ends sooner
+// or no end was asked for, and a Content-Length, when given, is the span's,
+// which checkRange returns; a 200 to a range is refused, an open-ended one
+// from past the start among them, Blob without a range still takes a 200,
+// and a 206 that sends more than its span with no length is read as the
+// span and no further.
+func TestLimitContentRange(t *testing.T) {
+	const max = "9223372036854775807"
+	const over = "9223372036854775808"
+	for _, tc := range []struct {
+		v                string
+		start, end, size int64
+		ok               bool
+	}{
+		{"bytes 0-0/1", 0, 0, 1, true},
+		{"bytes 1-1/2", 1, 1, 2, true},
+		{"bytes 0-1/2", 0, 1, 2, true},
+		{"bytes 0-9/10", 0, 9, 10, true},
+		{"bytes 0-9223372036854775806/" + max, 0, math.MaxInt64 - 1, math.MaxInt64, true},
+		{"bytes 9223372036854775806-9223372036854775806/" + max, math.MaxInt64 - 1, math.MaxInt64 - 1, math.MaxInt64, true},
+		// end at MaxInt64 leaves no size above it.
+		{"bytes 0-" + max + "/" + max, 0, 0, 0, false},
+		{"bytes 0-" + max + "/" + over, 0, 0, 0, false},
+		{"bytes " + over + "-1/2", 0, 0, 0, false},
+		{"bytes 0-" + over + "/" + over, 0, 0, 0, false},
+		{"bytes 0-1/" + over, 0, 0, 0, false},
+		{"bytes 0-1/18446744073709551616", 0, 0, 0, false},
+		// Negatives, signs and spaces, in each place.
+		{"bytes -1-1/2", 0, 0, 0, false},
+		{"bytes 0--1/2", 0, 0, 0, false},
+		{"bytes 0-1/-1", 0, 0, 0, false},
+		{"bytes 0-1/-3", 0, 0, 0, false},
+		{"bytes +1-1/2", 0, 0, 0, false},
+		{"bytes 0-+1/2", 0, 0, 0, false},
+		{"bytes 0-1/+2", 0, 0, 0, false},
+		{"bytes  1-1/2", 0, 0, 0, false},
+		{"bytes 0- 1/2", 0, 0, 0, false},
+		{"bytes 0-1/ 2", 0, 0, 0, false},
+		{"bytes 0-1/2 ", 0, 0, 0, false},
+		{"bytes 0-1 /2", 0, 0, 0, false},
+		{"bytes -/2", 0, 0, 0, false},
+		{"bytes 0-1/", 0, 0, 0, false},
+		// end below start; size not above end.
+		{"bytes 5-4/10", 0, 0, 0, false},
+		{"bytes 1-0/2", 0, 0, 0, false},
+		{"bytes 0-9/9", 0, 0, 0, false},
+		{"bytes 0-9/8", 0, 0, 0, false},
+		{"bytes 0-0/0", 0, 0, 0, false},
+		// An unknown size, an unsatisfied range, a list, other units.
+		{"bytes 0-9/*", 0, 0, 0, false},
+		{"bytes */10", 0, 0, 0, false},
+		{"bytes 0-1/2, 3-4/5", 0, 0, 0, false},
+		{"bytes 0-1,3-4/5", 0, 0, 0, false},
+		{"0-9/10", 0, 0, 0, false},
+		{"Bytes 0-9/10", 0, 0, 0, false},
+		{"bytes=0-9/10", 0, 0, 0, false},
+		{"bytes0-9/10", 0, 0, 0, false},
+		{"items 0-9/10", 0, 0, 0, false},
+		{"bytes 0-9", 0, 0, 0, false},
+		{"bytes 9/10", 0, 0, 0, false},
+		{"", 0, 0, 0, false},
+	} {
+		start, end, size, ok := parseContentRange(tc.v)
+		if ok != tc.ok || start != tc.start || end != tc.end || size != tc.size {
+			t.Errorf("parseContentRange(%q) = %d, %d, %d, %v; want %d, %d, %d, %v",
+				tc.v, start, end, size, ok, tc.start, tc.end, tc.size, tc.ok)
+		}
+	}
+
+	c, _ := rangeClient(t, "http://relay.example")
+	const none = "absent"
+	for _, tc := range []struct {
+		name     string
+		from, to int64
+		status   int
+		cr       string
+		length   int64
+		ok       bool
+	}{
+		{"the span asked for", 10, 19, 206, "bytes 10-19/100", 10, true},
+		{"the span with no length", 10, 19, 206, "bytes 10-19/100", -1, true},
+		{"the first byte", 0, 0, 206, "bytes 0-0/1", 1, true},
+		{"the whole file as a range", 0, 99, 206, "bytes 0-99/100", 100, true},
+		{"a 200 to a range", 10, 19, 200, "", 100, false},
+		{"a 200 with the right header", 10, 19, 200, "bytes 10-19/100", 10, false},
+		{"a 206 without the header", 10, 19, 206, none, 10, false},
+		{"an unknown size", 10, 19, 206, "bytes 10-19/*", 10, false},
+		{"a list", 10, 19, 206, "bytes 10-19/100, 30-39/100", 10, false},
+		{"start one late", 10, 19, 206, "bytes 11-19/100", 9, false},
+		{"start one early", 10, 19, 206, "bytes 9-19/100", 11, false},
+		{"end one short", 10, 19, 206, "bytes 10-18/100", 9, false},
+		{"end one long", 10, 19, 206, "bytes 10-20/100", 11, false},
+		{"the start of the file for a range past it", 10, 19, 206, "bytes 0-9/100", 10, false},
+		{"open-ended to the last byte", 10, -1, 206, "bytes 10-99/100", 90, true},
+		{"open-ended one short of the last byte", 10, -1, 206, "bytes 10-98/100", 89, false},
+		{"open-ended from 0", 0, -1, 206, "bytes 0-9/10", 10, true},
+		{"an end past the file, clamped", 0, 999, 206, "bytes 0-9/10", 10, true},
+		{"an end past the file, one short of its last byte", 0, 999, 206, "bytes 0-8/10", 9, false},
+		{"an end past the file, answered as asked", 0, 999, 206, "bytes 0-999/1000", 1000, true},
+		{"an end at the file's last byte", 0, 9, 206, "bytes 0-9/10", 10, true},
+		{"a length one long", 10, 19, 206, "bytes 10-19/100", 11, false},
+		{"a length one short", 10, 19, 206, "bytes 10-19/100", 9, false},
+		{"a length of the whole file", 10, 19, 206, "bytes 10-19/100", 100, false},
+		{"a length of zero", 10, 19, 206, "bytes 10-19/100", 0, false},
+	} {
+		h := http.Header{}
+		if tc.cr != none {
+			h.Set("Content-Range", tc.cr)
+		}
+		resp := &http.Response{StatusCode: tc.status, Header: h, ContentLength: tc.length}
+		span, err := c.checkRange(resp, tc.from, tc.to)
+		switch {
+		case tc.ok && err != nil:
+			t.Errorf("%s (asked %d-%d, %d %q, length %d): %v; want it taken", tc.name, tc.from, tc.to, tc.status, tc.cr, tc.length, err)
+		case tc.ok:
+			start, end, _, _ := parseContentRange(tc.cr)
+			if span != end-start+1 {
+				t.Errorf("%s (%q): span %d, want %d", tc.name, tc.cr, span, end-start+1)
+			}
+		case !tc.ok && !errors.Is(err, ErrMalformedAnswer):
+			t.Errorf("%s (asked %d-%d, %d %q, length %d): %v; want ErrMalformedAnswer", tc.name, tc.from, tc.to, tc.status, tc.cr, tc.length, err)
+		case !tc.ok && (!strings.Contains(err.Error(), "relay.example") || !strings.Contains(err.Error(), "range")):
+			t.Errorf("%s: %q does not name the relay and the range", tc.name, err)
+		}
+	}
+
+	// Through Blob, on the wire: each answer is what a server sends,
+	// Content-Length and all.
+	file := []byte("0123456789")
+	for _, tc := range []struct {
+		name      string
+		from, to  int64
+		rangeSent string
+		answer    func(w http.ResponseWriter)
+		want      string
+	}{
+		{"no range and a 200", 0, -1, "", func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusOK)
+			w.Write(file)
+		}, "0123456789"},
+		{"a range and its 206", 2, 5, "bytes=2-5", func(w http.ResponseWriter) {
+			w.Header().Set("Content-Range", "bytes 2-5/10")
+			w.WriteHeader(http.StatusPartialContent)
+			w.Write(file[2:6])
+		}, "2345"},
+		{"an open-ended range and its 206", 4, -1, "bytes=4-", func(w http.ResponseWriter) {
+			w.Header().Set("Content-Range", "bytes 4-9/10")
+			w.WriteHeader(http.StatusPartialContent)
+			w.Write(file[4:])
+		}, "456789"},
+		{"an end past the file, clamped", 0, 999, "bytes=0-999", func(w http.ResponseWriter) {
+			w.Header().Set("Content-Range", "bytes 0-9/10")
+			w.WriteHeader(http.StatusPartialContent)
+			w.Write(file)
+		}, "0123456789"},
+		{"a range and a 200", 2, 5, "bytes=2-5", func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusOK)
+			w.Write(file)
+		}, ""},
+		{"a 206 without Content-Range", 2, 5, "bytes=2-5", func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusPartialContent)
+			w.Write(file[2:6])
+		}, ""},
+		{"a 206 of another span", 2, 5, "bytes=2-5", func(w http.ResponseWriter) {
+			w.Header().Set("Content-Range", "bytes 3-6/10")
+			w.WriteHeader(http.StatusPartialContent)
+			w.Write(file[3:7])
+		}, ""},
+		{"a 206 whose length is not the span's", 2, 5, "bytes=2-5", func(w http.ResponseWriter) {
+			w.Header().Set("Content-Range", "bytes 2-5/10")
+			w.Header().Set("Content-Length", "5")
+			w.WriteHeader(http.StatusPartialContent)
+			w.Write(file[2:7])
+		}, ""},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if got := r.Header.Get("Range"); got != tc.rangeSent {
+				t.Errorf("%s: Range %q, want %q", tc.name, got, tc.rangeSent)
+			}
+			tc.answer(w)
+		}))
+		c, id := rangeClient(t, srv.URL)
+		body, _, err := c.Blob(context.Background(), id.Fingerprint(), 1, tc.from, tc.to)
+		if tc.want == "" {
+			if body != nil {
+				body.Close()
+			}
+			if !errors.Is(err, ErrMalformedAnswer) || !strings.Contains(err.Error(), srv.URL) || body != nil {
+				t.Errorf("%s: body=%v err=%v; want no body and ErrMalformedAnswer naming %s", tc.name, body != nil, err, srv.URL)
+			}
+			srv.Close()
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v; want it taken", tc.name, err)
+			srv.Close()
+			continue
+		}
+		got, err := io.ReadAll(body)
+		body.Close()
+		if err != nil || string(got) != tc.want {
+			t.Errorf("%s: read %q (%v), want %q", tc.name, got, err, tc.want)
+		}
+		srv.Close()
+	}
+
+	// An open-ended range from past the start, the resume's N-, answered 200
+	// with the whole file: refused, as a closed range is, and not taken as
+	// the remainder.
+	var sent []string
+	whole := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sent = append(sent, r.Header.Get("Range"))
+		w.WriteHeader(http.StatusOK)
+		w.Write(file)
+	}))
+	defer whole.Close()
+	wc, wid := rangeClient(t, whole.URL)
+	wb, wn, err := wc.Blob(context.Background(), wid.Fingerprint(), 1, 4, -1)
+	if wb != nil {
+		wb.Close()
+	}
+	if !errors.Is(err, ErrMalformedAnswer) || !strings.Contains(err.Error(), "bytes 4-") ||
+		!strings.Contains(err.Error(), whole.URL) || wb != nil || wn != 0 {
+		t.Errorf("a 200 to bytes=4-: body=%v n=%d err=%v; want no body and ErrMalformedAnswer naming %s and bytes 4-",
+			wb != nil, wn, err, whole.URL)
+	}
+	if len(sent) != 1 || sent[0] != "bytes=4-" {
+		t.Errorf("Blob(4, -1) sent Range %q; want one request, bytes=4-", sent)
+	}
+
+	// A 206 of the span asked for, its header right, no Content-Length (the
+	// flush before any byte makes it chunked), and a body longer than the
+	// span (bytes 2-9 sent for 2-5): Blob says the span's length and reads
+	// the span and nothing past it.
+	long := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Range", "bytes 2-5/10")
+		w.WriteHeader(http.StatusPartialContent)
+		w.(http.Flusher).Flush()
+		w.Write(file[2:]) // the span, then four bytes past it
+	}))
+	defer long.Close()
+	lc, lid := rangeClient(t, long.URL)
+	body, n, err := lc.Blob(context.Background(), lid.Fingerprint(), 1, 2, 5)
+	if err != nil {
+		t.Fatalf("a chunked 206 of bytes 2-5 with a body of 8: %v; want it taken", err)
+	}
+	got, err := io.ReadAll(body)
+	body.Close()
+	if n != 4 || err != nil || string(got) != "2345" {
+		t.Errorf("a chunked 206 of bytes 2-5 with a body of 8: n=%d, read %q (%v); want 4 and %q", n, got, err, "2345")
 	}
 }

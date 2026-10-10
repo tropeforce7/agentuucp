@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -210,7 +211,104 @@ func (c *Client) Blob(ctx context.Context, fp string, id int64, from, to int64) 
 		he.Relay = c.base
 		return nil, 0, he
 	}
-	return &stallBody{ReadCloser: resp.Body, watch: watch}, resp.ContentLength, nil
+	// A range asked for is answered as that range or not at all. A relay,
+	// or a proxy or a cache between, that ignores Range answers 200 with
+	// the whole blob, which read as the range would not open: a stream
+	// damaged for good and acknowledged away. So the answer is held to the
+	// span asked for, and anything else is a malformed answer, a transport
+	// failure, and the stream waits on the relay for the next fetch. What
+	// is read of it is the span and no more, whatever length the answer
+	// gave or left out.
+	body := resp.Body
+	length := resp.ContentLength
+	if from > 0 || to >= 0 {
+		span, err := c.checkRange(resp, from, to)
+		if err != nil {
+			resp.Body.Close()
+			watch.stop()
+			return nil, 0, err
+		}
+		body = struct {
+			io.Reader
+			io.Closer
+		}{io.LimitReader(resp.Body, span), resp.Body}
+		length = span
+	}
+	return &stallBody{ReadCloser: body, watch: watch}, length, nil
+}
+
+// checkRange holds an answer to a range request to the span asked for: a
+// 206 whose Content-Range is bytes from-end/size, end being to, or the
+// file's last byte where the file ends sooner or where no end was asked
+// for, and whose length, when the answer gives one, is the span's; it
+// says the span's length, which is all that is read of the body. The
+// three numbers come from the wire and are held to their shape before
+// any is compared.
+func (c *Client) checkRange(resp *http.Response, from, to int64) (int64, error) {
+	asked := fmt.Sprintf("bytes %d-", from)
+	if to >= 0 {
+		asked += strconv.FormatInt(to, 10)
+	}
+	want := func(what string) error {
+		return c.malformed("the answer to a range request ("+asked+")", what,
+			"the range asked for; a relay, or a proxy between, that does not honour a range is a "+
+				"transport failure, and the stream waits on the relay for the next fetch")
+	}
+	if resp.StatusCode != http.StatusPartialContent {
+		return 0, want(fmt.Sprintf("the status %d", resp.StatusCode))
+	}
+	start, end, size, ok := parseContentRange(resp.Header.Get("Content-Range"))
+	if !ok {
+		return 0, want("the Content-Range header")
+	}
+	last := size - 1
+	if to >= 0 && to < last {
+		last = to
+	}
+	if start != from || end != last {
+		return 0, want(fmt.Sprintf("the span %d-%d of %d", start, end, size))
+	}
+	span := end - start + 1
+	if resp.ContentLength >= 0 && resp.ContentLength != span {
+		return 0, want(fmt.Sprintf("the length %d for a span of %d", resp.ContentLength, span))
+	}
+	return span, nil
+}
+
+// parseContentRange reads "bytes start-end/size", the one form a 206 for a
+// single range carries, each number a decimal at or above zero, end at or
+// above start and size above end. Anything else, an unknown size, a list,
+// a sign, is not it.
+func parseContentRange(v string) (start, end, size int64, ok bool) {
+	rest, found := strings.CutPrefix(v, "bytes ")
+	if !found {
+		return 0, 0, 0, false
+	}
+	span, total, found := strings.Cut(rest, "/")
+	if !found {
+		return 0, 0, 0, false
+	}
+	a, b, found := strings.Cut(span, "-")
+	if !found {
+		return 0, 0, 0, false
+	}
+	// A leading digit is what keeps a sign out, and with it any number
+	// below zero: ParseInt would take "+1" and "-1".
+	parse := func(s string) (int64, bool) {
+		if s == "" || s[0] < '0' || s[0] > '9' {
+			return 0, false
+		}
+		n, err := strconv.ParseInt(s, 10, 64)
+		return n, err == nil
+	}
+	var okA, okB, okS bool
+	start, okA = parse(a)
+	end, okB = parse(b)
+	size, okS = parse(total)
+	if !okA || !okB || !okS || end < start || size <= end {
+		return 0, 0, 0, false
+	}
+	return start, end, size, true
 }
 
 // stallWatch is the stream rule's clock for one request: a timer of the

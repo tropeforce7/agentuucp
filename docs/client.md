@@ -350,6 +350,13 @@ The download of a stream on the receiving side runs under the same rule,
 `the relay stopped sending the stream: no byte arrived for 60 seconds`,
 and resumes by range from where it stood. Every other request to the
 relay is answered within two minutes or fails.
+A relay, or a proxy or cache between, may not honour a range and answer
+with the whole stream instead. That is a malformed answer naming the relay
+and saying the range was not honoured. It is a transport failure. Nothing
+is kept as damaged and nothing is acknowledged. The fetch from that relay
+stops at the stream, and the stream and everything after it wait on the
+relay for the next fetch. A fetch through a path that honours ranges
+delivers them, so the remedy is a path with no proxy that strips `Range`.
 
 A message to several goes to each recipient as a copy sealed for them,
 and each copy names everybody it went to:

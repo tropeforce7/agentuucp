@@ -4,16 +4,25 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/client"
 	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/store"
@@ -22,8 +31,9 @@ import (
 )
 
 // The third adversarial trace, at v0.17.0: who a thread on an expert host
-// belongs to. Its tests are here as the
-// regression tests, each renamed for what it proves.
+// belongs to, and what a fetch does with an answer that is not the range it
+// asked for. Its tests are here as the regression tests, each renamed for
+// what it proves.
 
 // newExpertAndCarol is newExpert with a third user: alice and carol, each
 // on bob's peer list and he on theirs, and bob serving one channel in the
@@ -1074,4 +1084,216 @@ func TestAFailingOpenersThreadIsNotTakenByAnEarlierStamp(t *testing.T) {
 	nothingFromBob(t, carol, bob)
 	unreadAtBob(t, bob, hijack.ID)
 	alice.replyOn(t, sent.Thread)
+}
+
+// repointRelay makes a home's default relay answer from another URL, as a
+// proxy in front of the real one would, and hands back the relay's name.
+func repointRelay(t *testing.T, u *user, to string) string {
+	t.Helper()
+	s, err := store.Open(u.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.DefaultRelay()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.URL = to
+	if err := s.SaveRelay(r); err != nil {
+		t.Fatal(err)
+	}
+	return r.Name
+}
+
+// The trace's reverse proxy in front of an honest relay, dropping Range from
+// every request as a proxy or a cache may: the relay answers each range with
+// the whole blob as a 200. That used to read as the range, the manifest did
+// not open, and the fetch kept the stream as damaged and acknowledged it,
+// deleting the sender's message from the relay. Now the answer is a
+// malformed one and the fetch's failure a transport failure: the inbox
+// exits 2 naming the range, keeps nothing under damaged/, delivers nothing
+// and acknowledges nothing, so the stream is still in bob's mailbox on the
+// relay; and the next fetch, straight to the relay, delivers it whole.
+func TestAnIntermediaryIgnoringRangeLeavesTheStreamOnTheRelay(t *testing.T) {
+	relayURL := startRelay(t)
+	alice := newUser(t, "alice", relayURL)
+	bob := newUser(t, "bob", relayURL)
+	alice.run("peers", "add", bob.exportLine())
+	bob.run("peers", "add", alice.exportLine())
+	target, err := url.Parse(relayURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stripped atomic.Int64
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	direct := proxy.Director
+	proxy.Director = func(r *http.Request) {
+		direct(r)
+		if r.Header.Get("Range") != "" {
+			stripped.Add(1)
+		}
+		r.Header.Del("Range")
+	}
+	front := httptest.NewServer(proxy)
+	defer front.Close()
+	relayName := repointRelay(t, bob, front.URL)
+
+	const text = "a message that travels as a stream"
+	alice.run("send", "--to", "bob", "--stream", text)
+	out, err := bob.tryRun("inbox", "--json")
+	t.Logf("bob's fetch through the Range-stripping proxy: %v; stdout %q", err, out)
+	var e *exitError
+	if !errors.As(err, &e) || e.code != exitTransport {
+		t.Fatalf("the fetch through the proxy: %v; want a transport failure, exit %d", err, exitTransport)
+	}
+	if !errors.Is(err, client.ErrMalformedAnswer) || !strings.Contains(err.Error(), "range") ||
+		!strings.Contains(err.Error(), front.URL) {
+		t.Errorf("the failure %q is not a malformed answer from %s naming the range", err, front.URL)
+	}
+	if stripped.Load() == 0 {
+		t.Fatal("the proxy saw no range request: the test did not reach the stream's body")
+	}
+	s, err := store.Open(bob.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept, err := os.ReadDir(s.DamagedDir()); err == nil && len(kept) > 0 {
+		t.Errorf("the fetch through the proxy kept %d entries under damaged/; want none", len(kept))
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if got := bob.inboxJSON("--no-fetch"); len(got.Messages) != 0 {
+		t.Errorf("the failed fetch delivered %d messages", len(got.Messages))
+	}
+
+	// The relay still holds it: bob's own client, straight to the relay. (A
+	// damaged stream is acknowledged whatever the channel's keep setting,
+	// so the row being there is the failed fetch having let it be.)
+	repointRelay(t, bob, relayURL)
+	bs, id, relays := bob.opened()
+	c, err := dial(bs, id, relays[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	listing, err := c.List(ctx(), 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listing.Messages) != 1 || !listing.Messages[0].IsStream() {
+		t.Fatalf("after the fetch through the proxy the relay %s holds %+v; want the one stream, unacknowledged", relayName, listing.Messages)
+	}
+
+	got := bob.inboxJSON()
+	if got.Fetch.Delivered != 1 || got.Fetch.Unreadable != 0 || got.Fetch.Kept != 0 || len(got.Messages) != 1 {
+		t.Fatalf("the fetch straight to the relay: %+v, %d messages; want the stream delivered whole", got.Fetch, len(got.Messages))
+	}
+	if read := bob.run("read", got.Messages[0].ID); !strings.Contains(read, text) {
+		t.Errorf("the delivered stream reads %q; want it to carry %q", read, text)
+	}
+}
+
+// The same on the resume path: the payload download is cut part-way, and
+// the resume's open-ended N- request reaches the relay with its Range
+// dropped, as a proxy may, so the relay answers 200 with the whole blob.
+// That is not the remainder: the fetch fails as a transport failure, keeps
+// nothing under damaged/ and acknowledges nothing, the stream is still on
+// the relay, and the next fetch, straight to the relay, delivers it whole.
+func TestAResumeAnsweredWholeLeavesTheStreamOnTheRelay(t *testing.T) {
+	relayURL, gate := startDroppingRelay(t, 1, 100<<10)
+	alice := newUser(t, "alice", relayURL)
+	bob := newUser(t, "bob", relayURL)
+	payload := downloadPayload()
+
+	target, err := url.Parse(relayURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var openEnded, stripped atomic.Int64
+	var resumes []string
+	var mu sync.Mutex
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	direct := proxy.Director
+	proxy.Director = func(r *http.Request) {
+		direct(r)
+		rng := r.Header.Get("Range")
+		// The first open-ended range is the download, cut by the dropper;
+		// every one after it is a resume, and loses its Range here.
+		if strings.HasSuffix(rng, "-") && openEnded.Add(1) > 1 {
+			mu.Lock()
+			resumes = append(resumes, rng)
+			mu.Unlock()
+			stripped.Add(1)
+			r.Header.Del("Range")
+		}
+	}
+	// The cut download is the proxy's to read short; that is the test.
+	proxy.ErrorLog = log.New(io.Discard, "", 0)
+	front := httptest.NewServer(proxy)
+	defer front.Close()
+	repointRelay(t, bob, front.URL)
+	sendOneStream(t, alice, bob, payload, "long.bin")
+
+	out, err := bob.tryRun("inbox", "--json")
+	t.Logf("bob's fetch with the resume answered whole: %v; stdout %q; resumes sent %q", err, out, resumes)
+	if _, cut := gate.counts(); cut != 1 {
+		t.Fatalf("the harness cut %d downloads, want 1", cut)
+	}
+	if stripped.Load() == 0 {
+		t.Fatal("no resume was asked for after the cut: the test did not reach the resume")
+	}
+	mu.Lock()
+	first := resumes[0]
+	mu.Unlock()
+	from := strings.TrimSuffix(strings.TrimPrefix(first, "bytes="), "-")
+	if from == "" || from == "0" {
+		t.Fatalf("the resume asked for %q; want an open-ended range from past the start", first)
+	}
+	var e *exitError
+	if !errors.As(err, &e) || e.code != exitTransport {
+		t.Fatalf("the fetch with the resume answered whole: %v; want a transport failure, exit %d", err, exitTransport)
+	}
+	if !errors.Is(err, client.ErrMalformedAnswer) || !strings.Contains(err.Error(), "bytes "+from+"-") {
+		t.Errorf("the failure %q is not a malformed answer naming the range bytes %s-", err, from)
+	}
+	s, err := store.Open(bob.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept, err := os.ReadDir(s.DamagedDir()); err == nil && len(kept) > 0 {
+		t.Errorf("the fetch kept %d entries under damaged/; want none", len(kept))
+	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if got := bob.inboxJSON("--no-fetch"); len(got.Messages) != 0 {
+		t.Errorf("the failed fetch delivered %d messages", len(got.Messages))
+	}
+
+	// Still on the relay, unacknowledged.
+	repointRelay(t, bob, relayURL)
+	bs, id, relays := bob.opened()
+	c, err := dial(bs, id, relays[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	listing, err := c.List(ctx(), 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listing.Messages) != 1 || !listing.Messages[0].IsStream() {
+		t.Fatalf("after the failed resume the relay holds %+v; want the one stream", listing.Messages)
+	}
+
+	got := bob.inboxJSON()
+	if got.Fetch.Delivered != 1 || got.Fetch.Unreadable != 0 || len(got.Messages) != 1 {
+		t.Fatalf("the fetch straight to the relay: %+v; want the stream delivered", got.Fetch)
+	}
+	dir := t.TempDir()
+	bob.run("extract", got.Messages[0].ID, "--out", dir)
+	back, err := os.ReadFile(filepath.Join(dir, "long.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(back, payload) {
+		t.Fatalf("the stream delivered after the failed resume differs: %d bytes back, %d sent", len(back), len(payload))
+	}
 }

@@ -685,6 +685,16 @@ A refused send names what to change, and nothing was queued:
   from before, so `auu` refuses the answer whole rather than reading the
   absence as an older relay. What is at URL is not this relay, or is
   damaged; its operator looks.
+- `malformed answer from the relay at URL: in the answer to a range
+  request (bytes N-M or N-), ... is not the range asked for; a relay, or a proxy
+  between, that does not honour a range is a transport failure, and the
+  stream waits on the relay for the next fetch; nothing of the answer was
+  used` (exit 2) — a fetch of a large
+  message asked for part of it and got something else, often the whole
+  blob from a proxy or cache that strips `Range`. Nothing is kept as
+  damaged and nothing is acknowledged; the fetch from that relay stops
+  there, and the stream and everything after it stay on the relay. A
+  fetch through a path that honours ranges delivers it.
 - `malformed answer: the relay at URL answered METHOD PATH in a shape this
   build cannot read: ...` — the answer carries a field this `auu` does not
   know outside its `sections`; the same advice as the line above.

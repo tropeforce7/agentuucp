@@ -1391,6 +1391,22 @@ too. The blob route honours `Range`, so a receiver that holds the first
 part of a stream asks for the rest from there. A range from the end or
 past it is `416`.
 
+The client holds the answer to a range to the span it asked for. It must be
+`206` with a `Content-Range` for exactly that span. The span's end may be
+the file's last byte where the file is shorter or no end was asked for. A
+`Content-Length`, when the answer gives one, must be the span's. A relay,
+or a proxy or cache between, may ignore `Range` and answer `200` with the
+whole blob, since HTTP permits that. Read as the range, that answer would
+not open, and the stream would be kept as damaged and acknowledged. That
+would delete it from the relay for good. So an answer that is not the
+range asked for is a malformed answer naming the relay. It is a transport
+failure, never a damaged stream. Nothing is kept under `damaged/` and
+nothing is acknowledged. The fetch from that relay stops at the stream,
+and the stream and everything after it wait on the relay for the next
+fetch. So an intermediary that does not honour a range can no longer make
+a stream be deleted unread. One that alters the bytes it carries can, as
+the relay can, and TLS to the relay is what keeps anyone else from it.
+
 ### 2.3 A knock
 
 A knock is the one message that reaches a mailbox from somebody its owner
