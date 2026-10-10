@@ -131,29 +131,57 @@ func Check(sections []Section) error {
 	return nil
 }
 
-// known is the sections this build understands, by name, filled by each
-// feature's init. It is empty in a binary that links no such feature, as this
-// package's own tests are; internal/recipients is the first.
-var known = map[string]bool{}
+// Path is where a section is read: in a sealed message, in a stream's
+// manifest, in a request body or in an answer body. A section is known on
+// the paths its feature reads it on and on no other; elsewhere it is held
+// to wire.MaxKeptBytes where it is kept, as an unknown one is (D76), but a
+// critical one is never refused as needing a newer build, since Sort asks
+// whether the name is known at all.
+type Path uint8
 
-// Known says whether this build understands the named section.
-func Known(name string) bool { return known[name] }
+const (
+	OnMessage Path = 1 << iota
+	OnManifest
+	OnRequest
+	OnAnswer
+	// AnyPath is every path, for the one question that does not depend on
+	// where a section came: whether this build knows the name at all, which
+	// is what Sort and a message waiting for a newer build ask, and what a
+	// record's load asks of the sections an earlier release kept (R13).
+	AnyPath = OnMessage | OnManifest | OnRequest | OnAnswer
+)
 
-// Register says this build understands the named section. A feature calls it
-// from its package's init, once, with a name of its own choosing; a name that
-// is not a name, or one registered twice, is a mistake in the program and
-// never input, so it panics rather than return an error nobody could act
-// on. It returns a function that takes the name out again, for a test in
-// another package to put the registry back as it found it; a feature's init
+// known is the sections this build understands, by name, with the paths it
+// reads each on, filled by each feature's init. It is empty in a binary
+// that links no such feature, as this package's own tests are;
+// internal/recipients is the first.
+var known = map[string]Path{}
+
+// Known says whether this build understands the named section on any of
+// the paths on: a section registered for requests and answers is not known
+// on a message, so a message carrying it keeps it only as it keeps one it
+// cannot read.
+func Known(name string, on Path) bool { return known[name]&on != 0 }
+
+// Register says this build understands the named section on the paths
+// given. A feature calls it from its package's init, once, with a name of
+// its own choosing and at least one path; a name that is not a name, one
+// registered twice, or no path is a mistake in the program and never
+// input, so it panics rather than return an error nobody could act on. It
+// returns a function that takes the name out again, for a test in another
+// package to put the registry back as it found it; a feature's init
 // ignores it.
-func Register(name string) (unregister func()) {
+func Register(name string, on Path) (unregister func()) {
 	if err := ValidName(name); err != nil {
 		panic(fmt.Sprintf("wire.Register: %v", err))
 	}
-	if known[name] {
+	if on == 0 || on&^AnyPath != 0 {
+		panic(fmt.Sprintf("wire.Register: section %q registered on no path this package names", name))
+	}
+	if known[name] != 0 {
 		panic(fmt.Sprintf("wire.Register: section %q registered twice", name))
 	}
-	known[name] = true
+	known[name] = on
 	return func() { delete(known, name) }
 }
 
@@ -169,7 +197,7 @@ func Register(name string) (unregister func()) {
 func Sort(sections []Section) (knownSections, ignored []Section, err error) {
 	for _, s := range sections {
 		switch {
-		case known[s.Name]:
+		case known[s.Name] != 0:
 			knownSections = append(knownSections, s)
 		case s.Critical:
 			return nil, nil, &NeedsNewerError{Name: s.Name}

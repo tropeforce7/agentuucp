@@ -589,8 +589,10 @@ type messageJSON struct {
 	// (D42); nothing of what it carries is said beside it.
 	Newer string `json:"newer,omitempty"`
 	// IgnoredSections names the sections the message came with that this
-	// build does not know and kept as they came (D31), and DroppedSections
-	// counts those it did not keep for being over the kept size.
+	// build does not read on a message, and kept as they came (D31): the
+	// ones it does not know, and the ones it knows only on a request or an
+	// answer. DroppedSections counts those it did not keep for being over
+	// the kept size.
 	IgnoredSections []string `json:"ignored_sections,omitempty"`
 	DroppedSections int      `json:"dropped_sections,omitempty"`
 	// Vouch is a vouch message's judgement here: whether it counts and
@@ -745,7 +747,7 @@ func toJSON(s *store.Store, box store.Box, m *store.Stored, includeText bool) me
 	out.Newer = m.Newer
 	out.DroppedSections = m.DroppedSections
 	for _, sec := range m.Inner.Sections {
-		if !wire.Known(sec.Name) {
+		if !wire.Known(sec.Name, wire.OnMessage|wire.OnManifest) {
 			out.IgnoredSections = append(out.IgnoredSections, sec.Name)
 		}
 	}

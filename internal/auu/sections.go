@@ -8,14 +8,15 @@ import (
 )
 
 // keptSections is what a message keeps of the sections it came with (D31):
-// every section this build knows, whose size is its own rule's, and every
-// one it does not know at or under wire.MaxKeptBytes, as it came, so that a
+// every section this build knows on a message or a manifest, whose size is
+// its own rule's, and every other at or under wire.MaxKeptBytes, one known
+// only on a request or an answer among them, as it came, so that a
 // later build on this machine can read it. One it does not know over the
 // size is dropped and counted. None is critical and unknown: Open and
 // OpenManifest answered that before a record was made.
 func keptSections(sections []wire.Section) (kept []wire.Section, dropped int) {
 	for _, s := range sections {
-		if !wire.Known(s.Name) && len(s.Data) > wire.MaxKeptBytes {
+		if !wire.Known(s.Name, wire.OnMessage|wire.OnManifest) && len(s.Data) > wire.MaxKeptBytes {
 			dropped++
 			continue
 		}

@@ -434,10 +434,18 @@ section's own rule, its size before the decode, and refuses what it does
 not expect, a field the data does not have among it
 (`TestTheRuleTakesAListAndRefusesWhatBreaksIt`). So what a name says, it
 says for good, and `wire.known` is one namespace in which each name says
-one thing. The design for messages to several reached for one name three
-times: the sealed list, a list on the request for the relay's cap, and
-the relay's number on the health answer, all `recipients`. A list on a
-forward request would also have told the first relay who on other relays
+one thing. A name is known on the paths its feature reads it on,
+registered with those paths through `wire.Register`, and held to
+`wire.MaxKeptBytes` as an unknown one is on every other, though a
+critical one is never refused as needing a newer auu, since whether a
+name needs one does not depend on the path: `recipient-count` is
+registered for requests alone and `max-recipients` for answers alone, so
+on a sealed message each is kept only up to `wire.MaxKeptBytes` and
+dropped and counted over it, as a name this build never heard of is. The
+design for messages to several reached for one name three times: the
+sealed list, a list on the request for the relay's cap, and the relay's
+number on the health answer, all `recipients`. A list on a forward
+request would also have told the first relay who on other relays
 had been written to, which it learns from nothing else, when all it
 needs is how many. They became three names with one shape each:
 `recipients` for the sealed list, `recipient-count` (`{"n": N}`) on a

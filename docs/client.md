@@ -867,8 +867,19 @@ with a name, which this build may not know. A section it does not know and
 was not told it must is passed over, and the message is read as usual. The
 section is kept with the message as it came, up to 16 KiB, so a later `auu`
 on this machine can read it, and `--json` names it in `ignored_sections`. A
-larger one is not kept, and `dropped_sections` counts it. A section the
-sender marked critical is one this build must not read past:
+larger one is not kept, and `dropped_sections` counts it. A section is
+known only where this build reads it, so `recipient-count`, which it
+reads on a request alone, and `max-recipients`, which it reads on an
+answer alone, are each held on a message as an unknown one is: kept up to
+16 KiB, named in `ignored_sections`, and counted in `dropped_sections`
+over it. Whether a critical section needs a newer `auu` does not depend
+on where it came: a name this build reads on any path is never one it
+asks a newer `auu` for, so either of those two marked critical on a
+message is passed over and named in `ignored_sections`, not refused. A
+message an earlier release kept with such a section over 16 KiB still
+loads; the cap holds what is fetched from now on. A section the sender
+marked critical that this build does not know on any path is one it must
+not read past:
 
 - A message is kept under `damaged/` with the cause `newer` and the
   section's name, and acknowledged. The warning names the sender, your

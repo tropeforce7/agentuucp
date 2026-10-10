@@ -230,7 +230,7 @@ func TestAKeptNewerEnvelopeIsReadAfterTheUpdate(t *testing.T) {
 		t.Fatal("the message is in the inbox before the update")
 	}
 
-	t.Cleanup(wire.Register("reopen-later"))
+	t.Cleanup(wire.Register("reopen-later", wire.OnMessage))
 	out := bob.run("damaged", "reopen", relayName, strconv.FormatInt(id, 10))
 	if want := fmt.Sprintf("%s %d: opened and filed in the inbox\n", relayName, id); out != want {
 		t.Errorf("reopen said %q; want %q", out, want)
@@ -336,7 +336,7 @@ func TestAMalformedRecordIsNeverReopened(t *testing.T) {
 		"only a message kept as needing a newer auu is", relayName, badRecord), "damaged", "reopen", relayName, "2000")
 	badBefore := keptPair(t, bs, relayName, 2000)
 	before := keptPair(t, bs, relayName, 1000)
-	t.Cleanup(wire.Register("beside-malformed"))
+	t.Cleanup(wire.Register("beside-malformed", wire.OnMessage))
 	rows := reopenJSONOf(t, bob, "--all")
 	if len(rows) != 1 || rows[0].ID != newerID || rows[0].Outcome != reopenFiled {
 		t.Fatalf("reopen --all: %+v; want the newer one filed and nothing else", rows)
@@ -378,7 +378,7 @@ func TestABinWithNoRecordIsNeverReopened(t *testing.T) {
 	if _, _, err := bs.ReadDamaged(relayName, 77); !errors.Is(err, store.ErrNoRecord) {
 		t.Fatalf("ReadDamaged of bytes with no record: %v; want ErrNoRecord", err)
 	}
-	t.Cleanup(wire.Register("beside-cut-off"))
+	t.Cleanup(wire.Register("beside-cut-off", wire.OnMessage))
 	usageError(t, bob, relayName+" 77 is bytes kept with no record, a keep cut off before its record was written, "+
 		"which is never reopened; only a message kept as needing a newer auu is", "damaged", "reopen", relayName, "77")
 	rows := reopenJSONOf(t, bob, "--all")
@@ -409,7 +409,7 @@ func TestReopenFilesAStrangerInQuarantine(t *testing.T) {
 	postSections(t, carol, bob, "a stranger's newer ask", critical("stranger-later"))
 	id := keptNewer(t, bob, 1)[0]
 	relayName := bob.defaultRelayName()
-	t.Cleanup(wire.Register("stranger-later"))
+	t.Cleanup(wire.Register("stranger-later", wire.OnMessage))
 	out := bob.run("damaged", "reopen", relayName, strconv.FormatInt(id, 10))
 	if want := fmt.Sprintf("%s %d: opened and filed in the quarantine\n", relayName, id); out != want {
 		t.Errorf("reopen said %q; want %q", out, want)
@@ -438,7 +438,7 @@ func TestReopenUnderALockedAgentMovesNothing(t *testing.T) {
 	ids := keptNewer(t, bob, 2)
 	relayName := bob.defaultRelayName()
 	bs := storeOf(t, bob)
-	t.Cleanup(wire.Register("lock-later"))
+	t.Cleanup(wire.Register("lock-later", wire.OnMessage))
 
 	bob.run("lock")
 	before := snapshotHome(t, filepath.Join(bob.home, "damaged"))
@@ -522,7 +522,7 @@ func TestReopenRechecksTheCauseUnderTheLock(t *testing.T) {
 	bs := storeOf(t, bob)
 	// Known to this build, so that the record's cause is all that keeps
 	// it from opening.
-	t.Cleanup(wire.Register("recheck-later"))
+	t.Cleanup(wire.Register("recheck-later", wire.OnMessage))
 	r, err := bs.DefaultRelay()
 	if err != nil {
 		t.Fatal(err)
@@ -576,7 +576,7 @@ func TestAHeldLockMidwayIsSaidWithTheCount(t *testing.T) {
 	ids := keptNewer(t, bob, 2)
 	relayName := bob.defaultRelayName()
 	bs := storeOf(t, bob)
-	t.Cleanup(wire.Register("midway-later"))
+	t.Cleanup(wire.Register("midway-later", wire.OnMessage))
 	moveKept(t, bs, relayName, ids[0], "gone.example", time.Now().Add(-time.Hour))
 	second := keptPair(t, bs, relayName, ids[1])
 	r, err := bs.DefaultRelay()
@@ -633,7 +633,7 @@ func TestReopenOfACopyKeptTwiceAcksNothing(t *testing.T) {
 	ids := keptNewer(t, bob, 2)
 	relayName := bob.defaultRelayName()
 	bs := storeOf(t, bob)
-	t.Cleanup(wire.Register("twice-later"))
+	t.Cleanup(wire.Register("twice-later", wire.OnMessage))
 	gate.requests.Store(0)
 
 	out := bob.run("damaged", "reopen", relayName, strconv.FormatInt(ids[0], 10))
@@ -669,7 +669,7 @@ func TestReopenMakesNoRelayRequest(t *testing.T) {
 	relayName := bob.defaultRelayName()
 	bs := storeOf(t, bob)
 	moveKept(t, bs, relayName, ids[1], "gone.example", time.Now())
-	t.Cleanup(wire.Register("quiet-later"))
+	t.Cleanup(wire.Register("quiet-later", wire.OnMessage))
 	gate.requests.Store(0)
 	rows := reopenJSONOf(t, bob, "--all")
 	if len(rows) != 2 || rows[0].Outcome != reopenFiled || rows[1].Outcome != reopenFiled {
@@ -866,7 +866,7 @@ func TestAnEarlierReleasesRecordReopensAndSaysWhatCouldNotRun(t *testing.T) {
 	if rows, stderr := lsDamaged(t, bob); len(rows) != 2 || stderr != "" {
 		t.Fatalf("an earlier release's records are not listed: %+v\n%s", rows, stderr)
 	}
-	t.Cleanup(wire.Register("old-record"))
+	t.Cleanup(wire.Register("old-record", wire.OnMessage))
 	out := bob.run("damaged", "reopen", relayName, strconv.FormatInt(ids[0], 10))
 	want := fmt.Sprintf("%s %d: opened and filed in the inbox; its record does not say the kind it was listed under or "+
 		"the channel it was listed under, so that check could not run\n", relayName, ids[0])
@@ -906,7 +906,7 @@ func TestAKeptRecordTheListingContradictsIsLeft(t *testing.T) {
 	edit(ids[1], func(r *store.DamagedRecord) { r.Channel = "elsewhere" })
 	edit(ids[2], func(r *store.DamagedRecord) { r.Via = "upstream.example" })
 	before := map[int64][2][]byte{ids[0]: keptPair(t, bs, relayName, ids[0]), ids[1]: keptPair(t, bs, relayName, ids[1])}
-	t.Cleanup(wire.Register("contradicted"))
+	t.Cleanup(wire.Register("contradicted", wire.OnMessage))
 	for id, want := range map[int64]string{
 		ids[0]: `it was listed as "knock" and sealed as "ask", and is left where it is`,
 		ids[1]: `it was filed under "elsewhere" and sealed for "default", and is left where it is`,
@@ -1107,7 +1107,7 @@ func TestReopenOfAnIdHeldFromAnotherSenderIsLeft(t *testing.T) {
 	if err := json.Unmarshal(before[0], &env); err != nil {
 		t.Fatal(err)
 	}
-	unregister := wire.Register("collide-later")
+	unregister := wire.Register("collide-later", wire.OnMessage)
 	inner, _, err := envelope.Open(bobID, &env)
 	unregister()
 	if err != nil {
@@ -1127,7 +1127,7 @@ func TestReopenOfAnIdHeldFromAnotherSenderIsLeft(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Cleanup(wire.Register("collide-later"))
+	t.Cleanup(wire.Register("collide-later", wire.OnMessage))
 	out := bob.run("damaged", "reopen", relayName, strconv.FormatInt(id, 10))
 	if want := fmt.Sprintf("%s %d: its id is held from another sender, so it is left where it is\n", relayName, id); out != want {
 		t.Errorf("reopen said %q; want %q", out, want)
@@ -1178,7 +1178,7 @@ func TestAReopenedVouchIsKeptForKnocks(t *testing.T) {
 	if _, err := bs.KeptVouch(aliceID.Fingerprint()); !errors.Is(err, store.ErrNoVouch) {
 		t.Fatalf("a vouch was kept before the reopen: %v", err)
 	}
-	t.Cleanup(wire.Register("vouch-later"))
+	t.Cleanup(wire.Register("vouch-later", wire.OnMessage))
 	bob.run("damaged", "reopen", bob.defaultRelayName(), strconv.FormatInt(id, 10))
 	kept, err := bs.KeptVouch(aliceID.Fingerprint())
 	if err != nil {
@@ -1234,7 +1234,7 @@ func TestAnEarlierReleasesKnockReopensWithoutTheKindCheck(t *testing.T) {
 	if err := os.WriteFile(strings.TrimSuffix(bin, ".bin")+".json", []byte(old), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(wire.Register("knock-later"))
+	t.Cleanup(wire.Register("knock-later", wire.OnMessage))
 	out := bob.run("damaged", "reopen", relayName, strconv.FormatInt(id, 10))
 	want := fmt.Sprintf("%s %d: opened and filed in the quarantine; its record does not say the kind it was listed under or "+
 		"the channel it was listed under, so that check could not run\n", relayName, id)
@@ -1279,7 +1279,7 @@ func TestAKeptRecordWithAnUnknownFieldIsNeverReopened(t *testing.T) {
 	if out := bob.run("damaged", "ls"); !strings.Contains(out, `unreadable record: json: unknown field "future"`) {
 		t.Errorf("damaged ls does not say the record does not read:\n%s", out)
 	}
-	t.Cleanup(wire.Register("future-field"))
+	t.Cleanup(wire.Register("future-field", wire.OnMessage))
 	usageError(t, bob, fmt.Sprintf("%s %d is kept beside a record that does not read (%s: json: unknown field \"future\"), which is never reopened; "+
 		"only a message kept as needing a newer auu is", relayName, id, record), "damaged", "reopen", relayName, strconv.FormatInt(id, 10))
 	if rows := reopenJSONOf(t, bob, "--all"); len(rows) != 0 {

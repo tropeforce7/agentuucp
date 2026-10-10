@@ -34,7 +34,7 @@ func fetchKnownNow(ctx context.Context, s *store.Store, id *identity.Identity, c
 			return err
 		}
 		for _, m := range msgs {
-			if m.Newer == "" || m.Relay != r.Name || !wire.Known(m.Newer) || m.PayloadGone {
+			if m.Newer == "" || m.Relay != r.Name || !wire.Known(m.Newer, wire.AnyPath) || m.PayloadGone {
 				continue
 			}
 			if box == store.Quarantine {

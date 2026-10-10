@@ -440,10 +440,18 @@ another relay: the relays it crossed, nearest the sender first, joined by
 `payload_on_relay` (when set), `newer` (when set: a stream waiting on the
 relay for a newer auu, by its critical section, with nothing of what it
 carries beside it), `ignored_sections` (when set: the sections this build
-did not know, kept with the message) and `dropped_sections` (when set: how
-many were too large to keep), and `vouch` (on a message of type `vouch`
-alone: `counts`, and when it does not, `why`; when it does, `voucher` and
-`subject` (fingerprints), `name` (the voucher's label for the subject, a
+does not read on a message, kept with the message up to 16 KiB each: one
+it does not know, and one it knows only on another path, as
+`recipient-count`, which it reads on a request alone, and
+`max-recipients`, which it reads on an answer alone; a section name is
+known on the paths that read it and held as an unknown one elsewhere, so
+one of those two marked critical on a message is passed over and named
+here, never refused as needing a newer auu; a message an earlier release
+kept with such a section over 16 KiB still loads, and the cap holds what
+is fetched from now on) and `dropped_sections` (when set: how many such
+sections were over 16 KiB and not kept), and `vouch` (on a message of
+type `vouch` alone: `counts`, and when it does not, `why`; when it does,
+`voucher` and `subject` (fingerprints), `name` (the voucher's label for the subject, a
 suggestion and never a label here), `issued`, `known_as` (when the subject
 is already a peer: your name for them) and `you` (when the vouch is for
 the user)), and `ask` (on a message of type `vouch-ask` alone: `about`, the

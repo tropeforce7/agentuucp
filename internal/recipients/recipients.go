@@ -71,9 +71,11 @@ const MaxName = "max-recipients"
 const MaxNumberBytes = 64
 
 func init() {
-	wire.Register(Name)
-	wire.Register(CountName)
-	wire.Register(MaxName)
+	// The list travels in a message and in a manifest, the count on a
+	// request and the maximum on answers, each read nowhere else.
+	wire.Register(Name, wire.OnMessage|wire.OnManifest)
+	wire.Register(CountName, wire.OnRequest)
+	wire.Register(MaxName, wire.OnAnswer)
 }
 
 // List is the section's data.

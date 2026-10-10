@@ -806,11 +806,11 @@ type Stored struct {
 	// here, and a build that knows the section fetches it whole. Empty, the
 	// value the key is left out for, is every other message.
 	Newer string `json:"newer,omitempty"`
-	// DroppedSections counts the sections, none of them critical and none
-	// this build knew, that were over wire.MaxKeptBytes and so not kept
-	// with the message (D31); the ones at or under it are kept in
-	// Inner.Sections as they came. Zero, the value the key is left out
-	// for, is a message that lost none.
+	// DroppedSections counts the sections this build does not read on a
+	// message, none of them critical and unknown, that were over
+	// wire.MaxKeptBytes and so not kept with the message (D31); the ones
+	// at or under it are kept in Inner.Sections as they came. Zero, the
+	// value the key is left out for, is a message that lost none.
 	DroppedSections int `json:"dropped_sections,omitempty"`
 	// Copies is a sent message to several: one entry per recipient, in the
 	// order the recipients section names them, saying where each copy went
@@ -944,13 +944,17 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	}
 	// What a message kept of its sections was held to wire.Check by Open,
 	// and each it did not know to wire.MaxKeptBytes by the fetch, a known
-	// section's size being its own rule's: a record that says otherwise
-	// was not written by this program.
+	// section's size being its own rule's: a record that says otherwise was
+	// not written by this program. The check asks whether the name is known
+	// on any path, not on a message, since a release before this one kept
+	// a section known only on requests and answers whole, and a record any
+	// release from v0.15.0 wrote is read by every later one (R13); the fetch
+	// holds the cap on the message path from now on.
 	if err := wire.Check(m.Inner.Sections); err != nil {
 		return nil, fmt.Errorf("the record's sections: %v", err)
 	}
 	for _, sec := range m.Inner.Sections {
-		if !wire.Known(sec.Name) && len(sec.Data) > wire.MaxKeptBytes {
+		if !wire.Known(sec.Name, wire.AnyPath) && len(sec.Data) > wire.MaxKeptBytes {
 			return nil, fmt.Errorf("the record's section %q is %d bytes, over the %d kept", sec.Name, len(sec.Data), wire.MaxKeptBytes)
 		}
 	}

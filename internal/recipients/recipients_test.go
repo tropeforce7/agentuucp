@@ -206,7 +206,41 @@ func TestSectionWritesTheListAsGiven(t *testing.T) {
 			t.Errorf("Section(%d names) = %v; want ErrForm", len(bad), err)
 		}
 	}
-	if !wire.Known(Name) {
+	if !wire.Known(Name, wire.OnMessage) {
 		t.Fatal("the section is not registered with the wire")
+	}
+}
+
+// Each of the three names is known on the paths its feature reads it on and
+// on no other (D76, R13): the list in a message and a manifest, the count in
+// a request alone and the maximum in an answer alone, and neither in a
+// message, where they are held to wire.MaxKeptBytes as an unknown section
+// is.
+func TestTheSectionsAreKnownOnTheirPathsAlone(t *testing.T) {
+	paths := []struct {
+		on    wire.Path
+		label string
+	}{
+		{wire.OnMessage, "a message"},
+		{wire.OnManifest, "a manifest"},
+		{wire.OnRequest, "a request"},
+		{wire.OnAnswer, "an answer"},
+	}
+	for _, c := range []struct {
+		name string
+		on   wire.Path
+	}{
+		{Name, wire.OnMessage | wire.OnManifest},
+		{CountName, wire.OnRequest},
+		{MaxName, wire.OnAnswer},
+	} {
+		for _, p := range paths {
+			if got, want := wire.Known(c.name, p.on), c.on&p.on != 0; got != want {
+				t.Errorf("%s known on %s: %v; want %v", c.name, p.label, got, want)
+			}
+		}
+		if !wire.Known(c.name, wire.AnyPath) {
+			t.Errorf("%s is not known on any path", c.name)
+		}
 	}
 }

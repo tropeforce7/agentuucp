@@ -107,9 +107,10 @@ func TestTheNumbersAreWrittenAsTheyAreRead(t *testing.T) {
 			t.Errorf("MaxSection(%d) was written", n)
 		}
 	}
-	for _, name := range []string{CountName, MaxName} {
-		if !wire.Known(name) {
-			t.Errorf("%s is not registered with the wire", name)
-		}
+	if !wire.Known(CountName, wire.OnRequest) {
+		t.Errorf("%s is not registered with the wire on a request", CountName)
+	}
+	if !wire.Known(MaxName, wire.OnAnswer) {
+		t.Errorf("%s is not registered with the wire on an answer", MaxName)
 	}
 }

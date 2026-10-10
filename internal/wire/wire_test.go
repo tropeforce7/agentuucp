@@ -190,17 +190,47 @@ func TestSortIgnoresTheUnknownAndRefusesTheCritical(t *testing.T) {
 }
 
 // A section this build knows goes to its rule whether or not it is
-// critical. The registry is empty in this package's tests, so the test fills
-// it.
+// critical, and Sort asks whether the name is known on any path: one
+// registered only for requests and answers is handed on as well. The
+// registry is empty in this package's tests, so the test fills it.
 func TestSortHandsAKnownSectionOn(t *testing.T) {
-	known["recipients"] = true
-	t.Cleanup(func() { delete(known, "recipients") })
-	k, ign, err := Sort([]Section{section("recipients", true), section("later", false)})
-	if err != nil || len(k) != 1 || k[0].Name != "recipients" || len(ign) != 1 || ign[0].Name != "later" {
+	known["recipients"] = OnMessage
+	known["asked"] = OnRequest | OnAnswer
+	t.Cleanup(func() { delete(known, "recipients"); delete(known, "asked") })
+	k, ign, err := Sort([]Section{section("recipients", true), section("asked", true), section("later", false)})
+	if err != nil || len(k) != 2 || k[0].Name != "recipients" || k[1].Name != "asked" || len(ign) != 1 || ign[0].Name != "later" {
 		t.Fatalf("known %v, ignored %v, %v", k, ign, err)
 	}
-	if !Known("recipients") || Known("later") {
+	if !Known("recipients", OnMessage) || Known("later", AnyPath) {
 		t.Fatal("Known disagrees with the registry")
+	}
+}
+
+// Known answers for the paths asked: a name is known on a path it was
+// registered on, on a set of paths any one of which it was registered on,
+// and on no other (D76).
+func TestKnownIsAskedPerPath(t *testing.T) {
+	known["asked"] = OnRequest | OnAnswer
+	t.Cleanup(func() { delete(known, "asked") })
+	for _, c := range []struct {
+		on   Path
+		want bool
+	}{
+		{OnMessage, false},
+		{OnManifest, false},
+		{OnMessage | OnManifest, false},
+		{OnRequest, true},
+		{OnAnswer, true},
+		{OnMessage | OnAnswer, true},
+		{AnyPath, true},
+		{0, false},
+	} {
+		if got := Known("asked", c.on); got != c.want {
+			t.Errorf("Known(asked, %04b) = %v; want %v", c.on, got, c.want)
+		}
+	}
+	if Known("never", AnyPath) {
+		t.Error("an unregistered name is known")
 	}
 }
 
@@ -341,29 +371,51 @@ func TestTheWalkKnowsTheFieldsJSONDoes(t *testing.T) {
 	}
 }
 
-// Register adds a name to what this build knows, once, and refuses a name
-// that is not one and a name twice by panicking, since either is the
-// program's own mistake at init.
+// Register adds a name to what this build knows, once, on the paths given,
+// and refuses a name that is not one, a name twice, no path and a bit that
+// is no path by panicking, since each is the program's own mistake at init;
+// none of the refused calls changes what is known.
 func TestRegisterAddsANameOnce(t *testing.T) {
-	unregister := Register("a-feature")
-	if !Known("a-feature") {
-		t.Fatal("a registered name is not known")
+	unregister := Register("a-feature", OnMessage)
+	if !Known("a-feature", OnMessage) || Known("a-feature", OnManifest|OnRequest|OnAnswer) {
+		t.Fatal("a registered name is not known on its path alone")
 	}
 	t.Cleanup(func() {
 		unregister()
-		if Known("a-feature") {
+		if Known("a-feature", AnyPath) {
 			t.Error("the name is still known after its unregister ran")
 		}
 	})
-	for _, name := range []string{"a-feature", "Not-A-Name", ""} {
+	for _, c := range []struct {
+		name string
+		on   Path
+		why  string
+	}{
+		{"a-feature", OnMessage, "a name twice"},
+		{"a-feature", OnAnswer, "a name twice on another path"},
+		{"Not-A-Name", OnMessage, "not a name"},
+		{"", OnMessage, "no name"},
+		{"no-path", 0, "no path"},
+		{"unknown-bit", AnyPath + 1, "a bit that is no path"},
+		{"unknown-bit", 1 << 7, "the top bit"},
+		{"unknown-bit", OnMessage | 1<<4, "a path and a bit that is none"},
+	} {
 		func() {
 			defer func() {
 				if recover() == nil {
-					t.Errorf("Register(%q) did not panic", name)
+					t.Errorf("Register(%q, %08b), %s, did not panic", c.name, c.on, c.why)
 				}
 			}()
-			Register(name)
+			Register(c.name, c.on)
 		}()
+	}
+	if known["a-feature"] != OnMessage {
+		t.Errorf("a refused second registration changed the first: %08b", known["a-feature"])
+	}
+	for _, name := range []string{"no-path", "unknown-bit"} {
+		if _, ok := known[name]; ok {
+			t.Errorf("a refused registration of %q left an entry", name)
+		}
 	}
 }
 

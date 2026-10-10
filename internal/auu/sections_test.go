@@ -327,7 +327,7 @@ func TestAWaitingStreamIsFetchedByABuildThatKnowsItsSection(t *testing.T) {
 		t.Fatalf("fetch: %+v, want the stream waiting", in.Fetch)
 	}
 	// The upgrade: this build learns the section.
-	t.Cleanup(wire.Register("now-known"))
+	t.Cleanup(wire.Register("now-known", wire.OnManifest))
 	in, stderr := fetchJSON(t, bob)
 	if in.Fetch.Delivered != 1 {
 		t.Fatalf("the fetch after the upgrade: %+v\n%s", in.Fetch, stderr)
@@ -362,7 +362,7 @@ func TestAWaitingStreamGoneFromTheRelayIsSaidOnce(t *testing.T) {
 	if _, err := st.Delete(bob.exportFingerprint(), queued[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(wire.Register("gone-later"))
+	t.Cleanup(wire.Register("gone-later", wire.OnManifest))
 	_, stderr := fetchJSON(t, bob)
 	if !strings.Contains(stderr, "waited on ") || !strings.Contains(stderr, "is no longer there; ask the sender to send it again") {
 		t.Errorf("the gone stream was not said:\n%s", stderr)
@@ -396,7 +396,7 @@ func TestServeAnswersAWaitingStreamAfterTheUpgrade(t *testing.T) {
 	if n := bob.ledgerOf(t).answered(waiting.Thread); n != 0 {
 		t.Fatalf("%d turns counted on the thread before the upgrade; want none", n)
 	}
-	t.Cleanup(wire.Register("serve-later"))
+	t.Cleanup(wire.Register("serve-later", wire.OnManifest))
 	second := bob.round(t)
 	if len(second.Answered) != 1 {
 		t.Fatalf("the round after the upgrade: %+v; want the message answered", second)
@@ -435,7 +435,7 @@ func TestADamagedWaitingStreamDoesNotStopTheFetchAfterTheUpgrade(t *testing.T) {
 		b[len(b)-1] ^= 1
 	})
 	fetchJSON(t, bob)
-	t.Cleanup(wire.Register("damaged-later"))
+	t.Cleanup(wire.Register("damaged-later", wire.OnManifest))
 	alice.run("send", "--to", "bob", "--subject", "the good one", "hello")
 	in, stderr := fetchJSON(t, bob)
 	if in.Fetch.Delivered != 1 || in.Fetch.Unreadable != 1 {
