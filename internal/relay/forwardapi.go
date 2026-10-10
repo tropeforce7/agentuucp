@@ -247,13 +247,19 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, env *relayapi.C
 	if !ok {
 		return
 	}
-	id, err := s.store.Put(fp, channel, relayapi.KindEnvelope, "", raw, s.cfg.Limits.Quotas(),
-		Forwarded{
-			Via:     via,
-			Hash:    hash,
-			Expires: s.cfg.Now().Add(s.cfg.CourierLimits.CarriedWindow(0)),
-			Quotas:  s.cfg.CourierLimits.Quotas(),
-		})
+	put := func() (int64, error) {
+		return s.store.Put(fp, channel, relayapi.KindEnvelope, "", raw, s.cfg.Limits.Quotas(),
+			Forwarded{
+				Via:     via,
+				Hash:    hash,
+				Expires: s.cfg.Now().Add(s.cfg.CourierLimits.CarriedWindow(0)),
+				Quotas:  s.cfg.CourierLimits.Quotas(),
+			})
+	}
+	id, err := put()
+	if s.roomFreed(err) {
+		id, err = put()
+	}
 	switch {
 	case errors.Is(err, ErrCarried):
 		// The same envelope arriving twice, which the cheap check above

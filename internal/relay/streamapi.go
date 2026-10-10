@@ -157,6 +157,9 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 		s.purgeUploads(now)
 		err = open()
 	}
+	if s.roomFreed(err) {
+		err = open()
+	}
 	if err != nil {
 		s.lim.postBytes.Return(callerFP, req.Size)
 	}

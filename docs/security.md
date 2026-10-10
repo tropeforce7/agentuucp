@@ -115,8 +115,12 @@ sending nothing, aborting and opening again at once. So one identity's
 reservations cost its `post_bytes_per_hour`, 256 MiB at the defaults,
 however little it uploads. A reservation nobody feeds expires sixty
 seconds after the open, the resume window. It still holds the room until
-the sender's next request on it or the purge meets it. The purge runs
-every hundredth request, so on a quiet relay that can be later.
+something meets it: its sender's next request on it, its sender's open
+at the `max_open_uploads` cap, the purge every hundredth request, or the
+next post, open, knock or courier's delivery refused `507` for room,
+which purges it. An attempt in flight keeps it from the purge. So a
+sender who starts an attempt at the last moment and sends nothing holds
+the room for one stall deadline more, sixty seconds.
 
 What remains is this. Each hour one identity may reserve, unfed, as many
 bytes of a recipient's room as its `post_bytes_per_hour`, and hold each

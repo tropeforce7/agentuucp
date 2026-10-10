@@ -276,16 +276,21 @@ with a 410 that says when the upload expired and to open again. It forgets
 the upload with the answer, so the reservation ends when it was promised to.
 The sender's `send --resume` opens a new upload for the same sealed bytes. An
 expired upload nobody touches is swept by the purge that runs every hundredth
-request. The purge skips an upload mid-attempt rather than wait behind its
-sender and returns to it next time. Bytes that stop coming end inside the
-window too. An attempt runs under a stall deadline of sixty seconds that
-every delivering read moves on. So a transfer of any length finishes while
-bytes keep arriving, and a stalled one is cut and judged as an attempt that
-stopped short. The download of a placed stream is served under the same
-deadline turned round, moved by every write that delivers bytes. So a slow
-reader is served to the end and a reader that stops is cut inside the
-window. The server's five-minute read and write timeouts stand on every
-other route.
+request. The purge runs too when a post, an open, a knock or a courier's
+delivery is refused `507` because reservations and messages fill the
+recipient's quotas or `relay_max_bytes`. When it lets an upload go, the
+request asks for the room once more. So these four answer that `507` only
+when the room is taken by what still counts. A full disk is refused the same
+way, and the purge frees only what kept partials held there. The purge skips
+an upload mid-attempt rather than wait behind its sender and returns to it
+next time. Bytes that stop coming end inside the window too. An attempt runs
+under a stall deadline of sixty seconds that every delivering read moves on.
+So a transfer of any length finishes while bytes keep arriving, and a stalled
+one is cut and judged as an attempt that stopped short. The download of a
+placed stream is served under the same deadline turned round, moved by every
+write that delivers bytes. So a slow reader is served to the end and a reader
+that stops is cut inside the window. The server's five-minute read and write
+timeouts stand on every other route.
 
 **At the shipped defaults a 2 GB file is refused**, and deliberately so. A
 sender's whole `post_bytes_per_hour` budget is 256 MiB and one recipient's
@@ -360,8 +365,13 @@ and bytes and against the relay's total exactly as a queued message is. That
 holds for an envelope posted beside it and for another stream alike. So a
 sender cannot fill a mailbox to its quota under an open reservation and then
 complete the stream on top. The reservation is released when the upload
-completes or is abandoned, or, once expired, when a route or the purge
-meets it.
+completes or is abandoned. Once expired, it is released by the first of
+these to meet it: its sender's next request on it, its sender's open at the
+`max_open_uploads` cap, the purge every hundredth request, or a post, an
+open, a knock or a courier's delivery that finds the room taken. An attempt
+in flight holds the upload's lock, and the purge passes over a locked
+upload. So an attempt begun at the last moment and fed nothing holds the
+room until its stall deadline cuts it, sixty seconds more at most.
 
 The sender's byte budget is charged the same way at the open, with the
 whole declared size, so a sender cannot open past it. What comes back when

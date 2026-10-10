@@ -381,13 +381,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // purgeUploads lets go of every upload past its expiry whose lock is not
-// held, and settles each sender's budget for its rows by returnUnheld. It
-// runs every hundredth request, and at an open refused for the sender's
-// count when the soonest of that sender's expiries has passed, so that
-// the count the refusal promised would fall by then has.
+// held, settles each sender's budget for its rows by returnUnheld, and
+// says how many it let go. It runs every hundredth request; at an open
+// refused for the sender's count when the soonest of that sender's
+// expiries has passed, so that the count the refusal promised would fall
+// by then has; and at a refusal for a full mailbox or relay, in roomFreed.
 // Failures are logged and not answered: it runs inside an unrelated
-// caller's request, or one that will be answered by its own count.
-func (s *Server) purgeUploads(now time.Time) {
+// caller's request, or one that will be answered by its own count or room.
+func (s *Server) purgeUploads(now time.Time) int {
 	purged, skipped, err := s.store.PurgeUploads(now)
 	if err != nil {
 		s.log.Warn("upload purge failed", "err", err)
@@ -403,6 +404,32 @@ func (s *Server) purgeUploads(now time.Time) {
 		// met again at the next one.
 		s.log.Debug("expired uploads left for the next purge, their locks held", "count", skipped)
 	}
+	return len(purged)
+}
+
+// roomFreed reports whether a store's refusal for a full mailbox or a
+// full relay may be asked again: it purged the relay's expired uploads and
+// let at least one go, whichever mailbox that one held room in. roomFor
+// counts every upload's reservation whatever its expiry, since an attempt
+// that runs past the expiry the open wrote is still landing bytes and only
+// the purge, under the upload's lock, can tell it from an abandoned one; so
+// an expired reservation nobody fed would hold a recipient's room until its
+// sender's next request on it, its sender's open at the max_open_uploads
+// cap, or the hundredth request's purge, which on a quiet relay is a long
+// time after the sixty seconds it was given. Each route that answers 507
+// from roomFor asks here first and, when this says yes, asks the store once
+// more; if what went held room elsewhere, that second ask is a 507 again.
+// So for the quotas roomFor keeps, a 507 is answered only when the room is
+// taken by what still counts. A full disk is refused the same way, and the
+// purge frees only what kept partials held there. An upload whose lock is
+// held, an attempt in flight, is passed over and keeps its room. Any other
+// answer, and a purge that let nothing go, leave the refusal as it was,
+// with no second ask.
+func (s *Server) roomFreed(err error) bool {
+	if !errors.Is(err, ErrMailboxFull) && !errors.Is(err, ErrRelayFull) {
+		return false
+	}
+	return s.purgeUploads(s.cfg.Now()) > 0
 }
 
 // returnUnheld settles a sender's post bytes when an upload's row goes
@@ -1292,7 +1319,13 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 	if !ok {
 		return
 	}
-	id, err := s.store.Put(fp, channel, relayapi.KindEnvelope, "", body, s.cfg.Limits.Quotas(), Forwarded{})
+	put := func() (int64, error) {
+		return s.store.Put(fp, channel, relayapi.KindEnvelope, "", body, s.cfg.Limits.Quotas(), Forwarded{})
+	}
+	id, err := put()
+	if s.roomFreed(err) {
+		id, err = put()
+	}
 	switch {
 	case errors.Is(err, ErrMailboxFull):
 		// Not the sender's fault and not something they can retry around: the
