@@ -621,9 +621,11 @@ A refused send names what to change, and nothing was queued:
   the shape before they describe anything. Ask the issuer for the token
   again.
 - `--thread "T" is not a message id (32 lowercase hex characters); a thread
-  id is the id of the message that opened it` — a thread is named by the
-  `thread` a `send` or `inbox` reported, never by a name of your own;
-  `--reply-to` is held to the same shape.
+  id is the thread that auu send printed or auu read shows` — a thread is
+  named by the `thread` a `send` or `read` reported, never by a name of
+  your own; `--reply-to` is held to the same shape. A thread on an expert
+  is the conversation of the peer who opened it: `auu serve` leaves
+  anybody else's message on it unanswered.
 - `message: subject contains U+000A, a control character; a subject is one
   line`, `message: text contains U+001B, a control character`, or
   `attachment "NAME": name contains U+202E, a format character` — a

@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/identity"
 )
 
 // The ledger is serve's record of what it has answered.
@@ -66,6 +68,26 @@ type ledgerEntry struct {
 	// after the upgrade finds the message delivered and answers it, and
 	// the reason goes when it does.
 	Newer string `json:"newer,omitempty"`
+	// From is the fingerprint of the message's sender, written when the
+	// entry is made. A thread belongs to the sender of its earliest entry
+	// by arrival that is not skipped and has one (opener), and serve
+	// answers nobody else on it. While nothing on the thread has been
+	// tried or answered, a message that arrived before the recorded
+	// opener's is answered, and its sender becomes the opener. An entry
+	// from a v0.17.0 ledger has none. It is given one from its message in
+	// the inbox at the run's start (fillSenders), or when it is next
+	// written. So a thread carried over takes its opener from the earliest
+	// of its messages still in the inbox. A thread whose opener's messages
+	// the owner has removed may take another sender's.
+	From string `json:"from,omitempty"`
+	// Arrived and RelayID are when the relay says it received the message,
+	// the record's Received, and the relay's counter for it, written with
+	// From and never rewritten. They are the order a thread's opener is
+	// read in, which is the order pending takes messages in. Tried is not
+	// that order: it is rewritten at every attempt, and a stream held for
+	// a newer auu has none.
+	Arrived time.Time `json:"arrived,omitempty"`
+	RelayID int64     `json:"relay_id,omitempty"`
 }
 
 // last is when this message was last touched at all.
@@ -114,6 +136,23 @@ func loadLedger(path string) (*ledger, error) {
 			return nil, fmt.Errorf("%s counts %d failures for %s, which is not a count; it is the record of what "+
 				"has been answered, so fix it or move it aside knowing that everything in the inbox becomes new mail",
 				path, e.Failures, id)
+		}
+		// A sender is a fingerprint or nothing: it is compared with the
+		// sender of every later message on the thread, and its first
+		// sixteen characters are what the console says.
+		if e.From != "" {
+			if !identity.ValidFingerprint(e.From) {
+				return nil, fmt.Errorf("%s names %q as the sender of %s, which is not a fingerprint; it is the "+
+					"record of what has been answered, so fix it or move it aside knowing that everything in the "+
+					"inbox becomes new mail", path, e.From, id)
+			}
+		}
+		// A relay's counter is never below zero; it orders a thread's
+		// opener, and a negative one would sort ahead of every real one.
+		if e.RelayID < 0 {
+			return nil, fmt.Errorf("%s has relay id %d for %s, which is not a relay's counter; it is the record of "+
+				"what has been answered, so fix it or move it aside knowing that everything in the inbox becomes "+
+				"new mail", path, e.RelayID, id)
 		}
 		// An attempt has a time. An entry that counts one and has none
 		// was written before there were timestamps, and nothing on this
@@ -207,6 +246,66 @@ func (l *ledger) answered(thread string) int {
 		}
 	}
 	return n
+}
+
+// opener is the fingerprint of the peer whose thread this is: the sender of
+// the thread's earliest entry by arrival, among the entries that are not
+// skipped and that name a sender. Arrival is when the relay says it
+// received the message, the record's Received, then the relay's counter,
+// then the message id. That is the order pending takes messages in, and
+// it is never rewritten, so two runs agree. Nothing is what a thread serve
+// has not seen gets. A thread from a v0.17.0 ledger has its senders from
+// its messages still in the inbox (fillSenders). One whose messages are
+// all gone gets nothing until the first message serve takes up on it after
+// the upgrade is written.
+func (l *ledger) opener(thread string) string {
+	_, e := l.openerEntry(thread)
+	if e == nil {
+		return ""
+	}
+	return e.From
+}
+
+// openerEntry is the entry opener reads the opener from, and its message
+// id, or nil.
+func (l *ledger) openerEntry(thread string) (string, *ledgerEntry) {
+	var bestID string
+	var best *ledgerEntry
+	for id, e := range l.Messages {
+		if e.Thread != thread || e.Skipped || e.From == "" {
+			continue
+		}
+		if best == nil || arrivedBefore(e.Arrived, e.RelayID, id, best.Arrived, best.RelayID, bestID) {
+			bestID, best = id, e
+		}
+	}
+	return bestID, best
+}
+
+// arrivedBefore is the order of arrival: when the relay says it received
+// the message, the record's Received, then the relay's counter, then the
+// message id, so that two runs agree. It is the order pending takes
+// messages in.
+func arrivedBefore(at time.Time, relayID int64, id string, than time.Time, thanRelayID int64, thanID string) bool {
+	switch {
+	case !at.Equal(than):
+		return at.Before(than)
+	case relayID != thanRelayID:
+		return relayID < thanRelayID
+	default:
+		return id < thanID
+	}
+}
+
+// tried says something on a thread has been tried or answered: a
+// conversation is in it, and no later message's stamp moves its opener.
+func (l *ledger) tried(thread string) bool {
+	for _, e := range l.Messages {
+		if e.Thread == thread && !e.Skipped && (!e.Tried.IsZero() || !e.Handled.IsZero()) {
+			return true
+		}
+	}
+	return false
 }
 
 // touched says serve has seen this thread before, which is what moves a

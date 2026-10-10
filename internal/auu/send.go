@@ -101,13 +101,14 @@ func cmdSend(args []string) error {
 	if *msgType != message.TypeAsk && *msgType != message.TypeNote {
 		return usageErrf("--type must be ask or note")
 	}
-	// Before the editor opens, not after: a thread id is a message id, the
-	// one that opened the thread, and a value of any other shape is
-	// refused everywhere a message is made, since it becomes a directory
-	// name under an expert's home.
+	// Before the editor opens, not after: a thread id has a message id's
+	// shape, though a new thread is given an id of its own and not its
+	// first message's. A value of any other shape is refused everywhere a
+	// message is made, since it becomes a directory name under an
+	// expert's home.
 	if *thread != "" {
 		if err := message.ValidID(*thread); err != nil {
-			return usageErrf("--thread %q is %v; a thread id is the id of the message that opened it", *thread, err)
+			return usageErrf("--thread %q is %v; a thread id is the thread that auu send printed or auu read shows", *thread, err)
 		}
 	}
 	if *replyTo != "" {

@@ -426,6 +426,10 @@ That prints a message id and a thread id. To block until the answer arrives:
 auu wait --thread THREAD-ID --timeout 30m
 ```
 
+On an expert, a thread id names the conversation of the peer who opened
+it and nobody else's. Another peer can name the same id with `auu send
+--thread`, and `auu serve` leaves that message unanswered.
+
 Each poll asks the relay to hold the listing open for the interval, so the
 reply arrives when it is sent rather than at the next poll. A relay over
 its cap on holds answers at once instead, and the wait sleeps the interval,

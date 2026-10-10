@@ -56,6 +56,9 @@ type serveRun struct {
 	// renamed is the follow-ups already said to name another thread than
 	// the reply they answer, so each is said once per run.
 	renamed map[string]bool
+	// otherParty is the messages already said to be on a thread another
+	// peer opened, so each is said once per run.
+	otherParty map[string]bool
 }
 
 // roundJSON is one round as --json gives it.
@@ -134,6 +137,9 @@ func cmdServe(args []string) error {
 
 	led, err := loadLedger(filepath.Join(root, ledgerFile))
 	if err != nil {
+		return err
+	}
+	if err := fillSenders(s, led); err != nil {
 		return err
 	}
 	if *backlog && led.existed {
@@ -372,9 +378,9 @@ func (r *serveRun) hold(ctx context.Context) error {
 // channel, admitted by the rule that stops two experts talking for ever,
 // and not settled in the ledger.
 //
-// Oldest is by when this machine received it, then by the relay's own
-// counter, which is the only true order among messages that arrived in the
-// same second, and then by id so that two runs agree.
+// Oldest is by the relay's stamp, the record's Received, then by the
+// relay's own counter, which is the only true order among messages that
+// arrived in the same second, and then by id so that two runs agree.
 func (r *serveRun) pending() ([]*store.Stored, error) {
 	msgs, err := r.s.List(store.Inbox)
 	if err != nil {
@@ -421,7 +427,7 @@ func (r *serveRun) waitsForNewer(m *store.Stored) error {
 	if r.channelFor(m) == nil {
 		return nil
 	}
-	e := r.led.entry(m.Inner.ID, m.Inner.Body.Thread, channelOf(m))
+	e := r.entry(m, channelOf(m))
 	if e.Newer == m.Newer {
 		return nil
 	}
@@ -454,7 +460,15 @@ func (r *serveRun) waitsForNewer(m *store.Stored) error {
 // to something serve sent that names a thread other than the one it was
 // sent on, since the turns are counted by thread and a follow-up that
 // chose its own would be on turn one every time.
+//
+// And a thread is a conversation with the peer who opened it. Any peer may
+// name any thread id with 'auu send --thread', and a co-recipient of a
+// message to several knows the thread it opened; so a message on a thread
+// whose opener is somebody else belongs to no channel here either. It is
+// left in the inbox for the owner, unanswered, uncounted, and given no
+// worktree and no directory of the opener's.
 func (r *serveRun) channelFor(m *store.Stored) *serveChannel {
+	var ch *serveChannel
 	if m.Inner.Body.Type == message.TypeReply {
 		e := r.led.repliedWith(m.Inner.Body.InReplyTo)
 		if e == nil {
@@ -464,9 +478,92 @@ func (r *serveRun) channelFor(m *store.Stored) *serveChannel {
 			r.sayRenamed(m, e)
 			return nil
 		}
-		return r.cfg.Channels[e.Channel]
+		ch = r.cfg.Channels[e.Channel]
+	} else {
+		ch = r.cfg.Channels[channelOf(m)]
 	}
-	return r.cfg.Channels[channelOf(m)]
+	if ch == nil {
+		return nil
+	}
+	// The message itself is a candidate while nothing on the thread has
+	// been tried or answered: a message has no entry until it is, and an
+	// entry another peer's message made in the same round, a stream held
+	// for a newer auu, must not open a thread whose asker's message arrived
+	// before it. Once anything on the thread has been tried or answered,
+	// the thread is its opener's whatever any later message's stamp says:
+	// the stamp is the relay's clock, and a relay behind, or one that lies,
+	// must not move a thread that has a conversation in it.
+	if id, e := r.led.openerEntry(m.Inner.Body.Thread); e != nil && e.From != m.Inner.From &&
+		!(!r.led.tried(m.Inner.Body.Thread) &&
+			arrivedBefore(m.Received.UTC(), m.RelayID, m.Inner.ID, e.Arrived, e.RelayID, id)) {
+		r.sayOtherParty(m, e.From)
+		return nil
+	}
+	return ch
+}
+
+// fillSenders gives an entry from a v0.17.0 ledger, which kept no senders,
+// the sender and arrival of its message when that message is still in the
+// inbox. Serve leaves what it answered there, marked read. So a thread
+// carried over the upgrade takes its opener from the earliest of its
+// messages still in the inbox, verified as every message's sender is when
+// it was opened. A thread whose opener's messages the owner has removed
+// may take another sender's. One with none of its messages left takes the
+// sender of the first message serve takes up on it after the upgrade.
+//
+// What it fills is written at once: a round that answers nothing saves
+// nothing, and an owner who removed the message after such a round would
+// otherwise leave the thread with no sender on disk for anybody to adopt.
+func fillSenders(s *store.Store, led *ledger) error {
+	msgs, err := s.ListQuietly(store.Inbox)
+	if err != nil {
+		return err
+	}
+	filled := false
+	for _, m := range msgs {
+		if e, ok := led.Messages[m.Inner.ID]; ok && e.From == "" {
+			setSender(e, m)
+			filled = true
+		}
+	}
+	if !filled {
+		return nil
+	}
+	return led.save()
+}
+
+// setSender writes who sent a message and when it arrived here, the facts a
+// thread's opener is read from.
+func setSender(e *ledgerEntry, m *store.Stored) {
+	e.From = m.Inner.From
+	e.Arrived = m.Received.UTC()
+	e.RelayID = m.RelayID
+}
+
+// entry is a message's ledger record, made with its sender if it has none,
+// which is what the thread's opener is read from.
+func (r *serveRun) entry(m *store.Stored, channel string) *ledgerEntry {
+	e := r.led.entry(m.Inner.ID, m.Inner.Body.Thread, channel)
+	if e.From == "" {
+		setSender(e, m)
+	}
+	return e
+}
+
+// sayOtherParty says, once per message per run, that a message was left
+// alone for being on a thread another peer opened, in the shape of
+// sayRenamed and for the same reason.
+func (r *serveRun) sayOtherParty(m *store.Stored, opener string) {
+	if r.otherParty == nil {
+		r.otherParty = map[string]bool{}
+	}
+	if r.otherParty[m.Inner.ID] {
+		return
+	}
+	r.otherParty[m.Inner.ID] = true
+	fmt.Fprintf(os.Stderr, "%s: %s from %s is on thread %s, which %s opened; left alone\n",
+		prog, shortID(m.Inner.ID), orNone(identity.Printable(m.SenderName)), shortID(m.Inner.Body.Thread),
+		opener[:16])
 }
 
 // sayRenamed says, once per message per run, that a follow-up was left
@@ -531,7 +628,7 @@ func (r *serveRun) recordBacklog(backlog bool) (int, error) {
 		if backlog && r.answerable(m) {
 			continue
 		}
-		e := r.led.entry(m.Inner.ID, m.Inner.Body.Thread, channelOf(m))
+		e := r.entry(m, channelOf(m))
 		e.Skipped = true
 		if !r.answerable(m) {
 			// Written down, so that a channel added to the file later is
@@ -553,7 +650,15 @@ func (r *serveRun) recordBacklog(backlog bool) (int, error) {
 // message's: a bad one is its failure, recorded and stepped over, so that
 // nothing a peer can write in a message stops the expert for good.
 func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
+	// pending decided the round's messages before any was answered, so a
+	// message it took may since have become another peer's thread: two
+	// asks on one new thread in one round. pending takes them in order of
+	// arrival, so the first to arrive is tried first and is now the
+	// opener. Asked again here, the other is left as channelFor leaves it.
 	ch := r.channelFor(m)
+	if ch == nil {
+		return nil
+	}
 	thread := m.Inner.Body.Thread
 	short := shortID(thread)
 
@@ -804,7 +909,7 @@ func (r *serveRun) send(m *store.Stored, ch *serveChannel, text, patch string, f
 // acknowledgement, and the owner's own inbox shows what has been dealt
 // with.
 func (r *serveRun) settle(m *store.Stored, ch *serveChannel, replyID string) error {
-	e := r.led.entry(m.Inner.ID, m.Inner.Body.Thread, ch.name)
+	e := r.entry(m, ch.name)
 	e.Handled = time.Now().UTC().Truncate(time.Second)
 	e.Tried = e.Handled
 	e.Reply = replyID
@@ -832,7 +937,7 @@ func (r *serveRun) settle(m *store.Stored, ch *serveChannel, replyID string) err
 // run out, and says why on standard error. The message stays unread, so the
 // owner's inbox shows it for what it is.
 func (r *serveRun) failed(m *store.Stored, ch *serveChannel, why string) {
-	e := r.led.entry(m.Inner.ID, m.Inner.Body.Thread, ch.name)
+	e := r.entry(m, ch.name)
 	e.Failures++
 	e.Tried = time.Now().UTC().Truncate(time.Second)
 	gaveUp := e.Failures >= ch.Retries

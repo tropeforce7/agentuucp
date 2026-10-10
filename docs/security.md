@@ -765,10 +765,11 @@ outer `v` is a message the recipient refuses, which it could already buy by
 garbling the ciphertext. A record from a build before the sealed version
 carries none, and is refused as malformed in those words.
 
-The message id, the thread and, on a reply, `in_reply_to` are each a
-message id. That is 32 lowercase hex characters, the id of the message that
-opened the thread or that is being answered. That is a rule of the format,
-not a convention. A record whose id, thread or `in_reply_to` has any other
+The message id, the thread and, on a reply, `in_reply_to` each have a
+message id's shape. That is 32 lowercase hex characters. `in_reply_to` is
+the id of the message being answered. A new thread is given an id of its
+own, not its first message's. That is a rule of the format, not a
+convention. A record whose id, thread or `in_reply_to` has any other
 shape is refused when it is opened, kept under `damaged/` as malformed and
 acknowledged. `auu send --thread` refuses one before anything is sealed. A
 stream's manifest is held to the same rule.
@@ -803,11 +804,12 @@ the authority's record of the relay, and `auu-ca` holds it to the shape of
 a DNS name or an address before any record is filed. A *message id* names
 the record's file, and is a message id at open, in a manifest and at the
 store. A *thread id* names a directory and a worktree under an expert
-host's serve directory. It is a message id at open, in a manifest, and
-checked again by `auu serve` before it is joined onto anything. One test
-walks every one of them with `..`, `../x`, `x/../../y`, `a/b`, an
-absolute path, a backslash form, a drive letter, a drive-relative name,
-a Windows device name with and without an extension, a NUL, the empty
+host's serve directory. It is held to a message id's shape at open, in a
+manifest, and checked again by `auu serve` before it is joined onto
+anything. One test walks every one of them with `..`, `../x`,
+`x/../../y`, `a/b`, an absolute path, a backslash form, a drive
+letter, a drive-relative name, a Windows device name with and
+without an extension, a NUL, the empty
 string, `.` and a 300-byte name. A new place that turns something from
 the network into a path gets its row there first. Behind that table is a
 ledger, `internal/fileopens/ledger.txt`, with one row for every call in
@@ -838,6 +840,19 @@ says. Windows versions differ in which names are devices under a
 directory (Server 2025 resolves `NUL` alone). So the list is the union
 across them, and the handle check is the safety net for a name it does
 not hold.
+
+Any peer may name any thread id. So serve answers a thread only for the
+peer who opened it. A message on it from anybody else gets no directory
+and no worktree. It is left unanswered in the inbox. The opener is decided
+by arrival, and arrival is the relay's stamp. So a relay, or the clocks of
+two relays, can decide who opens a new thread. So can a large message to
+several, which goes as one stream to each recipient: a co-recipient has
+the thread id while the expert's copy is still uploading, and a small ask
+from them on it can arrive first and open the thread. A thread that has
+been answered or tried is not moved by any later stamp. A thread carried
+over from a v0.17.0 ledger, which kept no senders, takes its opener from
+the earliest of its messages still in the inbox. A thread whose opener's
+messages the owner has removed may take another sender's.
 
 **The HTTP layer has bounds of its own**, and they are not settings. The
 relay speaks HTTP/1.1 alone. HTTP/2 is off on the listener and not offered

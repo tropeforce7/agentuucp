@@ -306,6 +306,7 @@ internal/auu/sendmany.go sentManyJSON int ChunkSize int = output
 internal/auu/sendmany.go sentManyJSON int Chunks int64 = output
 internal/auu/sendmany.go expandRooms string m.FP[:identity.ShortIDLen] = local: ValidFingerprint at checkRooms shown by TestLimitRoomShapes
 internal/auu/sendmany.go expandRooms string m.FP[:identity.ShortIDLen] #2 = local: ValidFingerprint at checkRooms shown by TestLimitRoomShapes
+internal/auu/serve.go (*serveRun).sayOtherParty string opener[:16] = local: ValidFingerprint at loadLedger and at Load shown by TestLimitServeLedgerSender
 internal/auu/serve.go (*serveRun).send string m.Inner.From[:16] = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
 internal/auu/serve.go shortID string id[:12] = local: len(id) > 12 by the check before
 internal/auu/serveconfig.go (*serveConfig).check string names[:i] = local: i is an index of names from range
@@ -318,6 +319,7 @@ internal/auu/serveconfig.go serveChannel int timeout time.Duration = > 0s shown 
 internal/auu/serveconfig.go serveConfig int V int = [1, 1] shown by TestLimitServeConfigV
 internal/auu/serveledger.go ledger int V int = [1, 1] shown by TestLimitServeLedgerIntegers
 internal/auu/serveledger.go ledgerEntry int Failures int = >= 0 shown by TestLimitServeLedgerIntegers
+internal/auu/serveledger.go ledgerEntry int RelayID int64 = >= 0 shown by TestLimitServeLedgerIntegers
 internal/auu/servels.go servedThreadJSON int Turns int = output
 internal/auu/serveproxy.go (*keyProxy).revoke string p.revoked[len(p.revoked) - revokedRemembered:] = local: len(p.revoked) > revokedRemembered by the check before
 internal/auu/serveproxy.go proxyConfig int AllowUIDs []int = >= 0 shown by TestLimitProxyAllowUIDs

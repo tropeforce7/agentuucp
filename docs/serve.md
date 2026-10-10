@@ -102,7 +102,14 @@ going to be returned to anyone.
 
 **`side-copy`** is an expert that works. Every thread gets a worktree of its
 own, made from HEAD at the thread's first message and reused for every
-message after, so a thread is a conversation over one copy.
+message after, so a thread is a conversation over one copy with the peer
+who opened it. The opener is the sender of the earliest message to arrive
+on the thread among those serve has written down: answered, tried, or held
+for a newer `auu`. In the usual order of arrival that is the asker, since
+anyone else normally learns the thread from the asker's message. Until
+something on the thread has been answered or tried, a message on it
+competes on its own arrival. After that the thread is its opener's. A
+message left alone at a first start opens nothing.
 
 Its reply carries the thread's whole change so far, attached as
 `THREAD12.patch`, and one sentence at the end of the text saying so. The
@@ -146,6 +153,19 @@ they can over anything else the project uses: a fixed port, a named
 container, a shared database, a lock file in `/tmp`. If a project needs one
 of those, the `before` and `after` hooks are where it is started and stopped,
 and a channel that cannot share is a channel to serve `read-only`.
+
+A thread belongs to its opener in either mode. Any peer may name a thread
+with `auu send --thread`, and everyone on a message to several knows its
+thread. A message on a thread from anybody but its opener is left in the
+inbox for the owner. It is not answered and not counted as a turn. It is
+given no worktree and no directory. In each run of serve, the first time
+it meets such a message, it says on stderr that the message is on a
+thread another peer opened and was left alone.
+
+A thread carried over from a v0.17.0 ledger, which kept no senders, takes
+its opener from the earliest of its messages still in the inbox, where
+serve leaves what it answered. A thread whose opener's messages the owner
+has removed may take another sender's.
 
 ## What the handler is given
 
@@ -229,10 +249,14 @@ not outlive it.
   thread is the one serve sent its reply on: a follow-up that names
   another thread than the reply it answers was sent on is not serve's,
   since a count on a thread the sender names would start over each time.
+- And only from the peer who opened the thread. A message on it from
+  anybody else is left in the inbox, unanswered and uncounted.
 
-A thread id is a message id, 32 lowercase hex characters, and serve makes
-the thread's directory and its worktree's path from it. A message whose
-thread id is anything else — a peer's `--thread "../../outside"` — is
+A thread id has a message id's shape, 32 lowercase hex characters. It is
+not its first message's id. A new thread is given an id of its own, and
+every later message on the thread carries that id. Serve makes the
+thread's directory and its worktree's path from it. A message whose
+thread id has any other shape — a peer's `--thread "../../outside"` — is
 refused as malformed when it is opened, kept under `damaged/` and
 acknowledged, and never reaches serve. A record in the spool with one,
 which only a hand could have written, is that message's failure in the

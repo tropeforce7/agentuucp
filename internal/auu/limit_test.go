@@ -104,10 +104,10 @@ func TestLimitServeConfigV(t *testing.T) {
 	}
 }
 
-// TestLimitServeLedgerIntegers: the serve ledger's v is 1 and each
-// entry's failures is a count; a negative count, the type's minimum, and
-// a v that is not 1 are each refused naming the file, and zero and the
-// type's maximum are read.
+// TestLimitServeLedgerIntegers: the serve ledger's v is 1, each entry's
+// failures is a count and its relay_id a relay's counter; a negative count
+// or relay id, the type's minimum, and a v that is not 1 are each refused
+// naming the file, and zero and the type's maximum are read.
 func TestLimitServeLedgerIntegers(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ledgerFile)
 	write := func(t *testing.T, text string) {
@@ -137,6 +137,27 @@ func TestLimitServeLedgerIntegers(t *testing.T) {
 		if err != nil || l.Messages[id] == nil || l.Messages[id].Failures != n {
 			t.Errorf("failures %d: %v; want it read", n, err)
 		}
+	}
+	// relay_id is the relay's counter, ordering a thread's arrivals within
+	// one second: below zero is refused naming the entry, and zero (the
+	// key absent), one and the type's maximum are read.
+	for _, n := range []int64{-1, math.MinInt64} {
+		write(t, `{"v":1,"messages":{"`+id+`":{"thread":"`+id+`","relay_id":`+strconv.FormatInt(n, 10)+`}}}`)
+		_, err := loadLedger(path)
+		if err == nil || !strings.Contains(err.Error(), "has relay id "+strconv.FormatInt(n, 10)+" for "+id+", which is not a relay's counter") {
+			t.Errorf("relay_id %d: %v; want the refusal naming the entry", n, err)
+		}
+	}
+	for _, n := range []int64{0, 1, math.MaxInt64} {
+		write(t, `{"v":1,"messages":{"`+id+`":{"thread":"`+id+`","relay_id":`+strconv.FormatInt(n, 10)+`}}}`)
+		l, err := loadLedger(path)
+		if err != nil || l.Messages[id] == nil || l.Messages[id].RelayID != n {
+			t.Errorf("relay_id %d: %v; want it read", n, err)
+		}
+	}
+	write(t, `{"v":1,"messages":{"`+id+`":{"thread":"`+id+`"}}}`)
+	if l, err := loadLedger(path); err != nil || l.Messages[id].RelayID != 0 {
+		t.Errorf("an entry with no relay_id: %v; want it read as zero", err)
 	}
 	write(t, `{"v":1,"messages":{"`+id+`":null}}`)
 	if _, err := loadLedger(path); err == nil || !strings.Contains(err.Error(), "has no entry under") {
@@ -175,6 +196,56 @@ func TestLimitServeLedgerIntegers(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"tried":`) {
 		t.Errorf("the zero entry marshals without its tried key: %s", data)
+	}
+}
+
+// TestLimitServeLedgerSender: an entry's from is a fingerprint or absent,
+// since a thread's opener is compared with every later sender on it and
+// its first sixteen characters are what the console says. A from that is
+// not one, short, long, uppercase or not hex at all, is refused at load
+// naming the field and the entry; a fingerprint and an absent from are
+// read, and a fingerprint survives a save and a second load.
+func TestLimitServeLedgerSender(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ledgerFile)
+	id := strings.Repeat("a", 32)
+	write := func(t *testing.T, from string) {
+		t.Helper()
+		text := `{"v":1,"messages":{"` + id + `":{"thread":"` + id + `","handled":"2026-09-20T10:00:00Z","tried":"2026-09-20T10:00:00Z"` + from + `}}}`
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, from := range []string{
+		"nope", "x",
+		strings.Repeat("b", 63), strings.Repeat("b", 65), strings.Repeat("B", 64),
+		strings.Repeat("g", 64), strings.Repeat("b", 63) + "\n",
+	} {
+		quoted, _ := json.Marshal(from)
+		write(t, `,"from":`+string(quoted))
+		_, err := loadLedger(path)
+		want := fmt.Sprintf("names %q as the sender of %s, which is not a fingerprint", from, id)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("from %q: %v; want the refusal naming the field and the entry", from, err)
+		}
+	}
+	for _, from := range []string{"", `,"from":""`} {
+		write(t, from)
+		if l, err := loadLedger(path); err != nil || l.Messages[id].From != "" {
+			t.Errorf("an entry with %q: %v; want it read with no sender", from, err)
+		}
+	}
+	fp := strings.Repeat("0123456789abcdef", 4)
+	write(t, `,"from":"`+fp+`"`)
+	l, err := loadLedger(path)
+	if err != nil || l.Messages[id].From != fp {
+		t.Fatalf("a fingerprint: %v; want it read", err)
+	}
+	if err := l.save(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := loadLedger(path)
+	if err != nil || again.Messages[id].From != fp {
+		t.Errorf("after a save the sender is %+v (%v), want %s", again.Messages[id], err, fp)
 	}
 }
 
