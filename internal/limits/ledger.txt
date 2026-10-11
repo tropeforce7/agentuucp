@@ -124,10 +124,6 @@
 #                  back, or a value a check already held, the why saying
 #                  which; needs no test, and one it names is held to
 #                  being a TestLimit test
-#   unbounded: PLAN-TIME commit N
-#                  a stamp from outside the plan bounds in its commit 2
-#                  or 3, until then; names no test, and goes with the
-#                  plan's commit 3
 #
 # The sweep that wrote this file found 285 sites, and the cap kind added
 # twelve. The walk had found 454 by the time the time kind added 88; 542
@@ -591,8 +587,8 @@ internal/relay/server.go (*Server).readBodyCharged cap http.MaxBytesReader(r.Bod
 internal/relay/streamapi.go (*Server).handlePutStream cap io.LimitReader(body, want - int64(n)) = local: want is the row's size less the offset, which Content-Length was held equal to before a byte, less the header's n already read shown by TestLimitAnAttemptRunsToTheEndOrKeepsNothing
 internal/relay/streamapi.go (*Server).handlePutStream cap io.LimitReader(body, want) = local: want is the row's size less the offset, which Content-Length was held equal to before a byte shown by TestLimitAnAttemptRunsToTheEndOrKeepsNothing
 
-# Times: a field of a json-tagged struct of a type that holds a time, and a time.Parse or time.ParseInLocation, of PLAN-TIME. The rows
-# that say unbounded are bounded by the commit of the plan they name.
+# Times: a field of a json-tagged struct of a type that holds a time, and
+# a time.Parse or time.ParseInLocation, of PLAN-TIME.
 cmd/auu-admin/commands.go tokenWindow time time.Parse(notAfter) = local: the operator's --not-after, which tokenWindow holds to whole seconds ahead of now
 cmd/auu-ca/main.go cmdShow.relayOut time Expires = output
 cmd/auu-ca/main.go cmdShow.relayOut time updated = output
@@ -627,7 +623,7 @@ internal/auu/relay.go relayJSON time Added = output
 internal/auu/relay.go relayJSON time AnchorExpires = output
 internal/auu/relay.go relayJSON time CertExpires = output
 internal/auu/relay.go relayJSON time ServerIntermediateIssued = output
-internal/auu/serveledger.go ledgerEntry time Arrived = unbounded: PLAN-TIME commit 3
+internal/auu/serveledger.go ledgerEntry time Arrived = local: the record's received, which checkListing holds to the skew and to what can be written; a record kept before is read as it is
 internal/auu/serveledger.go ledgerEntry time Handled = local: this machine's clock at the answer, read back from the ledger
 internal/auu/serveledger.go ledgerEntry time Tried = local: this machine's clock at the attempt, read back from the ledger
 internal/auu/servels.go servedThreadJSON time Last = output
@@ -652,32 +648,33 @@ internal/relay/store.go (*Store).ListingWithin time time.Parse(received) = local
 internal/relay/store.go (*Store).Mailbox time time.Parse(created) = local: the relay's own clock, read back from its own database
 internal/relay/streamstore.go (*Store).Upload time time.Parse(created) = local: the relay's own clock, read back from its own database
 internal/relayapi/relayapi.go AdminStatusResponse time CANotAfter = display
-internal/relayapi/relayapi.go AdminStatusResponse time Started = unbounded: PLAN-TIME commit 3
-internal/relayapi/relayapi.go BlockRecord time Created = unbounded: PLAN-TIME commit 3
+internal/relayapi/relayapi.go AdminStatusResponse time Started = <= now + 5m shown by TestLimitARelaysStampsAreHeldToTheSkew
+internal/relayapi/relayapi.go BlockRecord time Created = <= now + 5m shown by TestLimitARelaysStampsAreHeldToTheSkew
 internal/relayapi/relayapi.go CertRecord time NotAfter = deadline: a certificate's expiry, compared with now for its state word shown by TestLimitACertificatesNotAfterAtTheExtremes
 internal/relayapi/relayapi.go CertRecord time NotBefore = display
 internal/relayapi/relayapi.go CertResponse time NotAfter = display
 internal/relayapi/relayapi.go ErrorResponse time At = display
-internal/relayapi/relayapi.go KeysResponse time Created = unbounded: PLAN-TIME commit 3
-internal/relayapi/relayapi.go MailboxRecord time Created = unbounded: PLAN-TIME commit 3
+internal/relayapi/relayapi.go KeysResponse time Created = <= now + 5m shown by TestLimitARelaysStampsAreHeldToTheSkew
+internal/relayapi/relayapi.go MailboxRecord time Created = <= now + 5m shown by TestLimitARelaysStampsAreHeldToTheSkew
 internal/relayapi/relayapi.go OpenStreamResponse time Expires = display
 internal/relayapi/relayapi.go QueuedMessage time GivesUp = deadline: when the relay gives up a queued message, the earliest per neighbour picked to show shown by TestLimitQueueTimesAtTheExtremes
-internal/relayapi/relayapi.go QueuedMessage time LastTry = unbounded: PLAN-TIME commit 3
+internal/relayapi/relayapi.go QueuedMessage time LastTry = <= now + 5m shown by TestLimitARelaysStampsAreHeldToTheSkew
 internal/relayapi/relayapi.go QueuedMessage time NextTry = deadline: the relay's next try of a queued message, the earliest per neighbour picked to show shown by TestLimitQueueTimesAtTheExtremes
 internal/relayapi/relayapi.go RegisterResponse time NotAfter = display
-internal/relayapi/relayapi.go StoredMessage time Received = unbounded: PLAN-TIME commit 3
-internal/relayapi/relayapi.go TokenRecord time Created = unbounded: PLAN-TIME commit 3
-internal/relayapi/relayapi.go TokenRecord time LastRedeemed = unbounded: PLAN-TIME commit 3
+internal/relayapi/relayapi.go StoredMessage time Received = <= now + 5m shown by TestLimitARelaysStampsAreHeldToTheSkew
+internal/relayapi/relayapi.go TokenRecord time Created = <= now + 5m shown by TestLimitARelaysStampsAreHeldToTheSkew
+internal/relayapi/relayapi.go TokenRecord time LastRedeemed = <= now + 5m shown by TestLimitARelaysStampsAreHeldToTheSkew
 internal/relayapi/relayapi.go TokenRecord time NotAfter = deadline: a token's expiry, shown as the time left by token.Until shown by TestLimitATokensNotAfterAtTheExtremes
 internal/relayapi/relayapi.go TokenRecord time NotBefore = display
 internal/store/allowpushed.go (*Store).AllowPushed time time.Parse(text) = local: this machine's clock at the push, read back from its own file
 internal/store/cardpushed.go (*Store).CardPushed time time.Parse(text) = local: this machine's clock at the push, read back from its own file
 internal/store/cert.go CertRecord time NotAfter = deadline: the certificate's expiry, compared with now to decide renewal shown by TestLimitRenewalAtTheExtremes
 internal/store/cert.go CertRecord time NotBefore = display
-internal/store/damagedbox.go DamagedRecord time Received = unbounded: PLAN-TIME commit 3
-internal/store/leftbehind.go parseLeftEntry time time.Parse(fields[2]) = unbounded: PLAN-TIME commit 3
+internal/store/damagedbox.go DamagedRecord time Received = local: the listing's received, which checkListing holds to the skew and to what can be written, or this machine's clock or a file's time; a record kept before is read as it is
+internal/store/leftbehind.go (*Store).SetLeftBehind time time.Parse(received) = local: this program's own formatting, read back as its reader will before it is written
+internal/store/leftbehind.go parseLeftEntry time time.Parse(fields[2]) = local: this program's own line, which SetLeftBehind refuses to write unless this parse reads it back; a file written before is read as it is
 internal/store/relay.go Relay time Added = local: this machine's clock when the relay was added, read back from its own file
 internal/store/relay.go Relay time ServerIntNotBefore = local: the verified intermediate's NotBefore, which certificate verification held before now
-internal/store/store.go Stored time Received = unbounded: PLAN-TIME commit 3
+internal/store/store.go Stored time Received = local: the listing's received, which checkListing holds to the skew and to what can be written, or this machine's clock for a sent copy or a reopened damaged record kept with none; a record kept before is read as it is
 internal/stream/stream.go Manifest time Time = <= now + 5m shown by TestLimitAManifestTimeIsHeldToTheSkew
 internal/vouch/vouch.go Document time Issued = <= now + 5m shown by TestLimitAVouchIssuedIsHeldToTheSkew

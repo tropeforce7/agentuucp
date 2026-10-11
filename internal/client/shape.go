@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/clientca"
@@ -59,6 +60,7 @@ const (
 	wantKind          = "a message kind (envelope, stream or knock)"
 	wantChannelName   = "a channel name"
 	wantTime          = "a time"
+	wantStamp         = "a time no further ahead of this machine's clock than a request may be, and within the years 0000 to 9999"
 	wantSpan          = "the lowest message id held, from 0 to last, and 0 only with last 0"
 )
 
@@ -87,6 +89,23 @@ var (
 	tokenStates           = []string{relayapi.TokenLive, relayapi.TokenSpent, relayapi.TokenRevoked, relayapi.TokenExpired}
 )
 
+// stamp says whether a time the relay says something happened at may be
+// kept: no further ahead of this machine's clock than a request may be
+// (relayapi.MaxSkew), the one bound a stamp has, and within what this
+// program can write back (relayapi.Writable). Each says when something
+// happened, which no clock may put ahead of now. The listing's received
+// is kept in the record, copied into the left-behind file and the damaged
+// box and written into serve's ledger, and orders the inbox, a thread's
+// latest and serve's opener; the others are printed and written in --json
+// answers. One this program cannot write breaks the first of those it
+// reaches. The zero time, a field the relay left empty, passes.
+func stamp(t time.Time) bool { return stampAt(t, time.Now()) }
+
+// stampAt is stamp against a given now, so that its edges can be shown.
+func stampAt(t, now time.Time) bool {
+	return !t.After(now.Add(relayapi.MaxSkew)) && relayapi.Writable(t)
+}
+
 // oneOf reports whether v is in the set.
 func oneOf(v string, set []string) bool {
 	for _, s := range set {
@@ -113,6 +132,9 @@ func wantOneOf(set []string) string {
 // durations after multiplying by time.Second.
 func (c *Client) checkStatus(st *relayapi.AdminStatusResponse) error {
 	const answer = "the status"
+	if !stamp(st.Started) {
+		return c.malformed(answer, "started", wantStamp)
+	}
 	if st.CAFingerprint != "" && !identity.ValidFingerprint(st.CAFingerprint) {
 		return c.malformed(answer, "ca_fingerprint", wantFingerprint)
 	}
@@ -335,6 +357,9 @@ func (c *Client) checkQueue(q *relayapi.QueueResponse) error {
 		if err := c.counts(answer, count{"tries", row.Tries}); err != nil {
 			return err
 		}
+		if !stamp(row.LastTry) {
+			return c.malformed(answer, "last_try", wantStamp)
+		}
 		if !oneOf(row.State, queueStates) {
 			return c.malformed(answer, "state", wantOneOf(queueStates))
 		}
@@ -436,6 +461,9 @@ func (c *Client) checkListing(page *relayapi.ListResponse, after int64, stubs bo
 			return c.malformed(answer, "id", wantRising)
 		}
 		prev = m.ID
+		if !stamp(m.Received) {
+			return c.malformed(answer, "received", wantStamp)
+		}
 		if m.Size < 0 {
 			return c.malformed(answer, "size", wantCount)
 		}
@@ -461,6 +489,9 @@ func (c *Client) checkListing(page *relayapi.ListResponse, after int64, stubs bo
 func (c *Client) checkKeys(k *relayapi.KeysResponse) error {
 	if k.Created.IsZero() {
 		return c.malformed("the lookup", "created", wantTime)
+	}
+	if !stamp(k.Created) {
+		return c.malformed("the lookup", "created", wantStamp)
 	}
 	return nil
 }
@@ -537,6 +568,9 @@ func (c *Client) checkMailbox(answer string, m *relayapi.MailboxRecord) error {
 	if !identity.ValidFingerprint(m.FP) {
 		return c.malformed(answer, "fp", wantFingerprint)
 	}
+	if !stamp(m.Created) {
+		return c.malformed(answer, "created", wantStamp)
+	}
 	if !oneOf(m.Allow, mailboxAllowWords) {
 		return c.malformed(answer, "allow", wantOneOf(mailboxAllowWords))
 	}
@@ -575,6 +609,9 @@ func (c *Client) checkBlocks(blocks []relayapi.BlockRecord) error {
 		if !identity.ValidFingerprint(blocks[i].ByFP) {
 			return c.malformed(answer, "by_fp", wantFingerprint)
 		}
+		if !stamp(blocks[i].Created) {
+			return c.malformed(answer, "created", wantStamp)
+		}
 	}
 	return nil
 }
@@ -602,6 +639,12 @@ func (c *Client) checkToken(answer string, t *relayapi.TokenRecord) error {
 	}
 	if t.UsesLeft < 0 || t.UsesLeft > t.Uses {
 		return c.malformed(answer, "uses_left", "between 0 and uses")
+	}
+	if !stamp(t.Created) {
+		return c.malformed(answer, "created", wantStamp)
+	}
+	if !stamp(t.LastRedeemed) {
+		return c.malformed(answer, "last_redeemed", wantStamp)
 	}
 	return nil
 }

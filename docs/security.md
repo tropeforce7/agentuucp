@@ -242,23 +242,35 @@ from a relay that is not this one. It covers `auu-admin`'s confirmation
 before it removes a mailbox, which prints the name at the one moment an
 administrator is reading carefully.
 
-And what the relay lists is checked
-for shape before it is used. Every fingerprint, serial and token id in an
-answer is held to its rule as it comes off the wire. A lifetime it reports
-in seconds is bounded before anything multiplies it. Every count it
-reports is zero or more, every message id one or more, a parameter set one
-of the three, and an upload's offset a byte count. So an answer with a
-two-byte fingerprint or a negative queue is refused whole as malformed,
-naming the field and the relay. It is not sliced by a command that
-expected sixty-four characters or seeked to by one that expected an
-offset. A listing page is held to the order the relay promises as well:
-every row's id above the `after` the request asked for and above the row
-before it. A page that repeats an id, the one at the cursor among them,
-or goes back is refused whole as malformed, naming `id`, and the fetch
-treats that as a transport failure: nothing of it is acknowledged or
-kept. So a relay that answers the row at the cursor again and again stops
-the fetch there, and cannot have it acknowledge the row and write it
-under `damaged/` again on every turn for ever.
+And what the relay lists is checked for shape before it is used. Every
+fingerprint, serial and token id in an answer is held to its rule as it
+comes off the wire. A lifetime it reports in seconds is bounded before
+anything multiplies it. Every count it reports is zero or more, every
+message id one or more, a parameter set one of the three, and an upload's
+offset a byte count. A time that says when something happened is held to
+no more than five minutes ahead of this machine's clock, since no clock
+may put it ahead of now, and to the years 0000 to 9999, which this
+program can write back: a message's `received`, a lookup's `created`, a
+queue row's `last_try`, the status's `started`, a mailbox or block
+record's `created`, and a token's `created` and `last_redeemed`. A
+message's `received` is kept in the record, copied into the left-behind
+file and the damaged box and written into serve's ledger, and orders the
+inbox, a thread's latest and serve's opener; the others are printed and
+written in `--json` answers. A year past 9999 breaks the first file or
+answer it reaches. A time that names a moment to come is not held this
+way: an expiry, a next try, a token's `not_before`, which is a moment the
+token waits for, and a certificate's validity. So an answer with a
+two-byte fingerprint, a negative queue or a message received next year is
+refused whole as malformed, naming the field and the relay. It is not
+sliced by a command that expected sixty-four characters or seeked to by
+one that expected an offset. A listing page is held to the order the
+relay promises as well: every row's id above the `after` the request
+asked for and above the row before it. A page that repeats an id, the one
+at the cursor among them, or goes back is refused whole as malformed,
+naming `id`, and the fetch treats that as a transport failure: nothing of
+it is acknowledged or kept. So a relay that answers the row at the cursor
+again and again stops the fetch there, and cannot have it acknowledge the
+row and write it under `damaged/` again on every turn for ever.
 
 Every integer that enters the program from outside has a row in
 `internal/limits/ledger.txt`, and so does every slice of a string or a

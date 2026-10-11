@@ -46,10 +46,9 @@ import (
 // set is held to what every caller passes. A fourth kind is a time: a
 // field of a type that holds a time in a json-tagged struct, and a
 // time.Parse or time.ParseInLocation. Its row says how far ahead the code
-// takes it, or its window, deadline, display, output, local or, until the
-// commit that bounds it, unbounded; the test refuses a display row on a
-// field it sees compared or ordered, an unbounded row naming another
-// commit than 2 or 3 of PLAN-TIME, and a deadline or bound with no test.
+// takes it, or its window, deadline, display, output or local; the test
+// refuses a display row on a field it sees compared or ordered, and a
+// deadline or bound with no test.
 
 // floor is what the walk found when the time kind was added, every kind
 // together. A walk that finds fewer is not reaching the tree.
@@ -81,14 +80,8 @@ var ranges = regexp.MustCompile(`^(0 or )?(\[-?\d+[a-z]*, -?\d+[a-z]*\]|>= -?\d+
 // come, compared with now, with the other edge of its own window or with
 // an earlier copy of itself, or for the earliest to show, never ordered
 // across records, and written to a file only as a record of it, whose
-// test feeds the extremes; and "unbounded: PLAN-TIME commit N", a stamp
-// the plan bounds in a later commit, which names no test and lasts until
-// then.
+// test feeds the extremes.
 var timeRanges = regexp.MustCompile(`^(<= now \+ 5m|\[[A-Za-z_.]+, [A-Za-z_.]+\]|display|output)$`)
-
-// unboundedRange is the one form an unbounded time row may take: the
-// commit of PLAN-TIME that bounds it, and no other.
-var unboundedRange = regexp.MustCompile(`^unbounded: PLAN-TIME commit [23]$`)
 
 // timeOperators are the time.Time methods that compare or order: a
 // display field is an operand of none of them.
@@ -777,8 +770,10 @@ func parseIn(s string) (time.Time, error) { return time.ParseInLocation(time.RFC
 // handed to slices.ContainsFunc or slices.IndexFunc, which order nothing.
 // Sub is counted with either side the field, Compare with the field its
 // receiver, and comparators handed to sort.SliceStable and slices.MinFunc
-// as well; a display row on a time.Parse, which is no field, is refused. An unbounded row is refused for a commit other
-// than 2 or 3 and for naming a test, and taken for commit 3 with none. A
+// as well; a display row on a time.Parse, which is no field, is refused.
+// An unbounded row, a range R21 of PLAN-TIME removed, is refused as a
+// range of no known shape for every commit, 2, 3 or 4, and one with no
+// "shown by" by the reading of the ledger. A
 // deadline with no "shown by" is refused by the reading of the ledger,
 // and one with no reason as a range of no known shape, as is <= now + 1h;
 // a <= now + 5m row naming a test that is not TestLimit is refused, and
@@ -919,6 +914,10 @@ func least(ms []Most) Most {
 }
 
 func parsed(s string) (time.Time, error) { return time.Parse(time.RFC3339, s) }
+
+type Late struct {
+	V time.Time 'json:"v"'
+}
 `,
 		"internal/planted/planted_test.go": `package planted
 
@@ -951,9 +950,9 @@ func Late(e planted.Event, t time.Time) bool { return e.H.After(t) }
 		ev + "G = display",
 		ev + "H = display",
 		ev + "I = display shown by TestLimitStamp",
-		ev + "J = unbounded: PLAN-TIME commit 4",
+		ev + "J = unbounded: PLAN-TIME commit 4 shown by TestLimitStamp",
 		ev + "K = unbounded: PLAN-TIME commit 2 shown by TestLimitStamp",
-		ev + "L = unbounded: PLAN-TIME commit 3",
+		ev + "L = unbounded: PLAN-TIME commit 3 shown by TestLimitStamp",
 		ev + "M = deadline: the next retry",
 		ev + "N = deadline: shown by TestLimitStamp",
 		ev + "O = <= now + 5m shown by TestStamp",
@@ -981,12 +980,14 @@ func Late(e planted.Event, t time.Time) bool { return e.H.After(t) }
 		ms + "K = display",
 		ms + "N = display",
 		"internal/planted/planted.go parsed time time.Parse(s) = display",
+		"internal/planted/planted.go Late time V = unbounded: PLAN-TIME commit 3",
 	}, "\n")
 	problems, _ := check(t, root, ledger)
 	const fix = "; give the row a bound and a test"
-	const shapes = ", which is not <= now + 5m, [lo, hi], display, output, local:, deadline: or unbounded: with its reason"
+	const shapes = ", which is not <= now + 5m, [lo, hi], display, output, local: or deadline: with its reason"
 	want := []string{
 		"ledger.txt:13: " + ev + "M has no \"shown by\"",
+		"ledger.txt:40: internal/planted/planted.go Late time V has no \"shown by\"",
 		"ledger.txt:1: " + ev + "A says display, but the field is compared or ordered at internal/planted/planted.go:51 (Before)" + fix,
 		"ledger.txt:2: " + ev + "B says display, but the field is compared or ordered at internal/planted/planted.go:53 (After)" + fix,
 		"ledger.txt:3: " + ev + "C says display, but the field is compared or ordered at internal/planted/planted.go:55 (==)" + fix,
@@ -995,8 +996,9 @@ func Late(e planted.Event, t time.Time) bool { return e.H.After(t) }
 		"ledger.txt:6: " + ev + "F says display, but the field is compared or ordered at internal/planted/planted.go:67 (a Less method)" + fix,
 		"ledger.txt:8: " + ev + "H says display, but the field is compared or ordered at internal/other/other.go:9 (After)" + fix,
 		"ledger.txt:9: " + ev + "I says display and names a test; a field that is only shown has none",
-		"ledger.txt:10: " + ev + "J says \"unbounded: PLAN-TIME commit 4\"; a stamp left unbounded names the commit of PLAN-TIME that bounds it, 2 or 3, and no other",
-		"ledger.txt:11: " + ev + "K is unbounded and names a test; it names one when its commit bounds it",
+		"ledger.txt:10: " + ev + "J has the range \"unbounded: PLAN-TIME commit 4\"" + shapes,
+		"ledger.txt:11: " + ev + "K has the range \"unbounded: PLAN-TIME commit 2\"" + shapes,
+		"ledger.txt:12: " + ev + "L has the range \"unbounded: PLAN-TIME commit 3\"" + shapes,
 		"ledger.txt:14: " + ev + "N has the range \"deadline:\"" + shapes,
 		"ledger.txt:15: " + ev + "O names TestStamp, which does not start with TestLimit",
 		"ledger.txt:16: " + ev + "P has the range \"<= now + 1h\"" + shapes,
@@ -1016,6 +1018,7 @@ func Late(e planted.Event, t time.Time) bool { return e.H.After(t) }
 		"ledger.txt:38: " + ms + "N says display, but the field is compared or ordered at internal/planted/planted.go:129 (a comparator handed to slices.MinFunc)" + fix,
 		"ledger.txt:39: internal/planted/planted.go parsed time time.Parse(s) says display, but only a struct's field can be display",
 		ev + "M has no row in ledger.txt; add one saying how far ahead the code takes it, <= now + 5m, or its window, with the TestLimit test that shows it, or a deadline with its use and its test, or display, output or local: with why",
+		"internal/planted/planted.go Late time V has no row in ledger.txt; add one saying how far ahead the code takes it, <= now + 5m, or its window, with the TestLimit test that shows it, or a deadline with its use and its test, or display, output or local: with why",
 	}
 	if strings.Join(problems, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("problems:\n%s\nwant:\n%s", strings.Join(problems, "\n"), strings.Join(want, "\n"))
@@ -1162,7 +1165,6 @@ func checkWith(t *testing.T, root, ledger string, bounds map[string]capBound, se
 	decoded := tree.decoded()
 	compared := tree.compared()
 	tests := tree.limitTests()
-	unbounded := 0
 
 	byKey := map[string]site{}
 	for _, s := range sites {
@@ -1281,8 +1283,8 @@ func checkWith(t *testing.T, root, ledger string, bounds map[string]capBound, se
 		} else if s.kind == "time" {
 			// A time row is a bound with its test, a window with its
 			// test, a deadline with its use and its test, a field shown
-			// and never compared, output, this program's own clock, or a
-			// stamp a later commit of the plan bounds.
+			// and never compared, output, or this program's own clock or
+			// a value a check already held.
 			reason := func(prefix string) bool {
 				return strings.HasPrefix(r.rng, prefix) && strings.TrimSpace(strings.TrimPrefix(r.rng, prefix)) != ""
 			}
@@ -1301,17 +1303,9 @@ func checkWith(t *testing.T, root, ledger string, bounds map[string]capBound, se
 				if r.test == "" {
 					continue
 				}
-			case reason("unbounded:"):
-				if !unboundedRange.MatchString(r.rng) {
-					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says %q; a stamp left unbounded names the commit of PLAN-TIME that bounds it, 2 or 3, and no other", r.line, r.key, r.rng))
-				} else if r.test != "" {
-					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s is unbounded and names a test; it names one when its commit bounds it", r.line, r.key))
-				}
-				unbounded++
-				continue
 			case reason("deadline:"), timeRanges.MatchString(r.rng):
 			default:
-				problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s has the range %q, which is not <= now + 5m, [lo, hi], display, output, local:, deadline: or unbounded: with its reason", r.line, r.key, r.rng))
+				problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s has the range %q, which is not <= now + 5m, [lo, hi], display, output, local: or deadline: with its reason", r.line, r.key, r.rng))
 				continue
 			}
 		} else if !ranges.MatchString(r.rng) {
@@ -1337,9 +1331,6 @@ func checkWith(t *testing.T, root, ledger string, bounds map[string]capBound, se
 		default:
 			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s names %s, which %d packages declare; give it a name of its own", r.line, r.key, r.test, n))
 		}
-	}
-	if unbounded > 0 {
-		t.Logf("%d time rows are unbounded until the commit of PLAN-TIME that bounds them", unbounded)
 	}
 	sort.Slice(sites, func(i, j int) bool { return sites[i].key < sites[j].key })
 	for _, s := range sites {
@@ -2765,9 +2756,9 @@ func parseLedger(ledger string) (rows []row, problems []string) {
 			continue
 		}
 		rng, test, has := strings.Cut(rest, " shown by ")
-		// output, local:, a time shown and never compared, and a time a
-		// later commit bounds name no test; every other row names one.
-		if !has && rng != "output" && rng != "display" && !strings.HasPrefix(rng, "local:") && !strings.HasPrefix(rng, "unbounded:") {
+		// output, local: and a time shown and never compared name no
+		// test; every other row names one.
+		if !has && rng != "output" && rng != "display" && !strings.HasPrefix(rng, "local:") {
 			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s has no \"shown by\"", n, key))
 			continue
 		}

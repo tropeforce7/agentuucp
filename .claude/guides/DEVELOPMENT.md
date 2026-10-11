@@ -1434,8 +1434,7 @@ embedding one, a type defined over it, or a pointer, slice, array or map
 of these, a map by its key too; and every `time.Parse` and
 `time.ParseInLocation`: `<= now + 5m` with its test, a window, a
 deadline, a field only displayed, an output, the program's own clock or
-its user's input, or a value a check already held, or, for now, a stamp
-marked unbounded until the commit that bounds it. A new time field
+its user's input, or a value a check already held. A new time field
 from outside lands with its row.
 
 **Retry-After is an integer number of seconds, never a date, never zero.**

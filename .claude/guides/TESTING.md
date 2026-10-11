@@ -1207,10 +1207,10 @@ a time. Its row says `<= now + 5m`, the skew, with a test that feeds
 the edge, a second either side, a day and a year ahead, a year past, and
 the earliest and latest instants; `[lo, hi]`; `deadline: <use>`, with
 a test that feeds the earliest instant and one past year 9999 and shows
-no panic and no overflow; `display`; `output`; `local: <why>`; or
-`unbounded:`. Where the wire cannot carry those extremes, the test
-shows the encoder refuses them and feeds the wire's own ends through
-the reader instead. The latest instant is
+no panic and no overflow; `display`; `output`; or `local: <why>`.
+Where the wire cannot carry those extremes, the test shows the encoder
+refuses them and feeds the wire's own ends through the reader instead.
+The latest instant is
 `time.Unix(math.MaxInt64-62135596800, 999999999)`, not
 `time.Unix(math.MaxInt64, 0)`, which wraps to before 1970. The ledger's
 header gives the grammar of each, and is the place to read it.
@@ -1226,14 +1226,10 @@ rest; among them a copy into a local, or into a struct with no row, a
 comparison through `Unix` or `UnixNano`, a defined type converted back,
 a method promoted from an embedded time, a helper of the tree's own
 that compares, a whole struct compared, a comparator held in a variable,
-and a file the build leaves out. `unbounded:` is
-temporary: it marks a stamp from outside that is not yet held, names
-the commit that will hold it, and lasts until the commit that bounds
-those stamps, which takes the form out of the walk. And the decoder
-walk now follows a helper across packages by its name, so a field
-decoded through `wire.Decode` from another package is reached as one
-decoded in place, and `output` on a wire answer means what it says.
-The floor is 542.
+and a file the build leaves out. And the decoder walk now follows a
+helper across packages by its name, so a field decoded through
+`wire.Decode` from another package is reached as one decoded in place,
+and `output` on a wire answer means what it says. The floor is 542.
 
 **Two bounds on the same value in two encodings are read against each other.**
 `MaxSaid` bounds a relay's refusal sentence at 512 bytes and `MaxReportBytes`

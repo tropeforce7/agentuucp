@@ -178,7 +178,17 @@ func (s *Store) SetLeftBehind(relayName string, entries []LeftEntry) error {
 		if e.RelayID == last {
 			continue
 		}
-		fmt.Fprintf(&b, "%d %s %s %d %s\n", e.RelayID, e.ID, e.Received.UTC().Format(time.RFC3339), e.Size, from)
+		// The line is refused before it is written if its reader would
+		// refuse it: a writer that can produce a line its own reader
+		// cannot read makes a file from before a rule, and every later
+		// fetch of the relay would stop on it. The listing holds a relay's
+		// stamp to what can be written, so this is met only by a record
+		// kept before it did.
+		received := e.Received.UTC().Format(time.RFC3339)
+		if _, err := time.Parse(time.RFC3339, received); err != nil {
+			return fmt.Errorf("store: message %s on the relay has a received time this program cannot write back, %s", e.ID, received)
+		}
+		fmt.Fprintf(&b, "%d %s %s %d %s\n", e.RelayID, e.ID, received, e.Size, from)
 		last = e.RelayID
 	}
 	if err := os.MkdirAll(s.relayDir(relayName), dirMode); err != nil {

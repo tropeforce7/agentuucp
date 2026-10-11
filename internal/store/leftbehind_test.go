@@ -120,3 +120,85 @@ func TestADamagedLeftBehindFileIsDamaged(t *testing.T) {
 		}
 	}
 }
+
+// SetLeftBehind writes no line its own reader would refuse: a received
+// time whose UTC RFC 3339 form time.Parse does not read back, UTC year
+// 10000 (year 9999 at -12:00, the third trace's stamp) or UTC year -1
+// (year 0 at +23:59), is refused before anything is written, naming the
+// message, and the file is left as it was, absent or byte-equal, whether
+// the entry comes alone, among ordinary ones, or through AddLeftBehind,
+// which is the writer rm and reset's LeftEntry go through. The ends of
+// what can be written, year 0 and year 9999 in UTC, and an ordinary time
+// are written and read back.
+func TestALeftBehindLineItsReaderWouldRefuseIsNotWritten(t *testing.T) {
+	const name = "work"
+	bad := map[string]time.Time{
+		"UTC year 10000": time.Date(9999, 12, 31, 23, 59, 59, 0, time.FixedZone("", -12*3600)),
+		"UTC year -1":    time.Date(0, 1, 1, 0, 0, 0, 0, time.FixedZone("", 23*3600+59*60)),
+	}
+	for what, received := range bad {
+		t.Run(what, func(t *testing.T) {
+			s, err := Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(s.relayDir(name), leftBehindFile)
+			e := leftAt(5)
+			e.Received = received
+			refused := func(t *testing.T, err error) {
+				t.Helper()
+				if err == nil || !strings.Contains(err.Error(), "message "+e.ID+" on the relay has a received time this program cannot write back") {
+					t.Fatalf("%v; want the line refused, naming message %s", err, e.ID)
+				}
+			}
+
+			refused(t, s.SetLeftBehind(name, []LeftEntry{e}))
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("the file was absent and is now there (%v)", err)
+			}
+
+			if err := s.SetLeftBehind(name, []LeftEntry{leftAt(3), leftAt(7)}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			refused(t, s.SetLeftBehind(name, []LeftEntry{leftAt(3), e, leftAt(7)}))
+			refused(t, s.AddLeftBehind(name, e))
+			if after, err := os.ReadFile(path); err != nil || string(after) != string(before) {
+				t.Fatalf("the file went from %q to %q (%v); want it byte-equal", before, after, err)
+			}
+			if got, err := s.LeftBehind(name); err != nil || len(got) != 2 {
+				t.Fatalf("LeftBehind = %v, %v; want the two ordinary entries", got, err)
+			}
+		})
+	}
+
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var good []LeftEntry
+	for i, received := range []time.Time{
+		time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC),
+		time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC),
+	} {
+		e := leftAt(int64(i + 1))
+		e.Received = received
+		good = append(good, e)
+	}
+	if err := s.SetLeftBehind(name, good); err != nil {
+		t.Fatalf("ordinary entries: %v; want them written", err)
+	}
+	got, err := s.LeftBehind(name)
+	if err != nil || len(got) != len(good) {
+		t.Fatalf("LeftBehind = %v, %v; want %v", got, err, good)
+	}
+	for i := range good {
+		if got[i] != good[i] {
+			t.Fatalf("entry %d read back as %+v; want %+v", i, got[i], good[i])
+		}
+	}
+}
