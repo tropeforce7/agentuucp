@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/client"
 	"github.com/tropeforce7/agentuucp/internal/envelope"
@@ -319,12 +320,21 @@ func TestIgnoredSectionsAreKeptToTheKeptSize(t *testing.T) {
 
 // After the upgrade: a peer's stream that waited on the relay is fetched
 // whole by the first fetch of a build that knows its section, delivered
-// over its record without the mark, and acknowledged; S12 for streams.
+// over its record without the mark, and acknowledged; S12 for streams. It
+// keeps the arrival of the record that waited, set here an hour back so
+// that an arrival taken at the delivery would show: it arrived when it was
+// first fetched, not when its payload was.
 func TestAWaitingStreamIsFetchedByABuildThatKnowsItsSection(t *testing.T) {
 	alice, bob, st := peered(t)
 	streamSections(t, alice, bob, "a newer stream", critical("now-known"))
 	if in, _ := fetchJSON(t, bob); len(in.Fetch.Newer) != 1 {
 		t.Fatalf("fetch: %+v, want the stream waiting", in.Fetch)
+	}
+	held := recordOf(t, bob, store.Inbox, "a newer stream")
+	arrived := held.Arrived.Add(-time.Hour)
+	held.Arrived = arrived
+	if err := storeOf(t, bob).Save(store.Inbox, held); err != nil {
+		t.Fatal(err)
 	}
 	// The upgrade: this build learns the section.
 	t.Cleanup(wire.Register("now-known", wire.OnManifest))
@@ -342,6 +352,9 @@ func TestAWaitingStreamIsFetchedByABuildThatKnowsItsSection(t *testing.T) {
 	}
 	if files, err := os.ReadDir(bs.AttachmentDir(store.Inbox, msgs[0].Inner.ID)); err != nil || len(files) != 1 {
 		t.Fatalf("the payload was not fetched: %v, %v", files, err)
+	}
+	if !msgs[0].Arrived.Equal(arrived) {
+		t.Errorf("the delivered stream arrived %v; want the waiting record's, %v", msgs[0].Arrived, arrived)
 	}
 	if queued, err := st.List(bob.exportFingerprint(), 0, 10); err != nil || len(queued) != 1 {
 		t.Errorf("the relay holds %d (%v); the default channel keeps, so the stream stays there", len(queued), err)

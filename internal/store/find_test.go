@@ -90,6 +90,10 @@ func TestFindThread(t *testing.T) {
 		m.Inner.Body.Thread = thread
 		m.Inner.Time = when
 		m.Received = when
+		// Arrival here is what orders a thread; each message arrives
+		// when the relay says it received it, so the order is the one
+		// the times below give and not the order they are saved in.
+		m.Arrived = when
 		m.RelayID = relayID
 		if err := s.Save(box, m); err != nil {
 			t.Fatal(err)
@@ -163,6 +167,10 @@ func TestFirstOnThread(t *testing.T) {
 		m.Inner.Body.InReplyTo = inReplyTo
 		m.Inner.Time = when
 		m.Received = when
+		// Arrival here is what orders a thread; each message arrives
+		// when the relay says it received it, so the order is the one
+		// the times below give and not the order they are saved in.
+		m.Arrived = when
 		m.RelayID = relayID
 		if err := s.Save(box, m); err != nil {
 			t.Fatal(err)

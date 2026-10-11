@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/client"
@@ -172,7 +173,7 @@ func (r *resumingReader) Close() error {
 
 // deliverStream fetches a stream's payload and delivers it, atomically.
 func deliverStream(ctx context.Context, s *store.Store, id *identity.Identity, c *client.Client,
-	r *store.Relay, listed relayCopy, opened *stream.Opened, box store.Box, keep bool) error {
+	r *store.Relay, listed relayCopy, opened *stream.Opened, box store.Box, keep bool, arrived time.Time) error {
 
 	relayID := listed.ID
 	m := opened.Manifest
@@ -202,6 +203,7 @@ func deliverStream(ctx context.Context, s *store.Store, id *identity.Identity, c
 		RelayID:         relayID,
 		Relay:           r.Name,
 		Received:        listed.Received,
+		Arrived:         arrived,
 		RelaySize:       listed.Size,
 		Inner:           inner,
 		SenderName:      s.PeerName(m.From),
@@ -374,7 +376,7 @@ func fetchOneStream(ctx context.Context, s *store.Store, id *identity.Identity, 
 	// Kept on the relay, or acknowledged away, as this machine's setting
 	// for the manifest's channel says.
 	keep := keepFor(settings, channel)
-	if err := deliverStream(ctx, s, id, c, r, relayCopy{relayID, m.Received, m.Size}, opened, store.Inbox, keep); err != nil {
+	if err := deliverStream(ctx, s, id, c, r, relayCopy{relayID, m.Received, m.Size}, opened, store.Inbox, keep, time.Time{}); err != nil {
 		if isGone(err) {
 			return droppedOnRelay(relayID, res)
 		}

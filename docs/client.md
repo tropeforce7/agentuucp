@@ -705,12 +705,16 @@ again.
 A thread id works there too. `auu reply THREAD-ID` answers whatever is latest
 on the thread, including your own last message. In that case it is a
 follow-up to the person you sent it to. Latest is by when the message
-arrived here and then by the relay's own numbering. It is never by the
-time stamped inside it, which is the sender's word. `auu read` shows that
-stamp as `sent:`, labelled the sender's clock, beside `received:`. A
-message stamped in the future is refused when it is opened. Message and
-thread ids are the same shape, and either may be shortened to a unique
-prefix.
+arrived on this machine, by this machine's clock, and then by the relay's
+own numbering, with the relay's time breaking a tie. The inbox lists in
+the same order. It is never by the time stamped inside it, which is the
+sender's word, nor by the relay's time alone, which is the relay's. `auu
+read` shows the sender's stamp as `sent:`, labelled the sender's clock,
+beside `received:`, the relay's. `--json` carries all three, as `time`,
+`received` and `arrived`. Mail an earlier release kept here counts as
+arriving when the relay received it. A message stamped in the future is
+refused when it is opened. Message and thread ids are the same shape, and
+either may be shortened to a unique prefix.
 
 A reply carries the thread's subject unless you give it one of its own, with
 `--subject` or by editing the `# Subject:` line in the editor. The thread is

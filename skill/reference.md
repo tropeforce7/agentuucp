@@ -416,45 +416,47 @@ own line for each round that did something, and nothing for a quiet one.
 `auu inbox --json`: `fetch` with `delivered`, `quarantined`, `unreadable`,
 `kept`, `duplicate` (a message already held here arriving a second time
 while the relay still has the first, which a resent copy can be:
-acknowledged, not delivered again), `newer` (when set: the critical section each stream left waiting on
-the relay for a newer auu carries) and `channels_gone` (when set); `relays`, a list of `relay`, `url`,
-the same fetch counts, `queued` (what that relay still holds), `first`
-and `last` (the lowest and highest message ids it holds for you, both 0
-when it holds nothing), `allow`
-(the state of your allow list there: `signed`, `none` or
+acknowledged, not delivered again), `newer` (when set: the critical section
+each stream left waiting on the relay for a newer auu carries) and
+`channels_gone` (when set); `relays`, a list of `relay`, `url`, the same
+fetch counts, `queued` (what that relay still holds), `first` and `last`
+(the lowest and highest message ids it holds for you, both 0 when it holds
+nothing), `allow` (the state of your allow list there: `signed`, `none` or
 `broken`), `card` (the state of your card there, the same three words),
 `directory` (the state of your channel directory there, the same three
-words again; `broken` means posts to your named channels are refused
-until the user runs `auu channel push`), `outbound` (when that relay
-forwards and holds anything of yours: the queue's own rows, as `auu queue
---json` gives them without `relay`, which the entry around them already
-names) and `error` (when
-set); and `messages`, each `id`, `thread`, `in_reply_to` (when set),
-`type`, `subject`, `from`, `from_name`, `time`, `received`, `read`, `box`,
-`thread_subject` (only where the whole message is printed: the subject the
-thread was opened with, which is `subject` unless the message was given one
-of its own), `text` (only where the whole message is printed), `attachments` of `name`,
-`media`, `size`, `sha256`, `channel`, `via` (when the message came through
-another relay: the relays it crossed, nearest the sender first, joined by
-`!`), `on_relay` (when set),
-`payload_on_relay` (when set), `newer` (when set: a stream waiting on the
-relay for a newer auu, by its critical section, with nothing of what it
-carries beside it), `ignored_sections` (when set: the sections this build
-does not read on a message, kept with the message up to 16 KiB each: one
-it does not know, and one it knows only on another path, as
-`recipient-count`, which it reads on a request alone, and
-`max-recipients`, which it reads on an answer alone; a section name is
-known on the paths that read it and held as an unknown one elsewhere, so
-one of those two marked critical on a message is passed over and named
-here, never refused as needing a newer auu; a message an earlier release
-kept with such a section over 16 KiB still loads, and the cap holds what
-is fetched from now on) and `dropped_sections` (when set: how many such
-sections were over 16 KiB and not kept), and `vouch` (on a message of
-type `vouch` alone: `counts`, and when it does not, `why`; when it does,
-`voucher` and `subject` (fingerprints), `name` (the voucher's label for the subject, a
+words again; `broken` means posts to your named channels are refused until
+the user runs `auu channel push`), `outbound` (when that relay forwards and
+holds anything of yours: the queue's own rows, as `auu queue --json` gives
+them without `relay`, which the entry around them already names) and
+`error` (when set); and `messages`, each `id`, `thread`, `in_reply_to`
+(when set), `type`, `subject`, `from`, `from_name`, `time` (the sender's
+clock), `received` (the relay's), `arrived` (when it arrived on this
+machine, or for a sent record when the copy was written here, by its clock,
+which orders the list; for an inbox record an earlier release kept, it is
+that record's `received`), `read`, `box`, `thread_subject` (only where the
+whole message is printed: the subject the thread was opened with, which is
+`subject` unless the message was given one of its own), `text` (only where
+the whole message is printed), `attachments` of `name`, `media`, `size`,
+`sha256`, `channel`, `via` (when the message came through another relay:
+the relays it crossed, nearest the sender first, joined by `!`), `on_relay`
+(when set), `payload_on_relay` (when set), `newer` (when set: a stream
+waiting on the relay for a newer auu, by its critical section, with nothing
+of what it carries beside it), `ignored_sections` (when set: the sections
+this build does not read on a message, kept with the message up to 16 KiB
+each: one it does not know, and one it knows only on another path, as
+`recipient-count`, which it reads on a request alone, and `max-recipients`,
+which it reads on an answer alone; a section name is known on the paths
+that read it and held as an unknown one elsewhere, so one of those two
+marked critical on a message is passed over and named here, never refused
+as needing a newer auu; a message an earlier release kept with such a
+section over 16 KiB still loads, and the cap holds what is fetched from now
+on) and `dropped_sections` (when set: how many such sections were over 16
+KiB and not kept), and `vouch` (on a message of type `vouch` alone:
+`counts`, and when it does not, `why`; when it does, `voucher` and
+`subject` (fingerprints), `name` (the voucher's label for the subject, a
 suggestion and never a label here), `issued`, `known_as` (when the subject
-is already a peer: your name for them) and `you` (when the vouch is for
-the user)), and `ask` (on a message of type `vouch-ask` alone: `about`, the
+is already a peer: your name for them) and `you` (when the vouch is for the
+user)), and `ask` (on a message of type `vouch-ask` alone: `about`, the
 fingerprint asked about, `known`, whether the user holds it, and
 `known_as`, their name for it when they do).
 

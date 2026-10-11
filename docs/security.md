@@ -254,23 +254,29 @@ program can write back: a message's `received`, a lookup's `created`, a
 queue row's `last_try`, the status's `started`, a mailbox or block
 record's `created`, and a token's `created` and `last_redeemed`. A
 message's `received` is kept in the record, copied into the left-behind
-file and the damaged box and written into serve's ledger, and orders the
-inbox, a thread's latest and serve's opener; the others are printed and
-written in `--json` answers. A year past 9999 breaks the first file or
-answer it reaches. A time that names a moment to come is not held this
-way: an expiry, a next try, a token's `not_before`, which is a moment the
-token waits for, and a certificate's validity. So an answer with a
-two-byte fingerprint, a negative queue or a message received next year is
-refused whole as malformed, naming the field and the relay. It is not
-sliced by a command that expected sixty-four characters or seeked to by
-one that expected an offset. A listing page is held to the order the
-relay promises as well: every row's id above the `after` the request
-asked for and above the row before it. A page that repeats an id, the one
-at the cursor among them, or goes back is refused whole as malformed,
-naming `id`, and the fetch treats that as a transport failure: nothing of
-it is acknowledged or kept. So a relay that answers the row at the cursor
-again and again stops the fetch there, and cannot have it acknowledge the
-row and write it under `damaged/` again on every turn for ever.
+file and the damaged box, and orders the damaged box. In the inbox and a
+thread's latest it only breaks a tie between two messages that arrived
+here at once with one relay id, since those go by this machine's clock.
+Serve's opener breaks no tie by it, but it still orders the ledger
+entries an earlier release wrote. A record an earlier release kept is
+the exception: Load reads its `received` as its arrival, so for that
+record it is the order, in the inbox, a thread's latest and serve's
+ledger alike. The other times are printed and written in `--json`
+answers. A year past 9999 breaks the first file or answer it reaches. A
+time that names a moment to come is not held this way: an expiry, a next
+try, a token's `not_before`, which is a moment the token waits for, and a
+certificate's validity. So an answer with a two-byte fingerprint, a
+negative queue or a message received next year is refused whole as
+malformed, naming the field and the relay. It is not sliced by a command
+that expected sixty-four characters or seeked to by one that expected an
+offset. A listing page is held to the order the relay promises as well:
+every row's id above the `after` the request asked for and above the row
+before it. A page that repeats an id, the one at the cursor among them, or
+goes back is refused whole as malformed, naming `id`, and the fetch treats
+that as a transport failure: nothing of it is acknowledged or kept. So a
+relay that answers the row at the cursor again and again stops the fetch
+there, and cannot have it acknowledge the row and write it under
+`damaged/` again on every turn for ever.
 
 Every integer that enters the program from outside has a row in
 `internal/limits/ledger.txt`, and so does every slice of a string or a
@@ -913,15 +919,20 @@ not hold.
 Any peer may name any thread id. So serve answers a thread only for the
 peer who opened it. A message on it from anybody else gets no directory
 and no worktree. It is left unanswered in the inbox. The opener is decided
-by arrival, and arrival is the relay's stamp. So a relay, or the clocks of
-two relays, can decide who opens a new thread. So can a large message to
-several, which goes as one stream to each recipient: a co-recipient has
-the thread id while the expert's copy is still uploading, and a small ask
-from them on it can arrive first and open the thread. A thread that has
-been answered or tried is not moved by any later stamp. A thread carried
-over from a v0.17.0 ledger, which kept no senders, takes its opener from
-the earliest of its messages still in the inbox. A thread whose opener's
-messages the owner has removed may take another sender's.
+by arrival on this machine, by its own clock when the message was first
+kept, and the ledger records that. So a relay with its clock ahead cannot
+put its message first, but the relays' order of delivery, and when each
+fetch runs, still decide who opens a new thread. So can a large message
+to several, which goes as one stream to each recipient: a co-recipient
+has the thread id while the expert's copy is still uploading, and a small
+ask from them on it can arrive first and open the thread. A thread that
+has been answered or tried is not moved by any later arrival. A ledger
+entry an earlier release wrote keeps the relay's stamp under the same key
+and is not rewritten, so a thread opened before the upgrade is ordered by
+that stamp until something on it is tried. A thread carried over from a
+v0.17.0 ledger, which kept no senders, takes its opener from the earliest
+of its messages still in the inbox. A thread whose opener's messages the
+owner has removed may take another sender's.
 
 **The HTTP layer has bounds of its own**, and they are not settings. The
 relay speaks HTTP/1.1 alone. HTTP/2 is off on the listener and not offered
@@ -1395,14 +1406,20 @@ means `default` everywhere. That is the sender's rule, a message for
 means something other than a refusal.
 
 The sealed record carries a time, and it is the sender's word alone. It is
-shown, labelled as theirs, and it orders nothing. A thread's order is the
-receiver's. It goes by when each message arrived here, then by the relay's
-counter. So a peer cannot stamp a message into being the latest on a
-thread and draw every reply by thread to it. The one bound on the stamp is
-the future. A message may be old, since it was stored and forwarded. But
-one stamped more than the request skew (five minutes) past the receiver's
-clock is refused at open as malformed, on the envelope and on the
-manifest alike.
+shown, labelled as theirs, and orders nothing but a last tie. A thread's
+order is the receiver's. It goes by when each message arrived here, by
+this machine's clock, then by the relay's counter. So a peer cannot stamp
+a message into being the latest on a thread and draw every reply by
+thread to it. The relay's `received` is its own clock's word: it is
+shown, and in this order it only breaks a tie after the counter, so a
+relay with its clock ahead cannot pin its message atop the inbox or a
+thread. The inbox and a thread's latest take this one order, and serve's
+opener takes it as far as its ledger keeps it: arrival here, then the
+relay's counter. A message an earlier release kept here counts as
+arriving at its `received`. The one bound on the stamp is the future. A
+message may be old, since it was stored and forwarded. But one stamped
+more than the request skew (five minutes) past the receiver's clock is
+refused at open as malformed, on the envelope and on the manifest alike.
 
 The listing at step 7 takes three more parameters, all optional. `wait=D`
 asks the relay to hold the answer until a message arrives after the id asked

@@ -352,6 +352,39 @@ func TestLimitStoredRecordShapes(t *testing.T) {
 	if err := write(t, func(m *Stored) {}); err != nil {
 		t.Errorf("the record as written: %v", err)
 	}
+	// Arrived: a record v0.15.0 to v0.17.0 wrote has no arrived key and
+	// reads its received as its arrival; one that has the key keeps it.
+	{
+		m := stored(id, now)
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var keys map[string]json.RawMessage
+		if err := json.Unmarshal(data, &keys); err != nil {
+			t.Fatal(err)
+		}
+		delete(keys, "arrived")
+		if data, err = json.Marshal(keys); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(s.msgPath(Inbox, id), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.Load(Inbox, id); err != nil {
+			t.Errorf("a record with no arrived key: %v", err)
+		} else if !got.Arrived.Equal(now) {
+			t.Errorf("a record with no arrived key reads arrived %v; want its received, %v", got.Arrived, now)
+		}
+	}
+	arrived := now.Add(-time.Hour)
+	if err := write(t, func(m *Stored) { m.Arrived = arrived }); err != nil {
+		t.Errorf("a record with an arrival: %v", err)
+	} else if got, err := s.Load(Inbox, id); err != nil {
+		t.Errorf("a record with an arrival: %v", err)
+	} else if !got.Arrived.Equal(arrived) || !got.Received.Equal(now) {
+		t.Errorf("a record with an arrival reads arrived %v, received %v; want %v and %v", got.Arrived, got.Received, arrived, now)
+	}
 	// A message to several keeps its list, which names the record's to.
 	if err := write(t, func(m *Stored) {
 		m.Inner.Sections = []wire.Section{recipientsList(t, m.Inner.From, m.Inner.To)}

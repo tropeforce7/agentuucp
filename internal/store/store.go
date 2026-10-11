@@ -6,6 +6,7 @@
 package store
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -749,8 +750,16 @@ type Stored struct {
 	// Relay is the name of the relay this message arrived through, which is
 	// what a reply goes back the way of. Every record names one, so the
 	// key is always written, and Load refuses a record without it.
-	Relay      string          `json:"relay"`
-	Received   time.Time       `json:"received"`
+	Relay    string    `json:"relay"`
+	Received time.Time `json:"received"`
+	// Arrived is this machine's clock when the record was first saved, and
+	// what the inbox, a thread's latest and serve's opener are ordered by:
+	// Received is the relay's word, and a relay that put its clock ahead
+	// could pin its message atop the inbox within the skew. Save sets it
+	// when it is zero and never after, so a record moved, marked or
+	// rewritten keeps it; a record an earlier release wrote has none, and
+	// Load reads it as Received.
+	Arrived    time.Time       `json:"arrived"`
 	Read       bool            `json:"read"`
 	Inner      *envelope.Inner `json:"inner"`
 	SenderName string          `json:"sender_name"`
@@ -870,6 +879,9 @@ func (s *Store) Save(box Box, m *Stored) error {
 	if message.ValidID(m.Inner.ID) != nil {
 		return fmt.Errorf("refusing to store message with malformed id %q", m.Inner.ID)
 	}
+	if m.Arrived.IsZero() {
+		m.Arrived = time.Now().UTC()
+	}
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
@@ -912,6 +924,12 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	}
 	if m.Inner == nil {
 		return nil, errors.New("the record holds no message")
+	}
+	// A record from v0.15.0 to v0.17.0 has no arrival of its own; the
+	// relay's received stands in for it, which is the order it was listed
+	// in when it was written.
+	if m.Arrived.IsZero() {
+		m.Arrived = m.Received
 	}
 	if m.RelayID < 0 {
 		return nil, fmt.Errorf("the record's relay id %d is negative", m.RelayID)
@@ -1092,12 +1110,7 @@ func (s *Store) list(box Box, warn bool) ([]*Stored, error) {
 		}
 		out = append(out, m)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Received.Equal(out[j].Received) {
-			return out[i].Inner.ID < out[j].Inner.ID
-		}
-		return out[i].Received.Before(out[j].Received)
-	})
+	slices.SortFunc(out, ArrivalOrder)
 	return out, nil
 }
 
@@ -1299,12 +1312,10 @@ func (s *Store) Find(idOrPrefix string) (Box, *Stored, error) {
 // by thread id or a unique prefix of one. Quarantine is not searched: a
 // stranger's thread is not one to reply on.
 //
-// "Latest" is LaterThan's: by when the message was stored here, then by
-// the id the relay gave it, and by the sender's own timestamp only to
-// break a tie. The relay numbers every message it accepts from one counter
-// across all mailboxes, and both the copy in sent/ and the copy in inbox/
-// carry that number, so the order is the same on both ends of a
-// conversation and never depends on which file was listed first.
+// "Latest" is LaterThan's, ArrivalOrder: by when the message arrived on
+// this machine, then by the id the relay gave it, and by the relay's
+// received and the sender's own timestamp only to break a tie. The order
+// is this machine's own and never depends on which file was listed first.
 func (s *Store) FindThread(idOrPrefix string) (Box, *Stored, error) {
 	if len(idOrPrefix) < 4 {
 		return "", nil, errors.New("thread id prefix must be at least 4 characters")
@@ -1406,25 +1417,38 @@ func opensBefore(a, b *Stored) bool {
 	return LaterThan(b, a)
 }
 
-// LaterThan orders two messages on a thread: by when each was stored here,
-// then by the relay's id, and by the sender's own timestamp only between
-// two that arrived in the same second. A thread's order is the receiver's,
-// not the sender's clock: the timestamp inside a message is whatever its
-// sender wrote, and when it came first a peer who stamped a message in the
-// year 9999 was "latest" on that thread for as long as the message was
-// kept, so every reply by thread went to them. Arrival here and the relay's
-// counter are this side's own, and a sent copy carries both as its inbox
-// twin does.
-func LaterThan(a, b *Stored) bool {
-	switch {
-	case !a.Received.Equal(b.Received):
-		return a.Received.After(b.Received)
-	case a.RelayID != b.RelayID:
-		return a.RelayID > b.RelayID
-	default:
-		return a.Inner.Time.After(b.Inner.Time)
+// ArrivalOrder is the one order of messages on this machine: the inbox's,
+// a thread's, and the order serve takes its pending messages in. It is by
+// when each arrived here, then by the relay's id, then by the relay's
+// received, then by the sender's own timestamp, and last by the message
+// id, so that two records are never equal unless they are one. A
+// thread's order is the receiver's, not the sender's clock and not the
+// relay's: the timestamp inside a message is whatever its sender wrote,
+// and when it came first a peer who stamped a message in the year 9999
+// was "latest" on that thread for as long as the message was kept, so
+// every reply by thread went to them; and a relay's received is its own
+// word, which a relay with its clock ahead could use to pin its message
+// atop the inbox. Arrival here is this machine's own, and the relay's
+// received and the sender's stamp only break a tie.
+func ArrivalOrder(a, b *Stored) int {
+	if c := a.Arrived.Compare(b.Arrived); c != 0 {
+		return c
 	}
+	if c := cmp.Compare(a.RelayID, b.RelayID); c != 0 {
+		return c
+	}
+	if c := a.Received.Compare(b.Received); c != 0 {
+		return c
+	}
+	if c := a.Inner.Time.Compare(b.Inner.Time); c != 0 {
+		return c
+	}
+	return strings.Compare(a.Inner.ID, b.Inner.ID)
 }
+
+// LaterThan says whether a comes after b in ArrivalOrder: the later of two
+// messages on a thread.
+func LaterThan(a, b *Stored) bool { return ArrivalOrder(a, b) > 0 }
 
 // MarkRead flags a message as read in place.
 func (s *Store) MarkRead(box Box, id string) error {

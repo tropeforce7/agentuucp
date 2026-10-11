@@ -554,8 +554,11 @@ type messageJSON struct {
 	FromName  string    `json:"from_name"`
 	Time      time.Time `json:"time"`
 	Received  time.Time `json:"received"`
-	Read      bool      `json:"read"`
-	Box       string    `json:"box"`
+	// Arrived is when the message arrived on this machine, which orders
+	// the listing; Received is the relay's word for when it stored it.
+	Arrived time.Time `json:"arrived"`
+	Read    bool      `json:"read"`
+	Box     string    `json:"box"`
 	// ThreadSubject is the subject the thread was opened with, which is
 	// this message's own unless it was given one of its own. Set where a
 	// whole message is shown — read, wait and quarantine show — and not in
@@ -711,6 +714,7 @@ func toJSON(s *store.Store, box store.Box, m *store.Stored, includeText bool) me
 		FromName:    m.SenderName,
 		Time:        m.Inner.Time,
 		Received:    m.Received,
+		Arrived:     m.Arrived,
 		Read:        m.Read,
 		Box:         string(box),
 		Attachments: make([]attachmentJSON, 0, len(m.Inner.Body.Attachments)),
@@ -2111,7 +2115,7 @@ func cmdQuarantine(args []string) error {
 			if err != nil {
 				return err
 			}
-			if err := deliverStream(ctx(), s, id, c, r, relayCopy{m.RelayID, m.Received, m.RelaySize}, opened, store.Quarantine, keep); err != nil {
+			if err := deliverStream(ctx(), s, id, c, r, relayCopy{m.RelayID, m.Received, m.RelaySize}, opened, store.Quarantine, keep, m.Arrived); err != nil {
 				// The body was never fetched, and the relay no longer
 				// has it: an administrator's purge, or another machine
 				// of this identity removing the message. Nothing here

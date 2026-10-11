@@ -7,7 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -378,9 +378,9 @@ func (r *serveRun) hold(ctx context.Context) error {
 // channel, admitted by the rule that stops two experts talking for ever,
 // and not settled in the ledger.
 //
-// Oldest is by the relay's stamp, the record's Received, then by the
-// relay's own counter, which is the only true order among messages that
-// arrived in the same second, and then by id so that two runs agree.
+// Oldest is the inbox's order, store.ArrivalOrder: by when each record
+// arrived here, then the relay's own counter, the relay's received, the
+// sender's stamp and the id, so that two runs agree.
 func (r *serveRun) pending() ([]*store.Stored, error) {
 	msgs, err := r.s.List(store.Inbox)
 	if err != nil {
@@ -405,17 +405,7 @@ func (r *serveRun) pending() ([]*store.Stored, error) {
 		}
 		out = append(out, m)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		a, b := out[i], out[j]
-		switch {
-		case !a.Received.Equal(b.Received):
-			return a.Received.Before(b.Received)
-		case a.RelayID != b.RelayID:
-			return a.RelayID < b.RelayID
-		default:
-			return a.Inner.ID < b.Inner.ID
-		}
-	})
+	slices.SortStableFunc(out, store.ArrivalOrder)
 	return out, nil
 }
 
@@ -490,12 +480,13 @@ func (r *serveRun) channelFor(m *store.Stored) *serveChannel {
 	// entry another peer's message made in the same round, a stream held
 	// for a newer auu, must not open a thread whose asker's message arrived
 	// before it. Once anything on the thread has been tried or answered,
-	// the thread is its opener's whatever any later message's stamp says:
-	// the stamp is the relay's clock, and a relay behind, or one that lies,
-	// must not move a thread that has a conversation in it.
+	// the thread is its opener's whatever any later message's arrival says:
+	// an entry an earlier release wrote holds the relay's clock, and this
+	// machine's clock may be set back, and neither may move a thread that
+	// has a conversation in it.
 	if id, e := r.led.openerEntry(m.Inner.Body.Thread); e != nil && e.From != m.Inner.From &&
 		!(!r.led.tried(m.Inner.Body.Thread) &&
-			arrivedBefore(m.Received.UTC(), m.RelayID, m.Inner.ID, e.Arrived, e.RelayID, id)) {
+			arrivedBefore(m.Arrived.UTC(), m.RelayID, m.Inner.ID, e.Arrived, e.RelayID, id)) {
 		r.sayOtherParty(m, e.From)
 		return nil
 	}
@@ -536,7 +527,7 @@ func fillSenders(s *store.Store, led *ledger) error {
 // thread's opener is read from.
 func setSender(e *ledgerEntry, m *store.Stored) {
 	e.From = m.Inner.From
-	e.Arrived = m.Received.UTC()
+	e.Arrived = m.Arrived.UTC()
 	e.RelayID = m.RelayID
 }
 

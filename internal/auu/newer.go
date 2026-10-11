@@ -104,7 +104,7 @@ func fetchKnownNow(ctx context.Context, s *store.Store, id *identity.Identity, c
 				continue
 			}
 			keep := keepFor(settings, channelName(m.Channel))
-			if err := deliverStream(ctx, s, id, c, r, relayCopy{m.RelayID, m.Received, m.RelaySize}, opened, box, keep); err != nil {
+			if err := deliverStream(ctx, s, id, c, r, relayCopy{m.RelayID, m.Received, m.RelaySize}, opened, box, keep, m.Arrived); err != nil {
 				switch {
 				case isMissingOnRelay(err) || isGone(err):
 					if err := gone("is no longer there"); err != nil {

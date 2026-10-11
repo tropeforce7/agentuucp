@@ -80,10 +80,12 @@ type ledgerEntry struct {
 	// of its messages still in the inbox. A thread whose opener's messages
 	// the owner has removed may take another sender's.
 	From string `json:"from,omitempty"`
-	// Arrived and RelayID are when the relay says it received the message,
-	// the record's Received, and the relay's counter for it, written with
-	// From and never rewritten. They are the order a thread's opener is
-	// read in, which is the order pending takes messages in. Tried is not
+	// Arrived and RelayID are when the message arrived on this machine, the
+	// record's Arrived, and the relay's counter for it, written with From
+	// and never rewritten. They are the order a thread's opener is read in,
+	// which is the order pending takes messages in. An entry an earlier
+	// release wrote holds the relay's received under the same key, a clock
+	// within the skew of this one; it is not rewritten. Tried is not
 	// that order: it is rewritten at every attempt, and a stream held for
 	// a newer auu has none.
 	Arrived time.Time `json:"arrived,omitempty"`
@@ -250,10 +252,11 @@ func (l *ledger) answered(thread string) int {
 
 // opener is the fingerprint of the peer whose thread this is: the sender of
 // the thread's earliest entry by arrival, among the entries that are not
-// skipped and that name a sender. Arrival is when the relay says it
-// received the message, the record's Received, then the relay's counter,
-// then the message id. That is the order pending takes messages in, and
-// it is never rewritten, so two runs agree. Nothing is what a thread serve
+// skipped and that name a sender. Arrival is when the message arrived on
+// this machine, the record's Arrived, then the relay's counter, then the
+// message id: pending's order, store.ArrivalOrder, without the two ties
+// it breaks after the counter, which an entry does not keep. It is never
+// rewritten, so two runs agree. Nothing is what a thread serve
 // has not seen gets. A thread from a v0.17.0 ledger has its senders from
 // its messages still in the inbox (fillSenders). One whose messages are
 // all gone gets nothing until the first message serve takes up on it after
@@ -282,10 +285,11 @@ func (l *ledger) openerEntry(thread string) (string, *ledgerEntry) {
 	return bestID, best
 }
 
-// arrivedBefore is the order of arrival: when the relay says it received
-// the message, the record's Received, then the relay's counter, then the
-// message id, so that two runs agree. It is the order pending takes
-// messages in.
+// arrivedBefore is the order of arrival: when the message arrived on this
+// machine, the record's Arrived, then the relay's counter, then the
+// message id, so that two runs agree. It is pending's order as far as an
+// entry keeps it; an entry an earlier release wrote holds the relay's
+// received in place of the arrival.
 func arrivedBefore(at time.Time, relayID int64, id string, than time.Time, thanRelayID int64, thanID string) bool {
 	switch {
 	case !at.Equal(than):

@@ -328,6 +328,9 @@ func TestSaveLoadListMove(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	first := stored("00000000000000000000000000000001", now.Add(-time.Hour))
 	second := stored("00000000000000000000000000000002", now)
+	// The listing is in the order of arrival here, which is not the order
+	// of the saves below.
+	first.Arrived, second.Arrived = now.Add(-time.Hour), now
 
 	for _, m := range []*Stored{second, first} { // saved out of order on purpose
 		if err := s.Save(Inbox, m); err != nil {
@@ -339,7 +342,7 @@ func TestSaveLoadListMove(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(list) != 2 || list[0].Inner.ID != first.Inner.ID {
-		t.Fatal("listing is not in received order")
+		t.Fatal("listing is not in arrival order")
 	}
 
 	loaded, err := s.Load(Inbox, first.Inner.ID)
@@ -478,16 +481,18 @@ func TestMessageIDPrefixBoundary(t *testing.T) {
 // ordered by it first, so a peer who stamped a message in the year 9999
 // was "latest" on the thread for as long as it was kept and every reply by
 // thread went to them. Now arrival here comes first, then the relay's id,
-// and the stamp only breaks a tie.
+// then the relay's received, and the stamp only breaks a tie.
 func TestAThreadIsOrderedByArrivalNotTheSendersClock(t *testing.T) {
 	s := newStore(t)
 	now := time.Now().UTC().Truncate(time.Second)
 	fromTheFuture := stored("00000000000000000000000000000001", now.Add(-time.Hour))
 	fromTheFuture.Inner.Time = now.AddDate(1, 0, 0)
 	fromTheFuture.RelayID = 1
+	fromTheFuture.Arrived = now.Add(-time.Hour)
 	honest := stored("00000000000000000000000000000002", now)
 	honest.Inner.Time = now
 	honest.RelayID = 2
+	honest.Arrived = now
 	for _, m := range []*Stored{honest, fromTheFuture} {
 		if err := s.Save(Inbox, m); err != nil {
 			t.Fatal(err)
@@ -508,6 +513,7 @@ func TestAThreadIsOrderedByArrivalNotTheSendersClock(t *testing.T) {
 	// and only two the relay numbered alike by the stamp.
 	a := stored("00000000000000000000000000000003", now)
 	b := stored("00000000000000000000000000000004", now)
+	a.Arrived, b.Arrived = now, now
 	a.RelayID, b.RelayID = 5, 6
 	a.Inner.Time, b.Inner.Time = now.Add(time.Hour), now
 	if !LaterThan(b, a) {

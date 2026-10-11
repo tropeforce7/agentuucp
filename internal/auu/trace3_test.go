@@ -167,8 +167,9 @@ func tree(t *testing.T, dir string) []string {
 }
 
 // arrivalIs fails the test unless a message's ledger entry records when
-// and in what order it arrived exactly as bob's stored copy does: Received
-// and RelayID, neither of them zero.
+// and in what order it arrived exactly as bob's stored copy does: Arrived,
+// this machine's clock when the record was first saved, not the relay's
+// Received, and RelayID, neither of them zero.
 func arrivalIs(t *testing.T, bob *expert, led *ledger, id string) {
 	t.Helper()
 	s, err := store.Open(bob.home)
@@ -183,9 +184,9 @@ func arrivalIs(t *testing.T, bob *expert, led *ledger, id string) {
 	if e == nil {
 		t.Fatalf("no ledger entry for %s", id[:12])
 	}
-	if e.Arrived.IsZero() || e.RelayID == 0 || !e.Arrived.Equal(m.Received) || e.RelayID != m.RelayID {
+	if e.Arrived.IsZero() || e.RelayID == 0 || !e.Arrived.Equal(m.Arrived) || e.RelayID != m.RelayID {
 		t.Errorf("%s's entry has arrived %v and relay_id %d; want the stored record's %v and %d, neither zero",
-			id[:12], e.Arrived, e.RelayID, m.Received, m.RelayID)
+			id[:12], e.Arrived, e.RelayID, m.Arrived, m.RelayID)
 	}
 }
 
@@ -848,16 +849,18 @@ func TestARetryDoesNotMoveTheOpener(t *testing.T) {
 	alice.replyOn(t, sent.Thread)
 }
 
-// A message's arrival is the relay's listing stamp, and a relay that is
-// behind, or dishonest, can stamp a co-recipient's message before the
-// opener's. So a message from somebody other than the opener competes on
-// its own arrival only while the opener's message has not been taken up,
-// a held stream's entry with no try and no answer; against a thread serve
-// has answered, an earlier stamp wins nothing. Alice's ask on T is
-// answered, and her entry's arrival is set to an hour from now, so that carol's
-// ask on T, fetched after it, carries the earlier stamp: carol is left
-// alone and said once, no handler runs for her, alice stays the opener,
-// and alice's next turn is answered.
+// A message's arrival is the record's Arrived, this machine's clock when it
+// was first saved; an entry an earlier release wrote holds the relay's
+// received in its place, which a relay that is behind, or dishonest, can
+// stamp before the opener's, and this machine's clock may be set back. So a
+// message from somebody other than the opener competes on its own arrival
+// only while the opener's message has not been taken up, a held stream's
+// entry with no try and no answer; against a thread serve has answered, an
+// earlier arrival wins nothing. Alice's ask on T is answered, and her
+// entry's arrival is set to an hour from now, so that carol's ask on T,
+// fetched after it, carries the earlier arrival: carol is left alone and
+// said once, no handler runs for her, alice stays the opener, and alice's
+// next turn is answered.
 func TestAnEarlierStampCannotTakeAnAnsweredThread(t *testing.T) {
 	alice, carol, bob := newExpertAndCarol(t, modeReadOnly)
 	marker := filepath.Join(t.TempDir(), "runs")
@@ -890,9 +893,9 @@ func TestAnEarlierStampCannotTakeAnAnsweredThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	after := bob.ledgerOf(t)
-	if !m.Received.Before(after.Messages[sent.ID].Arrived) {
-		t.Fatalf("carol's ask was received %v, not before alice's arrival %v, so the test proves nothing",
-			m.Received, after.Messages[sent.ID].Arrived)
+	if !m.Arrived.Before(after.Messages[sent.ID].Arrived) {
+		t.Fatalf("carol's ask arrived %v, not before alice's arrival %v, so the test proves nothing",
+			m.Arrived, after.Messages[sent.ID].Arrived)
 	}
 	if want := leftAlone(hijack, "carol", alice.fingerprint()); strings.Count(stderr, want) != 1 {
 		t.Errorf("stderr:\n%s\nwant once:\n%s", stderr, want)
@@ -977,9 +980,9 @@ func TestTheOpenersHeldStreamDoesNotReopenAnAnsweredThread(t *testing.T) {
 		t.Fatal(err)
 	}
 	led = bob.ledgerOf(t)
-	if !m.Received.Before(led.Messages[held].Arrived) {
-		t.Fatalf("carol's ask was received %v, not before alice's stream %v, so the test proves nothing",
-			m.Received, led.Messages[held].Arrived)
+	if !m.Arrived.Before(led.Messages[held].Arrived) {
+		t.Fatalf("carol's ask arrived %v, not before alice's stream %v, so the test proves nothing",
+			m.Arrived, led.Messages[held].Arrived)
 	}
 	if want := leftAlone(hijack, "carol", alice.fingerprint()); strings.Count(stderr, want) != 1 {
 		t.Errorf("stderr:\n%s\nwant once:\n%s", stderr, want)
@@ -1050,9 +1053,9 @@ func TestAFailingOpenersThreadIsNotTakenByAnEarlierStamp(t *testing.T) {
 		t.Fatal(err)
 	}
 	led = bob.ledgerOf(t)
-	if !m.Received.Before(led.Messages[sent.ID].Arrived) {
-		t.Fatalf("carol's ask was received %v, not before alice's arrival %v, so the test proves nothing",
-			m.Received, led.Messages[sent.ID].Arrived)
+	if !m.Arrived.Before(led.Messages[sent.ID].Arrived) {
+		t.Fatalf("carol's ask arrived %v, not before alice's arrival %v, so the test proves nothing",
+			m.Arrived, led.Messages[sent.ID].Arrived)
 	}
 	if e := led.Messages[sent.ID]; e.Failures != 2 || !e.Handled.IsZero() {
 		t.Fatalf("alice's entry is %+v; want two failures and no answer, so the thread had only failed", e)

@@ -246,10 +246,12 @@ turn, sent that peer the patch of everything produced for the opener, and
 spent the opener's `max_turns`. Every check had passed — the signature was
 the peer's own, the peer was admitted, the id had its shape — and none had
 asked whose thread it was. Now every ledger entry records its message's
-verified sender, `from`, with the relay's arrival stamp and counter,
-written once and never rewritten; a thread's opener is the sender of its
-earliest entry that is not skipped and names a sender, earliest by arrival
-and not by `Tried`, since `Tried` is rewritten at every attempt and a
+verified sender, `from`, with its arrival on this machine, the record's
+`Arrived`, and the relay's counter, written once and never rewritten (an
+entry an earlier release wrote holds the relay's `received` under the
+same key, and keeps it); a thread's opener is the sender of its earliest
+entry that is not skipped and names a sender, earliest by arrival and not
+by `Tried`, since `Tried` is rewritten at every attempt and a
 stream held for a newer auu has none. `channelFor` asks whose thread it is
 before anything else is done with the message: one on the thread from
 anybody else belongs to no channel here, is said once per message per run
@@ -1416,10 +1418,12 @@ program wrote; and every print of them escapes all the same, as the last
 line under the rule. The stamp inside a message is the sender's word: `FindThread`
 ordered by it first, so a peer stamping year 9999 was the latest on a
 thread for as long as the message was kept and drew every reply by
-thread. Order by arrival here, then the relay's counter, and use the
-stamp to break a tie and to display, labelled as the sender's; the one
-bound on it is the future, the same skew a request is held to, so a
-message may be old but not from a clock no relay would have accepted.
+thread. Order by arrival here, by this machine's clock, then the
+relay's counter; the relay's `received` is the relay's word and only
+breaks a tie after the counter, and the stamp breaks one after that and
+is displayed, labelled as the sender's. The one bound on the stamp is
+the future, the same skew a request is held to, so a message may be old
+but not from a clock no relay would have accepted.
 
 **Every time from outside has a row in the limits ledger's time kind,
 saying its bound or why it has none.** Compare times as times, two
