@@ -743,8 +743,9 @@ of it is acknowledged or kept. So a single message over the hold, stored
 before the relay's upgrade, on a relay not yet upgraded, or under a
 larger `max_bytes` than the relay says now, is refused whatever the
 page, and every fetch from that relay stops at it until the message goes
-or the cursor is moved past it. Until then the fetch is a transport
-failure on that relay alone, and your other relays are fetched as usual.
+or the cursor is moved past it. While the message is still after the
+cursor, the fetch is a transport failure on that relay alone, and your
+other relays are fetched as usual.
 
 The recovery that ends it is the relay's operator's:
 `auu-admin mailboxes purge FP` discards every message queued for you
@@ -753,9 +754,10 @@ ID that message's relay id, which `auu cursor show` gives as the relay's
 lowest number when nothing before it is still there, steps past it in
 the meantime. It lets the mail after the message through and loses that
 message alone, at a cost: the message stays on the relay and is counted
-there, so every fetch from that relay then ends at exit 5, saying a
-message is waiting before the cursor, until the operator removes it. In
-a home with several relays `auu inbox` stops at that relay and does not
+there, so once the cursor is past it every fetch from that relay ends
+at exit 5, saying a message is waiting before the cursor, until the
+operator removes it. That is no longer a transport failure: in a home
+with several relays `auu inbox` then stops at that relay and does not
 fetch the ones after it, and `auu watch` stops watching that relay, and
 ends when it is the only one. That exit's sentence advises
 `auu cursor reset --relay NAME`, from the beginning, which leads
@@ -861,10 +863,10 @@ is what a peer running something other than this `auu` looks like from here.
 *Compatibility.* v0.15.0 is the floor. Everything you use, your `auu`,
 your peers' and the relays, goes to v0.15.0 or later once, together, and
 after that versions may differ. v0.14.0 and before are not supported.
-v0.17.0, v0.16.0 and v0.15.0 mix in any order, as sender, relay and
-recipient alike. v0.17.0 sends and relays what v0.16.0 does, and a
-message to a room is a message to several on the wire, so v0.16.0 in the
-table stands for v0.17.0 as well:
+v0.18.0, v0.17.0, v0.16.0 and v0.15.0 mix in any order, as sender,
+relay and recipient alike. v0.17.0 and v0.18.0 send and relay what
+v0.16.0 does, and a message to a room is a message to several on the
+wire, so v0.16.0 in the table stands for v0.17.0 and v0.18.0 as well:
 
 | Sender | Relay | Recipient | What happens |
 | --- | --- | --- | --- |
@@ -880,9 +882,11 @@ refuse a message v0.14.0 sealed, other than a stream, as malformed and
 keep it under `damaged/`. The release notes give the order to upgrade
 in from v0.14.0 and what each release changed:
 [`docs/releases/v0.15.0.md`](releases/v0.15.0.md),
-[`docs/releases/v0.16.0.md`](releases/v0.16.0.md) and
-[`docs/releases/v0.17.0.md`](releases/v0.17.0.md), which takes v0.14.0
-straight to v0.17.0.
+[`docs/releases/v0.16.0.md`](releases/v0.16.0.md),
+[`docs/releases/v0.17.0.md`](releases/v0.17.0.md) and
+[`docs/releases/v0.18.0.md`](releases/v0.18.0.md), which takes v0.14.0
+straight to v0.18.0 and says what a v0.18.0 party and an earlier one
+meet.
 
 From v0.15.0 on, a
 newer build adds what it adds through sections in messages and in what

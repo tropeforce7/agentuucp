@@ -520,7 +520,7 @@ journalctl -u auu-relay -f
 
 The first lines say what registration mode it is in, how many administrators
 it found, and its limits. The `relay starting` line leads with the version
-the binary was built from and the schema it speaks (`version=v0.17.0
+the binary was built from and the schema it speaks (`version=v0.18.0
 schema=13`), which is how a journal says what relay is running, and says
 where the bundle came from:
 

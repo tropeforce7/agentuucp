@@ -20,7 +20,7 @@ import (
 var olderRows = []matrixRow{
 	{"O01", "old_recipient", "alice writes to bob and to olive, who runs the previous release, olive reads it with everyone it went to and answers them all", o01},
 	{"O02", "old_recipient_stream", "the same as a stream, a message too large for an envelope", o02},
-	{"O03", "old_relay", "alice writes to several through a relay running the previous release, by bang path and as a stream", o03},
+	{"O03", "old_relay", "alice writes to several through a relay running the previous release, by bang path and as a stream, which bob's fetch takes by range", o03},
 	{"O04", "old_sender_and_tools", "olive writes to alice and to bob on this relay, and the previous release's auu-admin reads its status", o04},
 	{"O05", "room_to_old_recipient", "alice saves a room of bob and olive and sends to it, and both read it, olive on the previous release", o05},
 }
@@ -30,7 +30,7 @@ const (
 	prevBin = "/opt/auu-prev/bin"
 	// prevVersion is the release they are, which run.sh's prev names: the
 	// two move together, each release.
-	prevVersion = "v0.16.0"
+	prevVersion = "v0.17.0"
 	oliveHome   = "/home/bob/.auu-olive"
 )
 
@@ -299,13 +299,53 @@ func o03(t *testing.T) {
 	if k := sendSeveral(t, "bob,olive", "--subject", streamSubject, "--attach", "/home/alice/o03.bin", "large").Kind; k != "stream" {
 		t.Fatalf("sent as %q, want a stream", k)
 	}
+	// Bob's fetch is this release's client alone in the old relay's log:
+	// every request it makes for the stream's bytes carries a Range, the
+	// header, the manifest and then the payload from past them, and this
+	// release takes nothing but a 206 for exactly the span it asked for, so
+	// a relay that answered otherwise would leave the stream waiting and
+	// readBySubject would not find it. The minimal access log names the
+	// route and the status and not the header, so the 206s are the Range
+	// seen from the relay's side.
+	bm := logMark()
 	readBySubject(t, bob, streamSubject)
+	for _, line := range blobLinesSince(t, bm, 3) {
+		if !strings.Contains(line, "status=206") {
+			t.Errorf("the previous relay answered bob's range with %q, want 206", line)
+		}
+	}
 	readBySubject(t, olive, streamSubject)
 
 	expectNot(t, result{stdout: relayLogSince(m)}, "needs-newer", "too-many-recipients", "malformed")
 	nothingDamaged(t, alice, bob, olive, dave)
 	verdict(t, "ok", "A relay on the previous release takes every copy of a message to several, by bang path and as "+
-		"a stream: the count on a stream's open and on a user's forward is one it knows and holds within its own limit.")
+		"a stream: the count on a stream's open and on a user's forward is one it knows and holds within its own limit, "+
+		"and it answers each range this release's fetch asks of the stream 206 with the span this release holds it to.")
+}
+
+// blobLinesSince waits for at least n of the relay's access lines for a
+// stream's bytes after the mark and returns every one there is. A line is
+// written as its request ends, which can be a moment after the client has
+// read the last byte, so the lines are waited for rather than read once.
+func blobLinesSince(t *testing.T, m mark, n int) []string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var lines []string
+		log := relayLogSince(m)
+		for _, line := range strings.Split(log, "\n") {
+			if strings.Contains(line, "path=/v1/mailbox/{fp}/{id}/blob ") {
+				lines = append(lines, line)
+			}
+		}
+		if len(lines) >= n {
+			return lines
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the relay logged %d fetches of a stream's bytes, want at least %d; it says:\n%s", len(lines), n, log)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
 }
 
 func o04(t *testing.T) {
@@ -334,7 +374,9 @@ func o04(t *testing.T) {
 func o05(t *testing.T) {
 	olive := oliveMeets(t)
 	// The room is alice's alone: nothing of it is posted, so olive's
-	// release has nothing to know.
+	// release has nothing to know. It has rooms of its own and names one on
+	// a read where a room saved on her machine holds exactly those people,
+	// and she saves none, so her read names none, as bob's does not.
 	expectCode(t, alice.auu("room", "create", "pair", "bob", "olive"), 0)
 	t.Cleanup(func() { expectCode(t, alice.auu("room", "delete", "pair", "--yes"), 0) })
 
@@ -354,7 +396,8 @@ func o05(t *testing.T) {
 		}
 	}
 
-	oldReadsAll(t, olive, subject, "one message, a room of two")
+	oid := oldReadsAll(t, olive, subject, "one message, a room of two")
+	expectNot(t, olive.auu("read", oid), "room:")
 	bid, _ := readBySubject(t, bob, subject)
 	r = bob.auu("read", bid)
 	expectSays(t, r, 0, "one message, a room of two")
@@ -362,5 +405,5 @@ func o05(t *testing.T) {
 	expectSays(t, alice.auu("read", s.ID), 0, "room:    pair")
 	nothingDamaged(t, alice, bob, olive)
 	verdict(t, "ok", "A room is a message to several on the wire: the previous release reads it whole with everyone it "+
-		"went to, the room's name travels nowhere, so bob's read names none, and alice's own read names it.")
+		"went to, the room's name travels nowhere, so neither olive's read nor bob's names one, and alice's own read names it.")
 }
