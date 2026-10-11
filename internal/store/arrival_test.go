@@ -232,3 +232,133 @@ func TestSaveSetsArrivedOnce(t *testing.T) {
 		t.Errorf("saved again: arrived %v; want the first, %v", last.Arrived, first)
 	}
 }
+
+// v0170Record is a record in v0.17.0's exact keys, with no arrived key,
+// received at the stamp given as it is written in the file.
+func v0170Record(t *testing.T, id, received string) string {
+	t.Helper()
+	record := `{
+  "relay_id": 7,
+  "relay": "relay",
+  "received": "` + received + `",
+  "read": false,
+  "inner": {
+    "v": 1,
+    "from": "` + strings.Repeat("a", 64) + `",
+    "from_bundle": null,
+    "to": "` + strings.Repeat("b", 64) + `",
+    "id": "` + id + `",
+    "time": "2026-01-01T00:00:00Z",
+    "body": {"type": "ask", "thread": "0123456789abcdef0123456789abcdef", "text": "from v0.17.0"}
+  },
+  "sender_name": "alice",
+  "channel": "jostle"
+}
+`
+	if strings.Contains(record, `"arrived"`) {
+		t.Fatal("the older record has an arrived key")
+	}
+	return record
+}
+
+// v0.15.0 to v0.17.0 kept whatever received a relay listed, and one a
+// hostile relay set past either end of what this program can write back
+// would put a time in serve's ledger that its save refuses (D80). Such a
+// record, written in v0.17.0's keys with no arrived key and its file's
+// time set to a known instant, loads with that instant as its arrival and
+// its received as it was, and says so once on standard error across two
+// loads; marked read, it is saved with that arrival, which the file's new
+// time does not move. The stamps either side of each end are the nearest
+// RFC 3339 can carry: at the latest and the earliest a received still
+// stands in for the arrival, a nanosecond past either it does not. The
+// third branch, this machine's clock when the file's time cannot be
+// written back either, is not tested: this filesystem cannot hold a file
+// time outside the years 0000 to 9999, and os.Chtimes wraps one asked for.
+func TestARecordKeptWithAnUnwritableReceivedArrivesAtItsFilesTime(t *testing.T) {
+	fileTime := time.Date(2026, time.March, 14, 15, 9, 26, 0, time.UTC)
+	for _, c := range []struct {
+		name, received string
+		writable       bool
+	}{
+		{"the trace's stamp, UTC year 10000", "9999-12-31T23:59:59-12:00", false},
+		{"a nanosecond after the latest", "9999-12-31T23:59:00-00:01", false},
+		{"the latest", "9999-12-31T23:59:59.999999999Z", true},
+		{"the earliest", "0000-01-01T00:00:00Z", true},
+		{"a nanosecond before the earliest", "0000-01-01T00:00:59.999999999+00:01", false},
+		{"the year 0 at +01:00, UTC year -1", "0000-01-01T00:00:00+01:00", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			received, err := time.Parse(time.RFC3339Nano, c.received)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := received.UTC().Year() >= 0 && received.UTC().Year() <= 9999; got != c.writable {
+				t.Fatalf("%s is in UTC year %d, so the case proves nothing", c.received, received.UTC().Year())
+			}
+			s := newStore(t)
+			id := "00000000000000000000000000000002"
+			path := s.msgPath(Inbox, id)
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(v0170Record(t, id, c.received)), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chtimes(path, fileTime, fileTime); err != nil {
+				t.Fatal(err)
+			}
+			want := received
+			if !c.writable {
+				want = fileTime
+			}
+			var loads [2]*Stored
+			stderr := captureStderr(t, func() {
+				for i := range loads {
+					if loads[i], err = s.Load(Inbox, id); err != nil {
+						return
+					}
+				}
+			})
+			if err != nil {
+				t.Fatalf("v0.17.0's record received %s: %v", c.received, err)
+			}
+			for _, m := range loads {
+				if !m.Arrived.Equal(want) || !m.Received.Equal(received) {
+					t.Errorf("loaded with arrived %v and received %v; want %v and %v", m.Arrived, m.Received, want, received)
+				}
+			}
+			warning := "warning: " + path + " holds a received time this program cannot write back; it is ordered as arriving at " +
+				fileTime.Format(time.RFC3339) + "\n"
+			if c.writable && stderr != "" {
+				t.Errorf("a writable received was warned about:\n%s", stderr)
+			}
+			if !c.writable && stderr != warning {
+				t.Errorf("two loads said:\n%q\nwant once:\n%q", stderr, warning)
+			}
+
+			// Marked read, the record is written with the arrival it
+			// loaded with, and keeps it after the file's time has moved.
+			captureStderr(t, func() { err = s.MarkRead(Inbox, id) })
+			if err != nil {
+				t.Fatalf("marked read: %v", err)
+			}
+			if fi, err := os.Stat(path); err != nil || fi.ModTime().Equal(fileTime) {
+				t.Fatalf("the file's time after the mark is %v (%v); want it moved, or the test proves nothing", fi.ModTime(), err)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(data), `"arrived": "`+want.Format(time.RFC3339Nano)+`"`) {
+				t.Errorf("marked read, the record was written without arrived %v:\n%s", want, data)
+			}
+			m, err := s.Load(Inbox, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !m.Read || !m.Arrived.Equal(want) || !m.Received.Equal(received) {
+				t.Errorf("marked read: read %v, arrived %v, received %v; want read, %v and %v", m.Read, m.Arrived, m.Received, want, received)
+			}
+		})
+	}
+}

@@ -624,7 +624,7 @@ internal/auu/relay.go relayJSON time Added = output
 internal/auu/relay.go relayJSON time AnchorExpires = output
 internal/auu/relay.go relayJSON time CertExpires = output
 internal/auu/relay.go relayJSON time ServerIntermediateIssued = output
-internal/auu/serveledger.go ledgerEntry time Arrived = local: the record's Arrived, this machine's clock at its first Save, or for a record an earlier release kept, the relay's received Load lends it, read as it is (D80); an entry an earlier release wrote holds the relay's received, read as it is
+internal/auu/serveledger.go ledgerEntry time Arrived = local: the record's Arrived, this machine's clock at its first Save, or for a record an earlier release kept, the relay's received Load lends it when it can be written back and otherwise the file's time or this machine's clock (D80); an entry an earlier release wrote holds the relay's received, read as it is
 internal/auu/serveledger.go ledgerEntry time Handled = local: this machine's clock at the answer, read back from the ledger
 internal/auu/serveledger.go ledgerEntry time Tried = local: this machine's clock at the attempt, read back from the ledger
 internal/auu/servels.go servedThreadJSON time Last = output
@@ -676,7 +676,7 @@ internal/store/leftbehind.go (*Store).SetLeftBehind time time.Parse(received) = 
 internal/store/leftbehind.go parseLeftEntry time time.Parse(fields[2]) = local: this program's own line, which SetLeftBehind refuses to write unless this parse reads it back; a file written before is read as it is
 internal/store/relay.go Relay time Added = local: this machine's clock when the relay was added, read back from its own file
 internal/store/relay.go Relay time ServerIntNotBefore = local: the verified intermediate's NotBefore, which certificate verification held before now
-internal/store/store.go Stored time Arrived = local: this machine's clock at the record's first Save, read back from its own file; absent read as received at Load
+internal/store/store.go Stored time Arrived = local: this machine's clock at the record's first Save, read back from its own file; absent read as received at Load when relayapi.Writable holds it, otherwise as the file's modification time or this machine's clock, D80
 internal/store/store.go Stored time Received = local: the listing's received, which checkListing holds to the skew and to what can be written, or this machine's clock for a sent copy or a reopened damaged record kept with none; a record kept before is read as it is
 internal/stream/stream.go Manifest time Time = <= now + 5m shown by TestLimitAManifestTimeIsHeldToTheSkew
 internal/vouch/vouch.go Document time Issued = <= now + 5m shown by TestLimitAVouchIssuedIsHeldToTheSkew

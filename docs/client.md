@@ -712,9 +712,12 @@ sender's word, nor by the relay's time alone, which is the relay's. `auu
 read` shows the sender's stamp as `sent:`, labelled the sender's clock,
 beside `received:`, the relay's. `--json` carries all three, as `time`,
 `received` and `arrived`. Mail an earlier release kept here counts as
-arriving when the relay received it. A message stamped in the future is
-refused when it is opened. Message and thread ids are the same shape, and
-either may be shortened to a unique prefix.
+arriving when the relay received it, unless that time is one this program
+cannot write back, which no honest relay sends; then it counts from when
+its file was last written, and auu warns once per command until the
+record is next saved. A message stamped in the future is refused when it
+is opened. Message and thread ids are the same shape, and either may be
+shortened to a unique prefix.
 
 A reply carries the thread's subject unless you give it one of its own, with
 `--subject` or by editing the `# Subject:` line in the editor. The thread is

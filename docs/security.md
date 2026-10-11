@@ -261,22 +261,26 @@ Serve's opener breaks no tie by it, but it still orders the ledger
 entries an earlier release wrote. A record an earlier release kept is
 the exception: Load reads its `received` as its arrival, so for that
 record it is the order, in the inbox, a thread's latest and serve's
-ledger alike. The other times are printed and written in `--json`
-answers. A year past 9999 breaks the first file or answer it reaches. A
-time that names a moment to come is not held this way: an expiry, a next
-try, a token's `not_before`, which is a moment the token waits for, and a
-certificate's validity. So an answer with a two-byte fingerprint, a
-negative queue or a message received next year is refused whole as
-malformed, naming the field and the relay. It is not sliced by a command
-that expected sixty-four characters or seeked to by one that expected an
-offset. A listing page is held to the order the relay promises as well:
-every row's id above the `after` the request asked for and above the row
-before it. A page that repeats an id, the one at the cursor among them, or
-goes back is refused whole as malformed, naming `id`, and the fetch treats
-that as a transport failure: nothing of it is acknowledged or kept. So a
-relay that answers the row at the cursor again and again stops the fetch
-there, and cannot have it acknowledge the row and write it under
-`damaged/` again on every turn for ever.
+ledger alike. Those releases kept any `received` a relay sent, so one
+this program cannot write back gives way to the time the record's file
+was last written, or this machine's clock, and auu warns once per
+command until the record is next saved. The other times are printed and
+written in `--json` answers. A year past 9999 breaks the first file or
+answer it reaches. A time that names a moment to come is not held this
+way: an expiry, a next try, a token's `not_before`, which is a moment
+the token waits for, and a certificate's validity. So an answer with a
+two-byte fingerprint, a negative queue or a message received next year
+is refused whole as malformed, naming the field and the relay. It is not
+sliced by a command that expected sixty-four characters or seeked to by
+one that expected an offset. A listing page is held to the order the
+relay promises as well: every row's id above the `after` the request
+asked for and above the row before it. A page that repeats an id, the
+one at the cursor among them, or goes back is refused whole as
+malformed, naming `id`, and the fetch treats that as a transport
+failure: nothing of it is acknowledged or kept. So a relay that answers
+the row at the cursor again and again stops the fetch there, and cannot
+have it acknowledge the row and write it under `damaged/` again on every
+turn for ever.
 
 Every integer that enters the program from outside has a row in
 `internal/limits/ledger.txt`, and so does every slice of a string or a
@@ -1416,7 +1420,8 @@ relay with its clock ahead cannot pin its message atop the inbox or a
 thread. The inbox and a thread's latest take this one order, and serve's
 opener takes it as far as its ledger keeps it: arrival here, then the
 relay's counter. A message an earlier release kept here counts as
-arriving at its `received`. The one bound on the stamp is the future. A
+arriving at its `received`, or, if that cannot be written back, when its
+file was last written. The one bound on the stamp is the future. A
 message may be old, since it was stored and forwarded. But one stamped
 more than the request skew (five minutes) past the receiver's clock is
 refused at open as malformed, on the envelope and on the manifest alike.

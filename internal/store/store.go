@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -758,7 +759,8 @@ type Stored struct {
 	// could pin its message atop the inbox within the skew. Save sets it
 	// when it is zero and never after, so a record moved, marked or
 	// rewritten keeps it; a record an earlier release wrote has none, and
-	// Load reads it as Received.
+	// Load reads it as Received, or as the file's time when Received
+	// cannot be written back (arrivedBefore).
 	Arrived    time.Time       `json:"arrived"`
 	Read       bool            `json:"read"`
 	Inner      *envelope.Inner `json:"inner"`
@@ -911,10 +913,16 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	if message.ValidID(id) != nil {
 		return nil, fmt.Errorf("malformed message id %q", id)
 	}
-	data, err := regular.ReadFile(s.msgPath(box, id))
+	path := s.msgPath(box, id)
+	f, err := regular.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("%w %s", errNoMessage, id)
 	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(f)
 	if err != nil {
 		return nil, err
 	}
@@ -927,9 +935,13 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	}
 	// A record from v0.15.0 to v0.17.0 has no arrival of its own; the
 	// relay's received stands in for it, which is the order it was listed
-	// in when it was written.
+	// in when it was written. Those releases kept whatever received a
+	// relay sent, and one outside what this program can write back would
+	// put a time in serve's ledger its save refuses, at every start; for
+	// that record the file's own time stands in, and this machine's clock
+	// if that cannot be written back either.
 	if m.Arrived.IsZero() {
-		m.Arrived = m.Received
+		m.Arrived = s.arrivedBefore(f, path, m.Received)
 	}
 	if m.RelayID < 0 {
 		return nil, fmt.Errorf("the record's relay id %d is negative", m.RelayID)
@@ -1052,10 +1064,12 @@ func validCopies(box Box, m *Stored) error {
 }
 
 // warnedOnce is the paths already warned about in this process — a spool
-// file a box could not read (warnUnreadable) and a directory under
-// relays/ that is not a relay (warnSkippedRelay) — so a command that
-// lists a box or the relays more than once says each once. Keyed by the
-// full path, so the two uses cannot collide.
+// file a box could not read (warnUnreadable), a record whose arrival
+// Load could not take from its received (arrivedBefore, keyed by the
+// path with "#arrived" after it) and a directory under relays/ that is
+// not a relay (warnSkippedRelay) — so a command that lists a box or the
+// relays more than once says each once. Keyed by the full path, so the
+// uses cannot collide.
 var warnedOnce sync.Map
 
 // warnUnreadable says, once per file per command, that a record in a box
@@ -1066,6 +1080,25 @@ func (s *Store) warnUnreadable(box Box, name string, err error) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "warning: %s could not be read (%v) and is not listed\n", path, err)
+}
+
+// arrivedBefore is the arrival Load gives a record an earlier release
+// wrote: its received when that can be written back, otherwise the time
+// the record's file was last written, otherwise now, said once per file
+// per command.
+func (s *Store) arrivedBefore(f *os.File, path string, received time.Time) time.Time {
+	if relayapi.Writable(received) {
+		return received
+	}
+	arrived := time.Now().UTC()
+	if fi, err := f.Stat(); err == nil && relayapi.Writable(fi.ModTime()) {
+		arrived = fi.ModTime().UTC()
+	}
+	if _, already := warnedOnce.LoadOrStore(path+"#arrived", true); !already {
+		fmt.Fprintf(os.Stderr, "warning: %s holds a received time this program cannot write back; it is ordered as arriving at %s\n",
+			path, arrived.Format(time.RFC3339))
+	}
+	return arrived
 }
 
 // List returns every message in a spool directory, oldest first.
