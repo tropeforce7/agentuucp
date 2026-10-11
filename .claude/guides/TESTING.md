@@ -231,7 +231,10 @@ aggregate overflow: assert the refusal came at the insert.
 
 **Time.** `time.Time` compares safely with `Before`, `After` and `Equal`
 over its whole range; `Sub` saturates at the `Duration` limits rather than
-wrapping; `Unix(sec, 0)` takes any `int64`. The hazards are the
+wrapping; `Unix(sec, 0)` takes any `int64`, though not every one is
+where it looks: `Unix(math.MaxInt64, 0)` overflows the shift to year 1
+and lands before 1970, and the latest instant is
+`Unix(math.MaxInt64-62135596800, 999999999)`. The hazards are the
 conversions: a span to a `Duration` (the multiply above), a `Duration` to
 an `int` of seconds, and a stamp from a peer used as an order (the second
 trace's commit 9: a message stamped in the year 9999 was the latest on
@@ -1188,6 +1191,49 @@ exist, and a floor on the count, so that a walk that finds nothing is
 itself the finding. A row's test may be shared: one `TestLimit` over a
 struct's `Validate` can show every integer field of that struct, and one
 over a rule can show every path row that names the rule.
+
+**A time from outside has a row in the ledger, as an integer does.** The
+third trace found no time kind in the ledger, about seventy `time.Time`
+fields in wire and record structs, and their bounds written by hand,
+each differently: a message, a manifest and a vouch refused a stamp from
+the future, and the three owner documents, the allow list, the card and
+the channel directory, took one from any year. The ledger now has a
+fourth kind, `time`: a field of a json-tagged struct of a type that
+holds a time: `time.Time`, a struct embedding one, a type defined over
+it, or a pointer, slice, array or map of these, a map by its key too;
+and every `time.Parse` and `time.ParseInLocation`. A type defined over
+`time.Time` does not decode from a string; it is taken because it holds
+a time. Its row says `<= now + 5m`, the skew, with a test that feeds
+the edge, a second either side, a day and a year ahead, a year past, and
+the earliest and latest instants; `[lo, hi]`; `deadline: <use>`, with
+a test that feeds the earliest instant and one past year 9999 and shows
+no panic and no overflow; `display`; `output`; `local: <why>`; or
+`unbounded:`. Where the wire cannot carry those extremes, the test
+shows the encoder refuses them and feeds the wire's own ends through
+the reader instead. The latest instant is
+`time.Unix(math.MaxInt64-62135596800, 999999999)`, not
+`time.Unix(math.MaxInt64, 0)`, which wraps to before 1970. The ledger's
+header gives the grammar of each, and is the place to read it.
+`display` is held by the walk: it refuses the row when the field, or a
+time derived from it by a `time.Time` method, a dereference or an
+index, is an operand of `Before`, `After`, `Equal`, `Sub` or `Compare`,
+an argument of `time.Since` or `time.Until`, a side of a comparison (a
+pointer, slice or map held against nil excepted), or read in a
+comparator written in the call that sorts, `sort.Slice` and the like,
+or in a `Less` method, anywhere in the tree. That is not every way a
+time can be compared, and the row is read against its field for the
+rest; among them a copy into a local, or into a struct with no row, a
+comparison through `Unix` or `UnixNano`, a defined type converted back,
+a method promoted from an embedded time, a helper of the tree's own
+that compares, a whole struct compared, a comparator held in a variable,
+and a file the build leaves out. `unbounded:` is
+temporary: it marks a stamp from outside that is not yet held, names
+the commit that will hold it, and lasts until the commit that bounds
+those stamps, which takes the form out of the walk. And the decoder
+walk now follows a helper across packages by its name, so a field
+decoded through `wire.Decode` from another package is reached as one
+decoded in place, and `output` on a wire answer means what it says.
+The floor is 542.
 
 **Two bounds on the same value in two encodings are read against each other.**
 `MaxSaid` bounds a relay's refusal sentence at 512 bytes and `MaxReportBytes`

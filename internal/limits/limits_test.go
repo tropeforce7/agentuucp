@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,19 +33,27 @@ import (
 // the program decodes, a site in a file the host's build constraints
 // leave out, a non-test import of internal/testutil, and a count under
 // the floor. A new integer from outside fails this test until its row
-// and its test exist, which is the point. A third kind of site is a cap:
-// a reader bounded by http.MaxBytesReader or io.LimitReader, or a header
-// cap set on an http.Server or an http.Transport. Its row says the bound
+// and its test exist, which is the point. A string cut is a site of its
+// own, held to the rule that fixed its operand's length. A third kind of
+// site is a cap: a reader bounded by http.MaxBytesReader or
+// io.LimitReader, or a header cap set on an http.Server or an
+// http.Transport. Its row says the bound
 // and names the TestLimit test that shows it at the bound and one over.
 // A constant bound is held to the tree. A bound the row names is held to
 // the tree's spelling of it, and may not read a parameter or a local,
 // including a function literal's parameter, unless a named exception says
 // why. A bound the row gives as one of a set must be a parameter, and the
-// set is held to what every caller passes.
+// set is held to what every caller passes. A fourth kind is a time: a
+// field of a type that holds a time in a json-tagged struct, and a
+// time.Parse or time.ParseInLocation. Its row says how far ahead the code
+// takes it, or its window, deadline, display, output, local or, until the
+// commit that bounds it, unbounded; the test refuses a display row on a
+// field it sees compared or ordered, an unbounded row naming another
+// commit than 2 or 3 of PLAN-TIME, and a deadline or bound with no test.
 
-// floor is what the sweep that wrote the ledger found. A walk that finds
-// fewer is not reaching the tree.
-const floor = 297
+// floor is what the walk found when the time kind was added, every kind
+// together. A walk that finds fewer is not reaching the tree.
+const floor = 542
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.
@@ -59,6 +68,31 @@ var flagMethods = map[string]bool{
 // written; a duration's bound carries its unit, and "0 or" in front says
 // zero is a sentinel the range does not otherwise hold.
 var ranges = regexp.MustCompile(`^(0 or )?(\[-?\d+[a-z]*, -?\d+[a-z]*\]|>= -?\d+[a-z]*|> -?\d+[a-z]*|<= -?\d+[a-z]*|< -?\d+[a-z]*|one of -?\d+(, -?\d+)+|open|output)$`)
+
+// timeRanges is every shape a time row's range may take that names no
+// prose: "<= now + 5m", a stamp held to no more than relayapi.MaxSkew
+// ahead of the reader's clock, the one bound a stamp has; "[lo, hi]", a
+// window with both edges, named as the code names them; "display", shown
+// and never compared or ordered, which the walk holds by the field's uses
+// as far as compared says it can see them; and "output", as for an
+// integer. The rest take a reason after a colon: "local: <why>", this
+// program's own clock or its user's input read back, or a value a check
+// already held; "deadline: <its use>", a time that names a moment to
+// come, compared with now, with the other edge of its own window or with
+// an earlier copy of itself, or for the earliest to show, never ordered
+// across records, and written to a file only as a record of it, whose
+// test feeds the extremes; and "unbounded: PLAN-TIME commit N", a stamp
+// the plan bounds in a later commit, which names no test and lasts until
+// then.
+var timeRanges = regexp.MustCompile(`^(<= now \+ 5m|\[[A-Za-z_.]+, [A-Za-z_.]+\]|display|output)$`)
+
+// unboundedRange is the one form an unbounded time row may take: the
+// commit of PLAN-TIME that bounds it, and no other.
+var unboundedRange = regexp.MustCompile(`^unbounded: PLAN-TIME commit [23]$`)
+
+// timeOperators are the time.Time methods that compare or order: a
+// display field is an operand of none of them.
+var timeOperators = map[string]bool{"Before": true, "After": true, "Equal": true, "Sub": true, "Compare": true}
 
 // capRanges is every shape a cap row's bound may take: "<= n" for one
 // bound, or "one of a, b" where the site's bound is a parameter and the
@@ -81,11 +115,11 @@ var capFields = map[string]bool{"MaxHeaderBytes": true, "MaxResponseHeaderBytes"
 // test.
 var localRule = regexp.MustCompile(`^local: ([A-Za-z_][A-Za-z0-9_.]*) at (\S.*)$`)
 
-// site is one place a value from outside enters: an integer, or a string
-// cut by a slice expression.
+// site is one place a value from outside enters: an integer, a time, or
+// a string cut by a slice expression.
 type site struct {
 	key      string // <file> <enclosing> <kind> <as written>
-	kind     string // int, string or cap
+	kind     string // int, time, string or cap
 	pos      token.Position
 	typeName string // for a field, the struct's type by full path; "" otherwise
 	bound    int64  // for a cap whose bound is a constant, its value
@@ -643,6 +677,425 @@ func ask(b []byte) (Answer, error) {
 	}
 }
 
+// TestALedgerFindsATimeWithNoRow plants, in a json-tagged struct, a time
+// field, a pointer to one, an untagged unexported one, a slice and an
+// array of times, a map with times for values and one with times for
+// keys, an embedded time.Time, a field of a type defined over time.Time,
+// of a named slice of times and of a named pointer to one, one of a
+// struct embedding a time and one of a struct embedding a pointer to it,
+// with a time.Parse and a time.ParseInLocation, and asserts the fifteen
+// sentences; a time field of a
+// struct with no json tag is not a site, and neither is a field of a
+// struct with no time inside.
+func TestALedgerFindsATimeWithNoRow(t *testing.T) {
+	root := plantFiles(t, map[string]string{"internal/planted/planted.go": `package planted
+
+import "time"
+
+type Stamp time.Time
+
+type Wrapped struct{ time.Time }
+
+type WrappedPtr struct{ *time.Time }
+
+type Stamps []time.Time
+
+type StampPtr *time.Time
+
+type Named struct{ S string }
+
+type Record struct {
+	At    time.Time            'json:"at"'
+	Until *time.Time           'json:"until"'
+	seen  time.Time
+	List  []time.Time          'json:"list"'
+	ByKey map[string]time.Time 'json:"by_key"'
+	time.Time
+	Mark  Stamp   'json:"mark"'
+	Wrap  Wrapped 'json:"wrap"'
+	WrapP WrappedPtr 'json:"wrap_p"'
+	Keys  map[time.Time]string 'json:"keys"'
+	Many  Stamps 'json:"many"'
+	Ptr   StampPtr 'json:"ptr"'
+	Arr   [2]time.Time 'json:"arr"'
+	Name  Named   'json:"name"'
+}
+
+type Plain struct {
+	When time.Time
+}
+
+func parse(s string) (time.Time, error) { return time.Parse(time.RFC3339, s) }
+
+func parseIn(s string) (time.Time, error) { return time.ParseInLocation(time.RFC3339, s, time.UTC) }
+`})
+	problems, sites := check(t, root, "")
+	if len(sites) != 15 {
+		t.Fatalf("found %d sites, want 15: %+v", len(sites), sites)
+	}
+	for _, s := range sites {
+		if strings.Contains(s.key, "Plain") {
+			t.Fatalf("a time field of a struct with no json tag is a site: %s", s.key)
+		}
+		if strings.HasSuffix(s.key, " Name") {
+			t.Fatalf("a field of a struct with no time inside is a site: %s", s.key)
+		}
+	}
+	const noRow = " has no row in ledger.txt; add one saying how far ahead the code takes it, <= now + 5m, or its window, with the TestLimit test that shows it, or a deadline with its use and its test, or display, output or local: with why"
+	want := []string{
+		"internal/planted/planted.go Record time Arr" + noRow,
+		"internal/planted/planted.go Record time At" + noRow,
+		"internal/planted/planted.go Record time ByKey" + noRow,
+		"internal/planted/planted.go Record time Keys" + noRow,
+		"internal/planted/planted.go Record time List" + noRow,
+		"internal/planted/planted.go Record time Many" + noRow,
+		"internal/planted/planted.go Record time Mark" + noRow,
+		"internal/planted/planted.go Record time Ptr" + noRow,
+		"internal/planted/planted.go Record time Time" + noRow,
+		"internal/planted/planted.go Record time Until" + noRow,
+		"internal/planted/planted.go Record time Wrap" + noRow,
+		"internal/planted/planted.go Record time WrapP" + noRow,
+		"internal/planted/planted.go Record time seen" + noRow,
+		"internal/planted/planted.go parse time time.Parse(s)" + noRow,
+		"internal/planted/planted.go parseIn time time.ParseInLocation(s)" + noRow,
+	}
+	if strings.Join(problems, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("problems:\n%s\nwant:\n%s", strings.Join(problems, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// TestALedgerHoldsATimeRowToItsField plants a struct of time fields and
+// a row for each. A display row is refused, by name and with the place,
+// on a field that is an operand of Before, either side of After, a side
+// of ==, read in a comparator handed to sort.Slice or slices.SortFunc or
+// in a Less method, or compared in another package; and on one compared
+// through what still holds the same time: a method answering a time,
+// x.F.UTC() or x.F.Add(d), parentheses, a dereference on either side of
+// Before or ==, an element of a slice, and time.Since or time.Until. It
+// is refused too when it names a test, and taken on a pointer only held
+// against nil, on a field only shown, and on one read only in a function
+// handed to slices.ContainsFunc or slices.IndexFunc, which order nothing.
+// Sub is counted with either side the field, Compare with the field its
+// receiver, and comparators handed to sort.SliceStable and slices.MinFunc
+// as well; a display row on a time.Parse, which is no field, is refused. An unbounded row is refused for a commit other
+// than 2 or 3 and for naming a test, and taken for commit 3 with none. A
+// deadline with no "shown by" is refused by the reading of the ledger,
+// and one with no reason as a range of no known shape, as is <= now + 1h;
+// a <= now + 5m row naming a test that is not TestLimit is refused, and
+// an output row on a time of a decoded struct. A bound, a window, a
+// deadline with its reason and its test, local: and output on a struct
+// nothing decodes draw no sentence.
+func TestALedgerHoldsATimeRowToItsField(t *testing.T) {
+	root := plantFiles(t, map[string]string{
+		"internal/planted/planted.go": `package planted
+
+import (
+	"encoding/json"
+	"slices"
+	"sort"
+	"time"
+)
+
+type Event struct {
+	A time.Time  'json:"a"'
+	B time.Time  'json:"b"'
+	C time.Time  'json:"c"'
+	D time.Time  'json:"d"'
+	E time.Time  'json:"e"'
+	F time.Time  'json:"f"'
+	G *time.Time 'json:"g"'
+	H time.Time  'json:"h"'
+	I time.Time  'json:"i"'
+	J time.Time  'json:"j"'
+	K time.Time  'json:"k"'
+	L time.Time  'json:"l"'
+	M time.Time  'json:"m"'
+	N time.Time  'json:"n"'
+	O time.Time  'json:"o"'
+	P time.Time  'json:"p"'
+	Q time.Time  'json:"q"'
+	R time.Time  'json:"r"'
+	S time.Time  'json:"s"'
+	T time.Time  'json:"t"'
+}
+
+type Wire struct {
+	At time.Time 'json:"at"'
+}
+
+type Shown struct {
+	When time.Time 'json:"when"'
+}
+
+type Out struct {
+	Sent time.Time 'json:"sent"'
+}
+
+func read(b []byte) (Wire, error) {
+	var w Wire
+	err := json.Unmarshal(b, &w)
+	return w, err
+}
+
+func before(x Event, y time.Time) bool { return x.A.Before(y) }
+
+func after(x Event, y time.Time) bool { return y.After(x.B) }
+
+func same(x, y Event) bool { return x.C == y.C }
+
+func bySort(es []Event) {
+	sort.Slice(es, func(i, j int) bool { return es[i].D.Unix() < es[j].D.Unix() })
+}
+
+func bySlices(es []Event) {
+	slices.SortFunc(es, func(a, b Event) int { return int(a.E.Unix() - b.E.Unix()) })
+}
+
+type byF []Event
+
+func (s byF) Less(i, j int) bool { return s[i].F.Unix() < s[j].F.Unix() }
+
+func present(x Event) bool { return x.G != nil }
+
+func show(x Event, s Shown) string { return x.I.String() + s.When.String() }
+
+type More struct {
+	U  time.Time   'json:"u"'
+	V  time.Time   'json:"v"'
+	W  time.Time   'json:"w"'
+	X  *time.Time  'json:"x"'
+	Y  *time.Time  'json:"y"'
+	Z  []time.Time 'json:"z"'
+	AA time.Time   'json:"aa"'
+	AB time.Time   'json:"ab"'
+	AC time.Time   'json:"ac"'
+	AD time.Time   'json:"ad"'
+}
+
+func utc(x More, y time.Time) bool { return x.U.UTC().Before(y) }
+
+func added(x More, d time.Duration) bool { return x.V.Add(d).After(time.Now()) }
+
+func paren(x More, y time.Time) bool { return (x.W).Equal(y) }
+
+func deref(x More, y time.Time) bool { return y.Before(*x.X) }
+
+func derefEq(x More, y time.Time) bool { return *x.Y == y }
+
+func index(x More, y time.Time) bool { return x.Z[0].Before(y) }
+
+func since(x More) time.Duration { return time.Since(x.AA) }
+
+func until(x More) time.Duration { return time.Until(x.AB) }
+
+func contains(ms []More) bool {
+	return slices.ContainsFunc(ms, func(m More) bool { return m.AC.String() != "" })
+}
+
+func find(ms []More) int {
+	return slices.IndexFunc(ms, func(m More) bool { return m.AD.String() != "" })
+}
+
+type Most struct {
+	F time.Time 'json:"f"'
+	G time.Time 'json:"g"'
+	H time.Time 'json:"h"'
+	K time.Time 'json:"k"'
+	N time.Time 'json:"n"'
+}
+
+func sub(x Most, y time.Time) time.Duration { return x.F.Sub(y) }
+
+func subArg(x Most, y time.Time) time.Duration { return y.Sub(x.G) }
+
+func cmp(x Most, y time.Time) int { return x.H.Compare(y) }
+
+func stable(ms []Most) {
+	sort.SliceStable(ms, func(i, j int) bool { return ms[i].K.Unix() < ms[j].K.Unix() })
+}
+
+func least(ms []Most) Most {
+	return slices.MinFunc(ms, func(a, b Most) int { return int(a.N.Unix() - b.N.Unix()) })
+}
+
+func parsed(s string) (time.Time, error) { return time.Parse(time.RFC3339, s) }
+`,
+		"internal/planted/planted_test.go": `package planted
+
+import "testing"
+
+func TestLimitStamp(t *testing.T) {}
+func TestStamp(t *testing.T)      {}
+`,
+		"internal/other/other.go": `package other
+
+import (
+	"time"
+
+	"planted/internal/planted"
+)
+
+func Late(e planted.Event, t time.Time) bool { return e.H.After(t) }
+`,
+	})
+	const ev = "internal/planted/planted.go Event time "
+	const mo = "internal/planted/planted.go More time "
+	const ms = "internal/planted/planted.go Most time "
+	ledger := strings.Join([]string{
+		ev + "A = display",
+		ev + "B = display",
+		ev + "C = display",
+		ev + "D = display",
+		ev + "E = display",
+		ev + "F = display",
+		ev + "G = display",
+		ev + "H = display",
+		ev + "I = display shown by TestLimitStamp",
+		ev + "J = unbounded: PLAN-TIME commit 4",
+		ev + "K = unbounded: PLAN-TIME commit 2 shown by TestLimitStamp",
+		ev + "L = unbounded: PLAN-TIME commit 3",
+		ev + "M = deadline: the next retry",
+		ev + "N = deadline: shown by TestLimitStamp",
+		ev + "O = <= now + 5m shown by TestStamp",
+		ev + "P = <= now + 1h shown by TestLimitStamp",
+		"internal/planted/planted.go Wire time At = output",
+		ev + "Q = <= now + 5m shown by TestLimitStamp",
+		ev + "R = [not_before, not_after] shown by TestLimitStamp",
+		ev + "S = deadline: when the lease ends shown by TestLimitStamp",
+		ev + "T = local: this program's own file",
+		"internal/planted/planted.go Shown time When = display",
+		"internal/planted/planted.go Out time Sent = output",
+		mo + "U = display",
+		mo + "V = display",
+		mo + "W = display",
+		mo + "X = display",
+		mo + "Y = display",
+		mo + "Z = display",
+		mo + "AA = display",
+		mo + "AB = display",
+		mo + "AC = display",
+		mo + "AD = display",
+		ms + "F = display",
+		ms + "G = display",
+		ms + "H = display",
+		ms + "K = display",
+		ms + "N = display",
+		"internal/planted/planted.go parsed time time.Parse(s) = display",
+	}, "\n")
+	problems, _ := check(t, root, ledger)
+	const fix = "; give the row a bound and a test"
+	const shapes = ", which is not <= now + 5m, [lo, hi], display, output, local:, deadline: or unbounded: with its reason"
+	want := []string{
+		"ledger.txt:13: " + ev + "M has no \"shown by\"",
+		"ledger.txt:1: " + ev + "A says display, but the field is compared or ordered at internal/planted/planted.go:51 (Before)" + fix,
+		"ledger.txt:2: " + ev + "B says display, but the field is compared or ordered at internal/planted/planted.go:53 (After)" + fix,
+		"ledger.txt:3: " + ev + "C says display, but the field is compared or ordered at internal/planted/planted.go:55 (==)" + fix,
+		"ledger.txt:4: " + ev + "D says display, but the field is compared or ordered at internal/planted/planted.go:58 (a comparator handed to sort.Slice)" + fix,
+		"ledger.txt:5: " + ev + "E says display, but the field is compared or ordered at internal/planted/planted.go:62 (a comparator handed to slices.SortFunc)" + fix,
+		"ledger.txt:6: " + ev + "F says display, but the field is compared or ordered at internal/planted/planted.go:67 (a Less method)" + fix,
+		"ledger.txt:8: " + ev + "H says display, but the field is compared or ordered at internal/other/other.go:9 (After)" + fix,
+		"ledger.txt:9: " + ev + "I says display and names a test; a field that is only shown has none",
+		"ledger.txt:10: " + ev + "J says \"unbounded: PLAN-TIME commit 4\"; a stamp left unbounded names the commit of PLAN-TIME that bounds it, 2 or 3, and no other",
+		"ledger.txt:11: " + ev + "K is unbounded and names a test; it names one when its commit bounds it",
+		"ledger.txt:14: " + ev + "N has the range \"deadline:\"" + shapes,
+		"ledger.txt:15: " + ev + "O names TestStamp, which does not start with TestLimit",
+		"ledger.txt:16: " + ev + "P has the range \"<= now + 1h\"" + shapes,
+		"ledger.txt:17: internal/planted/planted.go Wire time At says output, but planted.Wire is decoded: it is reached from json.Unmarshal at internal/planted/planted.go read; give the row a range and a test",
+		"ledger.txt:24: " + mo + "U says display, but the field is compared or ordered at internal/planted/planted.go:86 (Before)" + fix,
+		"ledger.txt:25: " + mo + "V says display, but the field is compared or ordered at internal/planted/planted.go:88 (After)" + fix,
+		"ledger.txt:26: " + mo + "W says display, but the field is compared or ordered at internal/planted/planted.go:90 (Equal)" + fix,
+		"ledger.txt:27: " + mo + "X says display, but the field is compared or ordered at internal/planted/planted.go:92 (Before)" + fix,
+		"ledger.txt:28: " + mo + "Y says display, but the field is compared or ordered at internal/planted/planted.go:94 (==)" + fix,
+		"ledger.txt:29: " + mo + "Z says display, but the field is compared or ordered at internal/planted/planted.go:96 (Before)" + fix,
+		"ledger.txt:30: " + mo + "AA says display, but the field is compared or ordered at internal/planted/planted.go:98 (time.Since)" + fix,
+		"ledger.txt:31: " + mo + "AB says display, but the field is compared or ordered at internal/planted/planted.go:100 (time.Until)" + fix,
+		"ledger.txt:34: " + ms + "F says display, but the field is compared or ordered at internal/planted/planted.go:118 (Sub)" + fix,
+		"ledger.txt:35: " + ms + "G says display, but the field is compared or ordered at internal/planted/planted.go:120 (Sub)" + fix,
+		"ledger.txt:36: " + ms + "H says display, but the field is compared or ordered at internal/planted/planted.go:122 (Compare)" + fix,
+		"ledger.txt:37: " + ms + "K says display, but the field is compared or ordered at internal/planted/planted.go:125 (a comparator handed to sort.SliceStable)" + fix,
+		"ledger.txt:38: " + ms + "N says display, but the field is compared or ordered at internal/planted/planted.go:129 (a comparator handed to slices.MinFunc)" + fix,
+		"ledger.txt:39: internal/planted/planted.go parsed time time.Parse(s) says display, but only a struct's field can be display",
+		ev + "M has no row in ledger.txt; add one saying how far ahead the code takes it, <= now + 5m, or its window, with the TestLimit test that shows it, or a deadline with its use and its test, or display, output or local: with why",
+	}
+	if strings.Join(problems, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("problems:\n%s\nwant:\n%s", strings.Join(problems, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// TestADecodeTargetIsFollowedAcrossPackages plants a decode helper in one
+// package, codec.Decode, which hands its any parameter to a Decoder, a
+// helper in a second, fetch.Get, which hands its own to codec.Decode, and
+// two structs in a third, one passed to each. Every field of both, an
+// integer and a time, counts as decoded, the sentence naming the route.
+func TestADecodeTargetIsFollowedAcrossPackages(t *testing.T) {
+	root := plantFiles(t, map[string]string{
+		"internal/codec/codec.go": `package codec
+
+import (
+	"bytes"
+	"encoding/json"
+)
+
+func Decode(data []byte, v any) error { return json.NewDecoder(bytes.NewReader(data)).Decode(v) }
+`,
+		"internal/fetch/fetch.go": `package fetch
+
+import "planted/internal/codec"
+
+func Get(b []byte, out any) error { return codec.Decode(b, out) }
+`,
+		"internal/answer/answer.go": `package answer
+
+import (
+	"time"
+
+	"planted/internal/codec"
+	"planted/internal/fetch"
+)
+
+type Answer struct {
+	N  int       'json:"n"'
+	At time.Time 'json:"at"'
+}
+
+type Later struct {
+	N  int       'json:"n"'
+	At time.Time 'json:"at"'
+}
+
+func ask(b []byte) (Answer, error) {
+	var s Answer
+	err := codec.Decode(b, &s)
+	return s, err
+}
+
+func later(b []byte) (Later, error) {
+	var l Later
+	err := fetch.Get(b, &l)
+	return l, err
+}
+`,
+	})
+	ledger := strings.Join([]string{
+		"internal/answer/answer.go Answer int N int = output",
+		"internal/answer/answer.go Answer time At = output",
+		"internal/answer/answer.go Later int N int = output",
+		"internal/answer/answer.go Later time At = output",
+	}, "\n")
+	problems, _ := check(t, root, ledger)
+	const once = "Decoder.Decode at internal/codec/codec.go Decode through the any parameter of Decode"
+	const fix = "; give the row a range and a test"
+	want := []string{
+		"ledger.txt:1: internal/answer/answer.go Answer int N int says output, but answer.Answer is decoded: it is reached from " + once + fix,
+		"ledger.txt:2: internal/answer/answer.go Answer time At says output, but answer.Answer is decoded: it is reached from " + once + fix,
+		"ledger.txt:3: internal/answer/answer.go Later int N int says output, but answer.Later is decoded: it is reached from " + once + " through the any parameter of Get" + fix,
+		"ledger.txt:4: internal/answer/answer.go Later time At says output, but answer.Later is decoded: it is reached from " + once + " through the any parameter of Get" + fix,
+	}
+	if strings.Join(problems, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("problems:\n%s\nwant:\n%s", strings.Join(problems, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 // capBound is how the table of bounds reads one method whose call a
 // caller passes as a cap's bound. The body is the method's one return of
 // one expression, held to the tree as written. It must be a setting plus
@@ -707,7 +1160,9 @@ func checkWith(t *testing.T, root, ledger string, bounds map[string]capBound, se
 	tree := load(t, root)
 	sites = tree.sites()
 	decoded := tree.decoded()
+	compared := tree.compared()
 	tests := tree.limitTests()
+	unbounded := 0
 
 	byKey := map[string]site{}
 	for _, s := range sites {
@@ -823,6 +1278,42 @@ func checkWith(t *testing.T, root, ledger string, bounds map[string]capBound, se
 					}
 				}
 			}
+		} else if s.kind == "time" {
+			// A time row is a bound with its test, a window with its
+			// test, a deadline with its use and its test, a field shown
+			// and never compared, output, this program's own clock, or a
+			// stamp a later commit of the plan bounds.
+			reason := func(prefix string) bool {
+				return strings.HasPrefix(r.rng, prefix) && strings.TrimSpace(strings.TrimPrefix(r.rng, prefix)) != ""
+			}
+			switch {
+			case r.rng == "display":
+				if s.typeName == "" {
+					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says display, but only a struct's field can be display", r.line, r.key))
+				} else if where := compared[s.pos.String()]; len(where) > 0 {
+					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says display, but the field is compared or ordered at %s; give the row a bound and a test", r.line, r.key, strings.Join(where, ", ")))
+				} else if r.test != "" {
+					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says display and names a test; a field that is only shown has none", r.line, r.key))
+				}
+				continue
+			case r.rng == "output":
+			case reason("local:"):
+				if r.test == "" {
+					continue
+				}
+			case reason("unbounded:"):
+				if !unboundedRange.MatchString(r.rng) {
+					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says %q; a stamp left unbounded names the commit of PLAN-TIME that bounds it, 2 or 3, and no other", r.line, r.key, r.rng))
+				} else if r.test != "" {
+					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s is unbounded and names a test; it names one when its commit bounds it", r.line, r.key))
+				}
+				unbounded++
+				continue
+			case reason("deadline:"), timeRanges.MatchString(r.rng):
+			default:
+				problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s has the range %q, which is not <= now + 5m, [lo, hi], display, output, local:, deadline: or unbounded: with its reason", r.line, r.key, r.rng))
+				continue
+			}
 		} else if !ranges.MatchString(r.rng) {
 			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s has the range %q, which is not [lo, hi], >= n, > n, <= n, < n, one of a, b, open or output, with 0 or in front where zero is a sentinel", r.line, r.key, r.rng))
 			continue
@@ -847,6 +1338,9 @@ func checkWith(t *testing.T, root, ledger string, bounds map[string]capBound, se
 			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s names %s, which %d packages declare; give it a name of its own", r.line, r.key, r.test, n))
 		}
 	}
+	if unbounded > 0 {
+		t.Logf("%d time rows are unbounded until the commit of PLAN-TIME that bounds them", unbounded)
+	}
 	sort.Slice(sites, func(i, j int) bool { return sites[i].key < sites[j].key })
 	for _, s := range sites {
 		if seen[s.key] {
@@ -858,6 +1352,10 @@ func checkWith(t *testing.T, root, ledger string, bounds map[string]capBound, se
 		}
 		if s.kind == "cap" {
 			problems = append(problems, fmt.Sprintf("%s has no row in ledger.txt; add one saying the bound it reads under, as <= n, and the TestLimit test that shows it at the bound and one over, or the program's own arithmetic as local:", s.key))
+			continue
+		}
+		if s.kind == "time" {
+			problems = append(problems, fmt.Sprintf("%s has no row in ledger.txt; add one saying how far ahead the code takes it, <= now + 5m, or its window, with the TestLimit test that shows it, or a deadline with its use and its test, or display, output or local: with why", s.key))
 			continue
 		}
 		problems = append(problems, fmt.Sprintf("%s has no row in ledger.txt; add one saying the range the code holds it to, or open, and the TestLimit test that shows it", s.key))
@@ -1506,6 +2004,7 @@ func (tr *tree) leftOut(path, rel string) {
 		case *ast.CallExpr:
 			s := types.ExprString(x.Fun)
 			if strings.HasPrefix(s, "strconv.Atoi") || strings.HasPrefix(s, "strconv.Parse") || strings.HasPrefix(s, "binary.") || strings.HasPrefix(s, "flag.") ||
+				s == "time.Parse" || s == "time.ParseInLocation" ||
 				s == "http.MaxBytesReader" || s == "io.LimitReader" {
 				tr.problems = append(tr.problems, fmt.Sprintf("%s calls %s, and the host's build constraints leave the file out; the walk does not see it", rel, s))
 			}
@@ -1528,7 +2027,9 @@ func (tr *tree) leftOut(path, rel string) {
 // type in a struct with a json tag, wherever the struct is declared (at
 // package level, inside a function, or as a literal's anonymous type), a
 // strconv.Atoi or Parse*, a binary.*.Uint* read, and an integer or
-// duration flag on a FlagSet.
+// duration flag on a FlagSet; every time from outside, a field in such a
+// struct, tagged or not, of a type that holds a time (see timeType), and a time.Parse or time.ParseInLocation; and the string
+// cuts and caps.
 func (tr *tree) sites() []site {
 	var out []site
 	for _, p := range tr.pkgs {
@@ -1568,6 +2069,24 @@ func (tr *tree) sites() []site {
 						}
 					}
 					for _, fl := range x.Fields.List {
+						// A type that holds a time, alone or in a pointer, a
+						// slice, an array or a map (see timeType).
+						if timeType(p.info.TypeOf(fl.Type)) {
+							names := fl.Names
+							if len(names) == 0 {
+								// An embedded time is the field its type names.
+								names = []*ast.Ident{embeddedName(fl.Type)}
+							}
+							for _, name := range names {
+								out = append(out, site{
+									key:      fmt.Sprintf("%s %s time %s", rel, enclosing, name.Name),
+									kind:     "time",
+									pos:      tr.fset.Position(name.Pos()),
+									typeName: typeName,
+								})
+							}
+							continue
+						}
 						// An integer field, a pointer to one, or a map or slice
 						// whose values are integers, which the decoder fills
 						// with numbers all the same.
@@ -1592,6 +2111,17 @@ func (tr *tree) sites() []site {
 						out = append(out, site{
 							key:  fmt.Sprintf("%s %s int %s", rel, enclosing, text),
 							kind: "int",
+							pos:  tr.fset.Position(x.Pos()),
+						})
+					}
+					if text, is := timeCall(p, x); is {
+						enclosing := "a package-level declaration"
+						if fd := enclosingFunc(stack); fd != nil {
+							enclosing = funcName(fd)
+						}
+						out = append(out, site{
+							key:  fmt.Sprintf("%s %s time %s", rel, enclosing, text),
+							kind: "time",
 							pos:  tr.fset.Position(x.Pos()),
 						})
 					}
@@ -1824,11 +2354,13 @@ func (tr *tree) capSite(p *pkg, rel string, stack []ast.Node, pos token.Pos, tex
 // json.Unmarshal or Decoder.Decode, and every type reachable from one
 // through fields, slices, arrays, maps and pointers; the value says how.
 func (tr *tree) decoded() map[string]string {
-	// A decoding parameter: a function object and the index of a
-	// parameter that reaches a decoder. Found to a fixpoint, since a
-	// helper may call a helper.
+	// A decoding parameter: a function, by its full name, and the index
+	// of a parameter that reaches a decoder. Found to a fixpoint, since a
+	// helper may call a helper. The name and not the object, since each
+	// package is checked on its own and a helper seen from another
+	// package, wire.Decode from everywhere, is another object for it.
 	type param struct {
-		fn    *types.Func
+		fn    string
 		index int
 	}
 	reaches := map[param]string{}
@@ -1846,7 +2378,7 @@ func (tr *tree) decoded() map[string]string {
 					sig := fn.Type().(*types.Signature)
 					for i := 0; i < sig.Params().Len(); i++ {
 						if sig.Params().At(i) == v && types.IsInterface(v.Type()) {
-							reaches[param{fn, i}] = why
+							reaches[param{fn.FullName(), i}] = why
 							return
 						}
 					}
@@ -1914,7 +2446,7 @@ func (tr *tree) decoded() map[string]string {
 							return true
 						}
 						for pr, why := range reaches {
-							if pr.fn != callee || pr.index >= len(call.Args) {
+							if pr.fn != callee.FullName() || pr.index >= len(call.Args) {
 								continue
 							}
 							arg := call.Args[pr.index]
@@ -1925,8 +2457,8 @@ func (tr *tree) decoded() map[string]string {
 										sig := fn.Type().(*types.Signature)
 										for i := 0; i < sig.Params().Len(); i++ {
 											if sig.Params().At(i) == v && types.IsInterface(v.Type()) {
-												if _, known := reaches[param{fn, i}]; !known {
-													reaches[param{fn, i}] = through
+												if _, known := reaches[param{fn.FullName(), i}]; !known {
+													reaches[param{fn.FullName(), i}] = through
 													changed = true
 												}
 												return true
@@ -1960,6 +2492,188 @@ func (tr *tree) decoded() map[string]string {
 		reach(tg.typ, tg.why, out, map[string]bool{})
 	}
 	return out
+}
+
+// compared is every time field that is compared or ordered somewhere in
+// the tree, by the position of its declaration, with where; comparedAs
+// says what counts and what it cannot see. A field is known by where it
+// is declared, since each package is checked on its own and the same
+// field seen from another package is another object.
+func (tr *tree) compared() map[string][]string {
+	out := map[string][]string{}
+	for _, p := range tr.pkgs {
+		for _, f := range p.files {
+			var stack []ast.Node
+			ast.Inspect(f, func(n ast.Node) bool {
+				if n == nil {
+					stack = stack[:len(stack)-1]
+					return true
+				}
+				stack = append(stack, n)
+				sel, ok := n.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				sn := p.info.Selections[sel]
+				if sn == nil || sn.Kind() != types.FieldVal || !timeType(sn.Obj().Type()) {
+					return true
+				}
+				if how := comparedAs(p, stack); how != "" {
+					decl := tr.fset.Position(sn.Obj().Pos()).String()
+					at := tr.fset.Position(sel.Pos())
+					where := fmt.Sprintf("%s:%d (%s)", filepath.ToSlash(mustRel(tr.root, at.Filename)), at.Line, how)
+					if !slices.Contains(out[decl], where) {
+						out[decl] = append(out[decl], where)
+					}
+				}
+				return true
+			})
+		}
+	}
+	return out
+}
+
+// comparedAs says how the selector at the top of the stack is compared,
+// or "" when it is not. The selector is followed up through what still
+// holds the same time: parentheses, a pointer's dereference, an index
+// into a slice or map of times, and a method of time.Time that answers
+// another time (x.F.UTC(), x.F.Add(d)); the comparison is then sought
+// where that ends. This is not every way a time can be compared, and a
+// display row is read against its field for the rest; among them, a copy
+// into a local or into a struct with no row, a comparison through Unix or
+// UnixNano, a defined type converted back to time.Time, a method promoted
+// from an embedded time, a whole struct compared, reflect.DeepEqual, a
+// comparator not written in the call that sorts, and a helper of the
+// tree's own that compares a time it is handed.
+func comparedAs(p *pkg, stack []ast.Node) string {
+	i := len(stack) - 1
+	cur := stack[i].(ast.Expr)
+	for i >= 1 {
+		switch parent := stack[i-1].(type) {
+		case *ast.ParenExpr, *ast.StarExpr:
+			cur, i = parent.(ast.Expr), i-1
+			continue
+		case *ast.IndexExpr:
+			if parent.X == cur {
+				cur, i = parent, i-1
+				continue
+			}
+		case *ast.SelectorExpr:
+			// A method of time.Time that answers a time, called.
+			if parent.X == cur && i >= 2 && !timeOperators[parent.Sel.Name] {
+				if call, ok := stack[i-2].(*ast.CallExpr); ok && call.Fun == parent && timeType(p.info.TypeOf(call)) && timeType(p.info.TypeOf(cur)) {
+					cur, i = call, i-2
+					continue
+				}
+			}
+		}
+		break
+	}
+	if i >= 1 {
+		switch parent := stack[i-1].(type) {
+		case *ast.SelectorExpr:
+			// x.F.Before(y)
+			if parent.X == cur && timeOperators[parent.Sel.Name] {
+				return parent.Sel.Name
+			}
+		case *ast.CallExpr:
+			for _, a := range parent.Args {
+				if a != cur {
+					continue
+				}
+				// y.Before(x.F)
+				if fun, ok := parent.Fun.(*ast.SelectorExpr); ok && timeOperators[fun.Sel.Name] && timeType(p.info.TypeOf(fun.X)) {
+					return fun.Sel.Name
+				}
+				// time.Since(x.F), time.Until(x.F)
+				if fn := calleeFunc(p, parent); fn != nil && fn.Pkg() != nil && fn.Pkg().Path() == "time" && (fn.Name() == "Since" || fn.Name() == "Until") {
+					return "time." + fn.Name()
+				}
+			}
+		case *ast.BinaryExpr:
+			// A time compared as a value; a pointer, slice or map of
+			// them held against nil asks only whether it is there.
+			switch types.Unalias(p.info.TypeOf(cur)).Underlying().(type) {
+			case *types.Pointer, *types.Slice, *types.Map:
+				return ""
+			}
+			switch parent.Op {
+			case token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ:
+				return parent.Op.String()
+			}
+		}
+	}
+	for k := len(stack) - 2; k >= 0; k-- {
+		switch x := stack[k].(type) {
+		case *ast.FuncLit:
+			if k == 0 {
+				continue
+			}
+			call, ok := stack[k-1].(*ast.CallExpr)
+			if !ok {
+				continue
+			}
+			if fn := calleeFunc(p, call); fn != nil && fn.Pkg() != nil && orderingFuncs[fn.Pkg().Path()+"."+fn.Name()] {
+				return "a comparator handed to " + fn.Pkg().Name() + "." + fn.Name()
+			}
+		case *ast.FuncDecl:
+			if x.Recv != nil && x.Name.Name == "Less" {
+				return "a Less method"
+			}
+			return ""
+		}
+	}
+	return ""
+}
+
+// embeddedName is the identifier an embedded field is known by: the type's
+// own name, through a pointer and a package.
+func embeddedName(e ast.Expr) *ast.Ident {
+	switch x := e.(type) {
+	case *ast.StarExpr:
+		return embeddedName(x.X)
+	case *ast.SelectorExpr:
+		return x.Sel
+	case *ast.IndexExpr:
+		return embeddedName(x.X)
+	case *ast.Ident:
+		return x
+	}
+	return ast.NewIdent(types.ExprString(e))
+}
+
+// orderingFuncs are the functions of sort and slices whose function
+// argument orders: a time read there orders something.
+var orderingFuncs = map[string]bool{
+	"sort.Slice": true, "sort.SliceStable": true, "sort.SliceIsSorted": true, "sort.Search": true,
+	"slices.SortFunc": true, "slices.SortStableFunc": true, "slices.IsSortedFunc": true,
+	"slices.MinFunc": true, "slices.MaxFunc": true, "slices.BinarySearchFunc": true, "slices.CompareFunc": true,
+}
+
+// calleeFunc is the function a call names, or nil.
+func calleeFunc(p *pkg, call *ast.CallExpr) *types.Func {
+	var id *ast.Ident
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		id = fun
+	case *ast.SelectorExpr:
+		id = fun.Sel
+	case *ast.IndexExpr:
+		// slices.SortFunc[...] written with its instance
+		if s, ok := fun.X.(*ast.SelectorExpr); ok {
+			id = s.Sel
+		}
+	case *ast.IndexListExpr:
+		// and with more than one type argument
+		if s, ok := fun.X.(*ast.SelectorExpr); ok {
+			id = s.Sel
+		}
+	}
+	if id == nil {
+		return nil
+	}
+	fn, _ := p.info.Uses[id].(*types.Func)
+	return fn
 }
 
 // reach adds every named type reachable from t.
@@ -2051,7 +2765,9 @@ func parseLedger(ledger string) (rows []row, problems []string) {
 			continue
 		}
 		rng, test, has := strings.Cut(rest, " shown by ")
-		if !has && rng != "output" && !strings.HasPrefix(rng, "local:") {
+		// output, local:, a time shown and never compared, and a time a
+		// later commit bounds name no test; every other row names one.
+		if !has && rng != "output" && rng != "display" && !strings.HasPrefix(rng, "local:") && !strings.HasPrefix(rng, "unbounded:") {
 			problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s has no \"shown by\"", n, key))
 			continue
 		}
@@ -2083,6 +2799,82 @@ func integerType(t types.Type) bool {
 		return b.Info()&types.IsInteger != 0
 	}
 	return typeKey(t) == "time.Duration"
+}
+
+// timeType is a type that holds a time: time.Time; a struct embedding
+// one, which decodes as one through the promoted method; a type defined
+// over time.Time, which does not decode from a string at all but is taken
+// all the same, since it holds one; or a pointer, slice, array or map of
+// these, the map by its key as well as its value, since a time key
+// decodes from its text.
+func timeType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	// By the underlying type, so that a named slice or pointer of times,
+	// type Stamps []time.Time, is one as its spelling would be.
+	switch u := types.Unalias(t).Underlying().(type) {
+	case *types.Pointer:
+		return timeType(u.Elem())
+	case *types.Slice:
+		return timeType(u.Elem())
+	case *types.Array:
+		return timeType(u.Elem())
+	case *types.Map:
+		return timeType(u.Key()) || timeType(u.Elem())
+	}
+	return isTime(t, 0)
+}
+
+// isTime is time.Time, a type defined over it, or a struct embedding one,
+// or a pointer to one.
+func isTime(t types.Type, depth int) bool {
+	if depth > 8 {
+		return false
+	}
+	if typeKey(t) == "time.Time" {
+		return true
+	}
+	st, ok := types.Unalias(t).Underlying().(*types.Struct)
+	if !ok {
+		return false
+	}
+	// A type defined over time.Time has its fields: wall, ext and loc,
+	// declared in package time.
+	if st.NumFields() == 3 && st.Field(0).Pkg() != nil && st.Field(0).Pkg().Path() == "time" && st.Field(0).Name() == "wall" {
+		return true
+	}
+	for f := range st.Fields() {
+		ft := f.Type()
+		if ptr, ok := types.Unalias(ft).(*types.Pointer); ok {
+			ft = ptr.Elem()
+		}
+		if f.Embedded() && isTime(ft, depth+1) {
+			return true
+		}
+	}
+	return false
+}
+
+// timeCall says whether a call parses a time, and how the ledger writes
+// it: the callee and the value it parses, which is the second argument
+// of both; the first is the layout.
+func timeCall(p *pkg, call *ast.CallExpr) (string, bool) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	fn, ok := p.info.Uses[sel.Sel].(*types.Func)
+	if !ok || fn.Pkg() == nil || fn.Pkg().Path() != "time" {
+		return "", false
+	}
+	if fn.Name() != "Parse" && fn.Name() != "ParseInLocation" {
+		return "", false
+	}
+	if len(call.Args) < 2 {
+		return "", false
+	}
+	return fmt.Sprintf("time.%s(%s)", fn.Name(), types.ExprString(call.Args[1])), true
 }
 
 func typeKey(t types.Type) string {
@@ -2177,6 +2969,29 @@ func plantModule(t *testing.T, src string) string {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "planted.go"), []byte(src), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module planted\n\ngo 1.27\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+// plantFiles writes several source files, each by its path under the
+// root, in a module of its own named planted, for the self-tests that
+// need more than one package. A tag in a file is written between single
+// quotes and planted between backquotes, so that the source reads as Go.
+func plantFiles(t *testing.T, files map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	tick := strings.NewReplacer("'", "`")
+	for rel, src := range files {
+		path := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(tick.Replace(src)), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module planted\n\ngo 1.27\n"), 0o600); err != nil {
 		t.Fatal(err)

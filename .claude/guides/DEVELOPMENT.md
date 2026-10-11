@@ -1421,6 +1421,23 @@ stamp to break a tie and to display, labelled as the sender's; the one
 bound on it is the future, the same skew a request is held to, so a
 message may be old but not from a clock no relay would have accepted.
 
+**Every time from outside has a row in the limits ledger's time kind,
+saying its bound or why it has none.** Compare times as times, two
+bounds and no subtraction, and the one bound on a stamp is the future.
+The third trace found that bound written by hand where someone had
+thought of it: a message, a manifest and a vouch refused a stamp from
+the future, and the allow list, the card and the channel directory,
+documents an owner signs and every peer reads, took one from any year.
+`internal/limits/ledger.txt` now holds to a row every field of a
+`json`-tagged struct of a type that holds a time: `time.Time`, a struct
+embedding one, a type defined over it, or a pointer, slice, array or map
+of these, a map by its key too; and every `time.Parse` and
+`time.ParseInLocation`: `<= now + 5m` with its test, a window, a
+deadline, a field only displayed, an output, the program's own clock or
+its user's input, or a value a check already held, or, for now, a stamp
+marked unbounded until the commit that bounds it. A new time field
+from outside lands with its row.
+
 **Retry-After is an integer number of seconds, never a date, never zero.**
 Rounded up; a zero would invite the client straight back into a refusal.
 

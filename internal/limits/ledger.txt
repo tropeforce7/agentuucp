@@ -1,7 +1,7 @@
 # The limit ledger: one row per place in the non-test tree where an
-# integer from outside enters the program, and the range the code holds
-# it to, or that it is open, and the TestLimit test that shows the edge
-# and one step past. The test beside this file finds every such place and
+# integer or a time from outside enters the program, a string is cut, or
+# a reader is capped, and the range the code holds it to, or that it is
+# open, and the TestLimit test that shows the edge and one step past. The test beside this file finds every such place and
 # holds this file to it: a site with no row, a row with no site, a key
 # twice, a range of no known shape, a test not declared exactly once, a
 # test not named TestLimit, and an output row for a struct the program
@@ -9,7 +9,7 @@
 #
 #   <file> <enclosing function or struct> <kind> <site as written> = <range> shown by <TestLimit...>
 #
-# where the kind is int, string or cap. An int site is a field of integer,
+# where the kind is int, string, cap or time. An int site is a field of integer,
 # duration or integer-valued map or slice type in a struct with a json
 # tag, wherever the struct is declared; a strconv.Atoi or Parse*; a
 # time.ParseDuration; a binary.*.Uint* read; a FlagSet's integer or
@@ -77,8 +77,61 @@
 # and names the TestLimit test that feeds the reader at the bound and one
 # over.
 #
+# A time site is a field in a struct with a json tag, tagged or not, of a
+# type that holds a time: time.Time, a struct embedding one, a type
+# defined over it (which the decoder cannot read from a string, but which
+# holds one), or a pointer, slice, array or map of these, a map by its key
+# too, written as the field; or a time.Parse or time.ParseInLocation, written
+# as the callee with the value it parses.
+# Its row is one of
+#
+#   <= now + 5m    a stamp held to no more than relayapi.MaxSkew ahead of
+#                  the reader's clock, the one bound a stamp has; its test
+#                  feeds the edge and a second either side, a day and a
+#                  year ahead, a year past, and the earliest and latest
+#                  instants: through the reader where the wire can carry
+#                  them, and to the encoder, which refuses them, where it
+#                  cannot
+#   [lo, hi]       a window with both edges, named as the code names them
+#   deadline: <its use>
+#                  a time that names a moment to come, compared with now,
+#                  with the other edge of its own window or with an
+#                  earlier copy of itself, or for the earliest to show,
+#                  never ordered across
+#                  records, and written to a file only as a record of it
+#                  that orders nothing; its test feeds the earliest instant
+#                  and one past year 9999, through the code that uses it
+#                  where the wire can carry them, and shows no panic and
+#                  no overflow
+#   display        shown and never compared or ordered: the test refuses
+#                  the row when the field, or a time derived from it by a
+#                  method of time.Time, a dereference or an index, is an
+#                  operand of Before, After, Equal, Sub or Compare, of
+#                  time.Since or time.Until, or a side of a comparison (a
+#                  pointer, slice or map held against nil excepted), or
+#                  is read in a comparator written in the call that sorts
+#                  or in a Less method, anywhere in the tree. That is not
+#                  every way to compare a time, and the row is read
+#                  against its field for the rest: among them a copy into
+#                  a local, or into a struct with no row; a comparison
+#                  through Unix or UnixNano; a defined type converted back;
+#                  a method promoted from an embedded time; a helper of the
+#                  tree's own that compares what it is handed; a whole
+#                  struct compared; a comparator held in a variable; a file
+#                  the build leaves out. Names no test
+#   output         a struct this program writes and never decodes
+#   local: <why>   this program's own clock or its user's own input read
+#                  back, or a value a check already held, the why saying
+#                  which; needs no test, and one it names is held to
+#                  being a TestLimit test
+#   unbounded: PLAN-TIME commit N
+#                  a stamp from outside the plan bounds in its commit 2
+#                  or 3, until then; names no test, and goes with the
+#                  plan's commit 3
+#
 # The sweep that wrote this file found 285 sites, and the cap kind added
-# twelve; 297 is the floor in the test.
+# twelve. The walk had found 454 by the time the time kind added 88; 542
+# is the floor in the test.
 
 cmd/auu-admin/commands.go blockAdd string fp[:16] #2 = local: ValidFingerprint at oneFingerprint shown by TestLimitFingerprintAndSerialArgsOneShort
 cmd/auu-admin/commands.go blockAdd string fp[:16] = local: ValidFingerprint at oneFingerprint shown by TestLimitFingerprintAndSerialArgsOneShort
@@ -537,3 +590,94 @@ internal/client/stream.go (*Client).PutStream cap io.LimitReader(resp.Body, stre
 internal/relay/server.go (*Server).readBodyCharged cap http.MaxBytesReader(r.Body, limit) = one of inline_max + 65536, knock_max_bytes + 65536, 1048576, 65536, 3200 shown by TestLimitBodyCapsPerRoute
 internal/relay/streamapi.go (*Server).handlePutStream cap io.LimitReader(body, want - int64(n)) = local: want is the row's size less the offset, which Content-Length was held equal to before a byte, less the header's n already read shown by TestLimitAnAttemptRunsToTheEndOrKeepsNothing
 internal/relay/streamapi.go (*Server).handlePutStream cap io.LimitReader(body, want) = local: want is the row's size less the offset, which Content-Length was held equal to before a byte shown by TestLimitAnAttemptRunsToTheEndOrKeepsNothing
+
+# Times: a field of a json-tagged struct of a type that holds a time, and a time.Parse or time.ParseInLocation, of PLAN-TIME. The rows
+# that say unbounded are bounded by the commit of the plan they name.
+cmd/auu-admin/commands.go tokenWindow time time.Parse(notAfter) = local: the operator's --not-after, which tokenWindow holds to whole seconds ahead of now
+cmd/auu-ca/main.go cmdShow.relayOut time Expires = output
+cmd/auu-ca/main.go cmdShow.relayOut time updated = output
+cmd/auu-ca/main.go cmdShow.struct time Expires = output
+internal/agent/client.go (*Client).Status time time.Parse(resp.SendUntil) = local: the agent's own clock, over this user's own socket
+internal/agent/client.go (*Client).Status time time.Parse(resp.Until) = local: the agent's own clock, over this user's own socket
+internal/allowlist/allowlist.go Document time Issued = unbounded: PLAN-TIME commit 2
+internal/auu/allow.go allowShowJSON time Issued = output
+internal/auu/anchor.go anchorStatusOutput time Expires = output
+internal/auu/anchor.go anchorStatusOutput time ServerIntermediateIssued = output
+internal/auu/card.go cardShowJSON time Issued = output
+internal/auu/cert.go certStatusOutput time NotAfter = output
+internal/auu/cert.go certStatusOutput time NotBefore = output
+internal/auu/cert.go certStatusOutput time RenewsAfter = output
+internal/auu/channel.go parseWhen time time.Parse(value) = local: the owner's own --not-before or --not-after
+internal/auu/channel.go parseWhen time time.ParseInLocation(value) = local: the owner's own --not-before or --not-after
+internal/auu/channel_cmds.go channelJSON time NotAfter = output
+internal/auu/channel_cmds.go channelJSON time NotBefore = output
+internal/auu/channel_cmds.go channelLsJSON time Issued = output
+internal/auu/channel_cmds.go relayChannelsJSON time Issued = output
+internal/auu/damaged_cmds.go damagedJSON time Received = output
+internal/auu/inbox.go messageJSON time Received = output
+internal/auu/inbox.go messageJSON time Time = output
+internal/auu/lookup.go lookupJSON time Registered = output
+internal/auu/outbox.go pending time Started = local: this machine's clock when the stream began, read back from the outbox's own file
+internal/auu/outbox.go pending time Time = local: this machine's clock at the seal, read back from the outbox's own file
+internal/auu/outboxcopy.go outboxJSON time Started = output
+internal/auu/queue.go queuedJSON time GivesUp = output
+internal/auu/queue.go queuedJSON time LastTry = output
+internal/auu/queue.go queuedJSON time NextTry = output
+internal/auu/relay.go relayJSON time Added = output
+internal/auu/relay.go relayJSON time AnchorExpires = output
+internal/auu/relay.go relayJSON time CertExpires = output
+internal/auu/relay.go relayJSON time ServerIntermediateIssued = output
+internal/auu/serveledger.go ledgerEntry time Arrived = unbounded: PLAN-TIME commit 3
+internal/auu/serveledger.go ledgerEntry time Handled = local: this machine's clock at the answer, read back from the ledger
+internal/auu/serveledger.go ledgerEntry time Tried = local: this machine's clock at the attempt, read back from the ledger
+internal/auu/servels.go servedThreadJSON time Last = output
+internal/auu/vouch.go vouchJSON time Issued = output
+internal/auu/watch.go directoryEvent time Issued = output
+internal/auu/watch.go messageEvent time Received = output
+internal/card/card.go Document time Issued = unbounded: PLAN-TIME commit 2
+internal/channels/channels.go Channel time NotAfter = deadline: the channel's close, compared with now, with its opening and with the directory before shown by TestLimitAChannelWindowAtTheExtremes
+internal/channels/channels.go Channel time NotBefore = deadline: the channel's opening, compared with now, with its close and with the directory before shown by TestLimitAChannelWindowAtTheExtremes
+internal/channels/channels.go Directory time Issued = unbounded: PLAN-TIME commit 2
+internal/envelope/envelope.go Inner time Time = <= now + 5m shown by TestLimitAnInnerTimeIsHeldToTheSkew
+internal/pki/bundle.go Bundle time Issued = local: auu-ca's own clock, read back from its own bundle
+internal/pki/store.go RelayRecord time Updated = local: auu-ca's own clock, read back from its own record
+internal/relay/adminstore.go (*Store).Blocks time time.Parse(created) = local: the relay's own clock, read back from its own database
+internal/relay/adminstore.go scanMailboxes time time.Parse(created) = local: the relay's own clock, read back from its own database
+internal/relay/adminstore.go scanTokens time time.Parse(created) = local: the relay's own clock, read back from its own database
+internal/relay/adminstore.go scanTokens time time.Parse(lastRedeemed.String) = local: the relay's own clock, read back from its own database
+internal/relay/certstore.go (*Store).CertBySerial time time.Parse(created) = local: the relay's own clock, read back from its own database
+internal/relay/certstore.go (*Store).certRows time time.Parse(created) = local: the relay's own clock, read back from its own database
+internal/relay/channelstore.go (*Store).DirectoryIssued time time.Parse(raw) = unbounded: PLAN-TIME commit 2
+internal/relay/store.go (*Store).ListingWithin time time.Parse(received) = local: the relay's own clock, read back from its own database
+internal/relay/store.go (*Store).Mailbox time time.Parse(created) = local: the relay's own clock, read back from its own database
+internal/relay/streamstore.go (*Store).Upload time time.Parse(created) = local: the relay's own clock, read back from its own database
+internal/relayapi/relayapi.go AdminStatusResponse time CANotAfter = display
+internal/relayapi/relayapi.go AdminStatusResponse time Started = unbounded: PLAN-TIME commit 3
+internal/relayapi/relayapi.go BlockRecord time Created = unbounded: PLAN-TIME commit 3
+internal/relayapi/relayapi.go CertRecord time NotAfter = deadline: a certificate's expiry, compared with now for its state word shown by TestLimitACertificatesNotAfterAtTheExtremes
+internal/relayapi/relayapi.go CertRecord time NotBefore = display
+internal/relayapi/relayapi.go CertResponse time NotAfter = display
+internal/relayapi/relayapi.go ErrorResponse time At = display
+internal/relayapi/relayapi.go KeysResponse time Created = unbounded: PLAN-TIME commit 3
+internal/relayapi/relayapi.go MailboxRecord time Created = unbounded: PLAN-TIME commit 3
+internal/relayapi/relayapi.go OpenStreamResponse time Expires = display
+internal/relayapi/relayapi.go QueuedMessage time GivesUp = deadline: when the relay gives up a queued message, the earliest per neighbour picked to show shown by TestLimitQueueTimesAtTheExtremes
+internal/relayapi/relayapi.go QueuedMessage time LastTry = unbounded: PLAN-TIME commit 3
+internal/relayapi/relayapi.go QueuedMessage time NextTry = deadline: the relay's next try of a queued message, the earliest per neighbour picked to show shown by TestLimitQueueTimesAtTheExtremes
+internal/relayapi/relayapi.go RegisterResponse time NotAfter = display
+internal/relayapi/relayapi.go StoredMessage time Received = unbounded: PLAN-TIME commit 3
+internal/relayapi/relayapi.go TokenRecord time Created = unbounded: PLAN-TIME commit 3
+internal/relayapi/relayapi.go TokenRecord time LastRedeemed = unbounded: PLAN-TIME commit 3
+internal/relayapi/relayapi.go TokenRecord time NotAfter = deadline: a token's expiry, shown as the time left by token.Until shown by TestLimitATokensNotAfterAtTheExtremes
+internal/relayapi/relayapi.go TokenRecord time NotBefore = display
+internal/store/allowpushed.go (*Store).AllowPushed time time.Parse(text) = local: this machine's clock at the push, read back from its own file
+internal/store/cardpushed.go (*Store).CardPushed time time.Parse(text) = local: this machine's clock at the push, read back from its own file
+internal/store/cert.go CertRecord time NotAfter = deadline: the certificate's expiry, compared with now to decide renewal shown by TestLimitRenewalAtTheExtremes
+internal/store/cert.go CertRecord time NotBefore = display
+internal/store/damagedbox.go DamagedRecord time Received = unbounded: PLAN-TIME commit 3
+internal/store/leftbehind.go parseLeftEntry time time.Parse(fields[2]) = unbounded: PLAN-TIME commit 3
+internal/store/relay.go Relay time Added = local: this machine's clock when the relay was added, read back from its own file
+internal/store/relay.go Relay time ServerIntNotBefore = local: the verified intermediate's NotBefore, which certificate verification held before now
+internal/store/store.go Stored time Received = unbounded: PLAN-TIME commit 3
+internal/stream/stream.go Manifest time Time = <= now + 5m shown by TestLimitAManifestTimeIsHeldToTheSkew
+internal/vouch/vouch.go Document time Issued = <= now + 5m shown by TestLimitAVouchIssuedIsHeldToTheSkew
