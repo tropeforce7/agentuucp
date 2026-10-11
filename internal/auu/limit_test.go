@@ -875,7 +875,7 @@ func TestLimitThreadIDIsNotAPathAtServe(t *testing.T) {
 	}
 	ch := &serveChannel{name: "c", Dir: repo, Exec: "cat", Mode: modeSideCopy}
 	for _, v := range pathSet() {
-		if _, _, err := worktreeFor(root, ch, v, filepath.Join(root, "state"), true); err == nil || !strings.Contains(err.Error(), "not a message id") {
+		if _, _, _, err := worktreeFor(root, ch, v, filepath.Join(root, "state"), true); err == nil || !strings.Contains(err.Error(), "not a message id") {
 			t.Errorf("worktreeFor took the thread id %q: %v", v, err)
 		}
 		if name := threadName(v); !strings.HasPrefix(name, `"`) {

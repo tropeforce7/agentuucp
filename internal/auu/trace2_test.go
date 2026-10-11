@@ -240,7 +240,7 @@ func TestARecordWhoseThreadIDIsAPathIsRefusedBeforeServeSeesIt(t *testing.T) {
 		t.Errorf("handle joined the thread id onto a path: %s exists", outside)
 	}
 	// And worktreeFor refuses it on its own, the guard behind handle's.
-	if _, _, err := worktreeFor(root, bob.row, "../../outside",
+	if _, _, _, err := worktreeFor(root, bob.row, "../../outside",
 		t.TempDir(), true); err == nil || !strings.Contains(err.Error(), "not a message id") {
 		t.Errorf("worktreeFor took a thread id that is a path: %v", err)
 	}

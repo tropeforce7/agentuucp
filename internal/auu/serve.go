@@ -682,9 +682,16 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 		stateDir = channelDir
 	}
 	newThread := !r.led.touched(thread)
-	worktree, base, err := worktreeFor(r.root, ch, thread, stateDir, newThread)
+	worktree, base, remade, err := worktreeFor(r.root, ch, thread, stateDir, newThread)
 	if err != nil {
 		return err
+	}
+	if remade {
+		lost := ""
+		if ch.Mode == modeSideCopy {
+			lost = "; the thread's work in it is gone"
+		}
+		fmt.Fprintf(os.Stderr, "%s: worktree %s was not a git worktree and was made again%s\n", prog, worktree, lost)
 	}
 
 	facts := runFacts{

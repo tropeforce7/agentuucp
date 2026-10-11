@@ -102,14 +102,15 @@ going to be returned to anyone.
 
 **`side-copy`** is an expert that works. Every thread gets a worktree of its
 own, made from HEAD at the thread's first message and reused for every
-message after, so a thread is a conversation over one copy with the peer
-who opened it. The opener is the sender of the earliest message to arrive
-on the thread among those serve has written down: answered, tried, or held
-for a newer `auu`. In the usual order of arrival that is the asker, since
-anyone else normally learns the thread from the asker's message. Until
-something on the thread has been answered or tried, a message on it
-competes on its own arrival. After that the thread is its opener's. A
-message left alone at a first start opens nothing.
+message after unless it is made again (below), so a thread is a
+conversation over one copy with the peer who opened it. The opener is the
+sender of the earliest message to arrive on the thread among those serve
+has written down: answered, tried, or held for a newer `auu`. In the usual
+order of arrival that is the asker, since anyone else normally learns the
+thread from the asker's message. Until something on the thread has been
+answered or tried, a message on it competes on its own arrival. After that
+the thread is its opener's. A message left alone at a first start opens
+nothing.
 
 Its reply carries the thread's whole change so far, attached as
 `THREAD12.patch`, and one sentence at the end of the text saying so. The
@@ -119,7 +120,8 @@ when it was made and read back from a file, never asked of git again, so a
 handler that commits in its own worktree cannot move what the change is
 measured against. It is cumulative on purpose: every turn's patch is the
 whole of the thread's work, so the latest reply is always the complete one
-and an asker need keep only the last. Apply it to a clone at BASE:
+and an asker need keep only the last, unless the worktree was made again
+(below). Apply it to a clone at BASE:
 
 ```
 auu extract MESSAGE-ID --out .
@@ -147,6 +149,35 @@ which is the same hook that runs the tests.
 A thread's worktree is let go of when the thread has been idle for
 `thread_ttl`. A read-only channel's is not, and lasts as long as the
 channel is in the file.
+
+A handler with a shell can be talked by a message into damaging its
+worktree, and in `read-only` that worktree is every thread's on the
+channel. So whatever stands at a worktree's path and is not a git worktree
+of the checkout's — a directory whose `.git` was removed or that is a
+repository of its own, a file, a link — is removed and the worktree made
+again from the checkout's HEAD. Moving or re-cloning the checkout a channel
+names leaves every worktree one of a repository the channel no longer
+names, so each is made again at its next message. For each of these serve
+says the same line on standard error,
+`auu: worktree PATH was not a git worktree and was made again`. In
+`read-only` the untracked scratch goes with it. In `side-copy` the line
+ends `; the thread's work in it is gone`: what the thread had written and
+committed there is lost, and every patch after is taken against the new
+base. A git that cannot be run at all still ends the run.
+
+Making the worktree again writes nothing to the ledger by itself. A
+handler that damages its worktree and exits non-zero has failed, and is
+run again as any failed turn is. A side-copy handler that removed `.git`
+or ran `git init` and printed an answer fails when serve takes the patch;
+one that printed nothing has settled its message. The worktree is made
+again at the next message to reach it, which is usually the retry. An
+answer written and not sent goes out on its retry without the handler
+being run again, with the thread's latest patch, measured against the old
+base. For the first handler above, whose own patch could not be taken,
+that is an earlier turn's, if one took any; for an answer whose send to
+the relay failed, it is its own unless a later turn on the thread took
+one since. That patch holds the work the console line calls gone from the
+worktree, so the asker still gets it.
 
 A worktree is not a container. Two threads cannot collide over files, but
 they can over anything else the project uses: a fixed port, a named

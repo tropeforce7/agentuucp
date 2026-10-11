@@ -254,7 +254,7 @@ func TestLimitNothingTheNetworkNamesIsAPath(t *testing.T) {
 					memSource("a"), stream.MinChunkSize); !errors.Is(err, stream.ErrForm) {
 					return ""
 				}
-				if _, _, err := worktreeFor(t.TempDir(), &serveChannel{name: "c", Mode: modeSideCopy}, v, t.TempDir(), true); err == nil {
+				if _, _, _, err := worktreeFor(t.TempDir(), &serveChannel{name: "c", Mode: modeSideCopy}, v, t.TempDir(), true); err == nil {
 					return ""
 				}
 				return "refused"

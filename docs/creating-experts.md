@@ -384,8 +384,10 @@ exec git -C /var/lib/auu-expert/src/jostle pull --ff-only --quiet
 A read-only channel's worktree is moved to the checkout's HEAD at each new
 thread, so a pull before the ask is what makes the expert answer about
 the code as it is today. A side copy's worktree stays on the commit its
-thread began at, on purpose, and the pull only decides where the next
-thread starts.
+thread began at, on purpose, unless it is not a git worktree of the
+checkout's and is made again (`serve.md` says when, under *The two
+modes*). The pull decides only where the next thread starts and where a
+worktree made again starts, since that is made from the checkout's HEAD.
 
 A `before` hook that fails stops the handler and the message is tried
 again next round, so a pull that cannot reach the remote leaves the ask
