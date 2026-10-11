@@ -94,6 +94,13 @@ func cmdCard(args []string) error {
 	// bytes, wherever it goes.
 	now := time.Now()
 	d.Issued = now
+	// The relay's own check, run here on this machine's clock before any
+	// request; issued is that clock's now, so it fails only on a clock that
+	// steps back between the two readings or stands outside the years this
+	// program writes.
+	if err := card.CheckIssued(d, time.Now()); err != nil {
+		return err
+	}
 	doc, sig, err := card.Sign(id, d)
 	if err != nil {
 		return err

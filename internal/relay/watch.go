@@ -194,7 +194,7 @@ func (s *Server) listing(w http.ResponseWriter, r *http.Request, fp string, afte
 }
 
 // look is one listing: the rows after the id asked from, the count of
-// everything held, and which watched peers hold a directory issued later
+// everything held, and which watched peers hold a directory issued other
 // than the watcher said. found reports whether there is anything to
 // answer with rather than hold for, which a cursor past the highest id
 // held is.
@@ -262,7 +262,19 @@ func (s *Server) look(fp string, after int64, limit int, stubs bool, peers map[s
 		if err != nil {
 			return resp, false, err
 		}
-		if stored && issued.After(held) {
+		// Any other issue than the one held wakes the watcher, not only a
+		// later one: a directory held from beyond the skew is replaced by
+		// the owner's next push, issued earlier (R23), and a watcher that
+		// fetched the first must see the second. A column read as the zero
+		// time, which the store could not parse, wakes nobody: the watcher
+		// holds the document's own issue, and would be woken at every
+		// round for a fetch that tells it nothing new. The two are compared
+		// in the form the watcher sends, nanoseconds since 1970: an issue
+		// an earlier release stored outside what those can say (before
+		// late 1677, after early 2262) reaches the relay wrapped, and compared as the
+		// column reads it would never be equal, waking the watcher at every
+		// round.
+		if stored && !issued.IsZero() && !time.Unix(0, issued.UnixNano()).Equal(held) {
 			resp.DirectoriesChanged = append(resp.DirectoriesChanged, peer)
 		}
 	}

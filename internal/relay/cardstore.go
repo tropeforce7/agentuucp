@@ -70,7 +70,7 @@ func (s *Store) SetCard(fp string, d *card.Document, doc, sig []byte) (stored bo
 	}
 	// A mailbox with no row joins nil bytes, which cardDecision reads as
 	// broken: no rule, and the first push is taken.
-	if state, stored := cardDecision(bundle, storedDoc, storedSig); state == relayapi.CardSigned {
+	if state, stored := cardDecision(bundle, storedDoc, storedSig); state == relayapi.CardSigned && !heldFromTheFuture(stored.Issued) {
 		held := stored.Issued
 		if !d.Issued.After(held) {
 			if d.Issued.Equal(held) && bytes.Equal(doc, storedDoc) {

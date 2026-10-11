@@ -606,11 +606,17 @@ func TestADirectoryPushWakesAWatcherAndNamesThePeer(t *testing.T) {
 		t.Fatalf("the answer to a newer push: %d %+v", status, resp)
 	}
 
-	// The issue time is the comparison, to the nanosecond: a watcher
-	// holding the issue as stored is told nothing and held; one holding
-	// an earlier issue is told at once, hold or no hold; one holding a
-	// later issue than the relay does (a relay behind another) is told
-	// nothing.
+	// The issue time is the comparison, to the nanosecond (R24): a
+	// watcher holding the issue as stored is told nothing and held; one
+	// holding any other issue, earlier or later, is told at once, hold or
+	// no hold, and the peer named once, since a directory held from
+	// beyond the skew is replaced by the owner's next push, issued
+	// earlier (R23). A watcher holding the column's own instant, which is
+	// what its fetch sets held to, is not woken again on the same column.
+	column, found, err := h.store.DirectoryIssued(bobFP)
+	if err != nil || !found {
+		t.Fatalf("bob's issue column: found %v, %v", found, err)
+	}
 	for _, tc := range []struct {
 		name    string
 		held    time.Time
@@ -618,8 +624,9 @@ func TestADirectoryPushWakesAWatcherAndNamesThePeer(t *testing.T) {
 	}{
 		{"as stored", newer, false},
 		{"a nanosecond before", newer.Add(-time.Nanosecond), true},
-		{"a nanosecond after", newer.Add(time.Nanosecond), false},
+		{"a nanosecond after", newer.Add(time.Nanosecond), true},
 		{"zero", time.Time{}, true},
+		{"the column's instant, as a fetch sets it", column, false},
 	} {
 		l := h.list(alice, "wait=300ms&"+peersQuery(at(bobFP, tc.held)))
 		status, resp, _ := l.answer(t)
@@ -861,4 +868,95 @@ func TestAListingWithoutWaitIsUnchanged(t *testing.T) {
 	if zero, _ := json.Marshal(relayapi.ListResponse{}); strings.Contains(string(zero), "directories_changed") {
 		t.Fatalf("the zero value names the field: %s", zero)
 	}
+}
+
+// A watch settles whatever the column holds: the watcher sends its held
+// issue as nanoseconds since 1970, as the client encodes it, which wraps
+// outside 1677 to 2262, and the relay compares in that form. A column an
+// earlier release could have stored in the year 1000 or 3000 wakes a
+// watcher holding something else once, and not a watcher that sends that
+// same issue as it would after its fetch. So does an in-range replacement
+// issued earlier than what the watcher holds (R23's recovery).
+func TestAWatchSettlesOnAnIssueTheWireWraps(t *testing.T) {
+	woken := func(t *testing.T, h *harness, watcher *identity.Identity, fp string, held time.Time) bool {
+		t.Helper()
+		status, resp, body := h.list(watcher, peersQuery(at(fp, held))).answer(t)
+		if status != http.StatusOK {
+			t.Fatalf("a watch holding %s: %d %s", held, status, body)
+		}
+		n := 0
+		for _, got := range resp.DirectoriesChanged {
+			if got == fp {
+				n++
+			}
+		}
+		if n > 1 {
+			t.Fatalf("a watch holding %s named the peer %d times: %+v", held, n, resp)
+		}
+		return n == 1
+	}
+	plantAt := func(t *testing.T, h *harness, owner *identity.Identity, issued time.Time) {
+		t.Helper()
+		d, doc, sig := signedDirectory(t, owner, issued, dflt)
+		if stored, err := h.store.SetDirectory(owner.Fingerprint(), d, doc, sig); err != nil || !stored {
+			t.Fatalf("planting a directory issued %s: stored %v, %v", issued, stored, err)
+		}
+	}
+
+	for _, issued := range []time.Time{
+		time.Date(1000, time.March, 1, 12, 0, 0, 123, time.UTC),
+		time.Date(3000, time.March, 1, 12, 0, 0, 123, time.UTC),
+	} {
+		t.Run(strconv.Itoa(issued.Year()), func(t *testing.T) {
+			h := newHarness(t, Config{})
+			people := ids(t, "alice", "bob")
+			alice, bob := people[0], people[1]
+			for _, id := range people {
+				h.register(id)
+			}
+			fp := bob.Fingerprint()
+			plantAt(t, h, bob, issued)
+			// The wire's form of this issue is not the issue: it wraps.
+			if time.Unix(0, issued.UnixNano()).Equal(issued) {
+				t.Fatalf("%s does not wrap in UnixNano; the case shows nothing", issued)
+			}
+			if !woken(t, h, alice, fp, time.Now()) {
+				t.Fatal("a watcher holding another issue was not woken")
+			}
+			// After its fetch the watcher holds the document's issue and
+			// sends it as the client does; at every round after, nothing.
+			for round := range 3 {
+				if woken(t, h, alice, fp, issued) {
+					t.Fatalf("round %d: a watcher holding the column's issue was woken again", round)
+				}
+			}
+		})
+	}
+
+	t.Run("an earlier replacement", func(t *testing.T) {
+		h := newHarness(t, Config{})
+		people := ids(t, "alice", "bob")
+		alice, bob := people[0], people[1]
+		for _, id := range people {
+			h.register(id)
+		}
+		fp := bob.Fingerprint()
+		future := time.Now().Add(relayapi.MaxSkew + time.Hour).UTC()
+		plantAt(t, h, bob, future)
+		if woken(t, h, alice, fp, future) {
+			t.Fatal("a watcher holding the planted issue was woken")
+		}
+		now := time.Now().UTC()
+		if status, body, _ := h.pushDirectory(bob, bob, now, dflt, bugs); status != http.StatusNoContent {
+			t.Fatalf("the owner's push over a row from the future: %d %s", status, body)
+		}
+		if !woken(t, h, alice, fp, future) {
+			t.Fatal("a watcher holding the replaced, later issue was not woken by the earlier replacement")
+		}
+		for round := range 3 {
+			if woken(t, h, alice, fp, now) {
+				t.Fatalf("round %d: a watcher holding the replacement's issue was woken again", round)
+			}
+		}
+	})
 }

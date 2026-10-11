@@ -15,6 +15,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/card"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relay"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 // Each refusal here is the real relay's, written with its code, and each
@@ -146,9 +147,11 @@ func TestAPostOverTheWholeBudgetIsAskedOnce(t *testing.T) {
 }
 
 // rowC6Planted is the newer document another machine of this identity
-// pushed: a time an hour from now, on a whole second as RFC 3339 shows it.
+// pushed: a time a minute inside the skew the relay allows a pushed issue
+// (relayapi.MaxSkew), and so still ahead of this machine's push, on a
+// whole second as RFC 3339 shows it.
 func rowC6Planted() time.Time {
-	return time.Now().Add(time.Hour).Truncate(time.Second)
+	return time.Now().Add(relayapi.MaxSkew - time.Minute).Truncate(time.Second)
 }
 
 // TestAPushOlderThanTheHeldAllowListSaysWhenThatWasIssued: the relay holds an

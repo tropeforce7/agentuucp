@@ -1262,7 +1262,7 @@ type Listing struct {
 	// Last is past everything the relay holds.
 	First, Last int64
 	// DirectoriesChanged names the watched peers whose directory the relay
-	// holds a newer issue of than the request said. Empty when none has,
+	// holds an issue of other than the request said. Empty when none has,
 	// when nothing was watched, and from a relay that predates the field.
 	DirectoriesChanged []string
 	// Allow is the state of this mailbox's allow list as the relay holds
@@ -1294,9 +1294,9 @@ type ListRequest struct {
 	// Peers names the peers whose channel directories to watch, by
 	// fingerprint, each with the issue time of the directory held for
 	// them: the relay wakes the hold when one is replaced and names in
-	// DirectoriesChanged every peer whose directory is issued later. A
-	// zero time is a peer with no directory held, and goes on the wire
-	// as Unix zero, which every issue is after.
+	// DirectoriesChanged every peer whose directory is issued other than
+	// that. A zero time is a peer with no directory held, and goes on the
+	// wire as Unix zero, which every issue but Unix zero's differs from.
 	Peers map[string]time.Time
 	// Stubs asks for the rows without their envelopes, for a caller that
 	// wants the ids and nothing else — checking which of the messages it

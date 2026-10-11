@@ -111,6 +111,19 @@ but you until you push again, and `auu inbox` tells you so. `auu allow show` pri
 what each relay holds for you, verified with your own key. `auu allow clear`
 opens the mailbox again.
 
+Each of the three documents you push, the allow list, the card and the
+channel directory, carries the time it was issued, and a relay refuses
+one issued more than five minutes ahead of its own clock, with a
+sentence that begins `by this relay's clock,` and names `issued`. A
+document `auu` signs as it pushes never meets it: the push's request
+carries this machine's time too, and a relay more than five minutes
+apart from this machine refuses the request as stale before it reads
+the document, so fix the clock. The document's refusal is met by a
+document signed by hand. `auu channel push`, which sends the stored
+directory under its stored issue time, meets the same check on this
+machine first and exits 1 before any request is sent, so the relay's
+refusal never comes to it.
+
 The third document you can push is your card, and nothing is pushed until
 you say so:
 
@@ -500,13 +513,25 @@ identity key and pushed to every relay you are registered on, or the one
 `--relay` names, one line per relay: `work: directory pushed (3 channels)`.
 A relay that refuses or cannot be reached is named, and the command exits 2
 with the file already written. `auu channel push` catches that relay up
-later, under the same signature. Two machines of one identity are kept from
-writing over each other. Every edit first asks each relay what it holds. A
-relay holding a directory issued later than this machine's stops the edit
-with `work holds a directory issued T, newer than this machine's; run 'auu
-channel pull --relay work' to take it first`. `pull` takes that directory
-into the local file, and the edit goes through after. A directory is held to
-512 KiB and an allow list to 128 KiB — the bytes the owner signed, checked
+later, under the same signature, and so under the stored issue time.
+The push runs the relay's check on this machine before anything is
+sent, and a directory that fails it is refused with exit 1 and advice
+that depends on the refusal. A stored issue time now more than five
+minutes ahead of this machine's clock, which has gone back since, or
+one outside the range a relay takes, gives the advice to create, update
+or close a channel, which issues the directory anew at this machine's
+now. A relay that already holds the stored directory then answers
+`409`, since the new one is issued earlier, unless what it holds was
+issued more than five minutes ahead of the relay's clock, which is no
+bar. A channel whose `not_before` or `not_after` lies outside the years
+0000 to 9999 gives the advice to update that channel's bound. Two
+machines of one identity are kept from writing over each other. Every
+edit first asks each relay what it holds. A relay holding a directory
+issued later than this machine's stops the edit with `work holds a
+directory issued T, newer than this machine's; run 'auu channel pull
+--relay work' to take it first`. `pull` takes that directory into the
+local file, and the edit goes through after. A directory is held to 512
+KiB and an allow list to 128 KiB — the bytes the owner signed, checked
 before either is sent and again by the relay before the signature — and
 the request that carries one to 1 MiB, the relay's cap on the two routes.
 A full directory of 64 channels at every limit is about 426 KB signed and
@@ -1060,18 +1085,18 @@ same thing. The timeout is 10 minutes unless you say, or `0` for no limit,
 since a watch under a supervisor sits all day. `auu wait`'s `--timeout`
 must be more than nothing, since a wait is over when it ends.
 
-There are
-two kinds of event. A `message` is a message the relay holds that this
-machine has not fetched, a post or a placed stream. It is said with its
-relay, channel, kind, size and relay id. A `directory` is a peer accepting
-a newer channel directory on the relay. It is said with who, when it was
-issued, which channels were added, removed and updated by name, and the
-channels as they are now. `message` is the default. `--event directory`
-asks for the other, both flags for both. `--channel NAME` keeps only
-messages under that channel. `--peer NAME` narrows a directory watch to
-that peer, or `self` for your own directory changed from another machine.
-Without it every peer on your list is watched, and a peer who has not
-admitted you is named once on stderr and left alone.
+There are two kinds of event. A `message` is a message the relay holds
+that this machine has not fetched, a post or a placed stream. It is said
+with its relay, channel, kind, size and relay id. A `directory` is a
+peer accepting a different channel directory on the relay. It is said
+with who, when it was issued, which channels were added, removed and
+updated by name, and the channels as they are now. `message` is the
+default. `--event directory` asks for the other, both flags for both.
+`--channel NAME` keeps only messages under that channel. `--peer NAME`
+narrows a directory watch to that peer, or `self` for your own directory
+changed from another machine. Without it every peer on your list is
+watched, and a peer who has not admitted you is named once on stderr and
+left alone.
 
 The baseline is your cursor. Anything a relay holds that this machine has
 not fetched is an event, reported at once, so `auu inbox; auu watch` has no

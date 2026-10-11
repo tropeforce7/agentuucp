@@ -599,7 +599,7 @@ cmd/auu-ca/main.go cmdShow.relayOut time updated = output
 cmd/auu-ca/main.go cmdShow.struct time Expires = output
 internal/agent/client.go (*Client).Status time time.Parse(resp.SendUntil) = local: the agent's own clock, over this user's own socket
 internal/agent/client.go (*Client).Status time time.Parse(resp.Until) = local: the agent's own clock, over this user's own socket
-internal/allowlist/allowlist.go Document time Issued = unbounded: PLAN-TIME commit 2
+internal/allowlist/allowlist.go Document time Issued = <= now + 5m shown by TestLimitAnAllowlistIssuedIsHeldToTheSkew
 internal/auu/allow.go allowShowJSON time Issued = output
 internal/auu/anchor.go anchorStatusOutput time Expires = output
 internal/auu/anchor.go anchorStatusOutput time ServerIntermediateIssued = output
@@ -634,10 +634,10 @@ internal/auu/servels.go servedThreadJSON time Last = output
 internal/auu/vouch.go vouchJSON time Issued = output
 internal/auu/watch.go directoryEvent time Issued = output
 internal/auu/watch.go messageEvent time Received = output
-internal/card/card.go Document time Issued = unbounded: PLAN-TIME commit 2
+internal/card/card.go Document time Issued = <= now + 5m shown by TestLimitACardIssuedIsHeldToTheSkew
 internal/channels/channels.go Channel time NotAfter = deadline: the channel's close, compared with now, with its opening and with the directory before shown by TestLimitAChannelWindowAtTheExtremes
 internal/channels/channels.go Channel time NotBefore = deadline: the channel's opening, compared with now, with its close and with the directory before shown by TestLimitAChannelWindowAtTheExtremes
-internal/channels/channels.go Directory time Issued = unbounded: PLAN-TIME commit 2
+internal/channels/channels.go Directory time Issued = <= now + 5m shown by TestLimitADirectoryIssuedIsHeldToTheSkew
 internal/envelope/envelope.go Inner time Time = <= now + 5m shown by TestLimitAnInnerTimeIsHeldToTheSkew
 internal/pki/bundle.go Bundle time Issued = local: auu-ca's own clock, read back from its own bundle
 internal/pki/store.go RelayRecord time Updated = local: auu-ca's own clock, read back from its own record
@@ -647,7 +647,7 @@ internal/relay/adminstore.go scanTokens time time.Parse(created) = local: the re
 internal/relay/adminstore.go scanTokens time time.Parse(lastRedeemed.String) = local: the relay's own clock, read back from its own database
 internal/relay/certstore.go (*Store).CertBySerial time time.Parse(created) = local: the relay's own clock, read back from its own database
 internal/relay/certstore.go (*Store).certRows time time.Parse(created) = local: the relay's own clock, read back from its own database
-internal/relay/channelstore.go (*Store).DirectoryIssued time time.Parse(raw) = unbounded: PLAN-TIME commit 2
+internal/relay/channelstore.go (*Store).DirectoryIssued time time.Parse(raw) = local: the relay's own column, written from an issued that channels.CheckIssued held, at the push, to what this program writes; a row stored before that check is read as it is
 internal/relay/store.go (*Store).ListingWithin time time.Parse(received) = local: the relay's own clock, read back from its own database
 internal/relay/store.go (*Store).Mailbox time time.Parse(created) = local: the relay's own clock, read back from its own database
 internal/relay/streamstore.go (*Store).Upload time time.Parse(created) = local: the relay's own clock, read back from its own database

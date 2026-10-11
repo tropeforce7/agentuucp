@@ -37,6 +37,16 @@ type pushOutcome struct {
 // printed, so the sentence never comes from the refusal's text.
 func pushDirectory(s *store.Store, id *identity.Identity, relays []*store.Relay, d *channels.Directory) (pushOutcome, error) {
 	var out pushOutcome
+	// Said here before any request, as the relay would refuse it. A push
+	// of the stored directory sends its stored issue, which a clock that
+	// has since gone back can leave ahead; any change to a channel issues
+	// the directory anew.
+	if err := channels.CheckIssued(d, time.Now()); err != nil {
+		if errors.Is(err, channels.ErrBound) {
+			return out, usageErrf("the directory cannot be pushed: %v; update that channel's bound", err)
+		}
+		return out, usageErrf("the directory cannot be pushed: %v; create, update or close a channel to issue it anew", err)
+	}
 	doc, sig, err := channels.Sign(id, d)
 	if err != nil {
 		return out, err

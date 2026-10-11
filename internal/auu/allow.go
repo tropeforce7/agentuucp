@@ -92,7 +92,16 @@ func cmdAllow(args []string) error {
 			}
 			fps = withCouriers(peerFPs, couriers, id.Fingerprint())
 		}
-		doc, sig, err := allowlist.Sign(id, &allowlist.Document{Issued: now, Senders: fps})
+		d := &allowlist.Document{Issued: now, Senders: fps}
+		// The relay's own check, run here on this machine's clock before any
+		// request. issued is that clock's now, so it fails only on a clock
+		// that steps back between the two readings or stands outside the
+		// years this program writes; a hand-signed document is the relay's
+		// to refuse.
+		if err := allowlist.CheckIssued(d, time.Now()); err != nil {
+			return err
+		}
+		doc, sig, err := allowlist.Sign(id, d)
 		if err != nil {
 			return err
 		}
@@ -247,7 +256,12 @@ func pushAllowTo(s *store.Store, id *identity.Identity, r *store.Relay) (signedC
 	}
 	fps := withCouriers(peerFPs, couriers, id.Fingerprint())
 	now := time.Now()
-	doc, sig, err := allowlist.Sign(id, &allowlist.Document{Issued: now, Senders: fps})
+	d := &allowlist.Document{Issued: now, Senders: fps}
+	// The relay's own check, run here before any request, as above.
+	if err := allowlist.CheckIssued(d, time.Now()); err != nil {
+		return 0, 0, err
+	}
+	doc, sig, err := allowlist.Sign(id, d)
 	if err != nil {
 		return 0, 0, err
 	}

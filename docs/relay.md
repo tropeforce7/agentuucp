@@ -595,6 +595,22 @@ status and the request. The codes this release writes:
 | `no-administrators` | 403 | the relay has no administrators |
 | `too-many-recipients` | 413 | a copy of a message to more recipients than `max_recipients`, naming both numbers |
 
+An owner document, the allow list, the card or the channel directory,
+is refused `400` with no code when it was issued more than five minutes
+ahead of the relay's clock or outside the years 0000 to 9999; a
+directory is refused too when it was issued outside about 1677 to 2262,
+the range a watch carries as nanoseconds, or when a channel's
+`not_before` or `not_after` lies outside the years 0000 to 9999. The
+sentence is the reason. It names `issued` and the time, beginning `by
+this relay's clock,` when the time is ahead, or it names the channel and
+its `not_before` or `not_after`. The check comes right after the
+signature verifies, before anything is stored, and `auu` runs it before
+it sends one. A held document issued more than five minutes ahead of the
+relay's clock, which an earlier release could store, is no bar to a
+push: the owner's next push that passes the check replaces it, whatever
+its issue time, so such a relay recovers with no operator, and a
+running `auu watch` is woken by the replacement as by any change.
+
 `at`, an RFC 3339 time, comes with the three refusals about one. Left
 out, it means none. The sentence names the same time for a person reading
 the answer by hand. `auu` shows `at` in the reader's zone and never reads

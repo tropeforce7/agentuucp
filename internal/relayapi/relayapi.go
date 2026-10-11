@@ -395,7 +395,7 @@ type (
 		First *int64 `json:"first"`
 		Last  *int64 `json:"last"`
 		// DirectoriesChanged names the watched peers whose directory the
-		// relay holds a newer issue of than the listing's peers parameter
+		// relay holds an issue of other than the listing's peers parameter
 		// said. Absent when none has, or when nothing was watched, so a
 		// listing that watches nothing is byte for byte what it was.
 		DirectoriesChanged []string `json:"directories_changed,omitempty"`
@@ -1479,3 +1479,25 @@ func (a *Auth) Verify(pub *identity.Public, method, pathWithQuery string, body [
 // RequestPath returns the path-with-query used in the signature for a server
 // side request, matching what the client signed.
 func RequestPath(req *http.Request) string { return req.URL.RequestURI() }
+
+// EarliestWritable and LatestWritable are the ends of what this program
+// can write a time as: in UTC, as RFC 3339, whose year has four digits,
+// and through encoding/json, which refuses a year outside 0 to 9999. A
+// time from outside, past either end, is read without complaint and then
+// breaks the first file, column or answer it is written to, so a time that
+// is bounded is held to these as well as to its bound.
+var (
+	EarliestWritable = time.Date(0, time.January, 1, 0, 0, 0, 0, time.UTC)
+	LatestWritable   = time.Date(9999, time.December, 31, 23, 59, 59, 999999999, time.UTC)
+)
+
+// ErrAheadOfNow is what an owner document's CheckIssued wraps when issued
+// is further ahead of the clock it was given than MaxSkew, so that a relay
+// can say the clock was its own on that refusal and on no other.
+var ErrAheadOfNow = errors.New("ahead of now")
+
+// Writable says whether t lies within EarliestWritable and LatestWritable,
+// both included.
+func Writable(t time.Time) bool {
+	return !t.Before(EarliestWritable) && !t.After(LatestWritable)
+}

@@ -63,6 +63,14 @@ func (s *Server) handleSetCard(w http.ResponseWriter, r *http.Request, body []by
 		s.fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// The one rule that needs a clock, on the verified card and before
+	// anything is stored: issued no further ahead of this relay's clock
+	// than a request may be, and every time in it within what this
+	// program can write (CheckIssued says which).
+	if err := card.CheckIssued(d, time.Now()); err != nil {
+		s.fail(w, http.StatusBadRequest, issuedRefusal(err))
+		return
+	}
 	// Belt and braces, as the other two documents' pushes have it: Verify
 	// has required the owner to be the key's fingerprint, and the key is
 	// this mailbox's bundle.

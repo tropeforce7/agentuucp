@@ -76,7 +76,7 @@ func (s *Store) SetAllowlist(fp string, d *allowlist.Document, doc, sig []byte) 
 	}
 	// A mailbox with no row joins nil bytes, which allowDecision reads as
 	// broken: no rule, and the first push is taken.
-	if state, stored := allowDecision(bundle, storedDoc, storedSig); state == relayapi.AllowSigned {
+	if state, stored := allowDecision(bundle, storedDoc, storedSig); state == relayapi.AllowSigned && !heldFromTheFuture(stored.Issued) {
 		held := stored.Issued
 		if !d.Issued.After(held) {
 			if d.Issued.Equal(held) && bytes.Equal(doc, storedDoc) {
@@ -183,4 +183,18 @@ func allowDecision(bundle, doc, sig []byte) (state string, d *allowlist.Document
 		return relayapi.AllowBroken, nil
 	}
 	return relayapi.AllowSigned, d
+}
+
+// heldFromTheFuture says whether an owner document the relay holds was
+// issued further ahead of its clock than a push may now be. Such a row
+// was stored before the push held issued to the clock (CheckIssued), and
+// held as a bar it would refuse every push the owner can now make, since
+// none may be issued after it: so it is no bar, and the owner's next push
+// that passes CheckIssued replaces it. While such a row is held, any
+// document the key holder signed that passes the bound replaces it, the
+// ratchet's guard against an older push being suspended for that one
+// push; only the key holder could have put the row there. The clock is
+// read here, inside the push's transaction, beside the decision it makes.
+func heldFromTheFuture(issued time.Time) bool {
+	return issued.After(time.Now().Add(relayapi.MaxSkew))
 }

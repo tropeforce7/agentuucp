@@ -261,9 +261,10 @@ func TestA409AfterThePreflightLeavesTheFileUnwritten(t *testing.T) {
 	}
 	before, _ := os.ReadFile(s.ChannelsPath())
 
-	// The other machine pushes to work in the gap, an hour ahead so that
-	// now, which the edit signs under, is behind it.
-	ahead := time.Now().Add(time.Hour)
+	// The other machine pushes to work in the gap, ahead so that now,
+	// which the edit signs under, is behind it, and within the skew, since
+	// a row held from beyond it is no bar to the owner's push (R23).
+	ahead := time.Now().Add(relayapi.MaxSkew - time.Minute).Truncate(time.Second)
 	defer func() { afterPreflight = func() {} }()
 	afterPreflight = func() { plant(t, workStore, id, ahead, "default", "from the other machine") }
 

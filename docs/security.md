@@ -1237,11 +1237,38 @@ document over its bytes, and `409` for a directory issued no
 later than the one it holds, naming when that was issued — a stored row
 that no longer verifies being no bar, whatever issue time an editor left
 on it, since the relay verifies the stored row before its time can refuse
-a push and holds the push to the time inside the verified document. The
-relay never bounds `issued` against its own clock. So an owner who signs
-one far in the future locks their own other machines out of pushing until
-they push a later one, or deregister. Only the identity key can do that,
-to itself.
+a push and holds the push to the time inside the verified document. Right
+after the signature verifies, and before anything is stored, the relay
+holds `issued` to its own clock: a directory issued more than five minutes
+(the request skew) ahead of it, outside the years 0000 to 9999 the relay
+can write, or outside about 1677 to 2262, which a watch carries as
+nanoseconds, is answered `400` with no refusal code, as is a channel
+whose `not_before` or `not_after` lies outside the years 0000 to 9999.
+The sentence is the reason: it names `issued` and the time, saying for
+the first that it is by this relay's clock, or names the channel and its
+`not_before` or `not_after`. Before this release, a directory signed
+under a clock far ahead was stored, and every later push from a machine
+with the right clock was refused as older until that instant passed: one
+wrong clock jammed the owner's own policy. A held directory issued more
+than five minutes ahead of the relay's clock is therefore no bar: while
+it is held, any directory the key holder signed that passes the bound
+replaces it, the guard against an older push suspended for that one
+push, which only the key holder could have brought about. A relay
+holding such a row, stored by an earlier release, recovers at the
+owner's next push with no operator. The allow list and the card are
+held the same way. One thing outlasts a directory's recovery: another
+machine of the owner whose `channels.json` holds the future issue time
+has its guard against writing over a newer directory off until that time
+passes, since its edit's preflight finds nothing a relay holds issued
+later than its own, so after the recovery that machine should run `auu
+channel pull` before it edits. A running `auu watch` is woken by the
+replacement as by any change. `auu` runs the same check as the relay
+before it sends anything. A directory already stored is read as it is,
+since a bound at the read would close a mailbox over a clock. A row an
+earlier release stored with an issue time the relay cannot read back, a
+year -1 in UTC, is held as it is, its issue read as the zero time and
+said in the relay's log once a minute, so every watch that asks goes on
+working and the owner's next push replaces the row.
 
 Anyone the allow list admits fetches it with `GET
 /v1/mailbox/{fp}/channels` and gets the same two fields back verbatim, to
@@ -1268,16 +1295,18 @@ fingerprints is 67,141 bytes as `auu` writes it — the same rule run in the
 same places, before the signature.
 The relay verifies the pair against the registered key before storing
 either. It answers `401` for a signature that does not verify, `400` with
-the rule broken or the document over its bytes, and `409` for a list
-issued no later than the one it holds, a broken row being no bar. A body
-with no document is answered `400 this relay takes a signed
-allow list; the request carries no document`, which stores nothing. The
-owner reads it back with `GET /v1/mailbox/{fp}/allow`. That answer is the
-pair verbatim and `state`, one of `signed`, `none` and `broken`. `none`
-means never pushed, and any registered sender may post. `broken` means it
-does not verify, a row with no signature included, and every sender but
-the owner is refused. The owner's own mailbox listing carries the same
-word as `allow` on every answer.
+the rule broken, the document over its bytes, or `issued` more than five
+minutes ahead of its clock or outside the years 0000 to 9999, as for the
+directory, and `409` for a list issued no later than the one it holds, a
+broken row being no bar. A body with no document is answered `400 this
+relay takes a signed allow list; the request carries no document`, which
+stores nothing. The owner reads it back with `GET
+/v1/mailbox/{fp}/allow`. That answer is the pair verbatim and `state`,
+one of `signed`, `none` and `broken`. `none` means never pushed, and any
+registered sender may post. `broken` means it does not verify, a row
+with no signature included, and every sender but the owner is refused.
+The owner's own mailbox listing carries the same word as `allow` on
+every answer.
 
 The card travels the same way. `PUT /v1/mailbox/{fp}/card` carries
 `document` and `signature`, the card as the owner signed it under its own
@@ -1290,11 +1319,12 @@ otherwise take every reader's page of the listing over its hold. The
 relay verifies the pair against the registered key before storing
 either, and answers `401` for a signature that does not verify (a body
 with no document included), `400` with the rule broken, the document
-over its bytes or naming another owner, and `409` for a card issued
-no later than the one it holds, a broken row being no bar. The owner
-reads it back with `GET /v1/mailbox/{fp}/card`, the pair verbatim and
-`state`, one of `signed`, `none` and `broken`, and their own listing
-carries the word as `card`.
+over its bytes or naming another owner, or `issued` more than five
+minutes ahead of its clock or outside the years 0000 to 9999, as for the
+directory, and `409` for a card issued no later than the one it holds, a
+broken row being no bar. The owner reads it back with `GET
+/v1/mailbox/{fp}/card`, the pair verbatim and `state`, one of `signed`,
+`none` and `broken`, and their own listing carries the word as `card`.
 
 Any registered, unblocked identity — a
 mailbox, not a certificate alone — fetches the cards that say listed
@@ -1370,15 +1400,15 @@ already holding as many listings as `max_waiting` allows, or two for the
 same identity, answers at once instead. The hold degrades and never
 refuses.
 
-`peers=FP:ISSUED,...` names peers whose channel directories the
-caller is watching and the issue time it holds for each, in Unix
-nanoseconds. A push that replaces one of them wakes the hold. The answer
-names in `directories_changed` every watched peer whose directory is
-issued later than the caller said. A peer the caller may not post to is
-dropped without a word, never named and never woken on, since the
-directory fetch the caller made first has already told it `403`. A
-courier's mailbox is dropped the same way, for the reason that fetch
-refuses it.
+`peers=FP:ISSUED,...` names peers whose channel directories the caller
+is watching and the issue time it holds for each, in Unix nanoseconds. A
+push that replaces one of them wakes the hold. The answer names in
+`directories_changed` every watched peer whose directory has an issue
+time different from the one the caller said, never one whose issue the
+relay could not read. A peer the caller may not post to is dropped
+without a word, never named and never woken on, since the directory
+fetch the caller made first has already told it `403`. A courier's
+mailbox is dropped the same way, for the reason that fetch refuses it.
 
 `stubs=1` answers every row without its `envelope`, for a caller that
 wants the ids and nothing else. That is what checking whether mail it left

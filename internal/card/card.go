@@ -217,3 +217,26 @@ func decode(doc []byte) (*Document, error) {
 	}
 	return &d, nil
 }
+
+// CheckIssued is the rule of a pushed card that needs a clock, and so
+// runs where the document is pushed and nowhere else: at the relay, on the
+// verified document before it is stored, and in the owner's command before
+// any request. A document issued further ahead of now than a request may
+// be (relayapi.MaxSkew) was stamped by a clock no relay would have
+// accepted, and would hold every later push from a right clock off as
+// older; one issued outside what this program can write
+// (relayapi.Writable) could not be written into an answer or a file that
+// carries it (a 409's at, a --json listing). A
+// stored document is read as it is, by Verify, which never asks: a bound
+// at the read would close a mailbox over a clock.
+func CheckIssued(d *Document, now time.Time) error {
+	if d.Issued.After(now.Add(relayapi.MaxSkew)) {
+		return fmt.Errorf("issued %s is more than %s %w",
+			d.Issued.UTC().Format(time.RFC3339), relayapi.MaxSkew, relayapi.ErrAheadOfNow)
+	}
+	if !relayapi.Writable(d.Issued) {
+		return fmt.Errorf("issued %s is outside the years 0000 to 9999 this program can write",
+			d.Issued.UTC().Format(time.RFC3339))
+	}
+	return nil
+}

@@ -82,7 +82,7 @@ func (s *Store) SetDirectory(fp string, d *channels.Directory, doc, sig []byte) 
 	}
 	// A mailbox with no row joins nil bytes, which directoryDecision
 	// reads as not verifying: no rule, and the first push is taken.
-	if stored, ok := directoryDecision(bundle, storedDoc, storedSig); ok {
+	if stored, ok := directoryDecision(bundle, storedDoc, storedSig); ok && !heldFromTheFuture(stored.Issued) {
 		held := stored.Issued
 		if !d.Issued.After(held) {
 			if d.Issued.Equal(held) && bytes.Equal(doc, storedDoc) {
@@ -181,7 +181,14 @@ func (s *Store) DirectoryIssued(fp string) (issued time.Time, found bool, err er
 	}
 	issued, err = time.Parse(time.RFC3339Nano, raw)
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("relay: directory for %s has issued %q: %w", fp, raw, err)
+		// A row an earlier release stored with an issue it could write and
+		// not read back (a year -1 in UTC). The directory is held as it
+		// is, and the issue read as the zero time, said in the log: every
+		// watch that asks goes on working, and the owner's next push, judged
+		// against the held document's own issue, which it comes after,
+		// replaces the row.
+		s.faults.noteDirectoryIssued(fp, raw)
+		return time.Time{}, true, nil
 	}
 	return issued, true, nil
 }

@@ -128,6 +128,18 @@ func (f *faultLog) noteDirectory(fp string) {
 	}
 }
 
+// noteDirectoryIssued logs that a mailbox's channel directory holds an
+// issue time this relay cannot read back, unless that was logged for the
+// mailbox inside the last minute.
+func (f *faultLog) noteDirectoryIssued(fp, raw string) {
+	if f == nil || f.log == nil {
+		return
+	}
+	if f.due("directoryissued:" + fp) {
+		f.log.Warn(fmt.Sprintf("channel directory for %s holds an issue time this relay cannot read, %q; read as the zero time until the owner pushes again", fp, raw))
+	}
+}
+
 // noteUndialable says a courier this relay accepts from is one it cannot dial,
 // so news for it stops here. It is the one-way peering the start already says
 // out loud, met at the moment it costs something.

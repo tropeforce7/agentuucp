@@ -62,6 +62,14 @@ func (s *Server) handleSetChannels(w http.ResponseWriter, r *http.Request, body 
 		s.fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	// The one rule that needs a clock, on the verified directory and before
+	// anything is stored: issued no further ahead of this relay's clock
+	// than a request may be, and every time in it within what this
+	// program can write (CheckIssued says which).
+	if err := channels.CheckIssued(d, time.Now()); err != nil {
+		s.fail(w, http.StatusBadRequest, issuedRefusal(err))
+		return
+	}
 	// Belt and braces: Verify has required the owner to be the key's
 	// fingerprint, and the key is this mailbox's bundle, so this cannot
 	// differ unless the two are looked up differently one day.
@@ -214,4 +222,13 @@ func (s *Server) channelForPost(w http.ResponseWriter, fp, name string) (string,
 		return "", false
 	}
 	return name, true
+}
+
+// issuedRefusal is the sentence for an owner document CheckIssued refused:
+// its own, and for issued ahead of now, whose clock it was.
+func issuedRefusal(err error) string {
+	if errors.Is(err, relayapi.ErrAheadOfNow) {
+		return "by this relay's clock, " + err.Error()
+	}
+	return err.Error()
 }

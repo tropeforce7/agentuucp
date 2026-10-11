@@ -40,6 +40,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 	"unicode"
@@ -448,4 +449,56 @@ func decode(doc []byte) (*Directory, error) {
 		return nil, fmt.Errorf("%w: %v", ErrForm, err)
 	}
 	return &d, nil
+}
+
+// ErrBound is what CheckIssued wraps when a channel's not_before or
+// not_after is outside what this program can write: the owner's remedy is
+// that channel's bound, where for issued it is a directory issued anew.
+var ErrBound = errors.New("outside the years 0000 to 9999 this program can write")
+
+// The ends of what UnixNano can say: a watch carries a directory's issued
+// to the relay as nanoseconds since 1970, which wrap outside these.
+var (
+	earliestNano = time.Unix(0, math.MinInt64)
+	latestNano   = time.Unix(0, math.MaxInt64)
+)
+
+// CheckIssued is the rule of a pushed directory that needs a clock, and so
+// runs where the directory is pushed and nowhere else: at the relay, on
+// the verified document before it is stored, and in the owner's command
+// before any request. A directory issued further ahead of now than a
+// request may be (relayapi.MaxSkew) was stamped by a clock no relay would
+// have accepted, and would hold every later push from a right clock off as
+// older; one issued outside what this program can write
+// (relayapi.Writable) would be stored in a column its reader refuses, and
+// one outside what UnixNano can say would be carried by a watch as another
+// time. A channel's bound outside what this program can write would break
+// the relay's refusal that names it. A stored directory is read as it is,
+// by Verify, which never asks: a bound at the read would close a mailbox
+// over a clock.
+func CheckIssued(d *Directory, now time.Time) error {
+	if d.Issued.After(now.Add(relayapi.MaxSkew)) {
+		return fmt.Errorf("issued %s is more than %s %w",
+			d.Issued.UTC().Format(time.RFC3339), relayapi.MaxSkew, relayapi.ErrAheadOfNow)
+	}
+	if !relayapi.Writable(d.Issued) {
+		return fmt.Errorf("issued %s is outside the years 0000 to 9999 this program can write",
+			d.Issued.UTC().Format(time.RFC3339))
+	}
+	if d.Issued.Before(earliestNano) || d.Issued.After(latestNano) {
+		return fmt.Errorf("issued %s is outside %s to %s, which a watch can carry",
+			d.Issued.UTC().Format(time.RFC3339), earliestNano.UTC().Format(time.RFC3339Nano), latestNano.UTC().Format(time.RFC3339Nano))
+	}
+	for _, c := range d.Channels {
+		for _, b := range []struct {
+			name string
+			at   *time.Time
+		}{{"not_before", c.NotBefore}, {"not_after", c.NotAfter}} {
+			if b.at != nil && !relayapi.Writable(*b.at) {
+				return fmt.Errorf("channel %s: %s %s is %w",
+					identity.Printable(c.Name), b.name, b.at.UTC().Format(time.RFC3339), ErrBound)
+			}
+		}
+	}
+	return nil
 }
