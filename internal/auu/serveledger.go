@@ -78,7 +78,9 @@ type ledgerEntry struct {
 	// the inbox at the run's start (fillSenders), or when it is next
 	// written. So a thread carried over takes its opener from the earliest
 	// of its messages still in the inbox. A thread whose opener's messages
-	// the owner has removed may take another sender's.
+	// the owner has removed may take another sender's; one with none of
+	// its messages left, and something on it tried or answered, is
+	// nobody's (channelFor).
 	From string `json:"from,omitempty"`
 	// Arrived and RelayID are when the message arrived on this machine, the
 	// record's Arrived, and the relay's counter for it, written with From
@@ -259,8 +261,8 @@ func (l *ledger) answered(thread string) int {
 // rewritten, so two runs agree. Nothing is what a thread serve
 // has not seen gets. A thread from a v0.17.0 ledger has its senders from
 // its messages still in the inbox (fillSenders). One whose messages are
-// all gone gets nothing until the first message serve takes up on it after
-// the upgrade is written.
+// all gone gets nothing, and channelFor answers nobody on it once
+// anything on it was tried or answered.
 func (l *ledger) opener(thread string) string {
 	_, e := l.openerEntry(thread)
 	if e == nil {

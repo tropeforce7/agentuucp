@@ -260,14 +260,18 @@ no worktree and no directory. Only while nothing on the thread has been
 tried or answered may a message that arrived before the recorded opener's
 take the thread, so no later stamp moves a thread with a conversation in
 it. A v0.17.0 ledger kept no senders: its entries take theirs from their
-messages still in the inbox at the run's start (`fillSenders`), and a
-thread with none of its messages left takes the sender of the first message
-serve takes up on it after the upgrade. The rule holds for `max_turns` too:
-the rule below, that a fault a message chose is its own, keyed the count on
-the thread the ledger sent its reply on rather than one the sender named;
-but a limit keyed on a thread holds only as far as the thread is one
-party's, and it is now keyed on a thread only its opener can add turns to.
-The trace's test is `TestAThreadIsAnsweredForThePeerWhoOpenedIt`.
+messages still in the inbox at the run's start (`fillSenders`). A thread
+with none of its messages left once took the sender of the first message
+serve took up on it after the upgrade, so any peer who knew its id could
+take it over; now, once anything on it was tried or answered, it is
+nobody's: `channelFor` answers no message on it from anyone, the original
+asker included, and says each once per run (`sayNoOpener`), leaving it in
+the inbox uncounted. The rule holds for `max_turns` too: the rule below,
+that a fault a message chose is its own, keyed the count on the thread the
+ledger sent its reply on rather than one the sender named; but a limit
+keyed on a thread holds only as far as the thread is one party's, and it
+is now keyed on a thread only its opener can add turns to. The trace's
+test is `TestAThreadIsAnsweredForThePeerWhoOpenedIt`.
 
 ## The relay stays dumb
 

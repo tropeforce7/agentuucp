@@ -59,6 +59,12 @@ type serveRun struct {
 	// otherParty is the messages already said to be on a thread another
 	// peer opened, so each is said once per run.
 	otherParty map[string]bool
+	// noOpener is the messages already said to be on a thread tried or
+	// answered before the upgrade whose opener the ledger does not name,
+	// so each is said once per run: one serveRun is the whole process,
+	// every round and sweep of a long serve, so a message left in the
+	// inbox is not said again at each.
+	noOpener map[string]bool
 }
 
 // roundJSON is one round as --json gives it.
@@ -483,8 +489,16 @@ func (r *serveRun) channelFor(m *store.Stored) *serveChannel {
 	// the thread is its opener's whatever any later message's arrival says:
 	// an entry an earlier release wrote holds the relay's clock, and this
 	// machine's clock may be set back, and neither may move a thread that
-	// has a conversation in it.
-	if id, e := r.led.openerEntry(m.Inner.Body.Thread); e != nil && e.From != m.Inner.From &&
+	// has a conversation in it. A thread with a conversation and no opener
+	// at all is one a v0.17.0 ledger carried over whose messages the owner
+	// has removed: whose it was is gone, so it is nobody's, and a peer
+	// with something to say opens a thread of their own (D81).
+	id, e := r.led.openerEntry(m.Inner.Body.Thread)
+	if e == nil && r.led.tried(m.Inner.Body.Thread) {
+		r.sayNoOpener(m)
+		return nil
+	}
+	if e != nil && e.From != m.Inner.From &&
 		!(!r.led.tried(m.Inner.Body.Thread) &&
 			arrivedBefore(m.Arrived.UTC(), m.RelayID, m.Inner.ID, e.Arrived, e.RelayID, id)) {
 		r.sayOtherParty(m, e.From)
@@ -499,8 +513,9 @@ func (r *serveRun) channelFor(m *store.Stored) *serveChannel {
 // carried over the upgrade takes its opener from the earliest of its
 // messages still in the inbox, verified as every message's sender is when
 // it was opened. A thread whose opener's messages the owner has removed
-// may take another sender's. One with none of its messages left takes the
-// sender of the first message serve takes up on it after the upgrade.
+// may take another sender's. One with none of its messages left has no
+// opener, and is nobody's once anything on it was tried or answered
+// (channelFor).
 //
 // What it fills is written at once: a round that answers nothing saves
 // nothing, and an owner who removed the message after such a round would
@@ -555,6 +570,21 @@ func (r *serveRun) sayOtherParty(m *store.Stored, opener string) {
 	fmt.Fprintf(os.Stderr, "%s: %s from %s is on thread %s, which %s opened; left alone\n",
 		prog, shortID(m.Inner.ID), orNone(identity.Printable(m.SenderName)), shortID(m.Inner.Body.Thread),
 		opener[:16])
+}
+
+// sayNoOpener says, once per message per run, that a message was left
+// alone for being on a thread tried or answered before the upgrade whose
+// opener the ledger does not name, in the shape of sayOtherParty.
+func (r *serveRun) sayNoOpener(m *store.Stored) {
+	if r.noOpener == nil {
+		r.noOpener = map[string]bool{}
+	}
+	if r.noOpener[m.Inner.ID] {
+		return
+	}
+	r.noOpener[m.Inner.ID] = true
+	fmt.Fprintf(os.Stderr, "%s: %s from %s is on thread %s, which was tried or answered before the upgrade for a peer this ledger does not name; left alone\n",
+		prog, shortID(m.Inner.ID), orNone(identity.Printable(m.SenderName)), shortID(m.Inner.Body.Thread))
 }
 
 // sayRenamed says, once per message per run, that a follow-up was left

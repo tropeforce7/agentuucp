@@ -196,7 +196,13 @@ thread another peer opened and was left alone.
 A thread carried over from a v0.17.0 ledger, which kept no senders, takes
 its opener from the earliest of its messages still in the inbox, where
 serve leaves what it answered. A thread whose opener's messages the owner
-has removed may take another sender's.
+has removed may take another sender's. A thread with none of its messages
+left is nobody's once anything on it was tried or answered: serve answers
+no message on it from anyone, the peer who asked included. Each is left
+in the inbox, not answered and not counted as a turn, and serve says on
+stderr, the first time it meets one in each run, that the message is on
+a thread tried or answered before the upgrade for a peer the ledger does
+not name and was left alone. The peer opens a new thread.
 
 ## What the handler is given
 

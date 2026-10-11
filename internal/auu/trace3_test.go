@@ -291,16 +291,29 @@ func rewriteAsOlder(t *testing.T, bob *expert) {
 	}
 }
 
+// noOpenerLine is the line serve says for a message on a thread tried or
+// answered before the upgrade whose opener the ledger does not name.
+func noOpenerLine(id, thread, name string) string {
+	return fmt.Sprintf("auu: %s from %s is on thread %s, which was tried or answered before the upgrade for a peer this ledger does not name; left alone",
+		shortID(id), name, shortID(thread))
+}
+
 // A ledger written by v0.17.0 names no sender on any entry. Where the
 // message is still in the inbox, serve reads its sender from there at the
 // start of a run (TestAnOlderLedgerTakesItsOpenersFromTheInbox); this is
-// the other case, a thread whose messages the owner has removed, which has
-// no opener until it is written again. The first turn on it after the
-// upgrade is the one that names one: alice's follow-up is answered as her
-// second turn and its entry carries her fingerprint, while her removed
-// ask's entry still names nobody, and carol's ask on the same thread after
-// that is left alone.
-func TestAThreadFromAnOlderLedgerTakesItsNextSenderAsOpener(t *testing.T) {
+// the other case, a thread whose messages the owner has removed, which
+// has no opener and something answered on it. Whose it was is gone, so it
+// is nobody's (D81): alice's own follow-up on it is left alone, said once
+// in each round, with no handler run, nothing sent, no turn counted, no
+// entry written and the message still in bob's inbox, where before it
+// took the thread as her second turn; carol's ask on it is the same, where
+// before the first to ask would have named the opener. Each round here is
+// its own serve --once, a run of its own, and within one round pending
+// meets the message once, so a line said every time it is met would still
+// count once here: the evidence that it is said once per run is
+// TestTheNoOpenerLineIsSaidOncePerMessagePerRun. Alice asking on a thread
+// of her own is answered as its first turn.
+func TestAThreadFromAnOlderLedgerWithItsMessagesGoneIsNobodys(t *testing.T) {
 	alice, carol, bob := newExpertAndCarol(t, modeReadOnly)
 	marker := filepath.Join(t.TempDir(), "runs")
 	t.Setenv(handlerScript, "append:"+marker+";echo:answered")
@@ -320,34 +333,117 @@ func TestAThreadFromAnOlderLedgerTakesItsNextSenderAsOpener(t *testing.T) {
 		}
 	}
 
-	alice.run("reply", first.ID[:12], "and one more thing")
-	report := bob.round(t)
-	if len(report.Answered) != 1 || report.Answered[0].Thread != sent.Thread {
-		t.Fatalf("alice's follow-up on the older ledger's thread was not answered: %+v", report)
+	// leftAloneOnce runs two rounds and fails the test unless each says
+	// the line for m once and takes nothing, and then unless m is still
+	// in bob's inbox unread, no handler ran beyond alice's first ask,
+	// nothing reached alice or carol from bob past alice's first answer,
+	// the thread has its one turn and m has no ledger entry.
+	leftAloneOnce := func(who string, m sentJSON, name string) {
+		t.Helper()
+		want := noOpenerLine(m.ID, sent.Thread, name)
+		for round := 1; round <= 2; round++ {
+			report, stderr := bob.roundSaid(t)
+			if len(report.Answered)+len(report.Failed)+len(report.Skipped) != 0 {
+				t.Errorf("%s, round %d: taken on a thread with no opener: %+v", who, round, report)
+			}
+			if n := strings.Count(stderr, want); n != 1 {
+				t.Errorf("%s, round %d said it %d times, want once:\n%s\nstderr:\n%s", who, round, n, want, stderr)
+			}
+		}
+		unreadAtBob(t, bob, m.ID)
+		if runs := readFile(t, marker); strings.Count(runs, "\n") != 1 || strings.Contains(runs, m.ID) {
+			t.Errorf("%s: a handler ran:\n%s", who, runs)
+		}
+		led := bob.ledgerOf(t)
+		if n := led.answered(sent.Thread); n != 1 {
+			t.Errorf("%s: the thread has %d turns answered, want 1", who, n)
+		}
+		if e, ok := led.Messages[m.ID]; ok {
+			t.Errorf("%s: written into the ledger: %+v", who, e)
+		}
 	}
-	followUp := report.Answered[0].ID
-	if !strings.Contains(readFile(t, marker), "handler "+followUp+" 2\n") {
-		t.Errorf("alice's follow-up was not her turn 2; the handler ran:\n%s", readFile(t, marker))
+
+	var followUp sentJSON
+	if err := json.Unmarshal([]byte(alice.run("reply", first.ID[:12], "--json", "and one more thing")), &followUp); err != nil {
+		t.Fatal(err)
 	}
-	led := bob.ledgerOf(t)
-	if e := led.Messages[followUp]; e == nil || e.From != alice.fingerprint() {
-		t.Fatalf("alice's follow-up's entry names sender %+v, want %s", e, alice.fingerprint())
+	if followUp.Thread != sent.Thread {
+		t.Fatalf("alice's follow-up is on thread %s, not %s", followUp.Thread, sent.Thread)
 	}
-	if e := led.Messages[sent.ID]; e == nil || e.From != "" {
-		t.Errorf("alice's removed ask's entry is %+v; want it kept with no sender, so that the follow-up is what named one", e)
+	leftAloneOnce("alice's follow-up", followUp, "alice")
+	var got inboxJSON
+	if err := json.Unmarshal([]byte(alice.run("inbox", "--json")), &got); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range got.Messages {
+		if m.ID != first.ID && m.From == bob.fingerprint() {
+			t.Errorf("bob sent alice %s past her first answer: %+v", m.ID[:12], m)
+		}
 	}
 
 	hijack := carol.askOn(t, "jostle", sent.Thread, "carol's question", "what is in this thread?")
-	after, stderr := bob.roundSaid(t)
-	if len(after.Answered)+len(after.Failed) != 0 {
-		t.Errorf("carol's ask on a thread alice took up after the upgrade was taken: %+v", after)
-	}
-	if want := leftAlone(hijack, "carol", alice.fingerprint()); strings.Count(stderr, want) != 1 {
-		t.Errorf("stderr:\n%s\nwant once:\n%s", stderr, want)
-	}
+	leftAloneOnce("carol's ask", hijack, "carol")
 	nothingFromBob(t, carol, bob)
-	if n := bob.ledgerOf(t).answered(sent.Thread); n != 2 {
-		t.Errorf("the thread has %d turns answered, want 2", n)
+
+	// A thread of alice's own is hers, and its first turn is turn 1.
+	fresh := alice.ask(t, "jostle", "another question", "a new thread")
+	report := bob.round(t)
+	if len(report.Answered) != 1 || report.Answered[0].Thread != fresh.Thread || fresh.Thread == sent.Thread {
+		t.Fatalf("alice's ask on a new thread was not answered: %+v", report)
+	}
+	if line := "handler " + fresh.ID + " 1\n"; !strings.Contains(readFile(t, marker), line) {
+		t.Errorf("alice's new thread was not answered as turn 1; the handler ran:\n%s", readFile(t, marker))
+	}
+	if e := bob.ledgerOf(t).Messages[fresh.ID]; e == nil || e.From != alice.fingerprint() {
+		t.Errorf("alice's new ask's entry is %+v, want it to name her", e)
+	}
+}
+
+// The no-opener line is said once per message per run, as the other-party
+// line is: a long serve's rounds share one run, and a message left in the
+// inbox is met at every one of them. A run asked three times about alice's
+// follow-up on a thread tried or answered before the upgrade whose ledger entry
+// names nobody says it once and gives no channel each time; asked about
+// carol's, it says that once too; and a new run says the first again.
+func TestTheNoOpenerLineIsSaidOncePerMessagePerRun(t *testing.T) {
+	aliceFP, carolFP := strings.Repeat("a", 64), strings.Repeat("c", 64)
+	thread := strings.Repeat("1", 32)
+	now := time.Now().UTC().Truncate(time.Second)
+	led := &ledger{V: ledgerV, Messages: map[string]*ledgerEntry{
+		strings.Repeat("2", 32): {Thread: thread, Channel: "jostle", Handled: now, Tried: now},
+	}}
+	cfg := &serveConfig{V: 1, Channels: map[string]*serveChannel{"jostle": {Mode: modeReadOnly}}}
+	stored := func(id, from, name string) *store.Stored {
+		return &store.Stored{Channel: "jostle", SenderName: name, Inner: &envelope.Inner{
+			ID: id, From: from,
+			Body: message.Body{Type: message.TypeAsk, Thread: thread, Subject: "on the thread"},
+		}}
+	}
+	own := stored(strings.Repeat("3", 32), aliceFP, "alice")
+	other := stored(strings.Repeat("4", 32), carolFP, "carol")
+	line := func(m *store.Stored) string {
+		return noOpenerLine(m.Inner.ID, thread, m.SenderName) + "\n"
+	}
+
+	r := &serveRun{cfg: cfg, led: led}
+	stderr := captureStderr(t, func() {
+		for i := 1; i <= 3; i++ {
+			if ch := r.channelFor(own); ch != nil {
+				t.Errorf("ask %d: alice's message on a thread with no opener was given a channel", i)
+			}
+		}
+		if ch := r.channelFor(other); ch != nil {
+			t.Error("carol's message on a thread with no opener was given a channel")
+		}
+	})
+	if stderr != line(own)+line(other) {
+		t.Errorf("one run said:\n%q\nwant once each:\n%q", stderr, line(own)+line(other))
+	}
+
+	again := &serveRun{cfg: cfg, led: led}
+	stderr = captureStderr(t, func() { again.channelFor(own) })
+	if stderr != line(own) {
+		t.Errorf("a new run said:\n%q\nwant:\n%q", stderr, line(own))
 	}
 }
 
@@ -603,6 +699,70 @@ func TestTheOtherPartyLineIsSaidOncePerMessagePerRun(t *testing.T) {
 	stderr = captureStderr(t, func() { again.channelFor(first) })
 	if stderr != line(first) {
 		t.Errorf("a new run said:\n%q\nwant:\n%q", stderr, line(first))
+	}
+}
+
+// The gate is a thread tried or answered, not one merely seen: a v0.17.0
+// entry neither skipped, tried nor handled, as a message serve met and
+// never took up leaves, names no sender and has nothing on the thread that
+// anybody was answered for, so its first asker is given the channel and
+// nothing is said, where a gate on any entry at all would leave the thread
+// nobody's before anyone was answered on it.
+func TestAThreadSeenButNeverTriedIsNotNobodys(t *testing.T) {
+	aliceFP := strings.Repeat("a", 64)
+	thread := strings.Repeat("1", 32)
+	led := &ledger{V: ledgerV, Messages: map[string]*ledgerEntry{
+		strings.Repeat("2", 32): {Thread: thread, Channel: "jostle"},
+	}}
+	if !led.touched(thread) || led.tried(thread) {
+		t.Fatalf("the entry is not one seen and never tried: touched %v, tried %v", led.touched(thread), led.tried(thread))
+	}
+	cfg := &serveConfig{V: 1, Channels: map[string]*serveChannel{"jostle": {Mode: modeReadOnly}}}
+	ask := &store.Stored{Channel: "jostle", SenderName: "alice", Inner: &envelope.Inner{
+		ID: strings.Repeat("3", 32), From: aliceFP,
+		Body: message.Body{Type: message.TypeAsk, Thread: thread, Subject: "on the thread"},
+	}}
+	r := &serveRun{cfg: cfg, led: led}
+	var ch *serveChannel
+	stderr := captureStderr(t, func() { ch = r.channelFor(ask) })
+	if ch == nil {
+		t.Error("alice's ask on a thread seen but never tried was given no channel")
+	}
+	if stderr != "" {
+		t.Errorf("it said:\n%s", stderr)
+	}
+}
+
+// The gate is a thread tried, not one answered: a v0.17.0 entry whose
+// handler was tried and never answered, as one that failed leaves, names
+// no sender, and the thread is nobody's all the same, since its asker may
+// be anybody. Alice's message on it is given no channel and said once in
+// the run, and asked about again it is not said again.
+func TestAThreadTriedButNeverAnsweredIsNobodys(t *testing.T) {
+	aliceFP := strings.Repeat("a", 64)
+	thread := strings.Repeat("1", 32)
+	now := time.Now().UTC().Truncate(time.Second)
+	led := &ledger{V: ledgerV, Messages: map[string]*ledgerEntry{
+		strings.Repeat("2", 32): {Thread: thread, Channel: "jostle", Tried: now, Failures: 1},
+	}}
+	if !led.tried(thread) || led.answered(thread) != 0 {
+		t.Fatalf("the entry is not one tried and never answered: tried %v, answered %d", led.tried(thread), led.answered(thread))
+	}
+	cfg := &serveConfig{V: 1, Channels: map[string]*serveChannel{"jostle": {Mode: modeReadOnly}}}
+	ask := &store.Stored{Channel: "jostle", SenderName: "alice", Inner: &envelope.Inner{
+		ID: strings.Repeat("3", 32), From: aliceFP,
+		Body: message.Body{Type: message.TypeAsk, Thread: thread, Subject: "on the thread"},
+	}}
+	r := &serveRun{cfg: cfg, led: led}
+	stderr := captureStderr(t, func() {
+		for i := 1; i <= 2; i++ {
+			if ch := r.channelFor(ask); ch != nil {
+				t.Errorf("ask %d: alice's message on a thread tried and never answered was given a channel", i)
+			}
+		}
+	})
+	if want := noOpenerLine(ask.Inner.ID, thread, "alice") + "\n"; stderr != want {
+		t.Errorf("the run said:\n%q\nwant once:\n%q", stderr, want)
 	}
 }
 

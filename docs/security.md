@@ -936,7 +936,12 @@ and is not rewritten, so a thread opened before the upgrade is ordered by
 that stamp until something on it is tried. A thread carried over from a
 v0.17.0 ledger, which kept no senders, takes its opener from the earliest
 of its messages still in the inbox. A thread whose opener's messages the
-owner has removed may take another sender's.
+owner has removed may take another sender's. One with none of its
+messages left has no opener, and once anything on it was tried or
+answered it is nobody's: serve answers no message on it from anyone, the
+original asker included, and leaves each in the inbox, unanswered and
+uncounted. Were the first message after the upgrade to name its opener,
+any peer who knew the thread id could take the thread over.
 
 **The HTTP layer has bounds of its own**, and they are not settings. The
 relay speaks HTTP/1.1 alone. HTTP/2 is off on the listener and not offered
