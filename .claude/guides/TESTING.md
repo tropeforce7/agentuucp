@@ -553,24 +553,26 @@ thing you had to know to write the call, and the row is where the next
 reader finds it. A `network` row's rule and point should read the same as
 the matching row in the paths table.
 
-**A name has one rule, and both ends run it, on every path.** A thread
-id is a message id; a channel name has no slash. Each is one predicate in
-one package, called at send and at open, and called on the stream path as
-well as the envelope path. The stream manifest once copied its body into
-the message unchecked, so a rule that held for a small message was a door
-for a large one. The test for a new rule sends the bad value both ways and
-by both paths, and the value the sender's own command refuses is crafted
-past it with the wire constants as literals, the way `damaged_test` forges
-an envelope. An attachment name is the one rule of another shape: the
-receiver never refuses a name for what it would do as a path, since it is
-no good relying on the sender to get it right; it holds the name to what
-any text is held to and writes the file under `message.SafeName` of it,
-made unique at the write, and the sender is held to `SafeName`'s fixed
-point (`ValidAttachmentName`) at `envelope.Seal` and `stream.BuildManifest`,
-so the two ends agree by construction: a name the sender may ship is one
-the receiver writes unchanged. `TestLimitSafeNameIsAFixedPoint` pins every
-step and the fixed point; the receiver's tests feed the names past the
-sender's rule, as a stranger's client would.
+**A name has one rule, and both ends run it, on every path.** A thread id
+is held to a message id's shape, though a new thread is given an id of its
+own and not its first message's; a channel name has no slash. Each is one
+predicate in one package, called at send and at open, and called on the
+stream path as well as the envelope path. The stream manifest once copied
+its body into the message unchecked, so a rule that held for a small
+message was a door for a large one. The test for a new rule sends the bad
+value both ways and by both paths, and the value the sender's own command
+refuses is crafted past it with the wire constants as literals, the way
+`damaged_test` forges an envelope. An attachment name is the one rule of
+another shape: the receiver never refuses a name for what it would do as a
+path, since it is no good relying on the sender to get it right; it holds
+the name to what any text is held to and writes the file under
+`message.SafeName` of it, made unique at the write, and the sender is held
+to `SafeName`'s fixed point (`ValidAttachmentName`) at `envelope.Seal` and
+`stream.BuildManifest`, so the two ends agree by construction: a name the
+sender may ship is one the receiver writes unchanged.
+`TestLimitSafeNameIsAFixedPoint` pins every step and the fixed point; the
+receiver's tests feed the names past the sender's rule, as a stranger's
+client would.
 
 **A string from the network is never sliced before its rule has run.**
 `s[:16]` on a fifteen-byte string is a panic, and a fingerprint, a serial
@@ -654,6 +656,24 @@ thing that goes through it, or that it is built into, is not done until:
 
 A test pins what the code should say, never what it happens to say. A row
 for advice the code gives that is wrong is the bug's test, and it fails.
+
+**A section is known on a path, not everywhere, and its test says which.**
+`max-recipients`, read on an answer alone, was known on every path, so a
+sealed message could carry a mebibyte of it, kept whole in the record and
+re-read at every listing, where a name nobody registered is held to
+`wire.MaxKeptBytes`, 16 KiB, and dropped and counted over it. A known
+section's test is therefore a table of the feature's section names by the
+four paths, `OnMessage`, `OnManifest`, `OnRequest` and `OnAnswer`, every
+cell asserted known or not (`TestTheSectionsAreKnownOnTheirPathsAlone`);
+and the kept-size row above runs for a known name on a path that does not
+read it as for an unknown one, at the kept size and at a mebibyte: the
+trace's mebibyte on a sealed note is dropped and counted at the fetch
+(`TestASectionNotReadOnTheMessagePathIsHeldToTheKeptCap`). What does not
+depend on the path is tested path-blind, in the same test: a
+`max-recipients` at the kept size beside a critical `recipient-count` on a
+message is delivered, not held for a newer auu, and both are listed among
+the ignored sections; and a record an earlier release kept with an
+oversized `max-recipients` still loads.
 
 **Nothing on this machine is from before, and every refusal of a file
 from before has a test that makes the file in its old form.** A file a
@@ -1061,7 +1081,19 @@ values it already holds, with no edge from outside to feed — the sealed
 copy's size less the offset, the row's size less the offset that
 Content-Length was held equal to — says so in its row as `local:` and
 needs no test of its own, though it may name the test of what made the
-values equal.
+values equal. A hold sized by a relay's word is held to a client constant
+too, and its test feeds the largest word the relay may say. The listing
+hold was twice the `max_bytes` a health answer gives, which the client
+admits up to `MaxBytesCeiling`; the cap row for the reader every answer
+goes through, `(*Client).attempt` at `<= hold + 1`, and its test at an
+ordinary relay's figure proved the reader and not what sized it, and a
+relay saying a gigabyte had a hold of two. `TestLimitListingHold` feeds
+`holdFor` figures up to `MaxBytesCeiling` and shows the hold at
+`MaxListingHold` from 64 MiB up, then, through `List` against a relay
+saying the ceiling, takes a page of exactly `MaxListingHold` and refuses
+one a byte longer naming it; the trace's
+`TestTheListingHoldIsBoundedWhateverTheRelaySays` holds what refusing that
+relay's page allocates under three times the hold.
 
 A name list is one guard, and a name list is never complete. The other is
 the handle: a device is a device whatever it is called, and so is a named

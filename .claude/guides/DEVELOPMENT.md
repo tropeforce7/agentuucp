@@ -177,24 +177,33 @@ the certificate, the auth header parsed, the identity it names looked up,
 then the body under the route's cap, then the signature over it. Until
 PLAN-HTTP the body was read before the header was parsed, so a stranger
 with a valid certificate and a fingerprint no mailbox had could have
-sixteen megabytes accepted and buffered before the relay found nothing
-to check them against. The signature cannot come first: it is over the
-body, so the body must be read to check it; that is the one check that
-belongs after the body, and the reason the body is read at all before
-the caller is known to be who they say. The cost of the new order is a
-mailbox lookup for a stranger before the body instead of after it — the
-same read, earlier, bounded by the in-flight cap as it was. The test
-declares sixteen megabytes under an unknown fingerprint, sends none of
-them, and is answered. And a refusal before the body closes the
-connection behind its answer, every one of them — the `413`, the `401`,
-the in-flight `503` — because `net/http`, before it writes a response on
-a connection it will keep, reads up to 256 KiB of a body the handler did
-not, and waits for one that never comes: the first cut of this order
-left the in-flight cap's test flaking, a stalled request that lost the
-race for the slot getting its `503` only when the test closed the
-connection, since the server was waiting for the 3990 bytes it would
-never send before writing it. `unread` is the mark, set at the top of
-every authenticated route and taken off once the body is read; a
+sixteen megabytes accepted and buffered before the relay found nothing to
+check them against. The signature cannot come first: it is over the body,
+so the body must be read to check it; that is the one check that belongs
+after the body, and the reason the body is read at all before the caller is
+known to be who they say. The cost of the new order is a mailbox lookup for
+a stranger before the body instead of after it — the same read, earlier,
+bounded by the in-flight cap as it was. The test declares sixteen megabytes
+under an unknown fingerprint, sends none of them, and is answered. The
+admin routes are the one exception to the order: they read the body before
+the identity is looked up, under `FramingAllowance`, a body of no declared
+length refused `411` and one declared over the cap `413`, since the third
+trace found that a body judged after the lookup, or waited for only under
+an administrator's fingerprint, told an outsider who administers the relay.
+On all three wrappers that read a body before its signature,
+`authedWithCert`, `callerAuthedBody` and `adminAuthed`, a body refused
+before the signature, for its length or a read that failed, is charged to
+the address's unauthenticated budget as a refused signature is, so the
+refusal is not a free question about which fingerprints the relay knows.
+And a refusal before the body closes the connection behind its answer,
+every one of them — the `413`, the `401`, the in-flight `503` — because
+`net/http`, before it writes a response on a connection it will keep, reads
+up to 256 KiB of a body the handler did not, and waits for one that never
+comes: the first cut of this order left the in-flight cap's test flaking, a
+stalled request that lost the race for the slot getting its `503` only when
+the test closed the connection, since the server was waiting for the 3990
+bytes it would never send before writing it. `unread` is the mark, set at
+the top of every authenticated route and taken off once the body is read; a
 request that declares no body keeps its connection.
 
 **Reveal nothing about the token table until the token's signature has
@@ -225,6 +234,38 @@ whatever a setting says, since "0 for unlimited" must still be a number.
 **Settle the mailbox cap and blocks before looking at a token.** A registration
 refused by the cap must not have spent the holder's token. Inside
 `Store.Register` the order is: existing row, cap, token, insert.
+
+**An id that selects state names the party who may select it.** `auu serve`
+took an ask's thread from the message alone, and `auu send --thread` takes
+any id of a message id's shape. A thread id is no secret: every
+co-recipient of a message to several sees it, and so does anyone shown a
+`wait --thread` line. So any peer the expert answered who knew another
+peer's thread could send on it, and serve ran the handler in the opener's
+worktree with the opener's attachments, counted it as the thread's next
+turn, sent that peer the patch of everything produced for the opener, and
+spent the opener's `max_turns`. Every check had passed — the signature was
+the peer's own, the peer was admitted, the id had its shape — and none had
+asked whose thread it was. Now every ledger entry records its message's
+verified sender, `from`, with the relay's arrival stamp and counter,
+written once and never rewritten; a thread's opener is the sender of its
+earliest entry that is not skipped and names a sender, earliest by arrival
+and not by `Tried`, since `Tried` is rewritten at every attempt and a
+stream held for a newer auu has none. `channelFor` asks whose thread it is
+before anything else is done with the message: one on the thread from
+anybody else belongs to no channel here, is said once per message per run
+(`sayOtherParty`), and is left in the inbox, unanswered, uncounted, given
+no worktree and no directory. Only while nothing on the thread has been
+tried or answered may a message that arrived before the recorded opener's
+take the thread, so no later stamp moves a thread with a conversation in
+it. A v0.17.0 ledger kept no senders: its entries take theirs from their
+messages still in the inbox at the run's start (`fillSenders`), and a
+thread with none of its messages left takes the sender of the first message
+serve takes up on it after the upgrade. The rule holds for `max_turns` too:
+the rule below, that a fault a message chose is its own, keyed the count on
+the thread the ledger sent its reply on rather than one the sender named;
+but a limit keyed on a thread holds only as far as the thread is one
+party's, and it is now keyed on a thread only its opener can add turns to.
+The trace's test is `TestAThreadIsAnsweredForThePeerWhoOpenedIt`.
 
 ## The relay stays dumb
 
@@ -569,18 +610,19 @@ that the value is safe.
 onto its serve directory, wrote the message's text there, asked git for a
 worktree there, and ended every round for good on the error: a thread id
 was the one thing a message named that had no rule. Now a thread id and
-an `in_reply_to` are message ids, one predicate in `message` that the
-envelope, the manifest, the store, `send` and `serve` all run; and the
-eight things the network names that become a path — a fingerprint, an
-upload id, a token id, an attachment name, a channel name, a relay host,
-a message id, a thread id — each have one rule at one named point, walked
-by one table test that a new such place gets its row in first (for an
-attachment name the rule is `message.SafeName` at the write rather than
-a refusal, since a receiver never depends on the sender's name, and the
-sender is held to its fixed point). A rule
-must run on both paths: the manifest's body was never opened as an
-envelope's is, and a rule that held for a small message was a door for a
-large one until `Manifest.Validate` ran the same predicate.
+an `in_reply_to` are held to a message id's shape (a thread id is not its
+first message's id: a new thread is given one of its own), one predicate in
+`message` that the envelope, the manifest, the store, `send` and `serve`
+all run; and the eight things the network names that become a path — a
+fingerprint, an upload id, a token id, an attachment name, a channel name,
+a relay host, a message id, a thread id — each have one rule at one named
+point, walked by one table test that a new such place gets its row in first
+(for an attachment name the rule is `message.SafeName` at the write rather
+than a refusal, since a receiver never depends on the sender's name, and
+the sender is held to its fixed point). A rule must run on both paths: the
+manifest's body was never opened as an envelope's is, and a rule that held
+for a small message was a door for a large one until `Manifest.Validate`
+ran the same predicate.
 
 **Every path a file operation takes has its provenance written down, and
 one that is not the program's own has run a rule before the call.** Every
@@ -638,11 +680,17 @@ onto anything and recorded in the ledger as its failure, and the round
 goes on to the next; what is the host's — git failing, the channel's
 directory gone, the disk — still ends the run, since a host fault
 counted against each message would burn their retries and give up on
-messages that were fine. And a limit keyed on a string the sender chose
-is not a limit: `max_turns` counted answers by the thread id in the
-follow-up, so a peer renaming the thread on each reply was on turn one
-every time; a reply is answered on the thread the ledger sent its reply
-on, and a reply that names another is nobody's here.
+messages that were fine. A worktree that is no longer a git worktree of the
+channel's checkout is serve's to mend and not the run's to stop on: a
+handler can do that to it, and ending the run there let one `rm -f .git`
+stop the expert for every asker, so serve removes what stands at the path
+under the serve root, makes the worktree again from the checkout's `HEAD`
+and says so, and a git that cannot be run still ends the run. And a limit
+keyed on a string the sender chose is not a limit: `max_turns` counted
+answers by the thread id in the follow-up, so a peer renaming the thread on
+each reply was on turn one every time; a reply is answered on the thread
+the ledger sent its reply on, and a reply that names another is nobody's
+here.
 
 ## Configuration
 
@@ -1236,24 +1284,27 @@ the cut lands at the cap plus 4096, and the test says so); an auth header
 is held to `relayapi.MaxAuthHeader`, the length its five fields can
 reach, before a field is cut from it; every body is read under its
 route's cap, `readBody` taking the cap as an argument — the post route at
-`max_bytes` plus `FramingAllowance`, two of the three owner-signed
-documents at `MaxDocumentBytes`, and every other body route at
-`FramingAllowance` alone, the card among them, since a card at its
-maximum is a few hundred bytes — with a body that declares itself over the cap
-refused `413` before a byte, naming the cap. **A signed document has a
-cap of its own, and it is not the body's**: `MaxDirectoryBytes`,
-`MaxAllowlistBytes` and `MaxCardBytes` bound the bytes the owner signed,
-each measured from a document at every maximum as this client marshals it
-compact with room above for a signer that indents, each written in the
-constant's comment, and each run **before the signature** — at the push,
-at every reading of a stored document, and by the client before it sends
-one — since a length is the one check that costs nothing and tells the
-caller nothing. Without them a registered identity pads a document with
-whitespace to the route's cap and every reader verifies the padding: the
-relay on every post, and an administrator's page on every mailbox in it.
-A document over its cap is not verified, which for a stored row means it
-reads as broken and fails closed like any other document that does not
-verify; and HTTP/2 is off on the
+`inline_max`, `max_bytes` held to `relayapi.MaxPageBytes`, 64 MiB, plus
+`FramingAllowance`; the knock at `knock_max_bytes`, or `max_bytes` when
+that is unset, either held to `inline_max`, plus `FramingAllowance`;
+`/v1/forward` at `inline_max` plus `FramingAllowance`; `/v1/forward/failed`
+at `MaxReportBytes`; two of the three owner-signed documents at
+`MaxDocumentBytes`; and every other body route at `FramingAllowance` alone,
+the card among them, since a card at its maximum is a few hundred bytes —
+with a body that declares itself over the cap refused `413` before a byte,
+naming the cap. **A signed document has a cap of its own, and it is not the
+body's**: `MaxDirectoryBytes`, `MaxAllowlistBytes` and `MaxCardBytes` bound
+the bytes the owner signed, each measured from a document at every maximum
+as this client marshals it compact with room above for a signer that
+indents, each written in the constant's comment, and each run **before the
+signature** — at the push, at every reading of a stored document, and by
+the client before it sends one — since a length is the one check that costs
+nothing and tells the caller nothing. Without them a registered identity
+pads a document with whitespace to the route's cap and every reader
+verifies the padding: the relay on every post, and an administrator's page
+on every mailbox in it. A document over its cap is not verified, which for
+a stored row means it reads as broken and fails closed like any other
+document that does not verify; and HTTP/2 is off on the
 relay's listener, `TLSNextProto` an empty map and `NextProtos` http/1.1
 alone, so the drain, `Connection: close` and the stall deadline are
 proven under the protocol that is deployed. A cap is the plainest bound
@@ -1265,14 +1316,17 @@ response's headers at the wire constant; every JSON answer is read
 under a hold, and the one answer that grows with a relay's setting — a
 listing page, which had no byte bound at all, up to 200 envelopes of
 `max_bytes` each, a page nobody could hold and so a mailbox nobody could
-acknowledge — is bounded at the relay to `max_bytes` of envelopes, the
-first admitted whatever its size so a page is never empty, and held at
-the client to twice the relay's `max_bytes`, learned from
-the health answer, which carries it always; and the stream routes, whose
-length is the transfer's, run with no whole-exchange timeout and a stall
-rule of the relay's own window on both bodies, since a two-minute
-timeout under the one-request wire meant a stream needing four minutes
-on the link could never be placed.
+acknowledge — is bounded at the relay to `max_bytes` of envelopes, never
+above `relayapi.MaxPageBytes`, the first admitted whatever its size so a
+page is never empty, and held at the client to twice the relay's
+`max_bytes` plus `FramingAllowance`, learned from the health answer,
+which carries it always, and never above `relayapi.MaxListingHold`, a
+page over a hold already there asked for again with half as many rows,
+down to one, before it is refused (the rule on a range proven, below);
+and the stream routes, whose length is the transfer's, run with no
+whole-exchange timeout and a stall rule of the relay's own window on
+both bodies, since a two-minute timeout under the one-request wire meant
+a stream needing four minutes on the link could never be placed.
 
 **Every byte from the network is escaped before a terminal sees it, and the
 relay's sentences are from the network.** `identity.Printable`'s comment
@@ -1325,6 +1379,29 @@ it was given. The same holds for a number: bounded before it is
 multiplied or allocated from, the way `retryAfter` clamps `Retry-After`
 before `time.Second` — the agent's unlock TTL was not, and a multiple of
 2^55 seconds wrapped to exactly zero, which unlock read as until lock.
+
+**A range the code proves is not a range safe for what it sizes.** The
+client held a listing page to twice the relay's `max_bytes` plus
+`FramingAllowance`, and the health check admits `max_bytes` up to
+`MaxBytesCeiling`, a gigabyte. The integer ledger's row for it was true,
+and the range was the one the code held; but a relay that said a gigabyte
+once on its health answer and answered a listing with gigabytes of white
+space could have an `auu serve` or `auu watch` host killed for memory by
+the relay it reads. A row proves what a value may be; what the value is
+multiplied into, allocated or held needs a ceiling of its own, and the
+ceiling is a client constant, not the relay's word. Now `holdFor` takes the
+smaller of twice `max_bytes` plus `FramingAllowance` and
+`relayapi.MaxListingHold`, twice `relayapi.MaxPageBytes` plus
+`FramingAllowance`, 128 MiB and 64 KiB, and a page over it is refused as
+malformed naming it. The relay meets it from its side: a page's budget is
+`max_bytes` held to `MaxPageBytes`, and the post, the knock, a forward and
+a courier's delivery store no envelope over `inline_max`, the same
+`min(max_bytes, MaxPageBytes)`, so a relay of this release builds no page
+its clients refuse but for a lone row stored before the upgrade. An older
+relay fills a page to its whole `max_bytes`, so `ListWait`, refused at a
+hold already at `MaxListingHold`, asks again with half as many rows and the
+same `after`, down to one, before the refusal stands. The trace's test is
+`TestTheListingHoldIsBoundedWhateverTheRelaySays`.
 
 **What a peer writes is held to a rule at Validate and escaped again where
 it is shown, and nothing is ordered by a clock the sender set.** A
