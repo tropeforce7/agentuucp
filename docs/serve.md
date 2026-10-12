@@ -194,23 +194,33 @@ it meets such a message, it says on stderr that the message is on a
 thread another peer opened and was left alone.
 
 A thread carried over from a v0.17.0 ledger, which kept no senders, takes
-its opener from the earliest of its messages still in the inbox, where
-serve leaves what it answered. A message id is the sender's to choose, so
-a message in the inbox is taken as one of the thread's only if it is on
-that thread and, once anything on the thread was tried or answered, it is
-one the earlier release fetched, no later than the thread's last attempt
-and the five minutes the relay's clock is held to; one this release
-fetched came after the upgrade, and after every attempt the earlier
-release made. A record the earlier release kept that a relay later lists
-again under a new time, its numbering begun again, is no longer told from
-this release's own, and its thread takes no opener from it. One that fails
-is not the thread's message, and serve says so on stderr once each run:
-`auu: ID from NAME has the id of a message serve carried over from before
-the upgrade on thread THREAD, and is not that message; the thread takes no
-sender from it`. A thread whose opener's messages the owner has removed
-may take another sender's. A thread with none of its messages left is
-nobody's once anything on it was tried or answered: serve answers no
-message on it from anyone, the peer who asked included. Each is left in
+its opener from what this home wrote first: a message serve answered with
+a reply names its asker in the copy of that reply, in the sent box. A
+message serve did not answer, or one whose reply's copy the owner has
+removed, takes its sender from the message itself when it is still in the
+inbox, where serve leaves what it answered. On a thread anything was tried
+or answered on before the upgrade, only those messages open it, in the
+order serve dealt with them; one the earlier release left pending opens
+nothing while one of them stands, and nor does anything this release
+fetches. Where those messages are from more than one peer and the earlier
+release's record cannot say who came first, because an attempt on the
+thread failed or two were answered in the same second, the thread is
+nobody's. A message id is the sender's to choose, so a message in the
+inbox is taken as one of the thread's only if it is on that thread and,
+once anything on the thread was tried or answered, it is one the earlier
+release fetched, no later than the thread's last attempt and the five
+minutes the relay's clock is held to; one this release fetched came after
+the upgrade, and after every attempt the earlier release made. A record
+the earlier release kept that a relay later lists again under a new time,
+its numbering begun again, is no longer told from this release's own, and
+its thread takes no opener from it. One that fails is not the thread's
+message, and serve says so on stderr once each run: `auu: ID from NAME has
+the id of a message serve carried over from before the upgrade on thread
+THREAD, and is not that message; the thread takes no sender from it`. A
+thread whose opener's messages the owner has removed, the reply's copy
+among them, may take another sender's. A thread with none of its messages
+left is nobody's once anything on it was tried or answered: serve answers
+no message on it from anyone, the peer who asked included. Each is left in
 the inbox, not answered and not counted as a turn, and serve says on
 stderr, the first time it meets one in each run, that the message is on a
 thread tried or answered before the upgrade for a peer the ledger does not

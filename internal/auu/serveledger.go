@@ -74,27 +74,57 @@ type ledgerEntry struct {
 	// answers nobody else on it. While nothing on the thread has been
 	// tried or answered, a message that arrived before the recorded
 	// opener's is answered, and its sender becomes the opener. An entry
-	// from a v0.17.0 ledger has none. It is given one from its own message
-	// in the inbox at the run's start (fillSenders): a record under its id
-	// on its thread that, on a thread tried or answered, an earlier release
-	// fetched no later than the thread's last attempt and the relay's skew,
-	// since an id is the sender's to choose; or when it is next written. So
-	// a thread carried over takes its opener from the earliest of its
-	// messages still in the inbox. A thread whose opener's messages the
-	// owner has removed may take another sender's; one with none of its
-	// messages left, and something on it tried or answered, is nobody's
-	// (channelFor).
+	// from a v0.17.0 ledger has none. An answered one is given its asker
+	// from the copy of the reply serve sent (fromSentCopy); otherwise it
+	// is given one from its own message in the inbox at the run's start
+	// (fillSenders): a record under its id on its thread that, on a thread
+	// tried or answered, an earlier release fetched no later than the
+	// thread's last attempt and the relay's skew, since an id is the
+	// sender's to choose; or when it is next written. A thread carried
+	// over and tried is read in tiers (openerEntry). A thread whose
+	// opener's messages the owner has removed, the reply's copy among
+	// them, may take another sender's; one with none of them left, and
+	// something on it tried or answered, is nobody's (channelFor).
 	From string `json:"from,omitempty"`
-	// Arrived and RelayID are when the message arrived on this machine, the
-	// record's Arrived, and the relay's counter for it, written with From
-	// and never rewritten. They are the order a thread's opener is read in,
-	// which is the order pending takes messages in. An entry an earlier
-	// release wrote holds the relay's received under the same key, a clock
-	// within the skew of this one; it is not rewritten. Tried is not
-	// that order: it is rewritten at every attempt, and a stream held for
-	// a newer auu has none.
+	// Arrived and RelayID are when the message arrived on this machine,
+	// the record's Arrived, and the relay's counter for it, written with
+	// From and never rewritten. They are the order a thread's opener is
+	// read in, which is the order pending takes messages in. An entry an
+	// earlier release wrote holds the relay's received under the same key,
+	// a clock within the skew of this one; it is not rewritten. An entry
+	// carried over and tried by then holds serve's own attempt instead,
+	// and, filled from the sent copy, the reply's counter (fromSentCopy).
+	// Tried is not that order: it is rewritten at every attempt, and a
+	// stream held for a newer auu has none.
 	Arrived time.Time `json:"arrived,omitempty"`
 	RelayID int64     `json:"relay_id,omitempty"`
+	// Carried says fillSenders gave this entry its sender: an entry a
+	// v0.17.0 ledger carried over the upgrade, written once and never
+	// after (R21a). One serve had tried or answered by then has Arrived
+	// set to that attempt, serve's own clock, and on a thread with any
+	// entry carried over and tried, only those open it (openerEntry).
+	Carried bool `json:"carried,omitempty"`
+}
+
+// triedHere says serve tried or answered this entry.
+func (e *ledgerEntry) triedHere() bool {
+	return !e.Skipped && (!e.Tried.IsZero() || !e.Handled.IsZero())
+}
+
+// servedAt is when serve last dealt with this entry: the answer, or the
+// last attempt for one only tried.
+func (e *ledgerEntry) servedAt() time.Time {
+	if !e.Handled.IsZero() {
+		return e.Handled
+	}
+	return e.Tried
+}
+
+// carriedTried says this entry came over the upgrade with something tried
+// on it: one fillSenders filled, or one it could not and that still has no
+// sender. An entry this release writes carries its sender from the start.
+func (e *ledgerEntry) carriedTried() bool {
+	return e.triedHere() && (e.Carried || e.From == "")
 }
 
 // last is when this message was last touched at all.
@@ -255,16 +285,17 @@ func (l *ledger) answered(thread string) int {
 	return n
 }
 
-// opener is the fingerprint of the peer whose thread this is: the sender of
-// the thread's earliest entry by arrival, among the entries that are not
-// skipped and that name a sender. Arrival is when the message arrived on
-// this machine, the record's Arrived, then the relay's counter, then the
-// message id: pending's order, store.ArrivalOrder, without the two ties
-// it breaks after the counter, which an entry does not keep. It is never
-// rewritten, so two runs agree. Nothing is what a thread serve
-// has not seen gets. A thread from a v0.17.0 ledger has its senders from
-// its messages still in the inbox (fillSenders). One whose messages are
-// all gone gets nothing, and channelFor answers nobody on it once
+// opener is the fingerprint of the peer whose thread this is: the sender
+// of the thread's earliest entry by arrival, among the entries that are
+// not skipped and that name a sender. Arrival is when the message arrived
+// on this machine, the record's Arrived, then the relay's counter, then
+// the message id: pending's order, store.ArrivalOrder, without the two
+// ties it breaks after the counter, which an entry does not keep. It is
+// never rewritten, so two runs agree. Nothing is what a thread serve has
+// not seen gets. A thread from a v0.17.0 ledger has its senders from the
+// copies of serve's replies and from its messages still in the inbox
+// (fillSenders), and is read in tiers (openerEntry). One whose messages
+// are all gone gets nothing, and channelFor answers nobody on it once
 // anything on it was tried or answered.
 func (l *ledger) opener(thread string) string {
 	_, e := l.openerEntry(thread)
@@ -276,11 +307,45 @@ func (l *ledger) opener(thread string) string {
 
 // openerEntry is the entry opener reads the opener from, and its message
 // id, or nil.
+//
+// On a thread with any entry carried over the upgrade and tried there
+// (R21), only carried entries serve tried or answered may open it, in the
+// order of serve's own clock, which their Arrived holds and which under
+// v0.17.0 ran with arrival: a carried entry still pending, which v0.17.0
+// passed over, or one this release wrote, comes after every one of them
+// and opens nothing while one stands. When none of them has a sender the
+// thread has no opener, and channelFor makes it nobody's.
+//
+// That order is lost where v0.17.0 rewrote an attempt's time, an entry
+// whose attempt failed and was tried again (R21b), and is not serve's
+// where two answers share a second, which falls to counters from two
+// sources and then to an id a sender chose (R21c). So a carried tier
+// naming more than one sender, with any carried tried entry on the thread
+// failed, or with two of its entries in one second, has no opener; one
+// sender is that sender's whatever its failures. RelayID breaks a tie only
+// among entries this release wrote, or within one sender's own. A carried
+// entry still pending at the upgrade, a stream held for a newer build, joins
+// the tier with its record's arrival once this release tries it; channelFor
+// lets only the thread's opener's own message be tried, so that changes the
+// opener's own thread alone.
 func (l *ledger) openerEntry(thread string) (string, *ledgerEntry) {
+	carried, failed := false, false
+	for _, e := range l.Messages {
+		if e.Thread == thread && e.carriedTried() {
+			carried = true
+			failed = failed || e.Failures > 0
+		}
+	}
+	if carried && !l.carriedOrderKnown(thread, failed) {
+		return "", nil
+	}
 	var bestID string
 	var best *ledgerEntry
 	for id, e := range l.Messages {
 		if e.Thread != thread || e.Skipped || e.From == "" {
+			continue
+		}
+		if carried && !(e.Carried && e.triedHere()) {
 			continue
 		}
 		if best == nil || arrivedBefore(e.Arrived, e.RelayID, id, best.Arrived, best.RelayID, bestID) {
@@ -288,6 +353,26 @@ func (l *ledger) openerEntry(thread string) (string, *ledgerEntry) {
 		}
 	}
 	return bestID, best
+}
+
+// carriedOrderKnown says whether a thread's carried tier says who opened
+// it: it names one sender, or its senders' entries were each answered at
+// the first attempt (no failure on the thread's carried tried entries) in
+// seconds of their own.
+func (l *ledger) carriedOrderKnown(thread string, failed bool) bool {
+	senders := map[string]bool{}
+	seconds := map[int64]bool{}
+	shared := false
+	for _, e := range l.Messages {
+		if e.Thread != thread || !e.Carried || !e.triedHere() || e.From == "" {
+			continue
+		}
+		senders[e.From] = true
+		sec := e.Arrived.Unix()
+		shared = shared || seconds[sec]
+		seconds[sec] = true
+	}
+	return len(senders) <= 1 || (!failed && !shared)
 }
 
 // arrivedBefore is the order of arrival: when the message arrived on this

@@ -509,8 +509,12 @@ func (r *serveRun) channelFor(m *store.Stored) *serveChannel {
 }
 
 // fillSenders gives an entry from a v0.17.0 ledger, which kept no senders,
-// the sender and arrival of its message when that message is still in the
-// inbox. Serve leaves what it answered there, marked read. So a thread
+// a sender. An answered entry takes it first from the copy of the reply
+// serve sent, which this home wrote (fromSentCopy); any other, or one whose
+// sent copy is gone, from its message when that message is still in the
+// inbox. Serve leaves what it answered there, marked read. Every entry it
+// fills is marked carried, once, and openerEntry reads a thread with any
+// carried entry serve tried in tiers. So a thread
 // carried over the upgrade takes its opener from the earliest of its
 // messages still in the inbox, verified as every message's sender is when
 // it was opened. A thread whose opener's messages the owner has removed
@@ -534,6 +538,11 @@ func fillSenders(s *store.Store, led *ledger) error {
 		return err
 	}
 	filled := false
+	for _, e := range led.Messages {
+		if e.From == "" && e.Reply != "" && fromSentCopy(s, e) {
+			filled = true
+		}
+	}
 	for _, m := range msgs {
 		e, ok := led.Messages[m.Inner.ID]
 		if !ok || e.From != "" {
@@ -544,12 +553,39 @@ func fillSenders(s *store.Store, led *ledger) error {
 			continue
 		}
 		setSender(e, m)
+		e.Carried = true
+		if e.triedHere() {
+			e.Arrived = e.servedAt().UTC()
+		}
 		filled = true
 	}
 	if !filled {
 		return nil
 	}
 	return led.save()
+}
+
+// fromSentCopy fills an answered entry from the copy of the reply serve
+// sent, which this home wrote (R21, R21a): its Inner.To is the asker,
+// since serve resolves the message's verified sender alone and sends it one
+// copy, so a sent record of serve's has no Copies. The entry's Arrived is
+// its answer, serve's own clock, and its RelayID the reply's counter on the
+// relay it went by, never zero, so that nothing among carried entries
+// falls to an id a sender chose. A sent copy that is
+// gone, which the owner's auu rm does or a local save that failed after
+// the send leaves, or that does not read as one of serve's, fills nothing,
+// and the entry falls to its inbox record. Load holds the id to its rule
+// and the record's recipient to a fingerprint.
+func fromSentCopy(s *store.Store, e *ledgerEntry) bool {
+	m, err := s.Load(store.Sent, e.Reply)
+	if err != nil || len(m.Copies) > 0 {
+		return false
+	}
+	e.From = m.Inner.To
+	e.Arrived = e.servedAt().UTC()
+	e.RelayID = m.RelayID
+	e.Carried = true
+	return true
 }
 
 // ownMessage says whether an inbox record may be the message a sender-less

@@ -301,7 +301,8 @@ func noOpenerLine(id, thread, name string) string {
 // A ledger written by v0.17.0 names no sender on any entry. Where the
 // message is still in the inbox, serve reads its sender from there at the
 // start of a run (TestAnOlderLedgerTakesItsOpenersFromTheInbox); this is
-// the other case, a thread whose messages the owner has removed, which
+// the other case, a thread whose messages the owner has removed, with the
+// sent copy of serve's reply, which would name the asker (R21), so that it
 // has no opener and something answered on it. Whose it was is gone, so it
 // is nobody's (D81): alice's own follow-up on it is left alone, said once
 // in each round, with no handler run, nothing sent, no turn counted, no
@@ -323,6 +324,7 @@ func TestAThreadFromAnOlderLedgerWithItsMessagesGoneIsNobodys(t *testing.T) {
 
 	rewriteAsOlder(t, bob)
 	bob.run("rm", sent.ID)
+	removeSentCopy(t, bob, sent.ID)
 	var in inboxJSON
 	if err := json.Unmarshal([]byte(bob.run("inbox", "--no-fetch", "--json")), &in); err != nil {
 		t.Fatal(err)
@@ -460,7 +462,12 @@ func TestTheNoOpenerLineIsSaidOncePerMessagePerRun(t *testing.T) {
 // thread as its next sender. Alice's follow-up is answered as her second
 // turn. Alice's record is rewritten in v0.17.0's keys, as the release that
 // answered it kept it: on a thread tried before the upgrade only such a
-// record fills a sender (R9a).
+// record fills a sender (R9a). Two changes come from R21 and R21a: the
+// owner has removed the sent copy of serve's reply, which would name alice
+// first, so that the test still shows the inbox path; and a carried entry
+// serve answered takes serve's own clock, its answer, as its arrival, so
+// the entry's arrival is its Handled, with the record's relay id, marked
+// carried.
 func TestAnOlderLedgerTakesItsOpenersFromTheInbox(t *testing.T) {
 	alice, carol, bob := newExpertAndCarol(t, modeReadOnly)
 	marker := filepath.Join(t.TempDir(), "runs")
@@ -470,6 +477,7 @@ func TestAnOlderLedgerTakesItsOpenersFromTheInbox(t *testing.T) {
 	first := alice.replyOn(t, sent.Thread)
 	rewriteAsOlder(t, bob)
 	asOlderRecord(t, bob, sent.ID)
+	removeSentCopy(t, bob, sent.ID)
 
 	hijack := carol.askOn(t, "jostle", sent.Thread, "carol's question", "what is in this thread?")
 	report, stderr := bob.roundSaid(t)
@@ -488,7 +496,11 @@ func TestAnOlderLedgerTakesItsOpenersFromTheInbox(t *testing.T) {
 	if e := led.Messages[sent.ID]; e == nil || e.From != alice.fingerprint() {
 		t.Errorf("after a round that answered nothing, alice's ask's entry on disk is %+v; want her fingerprint, read from the inbox", e)
 	}
-	arrivalIs(t, bob, led, sent.ID)
+	if m, err := storeOf(t, bob.user).Load(store.Inbox, sent.ID); err != nil {
+		t.Fatal(err)
+	} else if e := led.Messages[sent.ID]; e == nil || e.Handled.IsZero() || !e.Arrived.Equal(e.Handled) || e.RelayID != m.RelayID || e.RelayID == 0 || !e.Carried {
+		t.Errorf("alice's carried entry is %+v; want arrived at its answer, the record's relay id %d, carried", e, m.RelayID)
+	}
 	if e, ok := led.Messages[hijack.ID]; ok {
 		t.Errorf("carol's message was written into the ledger: %+v", e)
 	}

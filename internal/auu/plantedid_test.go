@@ -121,20 +121,17 @@ func worktreesOf(t *testing.T, bob *expert) []string {
 	return names
 }
 
-// A thread a v0.17.0 ledger carried over, answered before the upgrade,
-// whose message the owner removed, is nobody's (D81). A message id is the
-// sender's to choose, so carol, a co-recipient who saw alice's id and
-// thread, plants a note under alice's message id once alice's message is
-// gone. At the next start the plant is in the inbox under the id of
-// alice's sender-less entry, on her thread, but it was fetched by this
-// build after the upgrade, so it is not her message: the entry takes no
-// sender from it, the start says so once, and the thread stays nobody's.
-// Carol's ask on it is then left alone: no answer, no turn in alice's
-// side-copy worktree, no patch of alice's work, no worktree made and no
-// ledger entry. Before the guard carol became the thread's opener and was
-// answered as alice's turn 2 with alice's work as the patch. The plant is
-// fetched by this build and keeps an arrival of its own, which on a thread
-// tried before the upgrade fills nothing at any time (R9a).
+// The review's planted-id test, as the review wrote it. Carol, a
+// co-recipient who saw alice's id and thread, plants a note under alice's
+// message id once the owner has removed alice's message, on a thread a
+// v0.17.0 ledger carried over answered. Before 3dabff9 the next start gave
+// alice's entry the plant's sender, and carol was answered as alice's turn
+// 2 in her side-copy worktree with her work as the patch. Now alice's
+// entry takes its asker from the copy of the reply serve sent her (R21),
+// which the plant cannot touch, so carol is not named and her ask on the
+// thread is not answered. The case where the sent copy is gone too, and
+// the thread is nobody's, is TestAPlantedIDDoesNotAdoptANobodysThread
+// WhoseSentCopyIsGone.
 func TestAPlantedIDDoesNotAdoptANobodysThread(t *testing.T) {
 	alice, carol, bob := newExpertAndCarol(t, modeSideCopy)
 	t.Setenv(handlerScript, "write:secret.txt=alice's private work;echo:done")
@@ -155,6 +152,92 @@ func TestAPlantedIDDoesNotAdoptANobodysThread(t *testing.T) {
 		Channel: "jostle",
 	})
 	postByHand(t, carol, env, "jostle")
+	bob.serve(t) // fetches the plant
+	bob.serve(t) // a later start: fillSenders
+
+	if e := bob.ledgerOf(t).Messages[sent.ID]; e != nil && e.From == carol.fingerprint() {
+		t.Errorf("alice's answered entry %s now names carol as its sender: %+v", sent.ID[:12], e)
+	}
+
+	t.Setenv(handlerScript, "env")
+	carol.askOn(t, "jostle", sent.Thread, "carol's question", "what is in this thread?")
+	bob.serve(t)
+
+	var in inboxJSON
+	decodeJSON(t, carol.run("inbox", "--json"), &in)
+	for _, m := range in.Messages {
+		if m.Type != "reply" || m.Thread != sent.Thread {
+			continue
+		}
+		var full messageJSON
+		decodeJSON(t, carol.run("read", m.ID, "--json"), &full)
+		vars := envOf(t, full.Text)
+		t.Errorf("carol was answered on alice's nobody's thread as turn %s in worktree %s", vars["AUU_TURN"], vars["AUU_WORKTREE"])
+		for _, a := range full.Attachments {
+			if a.Name == patchName(sent.Thread) {
+				if p := readFile(t, patchOf(t, carol, full)); strings.Contains(p, "alice's private work") {
+					t.Errorf("carol was sent alice's work as %s", a.Name)
+				}
+			}
+		}
+	}
+}
+
+// replyOf is the id of the reply serve sent for a message, from the ledger.
+func replyOf(t *testing.T, bob *expert, id string) string {
+	t.Helper()
+	e := bob.ledgerOf(t).Messages[id]
+	if e == nil || message.ValidID(e.Reply) != nil {
+		t.Fatalf("no reply recorded for %s: %+v", id[:12], e)
+	}
+	if _, err := storeOf(t, bob.user).Load(store.Sent, e.Reply); err != nil {
+		t.Fatalf("the sent copy of the reply to %s: %v", id[:12], err)
+	}
+	return e.Reply
+}
+
+// removeSentCopy removes the sent copy of serve's reply to a message the
+// way an owner does, with auu rm, and fails unless it is gone.
+func removeSentCopy(t *testing.T, bob *expert, id string) {
+	t.Helper()
+	reply := replyOf(t, bob, id)
+	bob.run("rm", reply)
+	if m, err := storeOf(t, bob.user).Holding(store.Sent, reply); m != nil || err != nil {
+		t.Fatalf("the sent copy %s is still there after auu rm: %v", reply[:12], err)
+	}
+}
+
+// The planted-id case where the owner has removed the sent copy of serve's
+// reply as well as alice's message, so nothing this home wrote names her:
+// the thread is nobody's (D81). A message id is the sender's to choose,
+// so carol plants a note under alice's message id. At the next start the
+// plant is in the inbox under the id of alice's sender-less entry, on her
+// thread, but it was fetched by this build after the upgrade and keeps an
+// arrival of its own, which on a thread tried before the upgrade fills
+// nothing at any time (R9a): the entry takes no sender from it, the start
+// says so once, and the thread stays nobody's. Carol's ask on it is then
+// left alone: no answer, no turn in alice's side-copy worktree, no patch
+// of alice's work, no worktree made and no ledger entry.
+func TestAPlantedIDDoesNotAdoptANobodysThreadWhoseSentCopyIsGone(t *testing.T) {
+	alice, carol, bob := newExpertAndCarol(t, modeSideCopy)
+	t.Setenv(handlerScript, "write:secret.txt=alice's private work;echo:done")
+	sent := alice.ask(t, "jostle", "alice's question", "please work on this")
+	bob.serve(t)
+	alice.replyOn(t, sent.Thread)
+
+	// The upgrade from v0.17.0, with alice's message and the sent copy of
+	// serve's reply to her removed by the owner: D81's precondition, a
+	// thread that is nobody's, since the sent copy would name her (R21).
+	rewriteAsOlder(t, bob)
+	bob.run("rm", sent.ID)
+	removeSentCopy(t, bob, sent.ID)
+
+	env := sealByHand(t, carol, bob.user, &envelope.Inner{V: envelope.Version,
+		ID: sent.ID, Time: time.Now().UTC().Truncate(time.Second),
+		Body:    message.Body{Type: message.TypeNote, Thread: sent.Thread, Subject: "fyi", Text: "nothing to see"},
+		Channel: "jostle",
+	})
+	postByHand(t, carol, env, "jostle")
 	stderr := captureStderr(t, func() {
 		for i := 0; i < 2; i++ { // the first fetches the plant, the second's start meets it
 			if out, err := bob.tryRun("serve", "--once"); err != nil {
@@ -164,10 +247,6 @@ func TestAPlantedIDDoesNotAdoptANobodysThread(t *testing.T) {
 	})
 	if want := notItsMessageLine(sent.ID, sent.Thread, "carol"); strings.Count(stderr, want) != 1 || strings.Count(stderr, notItsMessage) != 1 {
 		t.Errorf("two starts said:\n%s\nwant once:\n%s", stderr, want)
-	}
-
-	if e := bob.ledgerOf(t).Messages[sent.ID]; e != nil && e.From == carol.fingerprint() {
-		t.Errorf("alice's answered entry %s now names carol as its sender: %+v", sent.ID[:12], e)
 	}
 	if e := bob.ledgerOf(t).Messages[sent.ID]; e == nil || e.From != "" {
 		t.Errorf("alice's answered entry %s is %+v; want it kept with no sender", sent.ID[:12], e)
@@ -214,7 +293,8 @@ func TestAPlantedIDDoesNotAdoptANobodysThread(t *testing.T) {
 // fingerprint and says nothing about it, and her follow-up is answered as
 // the thread's turn 2. Its record is rewritten in v0.17.0's keys, as the
 // release that answered it kept it, so its arrival is lent from its
-// received.
+// received. The owner has removed the sent copy of serve's reply, which
+// would name alice first (R21), so the entry is filled from her message.
 func TestACarriedOverThreadTakesItsOpenerFromItsOwnMessage(t *testing.T) {
 	alice, _, bob := newExpertAndCarol(t, modeSideCopy)
 	marker := filepath.Join(t.TempDir(), "runs")
@@ -224,6 +304,7 @@ func TestACarriedOverThreadTakesItsOpenerFromItsOwnMessage(t *testing.T) {
 	first := alice.replyOn(t, sent.Thread)
 	rewriteAsOlder(t, bob)
 	asOlderRecord(t, bob, sent.ID)
+	removeSentCopy(t, bob, sent.ID)
 
 	report, stderr := bob.roundSaid(t)
 	if len(report.Answered)+len(report.Failed)+len(report.Skipped) != 0 {
@@ -258,7 +339,9 @@ func TestACarriedOverThreadTakesItsOpenerFromItsOwnMessage(t *testing.T) {
 // nothing about whether it was there when serve tried it (R9a). Each start
 // says once that it is not taken and leaves the entry with no sender, so
 // the thread is nobody's (D81): alice's follow-up is left alone, said once
-// in each run, with no handler run and nothing sent.
+// in each run, with no handler run and nothing sent. The owner has removed
+// the sent copy of serve's reply, which would name alice (R21), so the
+// inbox record is all there is to fill the entry from.
 func TestARecordThisReleaseFetchedDoesNotFillACarriedOverThread(t *testing.T) {
 	alice, _, bob := newExpertAndCarol(t, modeReadOnly)
 	marker := filepath.Join(t.TempDir(), "runs")
@@ -267,6 +350,7 @@ func TestARecordThisReleaseFetchedDoesNotFillACarriedOverThread(t *testing.T) {
 	bob.serve(t)
 	first := alice.replyOn(t, sent.Thread)
 	rewriteAsOlder(t, bob)
+	removeSentCopy(t, bob, sent.ID)
 	m, err := storeOf(t, bob.user).Load(store.Inbox, sent.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -338,9 +422,11 @@ func TestARecordThisReleaseFetchedDoesNotFillACarriedOverThread(t *testing.T) {
 // of its own, the kind a stream waiting for a newer auu leaves, on a
 // thread answered at T does not take a lent record past T and the skew.
 // And on a thread nothing was tried on, any record on it is taken whatever
-// its arrival. Where a record is refused the line is said once and nothing
-// is written; where it is taken nothing is said and the ledger on disk
-// names its sender.
+// its arrival. Every fill is marked carried; one of an entry serve tried
+// takes serve's clock, its answer or last attempt, as its arrival, and one
+// of an entry it did not keeps the record's (R21). Where a record is
+// refused the line is said once and nothing is written; where it is taken
+// nothing is said and the ledger on disk names its sender.
 func TestOwnMessageEdges(t *testing.T) {
 	T := time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC)
 	thread := strings.Repeat("1", 32)
@@ -421,25 +507,29 @@ func TestOwnMessageEdges(t *testing.T) {
 		entries func() map[string]*ledgerEntry
 		put     func(*testing.T, string, *store.Store)
 		filled  bool
+		// at is the arrival a fill writes: the entry's answer or last
+		// attempt, serve's own clock, for an entry serve tried (R21);
+		// zero for one it did not, which keeps the record's arrival.
+		at time.Time
 	}{
-		{"saved an hour before the attempt", tried, saved(thread, T.Add(-time.Hour)), false},
-		{"saved a second before the attempt", tried, saved(thread, T.Add(-time.Second)), false},
-		{"saved in the attempt's second", tried, saved(thread, T.Add(900*time.Millisecond)), false},
-		{"saved a second after the attempt", tried, saved(thread, T.Add(time.Second)), false},
-		{"lent before the attempt", tried, older(thread, T.Add(-time.Second)), true},
-		{"lent at the attempt", tried, older(thread, T), true},
-		{"lent at the attempt and the skew", tried, older(thread, T.Add(relayapi.MaxSkew)), true},
-		{"lent in the second of the attempt and the skew", tried, older(thread, T.Add(relayapi.MaxSkew+900*time.Millisecond)), true},
-		{"lent a second past the skew", tried, older(thread, T.Add(relayapi.MaxSkew+time.Second)), false},
-		{"lent on another thread, tried", tried, older(other, T.Add(-time.Hour)), false},
-		{"saved on another thread, untried", untried, saved(other, T.Add(-time.Hour)), false},
-		{"no attempt of its own, lent within the thread's", newer, older(thread, T.Add(relayapi.MaxSkew)), true},
-		{"no attempt of its own, lent past the thread's", newer, older(thread, T.Add(relayapi.MaxSkew+time.Second)), false},
-		{"answered after its attempt, lent within the answer and the skew", handledLater, older(thread, T.Add(time.Hour+relayapi.MaxSkew)), true},
-		{"answered after its attempt, lent past the answer and the skew", handledLater, older(thread, T.Add(time.Hour+relayapi.MaxSkew+time.Second)), false},
-		{"untried, a year ago", untried, saved(thread, T.AddDate(-1, 0, 0)), true},
-		{"untried, a year ahead", untried, saved(thread, T.AddDate(1, 0, 0)), true},
-		{"untried, lent a year ahead", untried, older(thread, T.AddDate(1, 0, 0)), true},
+		{"saved an hour before the attempt", tried, saved(thread, T.Add(-time.Hour)), false, time.Time{}},
+		{"saved a second before the attempt", tried, saved(thread, T.Add(-time.Second)), false, time.Time{}},
+		{"saved in the attempt's second", tried, saved(thread, T.Add(900*time.Millisecond)), false, time.Time{}},
+		{"saved a second after the attempt", tried, saved(thread, T.Add(time.Second)), false, time.Time{}},
+		{"lent before the attempt", tried, older(thread, T.Add(-time.Second)), true, T},
+		{"lent at the attempt", tried, older(thread, T), true, T},
+		{"lent at the attempt and the skew", tried, older(thread, T.Add(relayapi.MaxSkew)), true, T},
+		{"lent in the second of the attempt and the skew", tried, older(thread, T.Add(relayapi.MaxSkew+900*time.Millisecond)), true, T},
+		{"lent a second past the skew", tried, older(thread, T.Add(relayapi.MaxSkew+time.Second)), false, time.Time{}},
+		{"lent on another thread, tried", tried, older(other, T.Add(-time.Hour)), false, time.Time{}},
+		{"saved on another thread, untried", untried, saved(other, T.Add(-time.Hour)), false, time.Time{}},
+		{"no attempt of its own, lent within the thread's", newer, older(thread, T.Add(relayapi.MaxSkew)), true, time.Time{}},
+		{"no attempt of its own, lent past the thread's", newer, older(thread, T.Add(relayapi.MaxSkew+time.Second)), false, time.Time{}},
+		{"answered after its attempt, lent within the answer and the skew", handledLater, older(thread, T.Add(time.Hour+relayapi.MaxSkew)), true, T.Add(time.Hour)},
+		{"answered after its attempt, lent past the answer and the skew", handledLater, older(thread, T.Add(time.Hour+relayapi.MaxSkew+time.Second)), false, time.Time{}},
+		{"untried, a year ago", untried, saved(thread, T.AddDate(-1, 0, 0)), true, time.Time{}},
+		{"untried, a year ahead", untried, saved(thread, T.AddDate(1, 0, 0)), true, time.Time{}},
+		{"untried, lent a year ahead", untried, older(thread, T.AddDate(1, 0, 0)), true, time.Time{}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -463,7 +553,7 @@ func TestOwnMessageEdges(t *testing.T) {
 				if want := notItsMessageLine(id, e.Thread, "carol") + "\n"; stderr != want {
 					t.Errorf("said:\n%q\nwant once:\n%q", stderr, want)
 				}
-				if e.From != "" || !e.Arrived.IsZero() || e.RelayID != 0 {
+				if e.From != "" || !e.Arrived.IsZero() || e.RelayID != 0 || e.Carried {
 					t.Errorf("a record that is not the entry's message filled it: %+v", e)
 				}
 				if _, err := os.Stat(ledgerPath); !os.IsNotExist(err) {
@@ -474,14 +564,18 @@ func TestOwnMessageEdges(t *testing.T) {
 			if stderr != "" {
 				t.Errorf("the entry's own message was said about:\n%s", stderr)
 			}
-			if e.From != carolFP || !e.Arrived.Equal(m.Arrived) || e.RelayID != 7 {
-				t.Errorf("the entry is %+v; want it filled from its record arriving %v", e, m.Arrived)
+			want := m.Arrived
+			if !c.at.IsZero() {
+				want = c.at
+			}
+			if e.From != carolFP || !e.Arrived.Equal(want) || e.RelayID != 7 || !e.Carried {
+				t.Errorf("the entry is %+v; want it filled from its record, carried, arriving %v", e, want)
 			}
 			disk, err := loadLedger(ledgerPath)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if d := disk.Messages[id]; d == nil || d.From != carolFP {
+			if d := disk.Messages[id]; d == nil || d.From != carolFP || !d.Carried {
 				t.Errorf("the ledger on disk has %+v; want the sender written", d)
 			}
 		})
