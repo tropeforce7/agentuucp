@@ -19,6 +19,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/lockfile"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/regular"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
 
@@ -517,6 +518,13 @@ func (r *serveRun) channelFor(m *store.Stored) *serveChannel {
 // opener, and is nobody's once anything on it was tried or answered
 // (channelFor).
 //
+// A message id and a thread id are the sender's to choose, so a record is
+// taken as an entry's message only when it is on the entry's thread and,
+// on a thread serve tried or answered, an earlier release fetched it no
+// later than the thread's last attempt and the relay's skew (ownMessage).
+// A record that fails is said, once a run, and the entry stays without a
+// sender.
+//
 // What it fills is written at once: a round that answers nothing saves
 // nothing, and an owner who removed the message after such a round would
 // otherwise leave the thread with no sender on disk for anybody to adopt.
@@ -527,15 +535,59 @@ func fillSenders(s *store.Store, led *ledger) error {
 	}
 	filled := false
 	for _, m := range msgs {
-		if e, ok := led.Messages[m.Inner.ID]; ok && e.From == "" {
-			setSender(e, m)
-			filled = true
+		e, ok := led.Messages[m.Inner.ID]
+		if !ok || e.From != "" {
+			continue
 		}
+		if !ownMessage(led, e, m) {
+			sayNotItsMessage(m, e)
+			continue
+		}
+		setSender(e, m)
+		filled = true
 	}
 	if !filled {
 		return nil
 	}
 	return led.save()
+}
+
+// ownMessage says whether an inbox record may be the message a sender-less
+// entry was written for (R9, R9a). Only a v0.17.0 ledger has such entries,
+// and a message id and a thread id are the sender's to choose. The record
+// must be on the entry's thread. On a thread serve tried or answered, it
+// must be one an earlier release fetched, since the entry's message was in
+// the inbox when that release's serve tried it: such a record has no
+// arrival of its own and Load lends it the relay's received, which shows
+// as the two being equal, and it must have arrived no later than the
+// thread's last attempt, read across its entries so an entry nothing was
+// tried on cannot reopen a thread that was, allowed the skew the relay's
+// clock is held to. A record with this release's own arrival was fetched
+// after the upgrade, and after every attempt the earlier release made.
+// The arrival is kept to the second, as the attempt is. A thread nothing
+// was tried on takes a sender from a record on it, since nothing on it is
+// anybody's yet.
+func ownMessage(led *ledger, e *ledgerEntry, m *store.Stored) bool {
+	if m.Inner.Body.Thread != e.Thread {
+		return false
+	}
+	last := led.lastTried(e.Thread)
+	if last.IsZero() {
+		return true
+	}
+	if !m.Arrived.Equal(m.Received) {
+		return false
+	}
+	return !m.Arrived.Truncate(time.Second).After(last.Add(relayapi.MaxSkew))
+}
+
+// sayNotItsMessage says that a record was not taken as a carried-over
+// entry's message, naming the id and the entry's thread, in the shape of
+// sayNoOpener. fillSenders runs once at a start, so it is said once a run.
+func sayNotItsMessage(m *store.Stored, e *ledgerEntry) {
+	fmt.Fprintf(os.Stderr, "%s: %s from %s has the id of a message serve carried over from before the upgrade on thread %s, "+
+		"and is not that message; the thread takes no sender from it\n",
+		prog, shortID(m.Inner.ID), orNone(identity.Printable(m.SenderName)), shortID(e.Thread))
 }
 
 // setSender writes who sent a message and when it arrived here, the facts a

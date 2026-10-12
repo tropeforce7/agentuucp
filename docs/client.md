@@ -908,6 +908,14 @@ in from v0.14.0 and what each release changed:
 straight to v0.18.0 and says what a v0.18.0 party and an earlier one
 meet.
 
+One home runs one `auu`. A newer `auu` fetching mail for an older `auu
+serve` on the same home is two versions on one home, which the floor does
+not cover. A thread a v0.17.0 serve tried takes no opener from mail a
+v0.18.0 `auu` fetched, since that mail arrived after the upgrade as far as
+the ledger can tell. Unless another of its messages names an opener, it is
+nobody's: serve answers no message on it and says so once each run (see
+[the serve guide](serve.md)).
+
 From v0.15.0 on, a
 newer build adds what it adds through sections in messages and in what
 relays and clients send each other, and through refusal codes. An older

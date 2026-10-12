@@ -937,27 +937,42 @@ across them, and the handle check is the safety net for a name it does
 not hold.
 
 Any peer may name any thread id. So serve answers a thread only for the
-peer who opened it. A message on it from anybody else gets no directory
-and no worktree. It is left unanswered in the inbox. The opener is decided
-by arrival on this machine, by its own clock when the message was first
-kept, and the ledger records that. So a relay with its clock ahead cannot
-put its message first, but the relays' order of delivery, and when each
-fetch runs, still decide who opens a new thread. So can a large message
-to several, which goes as one stream to each recipient: a co-recipient
-has the thread id while the expert's copy is still uploading, and a small
-ask from them on it can arrive first and open the thread. A thread that
-has been answered or tried is not moved by any later arrival. A ledger
-entry an earlier release wrote keeps the relay's stamp under the same key
-and is not rewritten, so a thread opened before the upgrade is ordered by
-that stamp until something on it is tried. A thread carried over from a
-v0.17.0 ledger, which kept no senders, takes its opener from the earliest
-of its messages still in the inbox. A thread whose opener's messages the
-owner has removed may take another sender's. One with none of its
-messages left has no opener, and once anything on it was tried or
-answered it is nobody's: serve answers no message on it from anyone, the
-original asker included, and leaves each in the inbox, unanswered and
-uncounted. Were the first message after the upgrade to name its opener,
-any peer who knew the thread id could take the thread over.
+peer who opened it. A message on it from anybody else gets no directory and
+no worktree. It is left unanswered in the inbox. The opener is decided by
+arrival on this machine, by its own clock when the message was first kept,
+and the ledger records that. So a relay with its clock ahead cannot put its
+message first, but the relays' order of delivery, and when each fetch runs,
+still decide who opens a new thread. So can a large message to several,
+which goes as one stream to each recipient: a co-recipient has the thread
+id while the expert's copy is still uploading, and a small ask from them on
+it can arrive first and open the thread. A thread that has been answered or
+tried is not moved by any later arrival. A ledger entry an earlier release
+wrote keeps the relay's stamp under the same key and is not rewritten, so a
+thread opened before the upgrade is ordered by that stamp until something
+on it is tried. A thread carried over from a v0.17.0 ledger, which kept no
+senders, takes its opener from the earliest of its messages still in the
+inbox. A message id and a thread id are the sender's to choose, so a
+co-recipient who saw an id could post a note under it once the owner
+removed the original. A record is therefore taken as a carried-over entry's
+message only when it is on the entry's thread and, on a thread tried or
+answered, the earlier release fetched it: such a record has no arrival of
+its own and is lent the relay's received (or, when that cannot be written
+back, its file's time, and is then never taken), which must be no later
+than the thread's last attempt and the five minutes the relay's clock is
+held to. A record this release fetched came after the upgrade, after every
+attempt the earlier release made, and is never taken there. For mail
+fetched before the upgrade the bound is the relay's word: a note posted
+under a removed message's id and fetched by the earlier release, with a
+received the relay put inside the bound, is taken. That gains its sender no
+answer the earlier release would not have given, since that release
+answered anyone on any thread, though it can make them the thread's opener
+over the asker's later messages. A thread whose opener's messages the owner
+has removed may take another sender's. One with none of its messages left
+has no opener, and once anything on it was tried or answered it is
+nobody's: serve answers no message on it from anyone, the original asker
+included, and leaves each in the inbox, unanswered and uncounted. Were the
+first message after the upgrade to name its opener, any peer who knew the
+thread id could take the thread over.
 
 **The HTTP layer has bounds of its own**, and they are not settings. The
 relay speaks HTTP/1.1 alone. HTTP/2 is off on the listener and not offered

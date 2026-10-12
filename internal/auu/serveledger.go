@@ -74,13 +74,16 @@ type ledgerEntry struct {
 	// answers nobody else on it. While nothing on the thread has been
 	// tried or answered, a message that arrived before the recorded
 	// opener's is answered, and its sender becomes the opener. An entry
-	// from a v0.17.0 ledger has none. It is given one from its message in
-	// the inbox at the run's start (fillSenders), or when it is next
-	// written. So a thread carried over takes its opener from the earliest
-	// of its messages still in the inbox. A thread whose opener's messages
-	// the owner has removed may take another sender's; one with none of
-	// its messages left, and something on it tried or answered, is
-	// nobody's (channelFor).
+	// from a v0.17.0 ledger has none. It is given one from its own message
+	// in the inbox at the run's start (fillSenders): a record under its id
+	// on its thread that, on a thread tried or answered, an earlier release
+	// fetched no later than the thread's last attempt and the relay's skew,
+	// since an id is the sender's to choose; or when it is next written. So
+	// a thread carried over takes its opener from the earliest of its
+	// messages still in the inbox. A thread whose opener's messages the
+	// owner has removed may take another sender's; one with none of its
+	// messages left, and something on it tried or answered, is nobody's
+	// (channelFor).
 	From string `json:"from,omitempty"`
 	// Arrived and RelayID are when the message arrived on this machine, the
 	// record's Arrived, and the relay's counter for it, written with From
@@ -312,6 +315,24 @@ func (l *ledger) tried(thread string) bool {
 		}
 	}
 	return false
+}
+
+// lastTried is the latest attempt or answer on a thread, across its
+// entries; zero when nothing on it was tried.
+func (l *ledger) lastTried(thread string) time.Time {
+	var last time.Time
+	for _, e := range l.Messages {
+		if e.Thread != thread || e.Skipped {
+			continue
+		}
+		if e.Tried.After(last) {
+			last = e.Tried
+		}
+		if e.Handled.After(last) {
+			last = e.Handled
+		}
+	}
+	return last
 }
 
 // touched says serve has seen this thread before, which is what moves a

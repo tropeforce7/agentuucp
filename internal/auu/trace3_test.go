@@ -458,7 +458,9 @@ func TestTheNoOpenerLineIsSaidOncePerMessagePerRun(t *testing.T) {
 // message: bob removes alice's ask, and carol asking again is still left
 // alone, where a sender held only in memory would have let her take the
 // thread as its next sender. Alice's follow-up is answered as her second
-// turn.
+// turn. Alice's record is rewritten in v0.17.0's keys, as the release that
+// answered it kept it: on a thread tried before the upgrade only such a
+// record fills a sender (R9a).
 func TestAnOlderLedgerTakesItsOpenersFromTheInbox(t *testing.T) {
 	alice, carol, bob := newExpertAndCarol(t, modeReadOnly)
 	marker := filepath.Join(t.TempDir(), "runs")
@@ -467,6 +469,7 @@ func TestAnOlderLedgerTakesItsOpenersFromTheInbox(t *testing.T) {
 	bob.serve(t)
 	first := alice.replyOn(t, sent.Thread)
 	rewriteAsOlder(t, bob)
+	asOlderRecord(t, bob, sent.ID)
 
 	hijack := carol.askOn(t, "jostle", sent.Thread, "carol's question", "what is in this thread?")
 	report, stderr := bob.roundSaid(t)
