@@ -758,8 +758,8 @@ The test resumes at 59, at 60 (the edge is inclusive) and at 61 seconds,
 where the answer is 410 and the partial is gone, and parks an attempt past
 the threshold with its bytes on the disk while the clock moves ninety
 seconds before the sender closes, asserting the window counts from the
-close; a sender whose bytes stop coming is cut by a stall deadline inside
-the same window, which the test bounds in wall time with the deadline set
+close; a sender whose bytes stop coming is cut by the hunk deadline
+inside the same window, which the test bounds in wall time with the deadline set
 short.
 
 **A number from the network is bounded before it is multiplied or

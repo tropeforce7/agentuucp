@@ -389,12 +389,13 @@ func TestAnExpiredReservationIsLetGoWhenTheRoomIsAskedFor(t *testing.T) {
 	}
 
 	// A purge that lets nothing go leaves the refusal as it was: the
-	// reservation live, the post is 507 and nothing was removed.
+	// reservation live, a second inside the start window an unfed open is
+	// held for (D82), the post is 507 and nothing was removed.
 	t.Run("a purge that lets nothing go", func(t *testing.T) {
 		h := newHarness(t, Config{Limits: limits})
 		attacker, victim, sender := h.user(t, "attacker"), h.user(t, "victim"), h.user(t, "sender")
 		upload := h.openOrFail(attacker, victim.Fingerprint(), reserve)
-		h.clock.advance(relayapi.ResumeWindow - time.Second)
+		h.clock.advance(relayapi.StartWindow - time.Second)
 		status, body := h.do(sender, "POST", "/v1/mailbox/"+victim.Fingerprint(), sealed(t, sender, victim.Public(), "hello"), nil)
 		if status != http.StatusInsufficientStorage || errorText(t, body) != relayapi.MsgMailboxFull {
 			t.Fatalf("a post into the mailbox a live reservation fills: %d %s; want 507 %s", status, body, relayapi.MsgMailboxFull)

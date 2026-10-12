@@ -706,10 +706,18 @@ A refused send names what to change, and nothing was queued:
   itself always fits, so this is a document another tool indented.
 - `the relay stopped taking the upload: no byte was read for 60 seconds`
   on a send, or `the relay stopped sending the stream: no byte arrived for
-  60 seconds` on a fetch — the link went quiet for the relay's stall
-  window; a stream has no other clock, and the next attempt asks the relay
-  where its copy ends (`auu send --resume`), the next fetch resumes the
-  download by range.
+  60 seconds` on a fetch — the link went quiet for sixty seconds; the
+  relay itself cuts an upload slower than a hunk of 64 KiB every ten
+  seconds, 6.4 KiB a second, and the next attempt asks the relay where its
+  copy ends (`auu send --resume`), the next fetch resumes the download by
+  range.
+- `warning: the relay asked for a wait of Ns before the first attempt,
+  longer than the 10s an opened upload waits; it is opened again after
+  the wait` — an opened upload goes ten seconds after its open unless an
+  attempt has started, so `auu` lets it go, waits, and opens it again
+  once, an open charged as any open is and refused when the hour's budget
+  is spent; a second such wait lets that one go too and stops the send
+  with the copy in the outbox for `auu send --resume`.
 - `malformed answer from the relay at URL: in ANSWER, FIELD is not ...;
   nothing of the answer was used` — the relay's answer lacks a field every
   relay sends, or carries one outside its shape; nothing on the wire is

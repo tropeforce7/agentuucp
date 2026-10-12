@@ -1137,14 +1137,37 @@ const UploadOffsetHeader = "Upload-Offset"
 // that stops under the threshold, leaves nothing, and the sender opens
 // again from zero. So the relay never keeps less than a threshold's worth
 // for an upload that did not complete, a message is placed by at most two
-// attempts on one id, and a sender that trickles bytes buys nothing.
+// attempts on one id, and a sender that trickles bytes slower than the
+// pace below buys nothing.
+//
+// An upload is fed or it goes (D82). An opened upload waits StartWindow
+// for its first attempt, and an attempt's deadline moves only when a
+// whole hunk, HunkBytes, has arrived since it last moved, and then by
+// HunkWindow: a sender slower than a hunk every HunkWindow is cut as a
+// stall, and what it left is kept or not by the threshold rule. The relay
+// never sees a stream's chunks, which are sealed, so the hunk is the
+// relay's own unit. The pace these make, 6.4 KiB a second, is the least
+// a reservation is fed at, so holding a mailbox's room costs the bytes
+// that fill it.
 const (
 	// ResumeWindow is how long a kept partial lives, from the moment it is
-	// kept, and how long an opened upload waits for its first byte; the
-	// edge is inclusive, a resume at exactly the window is taken.
+	// kept; the edge is inclusive, a resume at exactly the window is
+	// taken.
 	ResumeWindow = 60 * time.Second
 	// ResumeWindowSeconds is ResumeWindow as the open answer carries it.
 	ResumeWindowSeconds int64 = 60
+	// StartWindow is how long an opened upload waits for its first
+	// attempt; the edge is inclusive, as ResumeWindow's is. The open
+	// answer does not name it, only the moment it ends, Expires (R1): a
+	// client of this release knows it, and an older one meets the 410 of
+	// an upload left unfed.
+	StartWindow = 10 * time.Second
+	// HunkBytes is how much of an attempt must arrive for its deadline
+	// to move.
+	HunkBytes = 64 << 10
+	// HunkWindow is how long an attempt waits for its next hunk, and for
+	// its first from the attempt's start.
+	HunkWindow = 10 * time.Second
 )
 
 // The sentences of an attempt refused by its length, as the relay's error
@@ -1178,8 +1201,9 @@ type (
 		// in bytes, for a first attempt that stops short to be kept for a
 		// resume: the relay's max_bytes.
 		ResumeThreshold int64 `json:"resume_threshold"`
-		// ResumeWindow is how long a kept partial lives, in seconds, and
-		// how long this upload waits for its first byte.
+		// ResumeWindow is how long a kept partial lives, in seconds. The
+		// upload waits StartWindow for its first attempt, which the
+		// answer does not name; Expires is when it ends.
 		ResumeWindow int64 `json:"resume_window"`
 	}
 	// PutStreamResponse is the 201 that ends an attempt which reached the

@@ -25,6 +25,7 @@ func TestLimitDefaults(t *testing.T) {
 		got.MailboxMaxBytes != want.MailboxMaxBytes ||
 		got.RelayMaxBytes != want.RelayMaxBytes ||
 		got.MaxOpenUploads != want.MaxOpenUploads ||
+		got.UploadOpensPerHour != want.UploadOpensPerHour ||
 		got.MaxInflight != want.MaxInflight ||
 		got.MaxWaiting != want.MaxWaiting ||
 		got.KnockMaxBytes != want.KnockMaxBytes ||
@@ -51,6 +52,7 @@ func TestLimitsFromFile(t *testing.T) {
 	    "mailbox_max_bytes": 2048,
 	    "relay_max_bytes": 4096,
 	    "max_open_uploads": 6,
+	    "max_upload_opens_per_hour": 17,
 	    "max_inflight": 9,
 	    "max_waiting": 8,
 	    "knock_max_bytes": 512,
@@ -79,6 +81,7 @@ func TestLimitsFromFile(t *testing.T) {
 		{"mailbox_max_bytes", l.MailboxMaxBytes, 2048},
 		{"relay_max_bytes", l.RelayMaxBytes, 4096},
 		{"max_open_uploads", l.MaxOpenUploads, 6},
+		{"max_upload_opens_per_hour", l.UploadOpensPerHour, 17},
 		{"max_inflight", l.MaxInflight, 9},
 		{"max_waiting", l.MaxWaiting, 8},
 		{"knock_max_bytes", l.KnockMaxBytes, 512},
@@ -107,6 +110,7 @@ func TestEveryLimitFlagOverridesTheFile(t *testing.T) {
 	    "mailbox_max_bytes": 10,
 	    "relay_max_bytes": 10,
 	    "max_open_uploads": 10,
+	    "max_upload_opens_per_hour": 10,
 	    "max_inflight": 10,
 	    "max_waiting": 10,
 	    "knock_max_bytes": 10,
@@ -126,6 +130,7 @@ func TestEveryLimitFlagOverridesTheFile(t *testing.T) {
 		"--mailbox-max-bytes", "8",
 		"--relay-max-bytes", "9",
 		"--max-open-uploads", "13",
+		"--max-upload-opens-per-hour", "17",
 		"--max-inflight", "12",
 		"--max-waiting", "11",
 		"--knock-max-bytes", "14",
@@ -151,6 +156,7 @@ func TestEveryLimitFlagOverridesTheFile(t *testing.T) {
 		{"mailbox_max_bytes", l.MailboxMaxBytes, 8},
 		{"relay_max_bytes", l.RelayMaxBytes, 9},
 		{"max_open_uploads", l.MaxOpenUploads, 13},
+		{"max_upload_opens_per_hour", l.UploadOpensPerHour, 17},
 		{"max_inflight", l.MaxInflight, 12},
 		{"max_waiting", l.MaxWaiting, 11},
 		{"knock_max_bytes", l.KnockMaxBytes, 14},
@@ -179,6 +185,7 @@ func TestZeroLimitsSurviveTheFile(t *testing.T) {
 	    "mailbox_max_messages": 0,
 	    "mailbox_max_bytes": 0,
 	    "max_open_uploads": 0,
+	    "max_upload_opens_per_hour": 0,
 	    "max_inflight": 0,
 	    "max_waiting": 0,
 	    "knock_max_bytes": 0,
@@ -194,7 +201,7 @@ func TestZeroLimitsSurviveTheFile(t *testing.T) {
 	if l.RequestsPerMinute != 0 || l.PostsPerMinute != 0 || l.PostBytesPerHour != 0 ||
 		l.UnauthenticatedPerMinute != 0 || l.RegistrationsPerHour != 0 ||
 		l.MailboxMaxMessages != 0 || l.MailboxMaxBytes != 0 || l.MaxOpenUploads != 0 ||
-		l.MaxInflight != 0 || l.MaxWaiting != 0 ||
+		l.UploadOpensPerHour != 0 || l.MaxInflight != 0 || l.MaxWaiting != 0 ||
 		l.KnockMaxBytes != 0 || l.MaxKnocksWaiting != 0 || l.KnocksPerHour != 0 {
 		t.Fatalf("a limit the file set to zero came back with a default: %+v", l)
 	}
@@ -217,6 +224,7 @@ func TestBadLimitsAreRefused(t *testing.T) {
 		{"negative relay bytes", []string{"--relay-max-bytes", "-1"}, "relay_max_bytes"},
 		{"negative open uploads", []string{"--max-open-uploads", "-1"}, "max_open_uploads"},
 		{"open uploads over the ceiling", []string{"--max-open-uploads", "1001"}, "max_open_uploads must be at most 1000"},
+		{"negative upload opens", []string{"--max-upload-opens-per-hour", "-1"}, "max_upload_opens_per_hour"},
 		{"negative knock bytes", []string{"--knock-max-bytes", "-1"}, "knock_max_bytes"},
 		{"negative knocks waiting", []string{"--max-knocks-waiting", "-1"}, "max_knocks_waiting"},
 		{"knocks waiting over the ceiling", []string{"--max-knocks-waiting", "1001"}, "max_knocks_waiting must be at most 1000"},

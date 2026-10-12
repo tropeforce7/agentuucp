@@ -113,7 +113,16 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 		s.rateLimited(w, limitPosts, retry, "")
 		return
 	}
+	// An open is counted whatever becomes of the upload, since each one
+	// reserves a recipient's room, and is given back below when the open
+	// reserves nothing (D82).
+	if ok, retry := s.lim.uploadOpens.Allow(callerFP); !ok {
+		s.rateLimited(w, limitUploadOpens, retry, fmt.Sprintf(
+			"; a sender may open %d uploads an hour on this relay", s.lim.uploadOpens.Burst()))
+		return
+	}
 	if ok, retry := s.lim.postBytes.AllowN(callerFP, req.Size); !ok {
+		s.lim.uploadOpens.Return(callerFP, 1)
 		detail := ""
 		if burst := s.lim.postBytes.Burst(); burst > 0 && req.Size > burst {
 			// Named, because at the shipped defaults this is the refusal a
@@ -131,13 +140,15 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 
 	id, err := NewUploadID()
 	if err != nil {
+		s.lim.postBytes.Return(callerFP, req.Size)
+		s.lim.uploadOpens.Return(callerFP, 1)
 		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
 	// The server's clock, which is also the one the expiry is read by: an
-	// upload nobody puts a byte to within the window is gone.
+	// upload nobody starts an attempt on within the start window is gone.
 	now := s.cfg.Now()
-	expires := now.Add(relayapi.ResumeWindow)
+	expires := now.Add(relayapi.StartWindow)
 	open := func() error {
 		return s.store.OpenUpload(id, fp, callerFP, channel, req.Size, now, expires,
 			s.cfg.Limits.Quotas(), s.cfg.MaxStreamBytes)
@@ -162,6 +173,7 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 	}
 	if err != nil {
 		s.lim.postBytes.Return(callerFP, req.Size)
+		s.lim.uploadOpens.Return(callerFP, 1)
 	}
 	switch {
 	case err == nil:
@@ -177,8 +189,11 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 		}
 		s.rateLimited(w, limitOpenUploads, wait, fmt.Sprintf(
 			"; you have %d uploads open, the most this relay allows one sender at once; "+
-				"an unfinished upload goes within %d seconds of its last byte",
-			capped.Open, relayapi.ResumeWindowSeconds))
+				"an upload goes %d seconds after its open unless an attempt has started, "+
+				"an attempt is cut when %d KiB do not arrive within %d seconds, "+
+				"and a kept partial goes %d seconds after it was kept",
+			capped.Open, int64(relayapi.StartWindow/time.Second), relayapi.HunkBytes>>10,
+			int64(relayapi.HunkWindow/time.Second), relayapi.ResumeWindowSeconds))
 		return
 	case errors.Is(err, ErrMailboxFull):
 		setLimit(w, limitMailboxFull)
@@ -204,13 +219,23 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 	})
 }
 
-// stallTimeout is how long the stream route waits for an attempt's next
-// byte: the window, unless a test set it shorter.
+// stallTimeout is how long the blob route waits for a reader to take its
+// next byte: the resume window, unless a test set it shorter.
 func (s *Server) stallTimeout() time.Duration {
 	if s.cfg.StallTimeout > 0 {
 		return s.cfg.StallTimeout
 	}
 	return relayapi.ResumeWindow
+}
+
+// hunkWindow is how long the stream route waits for an attempt's next
+// hunk, and for its first from the attempt's start: relayapi.HunkWindow,
+// unless a test set the stall timeout shorter.
+func (s *Server) hunkWindow() time.Duration {
+	if s.cfg.StallTimeout > 0 {
+		return s.cfg.StallTimeout
+	}
+	return relayapi.HunkWindow
 }
 
 // refuseUnread answers a request whose body the handler will not read,
@@ -338,26 +363,28 @@ func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerF
 		return
 	}
 
-	// The stall deadline: the connection's read and write deadlines are
-	// the relay's own for this request, now + the stall timeout, and each
-	// read that delivers bytes moves both, so a transfer of any length
-	// completes while bytes keep coming, a stalled one ends inside the
-	// window as an attempt that stopped short, and the answer at the end
-	// is always writable within a window of the last byte — the server's
-	// five-minute write deadline, set when the headers were read, would
-	// otherwise fail the 201 of a transfer longer than that after the
-	// message was placed.
+	// The hunk deadline (D82): the connection's read and write deadlines
+	// are the relay's own for this request, now + the hunk window, and
+	// they move by the window only when a whole hunk has arrived since
+	// they last moved, so a transfer of any length completes while it
+	// keeps the pace, a slower or stalled one ends inside a window as an
+	// attempt that stopped short, and the answer at the end is always
+	// writable within a window of the last hunk — the server's five-minute
+	// write deadline, set when the headers were read, would otherwise fail
+	// the 201 of a transfer longer than that after the message was placed.
+	// A deadline every byte moved let a sender hold an upload's
+	// reservation for ever on a byte a window.
 	// The body is read from here: the connection may be kept after the
 	// answer, and the refusals below that leave it unread say so again.
 	w.Header().Del("Connection")
 	rc := http.NewResponseController(w)
-	stall := s.stallTimeout()
+	stall := s.hunkWindow()
 	extend := func() {
 		rc.SetReadDeadline(time.Now().Add(stall))
 		rc.SetWriteDeadline(time.Now().Add(stall))
 	}
 	extend()
-	body := &deadlineReader{r: r.Body, extend: extend}
+	body := &deadlineReader{r: r.Body, extend: extend, hunk: relayapi.HunkBytes}
 	var badShape error
 	received, err := s.store.ReceiveUpload(u.ID, offset, s.cfg.MaxBytes, s.cfg.Now, relayapi.ResumeWindow,
 		func(f *os.File, want int64) (int64, error) {
@@ -420,7 +447,7 @@ func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerF
 		s.refuseUnreadWith(w, http.StatusInsufficientStorage, relayapi.RefusalRelayFull)
 		return
 	case errors.Is(err, ErrShortAttempt):
-		// The sender stopped, or the stall deadline ended it; either way
+		// The sender stopped, or the hunk deadline ended it; either way
 		// the sender is most likely gone, and the answer says what the
 		// relay kept for anyone still listening.
 		w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(received.Offset, 10))
@@ -437,16 +464,22 @@ func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerF
 	s.refuseUnreadWith(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 }
 
-// deadlineReader is a request body whose every delivering read moves the
-// stall deadline on.
+// deadlineReader is a request body that moves the hunk deadline on each
+// time a whole hunk has been read since it last moved. What a read
+// brought past a hunk's edge counts toward the next, so a sender at the
+// pace is credited every byte; since stays under a hunk plus one read's
+// length, both the relay's own.
 type deadlineReader struct {
 	r      io.Reader
 	extend func()
+	hunk   int64
+	since  int64
 }
 
 func (d *deadlineReader) Read(p []byte) (int, error) {
 	n, err := d.r.Read(p)
-	if n > 0 {
+	if d.since += int64(n); d.since >= d.hunk {
+		d.since -= d.hunk
 		d.extend()
 	}
 	return n, err

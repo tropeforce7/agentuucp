@@ -81,8 +81,11 @@ func (h *harness) waitOnDisk(id string, n int64) {
 // TestLimitOpenUploadsAtTheCapAndOneOver: one sender may have
 // max_open_uploads open at once, across every mailbox it sends to; at the
 // cap the next open is 429 naming the limit, with Retry-After the seconds
-// to the sender's soonest expiry rounded up, and the sentence saying an
-// unfinished upload goes within sixty seconds of its last byte. Two
+// to the sender's soonest expiry rounded up, which for an upload nobody has
+// started an attempt on is the start window, ten seconds from its open
+// (D82), and the sentence saying the start window, the hunk an attempt
+// must deliver within its window, and the resume window of a kept
+// partial. Two
 // senders do not share a count. An abort, a placement and an expiry each
 // free a slot, and the purge frees every expired one; uploads that have
 // expired untouched are let go by the open that meets them at the cap, so
@@ -125,7 +128,9 @@ func TestLimitOpenUploadsAtTheCapAndOneOver(t *testing.T) {
 			t.Fatalf("an open past the cap: %d %s; want 429", status, body)
 		}
 		want := "rate limited: open uploads; you have 2 uploads open, the most this relay allows one sender at once; " +
-			"an unfinished upload goes within 60 seconds of its last byte"
+			"an upload goes 10 seconds after its open unless an attempt has started, " +
+			"an attempt is cut when 64 KiB do not arrive within 10 seconds, " +
+			"and a kept partial goes 60 seconds after it was kept"
 		if got := errorText(t, body); got != want {
 			t.Fatalf("the refusal says %q\nwant %q", got, want)
 		}
@@ -137,21 +142,21 @@ func TestLimitOpenUploadsAtTheCapAndOneOver(t *testing.T) {
 	// At the cap: two taken, the third refused, and the log names the limit.
 	first := h.openOrFail(alice, to, size)
 	second := h.openOrFail(alice, to, size)
-	capped(t, alice, "60")
+	capped(t, alice, "10")
 	if !strings.Contains(h.logs.String(), `limit="open uploads"`) {
 		t.Fatalf("the refusal did not name its limit in the log:\n%s", h.logs.String())
 	}
-	// The seconds to the soonest expiry, rounded up: half a second on,
-	// 59.5 s to go is 60; a second on, 59.
+	// The seconds to the soonest expiry, the start window from the open,
+	// rounded up: half a second on, 9.5 s to go is 10; a second on, 9.
 	h.clock.advance(500 * time.Millisecond)
-	capped(t, alice, "60")
+	capped(t, alice, "10")
 	h.clock.advance(500 * time.Millisecond)
-	capped(t, alice, "59")
+	capped(t, alice, "9")
 
 	t.Run("two senders do not share a count", func(t *testing.T) {
 		h.openOrFail(carol, to, size)
 		h.openOrFail(carol, to, size)
-		capped(t, carol, "60")
+		capped(t, carol, "10")
 		if h.openCount(alice.Fingerprint()) != 2 || h.openCount(carol.Fingerprint()) != 2 {
 			t.Fatalf("alice has %d open and carol %d; want 2 each", h.openCount(alice.Fingerprint()), h.openCount(carol.Fingerprint()))
 		}
@@ -162,8 +167,8 @@ func TestLimitOpenUploadsAtTheCapAndOneOver(t *testing.T) {
 			t.Fatalf("abort: %d %s", status, body)
 		}
 		first = h.openOrFail(alice, to, size)
-		// The soonest expiry is the older upload's, 59 s on.
-		capped(t, alice, "59")
+		// The soonest expiry is the older upload's, 9 s on.
+		capped(t, alice, "9")
 	})
 
 	t.Run("a placement frees a slot", func(t *testing.T) {
@@ -171,7 +176,7 @@ func TestLimitOpenUploadsAtTheCapAndOneOver(t *testing.T) {
 			t.Fatalf("put: %d %s", status, body)
 		}
 		second = h.openOrFail(alice, to, size)
-		capped(t, alice, "60")
+		capped(t, alice, "10")
 	})
 
 	t.Run("expired untouched, the next open lets them go and succeeds at once", func(t *testing.T) {
@@ -189,7 +194,7 @@ func TestLimitOpenUploadsAtTheCapAndOneOver(t *testing.T) {
 			t.Fatalf("the open at the cap did not run the purge:\n%s", h.logs.String())
 		}
 		first, second = third, h.openOrFail(alice, to, size)
-		capped(t, alice, "60")
+		capped(t, alice, "10")
 	})
 
 	t.Run("the purge frees slots", func(t *testing.T) {
@@ -200,7 +205,7 @@ func TestLimitOpenUploadsAtTheCapAndOneOver(t *testing.T) {
 		}
 		first = h.openOrFail(alice, to, size)
 		second = h.openOrFail(alice, to, size)
-		capped(t, alice, "60")
+		capped(t, alice, "10")
 	})
 
 	t.Run("in flight past their expiry, the open at the cap is refused with a Retry-After of one", func(t *testing.T) {

@@ -345,24 +345,39 @@ attachment under a safe form of its name (see *Receive*). The sender's
 rule is that the name is already that form, so an honest sender never
 ships a name a receiver would write differently.
 
-Above 64 KiB in all, the
-message goes as a stream. It is sealed to `outbox/` first, then uploaded
-in one request per attempt, the whole of it or the rest of it from where
-the relay's copy ends. An attempt that is interrupted is tried again on
-the spot. `auu send --resume` finishes what a failed command left. It asks
-the relay by an attempt from zero. It resumes once from the partial the
-relay kept when it kept one, which it does for an attempt past its
-threshold, within sixty seconds. Otherwise it opens anew for the same
+Above 64 KiB in all, the message goes as a stream. It is sealed to `outbox/`
+first, then uploaded in one request per attempt, the whole of it or the rest
+of it from where the relay's copy ends. An attempt that is interrupted is
+tried again on the spot. `auu send --resume` finishes what a failed command
+left. It asks the relay by an attempt from zero. It resumes once from the
+partial the relay kept when it kept one, which it does for an attempt past
+its threshold, within sixty seconds. Otherwise it opens anew for the same
 sealed bytes. Nothing about the command changes. An attempt has no clock
-but the link's. The upload runs for as long as bytes keep moving. It is
-cut only when the relay takes none for sixty seconds, the relay's own
-stall window, with the sentence `the relay stopped taking the upload: no
-byte was read for 60 seconds`. After that the next attempt asks where the
-relay's copy ends.
-The download of a stream on the receiving side runs under the same rule,
-`the relay stopped sending the stream: no byte arrived for 60 seconds`,
-and resumes by range from where it stood. Every other request to the
-relay is answered within two minutes or fails.
+over the whole exchange, but the relay holds it to a pace. An opened upload
+waits ten seconds for its first attempt, and an attempt must bring the relay
+a hunk of 64 KiB within ten seconds of its start and of each hunk before,
+about 6.4 KiB a second, which is the least a link must sustain. A slower one
+is cut by the relay as an attempt that stopped short. A relay that asks for
+a wait, a `429` or a `503`, before the first attempt on an upload, for
+longer than is left of its ten seconds less two, would let the upload go
+before the attempt arrived. `auu` says so, `warning: the relay asked for a
+wait of 20s before the first attempt, longer than the 10s an opened upload
+waits; it is opened again after the wait`, lets the upload go, waits, and
+opens it again once. The new open is charged as any open is, against the
+hour's post bytes and the count of opens, and may itself be refused. A
+second such wait in the same send lets that upload go too and stops the send
+with the relay's words, the copy in the outbox for `auu send --resume`. A
+relay also counts the uploads one sender opens in an hour, 64 by default,
+each recipient's copy of a message to several one of them, and refuses an
+open over it `429` `rate limited: upload opens`, with a `Retry-After` saying
+when it takes another. The upload runs for as long as it keeps the relay's
+pace. On its own side `auu` cuts it only when the relay takes no byte for
+sixty seconds, with the sentence `the relay stopped taking the upload: no
+byte was read for 60 seconds`. After either cut the next attempt asks where
+the relay's copy ends. The download of a stream on the receiving side runs
+under that sixty-second rule, `the relay stopped sending the stream: no byte
+arrived for 60 seconds`, and resumes by range from where it stood. Every
+other request to the relay is answered within two minutes or fails.
 A relay, or a proxy or cache between, may not honour a range and answer
 with the whole stream instead. That is a malformed answer naming the relay
 and saying the range was not honoured. It is a transport failure. Nothing
@@ -428,9 +443,11 @@ first characters, and `PEER`, a peer's name or eight or more characters of
 their fingerprint, says whose it is when one id has more than one thing
 waiting. It does not ask first, as `auu rm` does not, since a message given
 up can be sent again. A stream dropped part way leaves the relay to let its
-part go when the sixty seconds end. Every command that sends says, once,
-what waits: `warning: 1 unfinished message in the outbox (1 stream); finish
-with 'auu send --resume' or give one up with 'auu outbox drop ID'`.
+part go when its window ends, ten seconds from the open when no attempt
+started on it and sixty from the moment a partial was kept. Every command
+that sends says, once, what waits: `warning: 1 unfinished message in the
+outbox (1 stream); finish with 'auu send --resume' or give one up with
+'auu outbox drop ID'`.
 
 A note to yourself needs no peer at all:
 

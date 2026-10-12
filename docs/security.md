@@ -113,31 +113,47 @@ open's charge is what its reservation of the recipient's room costs.
 Refunded, it would let a sender hold a mailbox full for nothing, opening,
 sending nothing, aborting and opening again at once. So one identity's
 reservations cost its `post_bytes_per_hour`, 256 MiB at the defaults,
-however little it uploads. A reservation nobody feeds expires sixty
-seconds after the open, the resume window. It still holds the room until
-something meets it: its sender's next request on it, its sender's open
-at the `max_open_uploads` cap, the purge every hundredth request, or the
-next post, open, knock or courier's delivery refused `507` for room,
-which purges it. An attempt in flight keeps it from the purge. So a
-sender who starts an attempt at the last moment and sends nothing holds
-the room for one stall deadline more, sixty seconds.
+however little it uploads. The count of opens is held too:
+`max_upload_opens_per_hour`, 64 unless the operator sets it, refused
+`429` `rate limited: upload opens` with a `Retry-After`. A stream to
+several opens one upload for each recipient's copy, so 64 is four such
+messages to sixteen.
 
-What remains is this. Each hour one identity may reserve, unfed, as many
-bytes of a recipient's room as its `post_bytes_per_hour`, and hold each
-reservation a minute or more. At the defaults that is a quarter of a
-mailbox, so it takes four identities to hold one full. That holds only on
-a mailbox whose owner admits them. A reservation fed to the resume
-threshold, `max_bytes`, and then dropped is kept for one resume. When it
-goes it is given back its size less the kept bytes, which were held. So
-it costs its sender only the threshold, and an identity may hold room
-for longer each hour that way, paying `max_bytes` each time. The allow
-list is the owner's answer to both, and the registration budget the
-operator's. The rule costs honest senders something too. A first attempt
-that ends short of the resume threshold leaves nothing, and so is charged
-the declared size for the hour. So is a first attempt the relay's own disk
-fails. An open the budget then cannot afford is refused `429`
-`rate limited: post bytes`, with `Retry-After` saying when the budget
-allows it.
+An upload is fed or it goes. One nobody starts an attempt on expires ten
+seconds after the open, the start window. An attempt's deadline moves only
+when a whole hunk, 64 KiB, has arrived since it last moved, and then by
+ten seconds, so an attempt slower than about 6.4 KiB a second, or one that
+stops, is cut within ten seconds of its last whole hunk as one that
+stopped short. What it left is kept or not by the threshold rule, and a
+kept partial lives sixty seconds, the resume window. A deadline that every
+byte moved would let a sender hold a reservation for ever on a byte every
+window. An expired upload still holds the room until something meets it:
+its sender's next request on it, its sender's open at the
+`max_open_uploads` cap, the purge every hundredth request, or the next
+post, open, knock or courier's delivery refused `507` for room, which
+purges it. An attempt in flight keeps it from the purge, but only for as
+long as it keeps the pace.
+
+What remains is this. A reservation of S bytes lives about as long as S
+takes at 6.4 KiB a second, the start window, the last hunk's window and
+one resume window aside, and holds nothing unless it is fed. At the
+defaults one identity may open a quarter of a mailbox each hour, so it can
+come to hold its four open uploads, the whole of a mailbox, and keep each
+for about eleven hours: 256 MiB at a hunk every ten seconds is 4,096
+hunks, 40,960 seconds. That takes feeding them at about 26 KiB a second in
+all, a hunk every ten seconds each, and the cost to the attacker is the
+bytes, a mailbox's worth sent. It holds only on a mailbox whose owner
+admits the identity. A reservation fed to the resume threshold,
+`max_bytes`, and then dropped is kept for one resume. When it goes it is
+given back its size less the kept bytes, which were held. So it costs its
+sender only the threshold, and an identity may hold room for longer each
+hour that way, paying `max_bytes` each time. The allow list is the owner's
+answer to both, and the registration budget the operator's. The rule costs
+honest senders something too. A first attempt that ends short of the
+resume threshold leaves nothing, and so is charged the declared size for
+the hour. So is a first attempt the relay's own disk fails. An open the
+budget then cannot afford is refused `429` `rate limited: post bytes`,
+with `Retry-After` saying when the budget allows it.
 
 **What the relay sees.** More than it stores, and this is worth being plain
 about. Posting is authenticated, so at the moment a message is accepted the
@@ -1079,13 +1095,13 @@ stream's id or an error's sentence, is read under 64 KiB. The trust anchor
 answer is read under 1 MiB. Each is refused by name over it, the same rule
 and not a cut that fails later as JSON. A directory or an allow list is
 held to the 1 MiB cap before a byte is sent. The stream routes run on a
-client with no whole-exchange timeout and a stall rule of the relay's
-sixty seconds on both bodies. A two-minute whole-exchange timeout, under
-the one-request wire, meant a stream needing more than about four minutes
-on the link could never be placed. An upload the relay stops taking, and a
-download the relay stops sending, are cut with a sentence naming the
-stall. The next attempt or the next range picks up from where the relay's
-copy ends.
+client with no whole-exchange timeout and a stall rule of sixty seconds,
+the relay's resume window, on both bodies. A two-minute whole-exchange
+timeout, under the one-request wire, meant a stream needing more than
+about four minutes on the link could never be placed. An upload the relay
+stops taking, and a download the relay stops sending, are cut with a
+sentence naming the stall. The next attempt or the next range picks up
+from where the relay's copy ends.
 
 ### 2.1 The round trip
 
@@ -1530,7 +1546,9 @@ it. The signed size and channel charge the recipient's quota and the
 sender's byte budget. The sender's count of open uploads is held to the
 relay's `max_open_uploads`. At it the open is `429` with a `Retry-After` of
 the seconds to the sender's soonest expiry, which the client waits out. The
-answer is an upload id, when it expires, and two numbers the sender needs,
+uploads it opens in an hour are held to `max_upload_opens_per_hour`, and
+over that the open is `429` with a `Retry-After` too. The answer is an
+upload id, when it expires, and two numbers the sender needs,
 `resume_threshold` (bytes, the relay's `max_bytes`) and `resume_window`
 (seconds, sixty). `PUT /v1/uploads/{id}` is one attempt. It carries the
 sealed stream from an offset to the end in one request, with
@@ -1565,23 +1583,29 @@ this wire tells it, by the next attempt. One from zero on the same id is
 simply the fresh attempt when the relay never saw the one that was lost. A
 resume after the window is `410`, naming when the upload expired and
 saying to open again, with the upload and its reservation gone. An upload
-nobody puts a byte to within sixty seconds of its open goes the same way.
+nobody starts an attempt on within ten seconds of its open, the start
+window, goes the same way. The answer names the start window only by the
+moment it ends, its `expires`: a client of this release knows the window,
+and an older one meets the `410`.
 
-Bytes that stop coming end inside the window too. The attempt runs under
-the relay's own stall deadline on the connection, sixty seconds, which no
-setting changes, and moved on by every read that delivers bytes. So a
-transfer of any length finishes while bytes keep arriving. A stalled one
-is cut and judged by the rule above, its answer written under a fresh
-deadline of its own for anyone still listening. The download of a placed
-stream is served under the same deadline turned round, moved by every
-write that delivers bytes. So a reader that stops is cut inside the
-window. A slow one is served to the end rather than cut by the server's
-five-minute write timeout every five minutes and left to ask by `Range`.
-The server's five-minute read and write timeouts stand on every other
-route. A refusal before the body is read closes the connection, and the
-answer is written before any of the body is read. The standard library
-then reads up to 256 KiB of what was declared before it closes, which is
-the one cost a refused attempt has.
+Bytes that stop coming, or come too slowly, end inside a window too. The
+attempt runs under the relay's own hunk deadline on the connection, which
+no setting changes: ten seconds from the attempt's start, set ten seconds
+on from the read that completes a whole hunk of 64 KiB since it last
+moved, and at no other read. So a transfer of any length finishes while it
+keeps a pace of 6.4 KiB a second. A slower or stalled one is cut and
+judged by the rule above, its answer written under a fresh deadline of its
+own for anyone still listening. A deadline that every byte moved would let
+a sender trickle a byte a window and hold a reservation for ever. The
+download of a placed stream is served under a stall deadline of sixty
+seconds, moved by every write that delivers bytes. So a reader that stops
+is cut inside that window. A slow one is served to the end rather than cut
+by the server's five-minute write timeout every five minutes and left to
+ask by `Range`. The server's five-minute read and write timeouts stand on
+every other route. A refusal before the body is read closes the
+connection, and the answer is written before any of the body is read. The
+standard library then reads up to 256 KiB of what was declared before it
+closes, which is the one cost a refused attempt has.
 
 An interrupted upload resumes. The sealed copy stays in `outbox/` and
 `auu send --resume` carries on from the byte the relay says it has. That is

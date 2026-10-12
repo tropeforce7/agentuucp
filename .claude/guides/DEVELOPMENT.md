@@ -834,7 +834,9 @@ read timeout let the dribble go on, slot held and answer unsent. The
 purge uses `TryLock`, skips what is held, says how many it skipped, and
 meets them next time; and the routes themselves refuse an expired upload
 with 410 and abort it, so nothing waits on the purge to end a reservation
-that a sender keeps touching.
+that a sender keeps touching. Since the purge passes over a held upload,
+the attempt holding it must end on its own: a reservation lives only as
+long as it is fed.
 
 **Counters, not aggregates, and adjust them in the same transaction as the
 row.** Per-mailbox and relay-wide queued totals are columns updated inside
@@ -1330,7 +1332,7 @@ which carries it always, and never above `relayapi.MaxListingHold`, a
 page over a hold already there asked for again with half as many rows,
 down to one, before it is refused (the rule on a range proven, below);
 and the stream routes, whose length is the transfer's, run with no
-whole-exchange timeout and a stall rule of the relay's own window on
+whole-exchange timeout and a stall rule of the relay's resume window on
 both bodies, since a two-minute timeout under the one-request wire meant
 a stream needing four minutes on the link could never be placed.
 
@@ -1455,13 +1457,18 @@ with its own lock, and a resume the sender could repeat without end. Under
 the one-attempt wire a `PUT` carries the sealed bytes from an offset to
 the end, with `Content-Length` required and equal to what is left, judged
 before a byte is read; an attempt that stops short is kept only when it
-was the first and reached the threshold, for sixty seconds from the
-moment it stopped and one resume, and otherwise leaves nothing; and the
-sender learns what the relay holds by its next attempt, never by asking.
-A limit on what a request may carry is not a reason to cut the request
-into more of them: the relay streams the body to disk under a stall
-deadline that every delivering read moves, so the request's length is the
-stream's.
+was the first and reached the threshold, for sixty seconds from the moment
+it stopped and one resume, and otherwise leaves nothing; and the sender
+learns what the relay holds by its next attempt, never by asking. A limit
+on what a request may carry is not a reason to cut the request into more
+of them: the relay streams the body to disk under a hunk deadline, so the
+request's length is the stream's. The deadline runs `relayapi.HunkWindow`
+from the attempt's start and is set that far on from the read that
+completes a whole hunk, `relayapi.HunkBytes`, since it last moved, and an
+opened upload no attempt has started on goes at `relayapi.StartWindow`. A
+deadline that every delivering read moved let a sender trickle a byte a
+window and hold the reservation for ever, out of reach of every expiry and
+of the purge, which passes over an attempt in flight.
 
 **`ServeMux` sets `Request.Pattern` on a copy the outer middleware never
 sees.** If you need the matched route in the outermost handler, record it at

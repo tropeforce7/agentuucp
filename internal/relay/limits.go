@@ -38,6 +38,15 @@ type Limits struct {
 	// answered 429 with a Retry-After of the seconds to the sender's
 	// soonest expiry.
 	MaxOpenUploads int64
+	// UploadOpensPerHour caps the uploads one sender may open in an hour,
+	// keyed by the verified fingerprint, whatever became of them: each
+	// open is a reservation of a recipient's room, so a sender that opens
+	// and leaves its uploads unfed holds that room ten seconds an open and
+	// no more often than this (D82). Over it an open is refused 429 with a
+	// Retry-After. A stream to several opens one upload per recipient's
+	// copy, so the default, 64, is four such messages to sixteen (R2).
+	// Zero is unlimited.
+	UploadOpensPerHour int64
 
 	// KnockMaxBytes caps one knock envelope on the knock route, a stranger's
 	// one message; zero means MaxBytes, the post's cap, since zero is
@@ -94,6 +103,7 @@ func DefaultLimits() Limits {
 		MailboxMaxBytes:          1 << 30,
 		RelayMaxBytes:            0,
 		MaxOpenUploads:           4,
+		UploadOpensPerHour:       64,
 		// A knock may carry up to message.MaxKnockVouches vouches, each a
 		// document with a whole bundle in it. Sealed as posted, a knock at
 		// its longest text and name, every vouch at its longest name, was
@@ -399,6 +409,7 @@ const (
 	limitMailboxFull     = "mailbox"
 	limitRelayFull       = "relay storage"
 	limitOpenUploads     = "open uploads"
+	limitUploadOpens     = "upload opens"
 	// limitKnocks is the sender's knock budget, knocks_per_hour, refused
 	// with a Retry-After; limitKnocksWaiting is the recipient's,
 	// max_knocks_waiting, refused without one, since the relay cannot say
@@ -432,6 +443,7 @@ type limiters struct {
 	requests        *ratelimit.Limiter // keyed by verified fingerprint
 	posts           *ratelimit.Limiter // keyed by verified fingerprint
 	postBytes       *ratelimit.Limiter // keyed by verified fingerprint
+	uploadOpens     *ratelimit.Limiter // keyed by verified fingerprint
 	knocks          *ratelimit.Limiter // keyed by verified fingerprint
 	unauthenticated *ratelimit.Limiter // keyed by source address
 	registrations   *ratelimit.Limiter // keyed by source address
@@ -461,6 +473,7 @@ func newLimiters(l Limits, c CourierLimits, now func() time.Time) limiters {
 		requests:         ratelimit.New(l.RequestsPerMinute, time.Minute, time.Minute, now),
 		posts:            ratelimit.New(l.PostsPerMinute, time.Minute, time.Minute, now),
 		postBytes:        ratelimit.New(l.PostBytesPerHour, time.Hour, time.Hour, now),
+		uploadOpens:      ratelimit.New(l.UploadOpensPerHour, time.Hour, time.Hour, now),
 		knocks:           ratelimit.New(l.KnocksPerHour, time.Hour, time.Hour, now),
 		unauthenticated:  ratelimit.New(l.UnauthenticatedPerMinute, time.Minute, time.Minute, now),
 		registrations:    ratelimit.New(l.RegistrationsPerHour, time.Hour, time.Hour, now),

@@ -14,6 +14,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/regular"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
 	"github.com/tropeforce7/agentuucp/internal/term"
@@ -408,6 +409,11 @@ func resumeRelay(s *store.Store, p *pending, flag string) (*store.Relay, error) 
 	return r, err
 }
 
+// startWindow is how long the relay holds an upload nobody has started an
+// attempt on, relayapi.StartWindow; a variable so a test can wait out a
+// shorter one.
+var startWindow = relayapi.StartWindow
+
 // uploadStream sends the sealed stream in the outbox to the relay, one
 // attempt per turn: an open, then a PUT of the whole file from the offset
 // the relay reports to the end, streamed from disk. It answers the message
@@ -448,16 +454,27 @@ func uploadStream(c *client.Client, s *store.Store, p *pending) (int64, error) {
 
 	var offset int64
 	resumed := false
+	// opened is when this process opened the upload, and unfed whether
+	// every attempt on it since was refused before its body (a wait), so
+	// the relay still holds it for no longer than its start window; reopened
+	// whether that window has already been lost once in this turn (R3), and
+	// lost whether the upload the record names was let go for it and is to
+	// be opened again. The record keeps a let-go id until a new open takes
+	// its place: an empty one on a fresh send tells the caller the relay
+	// never took the message, and the sealed copy would be dropped.
+	var opened time.Time
+	unfed, reopened, lost := false, false, false
 	for failed := 0; ; {
-		if p.Upload == "" {
+		if p.Upload == "" || lost {
 			// A copy of a message to several says how many it went to on
 			// every open, a resumed one too, for the relay to hold to its
 			// max_recipients as it held the first.
-			opened, err := c.OpenStream(ctx(), p.To, p.Channel, info.Size(), p.RecipientCount)
+			answer, err := c.OpenStream(ctx(), p.To, p.Channel, info.Size(), p.RecipientCount)
 			if err != nil {
 				return 0, err
 			}
-			p.Upload, offset, resumed = opened.Upload, 0, false
+			p.Upload, offset, resumed, lost = answer.Upload, 0, false, false
+			opened, unfed = time.Now(), true
 			if err := p.save(s); err != nil {
 				return 0, err
 			}
@@ -484,12 +501,36 @@ func uploadStream(c *client.Client, s *store.Store, p *pending) (int64, error) {
 			if wait > 30*time.Second {
 				wait = 30 * time.Second
 			}
+			// An upload nobody has started an attempt on goes at the
+			// relay's start window from its open, so a wait that would
+			// outlast what is left of it, less two seconds (one for the
+			// relay's whole-second expiry, one for the attempt to arrive),
+			// loses the open as a first attempt that leaves nothing does:
+			// it is said, let go, and opened again once after the wait
+			// (R3); a second loss in the turn is let go too and is the
+			// turn's end, with the copy in the outbox.
+			if unfed {
+				if left := startWindow - time.Since(opened) - 2*time.Second; wait > left {
+					if reopened {
+						// --resume meets the gone upload and opens
+						// afresh.
+						c.AbortStream(ctx(), p.Upload)
+						return 0, err
+					}
+					fmt.Fprintf(os.Stderr, "warning: the relay asked for a wait of %s before the first attempt, "+
+						"longer than the %s an opened upload waits; it is opened again after the wait\n",
+						wait.Round(time.Second), startWindow)
+					c.AbortStream(ctx(), p.Upload)
+					lost, reopened = true, true
+				}
+			}
 			time.Sleep(wait)
 			// A refusal is not progress, but it is not a failure of the
 			// upload either: the relay has told us to come back and we are
 			// coming back, at whatever offset it then says.
 			continue
 		}
+		unfed = false
 		if isStorageFull(err) {
 			// Retrying will not help: the relay has no room. Whether it
 			// kept the partial is its rule's to say, and the next attempt

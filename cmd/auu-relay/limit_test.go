@@ -15,7 +15,8 @@ import (
 // TestLimitRelaySettings: every integer setting of the relay, from the
 // file and from its flag. max_bytes is within [1, MaxBytesCeiling]
 // (TestLimitMaxBytesBoundaries walks its edges); max_stream_bytes and
-// twelve of the fifteen limits are zero or more, zero meaning unlimited:
+// thirteen of the sixteen limits, max_upload_opens_per_hour among them,
+// are zero or more, zero meaning unlimited:
 // a negative and the type's minimum are refused naming the setting, and
 // zero and the type's maximum are taken; max_open_uploads and
 // max_knocks_waiting are zero or within [1, 1000], the two limits with a
@@ -39,6 +40,7 @@ func TestLimitRelaySettings(t *testing.T) {
 		{"limits.mailbox_max_messages", "--mailbox-max-messages"},
 		{"limits.mailbox_max_bytes", "--mailbox-max-bytes"},
 		{"limits.relay_max_bytes", "--relay-max-bytes"},
+		{"limits.max_upload_opens_per_hour", "--max-upload-opens-per-hour"},
 		{"limits.max_inflight", "--max-inflight"},
 		{"limits.max_waiting", "--max-waiting"},
 		{"limits.knocks_per_hour", "--knocks-per-hour"},

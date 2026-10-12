@@ -434,7 +434,7 @@ func outboxDrop(args []string) error {
 	}
 	fmt.Printf("dropped the %s of %s to %s\n", outboxKind(p), p.MessageID[:12], p.label())
 	if p.kind == kindStream && p.Upload != "" {
-		fmt.Printf("the relay %s lets its part of the upload go when the resume window ends\n", p.Relay)
+		fmt.Printf("the relay %s lets its part of the upload go when its window ends, ten seconds from the open or sixty from a kept partial\n", p.Relay)
 	}
 	return nil
 }

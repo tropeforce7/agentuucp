@@ -181,6 +181,7 @@ cmd/auu-relay/config.go LimitsConfig int MaxInflight int64 = >= 0 shown by TestL
 cmd/auu-relay/config.go LimitsConfig int MaxKnocksWaiting int64 = 0 or [1, 1000] shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MaxMailboxes int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MaxOpenUploads int64 = 0 or [1, 1000] shown by TestLimitRelaySettings
+cmd/auu-relay/config.go LimitsConfig int UploadOpensPerHour int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MaxRecipients int64 = 0 or [1, 32] shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MaxWaiting int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int PostBytesPerHour int64 = >= 0 shown by TestLimitRelaySettings
@@ -216,6 +217,7 @@ cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxInflight) = >= 0 shown
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxKnocksWaiting) = 0 or [1, 1000] shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxMailboxes) = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxOpenUploads) = 0 or [1, 1000] shown by TestLimitRelaySettings
+cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.uploadOpensPerHour) = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxRecipients) = 0 or [1, 32] shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxStreamBytes) = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/main.go registerFlags int fs.Int64Var(&f.maxWaiting) = >= 0 shown by TestLimitRelaySettings

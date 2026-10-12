@@ -56,7 +56,8 @@ type Client struct {
 	// placed.
 	stream *http.Client
 	// stall is the stream rule's window, relayapi.ResumeWindow, the
-	// relay's own stall deadline; tests set it short.
+	// relay's deadline on a blob read and longer than its hunk window on
+	// an upload; tests set it short.
 	stall time.Duration
 	// maxBytes is the relay's max_bytes as its health answer said it,
 	// fetched once on the first listing and kept: what a listing page is

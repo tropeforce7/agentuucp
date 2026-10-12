@@ -356,7 +356,7 @@ func (w *stallWatch) wrap(err error) error {
 // stallReader is a request body under the watch: every delivering read
 // moves the window on, and the end of the body ends the watch — from
 // there the transport is waiting for the relay's answer, which its
-// ResponseHeaderTimeout bounds, and the relay's own stall deadline ends a
+// ResponseHeaderTimeout bounds, and the relay's own deadline ends a
 // relay that took the body and says nothing. The watch sees the relay
 // through the transport's reads of the body: the transport reads as it
 // writes the wire, so a relay that stops taking bytes fills the socket's

@@ -145,10 +145,10 @@ func TestAnEnvelopeIsCountedBesideStreamReservations(t *testing.T) {
 // abandoned, and its reservation with it. Now every route refuses an
 // expired upload with 410, says when it expired and to open again, and
 // aborts the row there and then, so the reservation goes with the answer.
-// Under the one-attempt wire the expiry is the resume window, sixty
-// seconds, from the open and again from a kept partial, and the edge is
-// inclusive: at the window the upload is still here, a second past it is
-// gone. The clock is the server's, moved by hand.
+// Under the one-attempt wire the expiry is the start window, ten seconds,
+// from the open (D82), and the resume window, sixty seconds, from a kept
+// partial, and the edge is inclusive: at the window the upload is still
+// here, a second past it is gone. The clock is the server's, moved by hand.
 func TestAnExpiredUploadTakesNoBytes(t *testing.T) {
 	// max_bytes 2048, so a partial of 3000 is past the threshold and kept.
 	h := newHarness(t, Config{MaxBytes: 2048})
@@ -181,13 +181,14 @@ func TestAnExpiredUploadTakesNoBytes(t *testing.T) {
 		return left
 	}
 
-	// An upload nobody puts a byte to within the window: the first attempt
-	// a second past it is 410, the row and the file gone with the answer.
+	// An upload nobody starts an attempt on within the start window: the
+	// first attempt a second past it is 410, the row and the file gone
+	// with the answer.
 	first := open()
-	if got, want := first.Expires, clock.Now().Add(relayapi.ResumeWindow).UTC().Truncate(time.Second); !got.Equal(want) {
-		t.Fatalf("the open promises expiry at %s, want the window from now, %s", got, want)
+	if got, want := first.Expires, clock.Now().Add(relayapi.StartWindow).UTC().Truncate(time.Second); !got.Equal(want) {
+		t.Fatalf("the open promises expiry at %s, want the start window from now, %s", got, want)
 	}
-	clock.advance(relayapi.ResumeWindow + time.Second)
+	clock.advance(relayapi.StartWindow + time.Second)
 	status, body, _ := h.putStream(alice, first.Upload, blob, 0)
 	if status != http.StatusGone {
 		t.Fatalf("an attempt at an upload past its expiry (%s, clock now %s) was answered %d %s; "+

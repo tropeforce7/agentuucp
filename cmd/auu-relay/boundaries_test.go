@@ -62,7 +62,7 @@ func TestLimitsAtTypeExtremes(t *testing.T) {
 		"--limit-requests", "--limit-posts", "--limit-post-bytes",
 		"--limit-unauthenticated", "--limit-registrations", "--max-mailboxes",
 		"--mailbox-max-messages", "--mailbox-max-bytes", "--relay-max-bytes",
-		"--max-inflight", "--max-waiting",
+		"--max-upload-opens-per-hour", "--max-inflight", "--max-waiting",
 	}
 	// max_waiting must sit under max_inflight when both are set, so each is
 	// taken to its extremes with the other unlimited; the pair is

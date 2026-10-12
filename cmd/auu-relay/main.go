@@ -68,6 +68,7 @@ type flagValues struct {
 	mailboxMaxBytes      int64
 	relayMaxBytes        int64
 	maxOpenUploads       int64
+	uploadOpensPerHour   int64
 	knockMaxBytes        int64
 	maxKnocksWaiting     int64
 	maxRecipients        int64
@@ -189,6 +190,8 @@ func registerFlags(fs *flag.FlagSet) *flagValues {
 		"most queued bytes across the whole relay (0: unlimited)")
 	fs.Int64Var(&f.maxOpenUploads, "max-open-uploads", d.Limits.MaxOpenUploads,
 		"most uploads one sender may have open at once, at most 1000 (0: unlimited)")
+	fs.Int64Var(&f.uploadOpensPerHour, "max-upload-opens-per-hour", d.Limits.UploadOpensPerHour,
+		"most uploads one sender may open in an hour (0: unlimited)")
 	fs.Int64Var(&f.maxInflight, "max-inflight", d.Limits.MaxInflight,
 		"requests handled at once before answering 503 (0: unlimited)")
 	fs.Int64Var(&f.maxWaiting, "max-waiting", d.Limits.MaxWaiting,

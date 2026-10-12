@@ -49,11 +49,14 @@ type Config struct {
 	streamsSet bool
 	// MaxStreamBytes is the largest declared stream. Zero is unlimited.
 	MaxStreamBytes int64
-	// StallTimeout is how long the stream route waits for the next byte of
-	// an attempt before ending it as one that stopped short, extended on
-	// every read that delivers bytes; zero means relayapi.ResumeWindow. It
-	// is a field so a test can set it short on a loopback connection: the
-	// deadline is the wall clock's, not Now's.
+	// StallTimeout is the stream routes' window: how long an upload
+	// attempt waits for its next hunk of relayapi.HunkBytes, moved only
+	// when a whole hunk has arrived, before ending it as one that stopped
+	// short, and how long the blob route waits for a reader to take its
+	// next byte, moved on every write that delivers bytes. Zero means
+	// relayapi.HunkWindow for the first and relayapi.ResumeWindow for the
+	// second. It is a field so a test can set it short on a loopback
+	// connection: the deadline is the wall clock's, not Now's.
 	StallTimeout time.Duration
 	// Logger receives one line per request. Never receives request bodies.
 	Logger *slog.Logger
@@ -418,7 +421,7 @@ func (s *Server) purgeUploads(now time.Time) int {
 // an expired reservation nobody fed would hold a recipient's room until its
 // sender's next request on it, its sender's open at the max_open_uploads
 // cap, or the hundredth request's purge, which on a quiet relay is a long
-// time after the sixty seconds it was given. Each route that answers 507
+// time after the ten seconds an unfed open is given. Each route that answers 507
 // from roomFor asks here first and, when this says yes, asks the store once
 // more; if what went held room elsewhere, that second ask is a 507 again.
 // So for the quotas roomFor keeps, a 507 is answered only when the room is

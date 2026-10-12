@@ -276,8 +276,11 @@ type LimitsConfig struct {
 	// it is a count of files and rows the relay holds for one sender, and
 	// a thousand of them is more than any sender has a use for.
 	MaxOpenUploads int64 `json:"max_open_uploads"`
-	MaxInflight    int64 `json:"max_inflight"`
-	MaxWaiting     int64 `json:"max_waiting"`
+	// UploadOpensPerHour is the uploads one sender may open in an hour,
+	// whatever became of them.
+	UploadOpensPerHour int64 `json:"max_upload_opens_per_hour"`
+	MaxInflight        int64 `json:"max_inflight"`
+	MaxWaiting         int64 `json:"max_waiting"`
 	// KnockMaxBytes is the largest knock envelope, on the knock route's
 	// own cap; zero means max_bytes, since zero is unlimited everywhere
 	// and a knock is a post, and over max_bytes it is refused at the
@@ -449,6 +452,7 @@ func Defaults() Config {
 			MailboxMaxBytes:          d.MailboxMaxBytes,
 			RelayMaxBytes:            d.RelayMaxBytes,
 			MaxOpenUploads:           d.MaxOpenUploads,
+			UploadOpensPerHour:       d.UploadOpensPerHour,
 			MaxInflight:              d.MaxInflight,
 			MaxWaiting:               d.MaxWaiting,
 			KnockMaxBytes:            d.KnockMaxBytes,
@@ -697,6 +701,8 @@ func (c *Config) Merge(fs *flag.FlagSet, f *flagValues) {
 			c.Limits.RelayMaxBytes = f.relayMaxBytes
 		case "max-open-uploads":
 			c.Limits.MaxOpenUploads = f.maxOpenUploads
+		case "max-upload-opens-per-hour":
+			c.Limits.UploadOpensPerHour = f.uploadOpensPerHour
 		case "max-inflight":
 			c.Limits.MaxInflight = f.maxInflight
 		case "max-waiting":
@@ -1052,6 +1058,7 @@ func (l LimitsConfig) validate() error {
 		{"mailbox_max_bytes", l.MailboxMaxBytes},
 		{"relay_max_bytes", l.RelayMaxBytes},
 		{"max_open_uploads", l.MaxOpenUploads},
+		{"max_upload_opens_per_hour", l.UploadOpensPerHour},
 		{"max_inflight", l.MaxInflight},
 		{"max_waiting", l.MaxWaiting},
 		{"knock_max_bytes", l.KnockMaxBytes},
@@ -1102,6 +1109,7 @@ func (l LimitsConfig) Relay() relay.Limits {
 		MailboxMaxBytes:          l.MailboxMaxBytes,
 		RelayMaxBytes:            l.RelayMaxBytes,
 		MaxOpenUploads:           l.MaxOpenUploads,
+		UploadOpensPerHour:       l.UploadOpensPerHour,
 		MaxInflight:              l.MaxInflight,
 		MaxWaiting:               l.MaxWaiting,
 		KnockMaxBytes:            l.KnockMaxBytes,

@@ -72,6 +72,7 @@ Later ones win. A flag you do not type never overrides the file.
 | `--mailbox-max-bytes N` | `limits.mailbox_max_bytes` | 1 GiB |
 | `--relay-max-bytes N` | `limits.relay_max_bytes` | 0, unlimited |
 | `--max-open-uploads N` | `limits.max_open_uploads` | 4, at most 1000 |
+| `--max-upload-opens-per-hour N` | `limits.max_upload_opens_per_hour` | 64 |
 | `--max-inflight N` | `limits.max_inflight` | 256 |
 | `--max-waiting N` | `limits.max_waiting` | 64 |
 | `--knock-max-bytes N` | `limits.knock_max_bytes` | 20480, at most `max_bytes`; 0 is `max_bytes`; never above 64 MiB in force |
@@ -272,27 +273,34 @@ carrying the sealed bytes from an offset to the end. Three settings govern it:
 | `max_stream_bytes` | the largest stream the relay will reserve space for, declared up front and refused before a byte is sent. `0` is unlimited, under a cap of 2^62 bytes no setting lifts |
 | `max_bytes` | besides being the largest envelope a post, a forward, delivered here or carried on, a courier's delivery or a knock may carry (never above 64 MiB whatever the setting), the resume threshold: an attempt that stops short after at least this many bytes, when it was the first, leaves a partial the sender may resume once within sixty seconds; one that stops short of it, or a resumed one that stops short, leaves nothing, and the upload and its reservation go with the answer. The relay announces it at the open as `resume_threshold`, with the window as `resume_window`. A listing page follows it too: a page ends before an envelope that would take its inline bytes past `max_bytes`, or past 64 MiB whatever `max_bytes` is, admitting the first whatever its size, so a page's envelopes never exceed that unless the first alone does, which only one stored under a larger earlier `max_bytes`, or before this release, can; the health answer says the setting so a client can size what it holds of a page to this relay, and raising `max_bytes` grows every client's page with it up to 64 MiB, half of the most `auu` holds of a page. Above 64 MiB the setting raises the resume threshold and nothing inline (below the table) |
 
-The window is not a setting. It is sixty seconds from the open, and sixty
-from the moment a partial is kept. Past it the relay refuses the next attempt
-with a 410 that says when the upload expired and to open again. It forgets
-the upload with the answer, so the reservation ends when it was promised to.
-The sender's `send --resume` opens a new upload for the same sealed bytes. An
-expired upload nobody touches is swept by the purge that runs every hundredth
-request. The purge runs too when a post, an open, a knock or a courier's
-delivery is refused `507` because reservations and messages fill the
-recipient's quotas or `relay_max_bytes`. When it lets an upload go, the
+The windows are not settings. An upload is fed or it goes. One nobody starts
+an attempt on goes ten seconds after its open, the start window, and a kept
+partial goes sixty seconds after it was kept, the resume window. The open
+answer names the resume window, and of the start window only the moment it
+ends, its `expires`; a client of this release knows the window, and an older
+one meets the 410. Past either, the relay refuses the next attempt with a
+410 that says when the upload expired and to open again. It forgets the
+upload with the answer, so the reservation ends when it was promised to. The
+sender's `send --resume` opens a new upload for the same sealed bytes. An
+expired upload nobody touches is swept by the purge that runs every
+hundredth request. The purge runs too when a post, an open, a knock or a
+courier's delivery is refused `507` because reservations and messages fill
+the recipient's quotas or `relay_max_bytes`. When it lets an upload go, the
 request asks for the room once more. So these four answer that `507` only
 when the room is taken by what still counts. A full disk is refused the same
 way, and the purge frees only what kept partials held there. The purge skips
 an upload mid-attempt rather than wait behind its sender and returns to it
-next time. Bytes that stop coming end inside the window too. An attempt runs
-under a stall deadline of sixty seconds that every delivering read moves on.
-So a transfer of any length finishes while bytes keep arriving, and a stalled
-one is cut and judged as an attempt that stopped short. The download of a
-placed stream is served under the same deadline turned round, moved by every
-write that delivers bytes. So a slow reader is served to the end and a reader
-that stops is cut inside the window. The server's five-minute read and write
-timeouts stand on every other route.
+next time. Bytes that stop coming, or come too slowly, end inside a window
+too. An attempt runs under a hunk deadline: ten seconds from its start, set
+ten seconds on from the read that completes a whole hunk of 64 KiB since it
+last moved, and at no other read. So a transfer of any length finishes while
+it keeps a pace of 6.4 KiB a second, and a slower or stalled one is cut and
+judged as an attempt that stopped short. A deadline that every byte moved
+would let a sender trickle a byte a window and hold its reservation for
+ever. The download of a placed stream is served under a stall deadline of
+sixty seconds, moved by every write that delivers bytes. So a slow reader is
+served to the end and a reader that stops is cut inside the window. The
+server's five-minute read and write timeouts stand on every other route.
 
 A relay takes a `max_bytes` above 64 MiB, but it holds every inline row
 to 64 MiB whatever the setting: a post, a forward, delivered here or
@@ -391,6 +399,7 @@ switch the lot off.
 | `mailbox_max_bytes` | queued bytes for one recipient | 1 GiB |
 | `relay_max_bytes` | queued bytes in the mailboxes across the whole relay; mail waiting to go to a neighbouring relay is a second pool, under `courier.queue_max_bytes` | unlimited |
 | `max_open_uploads` | uploads one sender may have open at once, across every mailbox it sends to; each is a file and a reservation the relay holds for that sender, so 0, unlimited like the rest, lets one sender hold as many as it likes; at most 1000 | 4 |
+| `max_upload_opens_per_hour` | uploads one sender may open in an hour, whatever became of them, refused `429` with a `Retry-After` over it; a stream to several opens one upload for each recipient's copy, so the default is four such messages to sixteen; 0 is unlimited | 64 |
 | `max_inflight` | requests being handled at once | 256 |
 | `max_waiting` | listings held open at once for watchers; over it the next is answered at once rather than held, and each held listing keeps an in-flight slot, so keep this well under `max_inflight` | 64 |
 | `knock_max_bytes` | the largest knock envelope, on the knock route's own cap, so a stranger's one message is read under a bound of its own; 0 is `max_bytes`, since a knock is a post, and a value over `max_bytes` is refused at startup naming both; in force it is never above 64 MiB, since a knock is a row like any other, and the health answer says the figure in force; the default takes a knock at its longest with four vouches and not five | 20480 |
@@ -409,8 +418,9 @@ these to meet it: its sender's next request on it, its sender's open at the
 `max_open_uploads` cap, the purge every hundredth request, or a post, an
 open, a knock or a courier's delivery that finds the room taken. An attempt
 in flight holds the upload's lock, and the purge passes over a locked
-upload. So an attempt begun at the last moment and fed nothing holds the
-room until its stall deadline cuts it, sixty seconds more at most.
+upload. So an attempt begun at the last moment holds the room for as long
+as it keeps the pace, and one fed nothing until its hunk deadline cuts it,
+ten seconds more at most. A reservation lives only as long as it is fed.
 
 The sender's byte budget is charged the same way at the open, with the
 whole declared size, so a sender cannot open past it. What comes back when
@@ -445,14 +455,26 @@ names the caller of every request anyway.
 
 `max_open_uploads` bounds the count. A sender at it is refused `429 rate
 limited: open uploads` with `Retry-After` set to the seconds until its
-soonest upload expires. The sentence says that an unfinished upload
-goes within sixty seconds of its last byte. The refusal is one the client
+soonest upload expires. The sentence says that an upload goes ten
+seconds after its open unless an attempt has started, that an attempt is
+cut when 64 KiB do not arrive within ten seconds, and that a kept partial
+goes sixty seconds after it was kept. The refusal is one the client
 waits out. `auu send` sleeps the `Retry-After` and asks again. The
 open that asks again meets the sender's expired uploads and lets them go,
 so a sender who waited is not refused for a slot the purge had not yet
 freed. An upload in flight, its bytes still arriving, holds its slot for
 as long as they do, and the relay cannot say when that ends. A sender at
 the cap over such uploads is asked back in a second.
+
+`max_upload_opens_per_hour` bounds how many a sender starts. Each open
+reserves a recipient's room whatever becomes of it, so the count is
+charged at the open, before the reservation, and given back only when the
+open reserves nothing. A sender over it is refused `429 rate limited:
+upload opens` with `Retry-After`, in a sentence naming the number. A
+stream to several opens one upload for each recipient's copy, so the
+default of 64 is four messages to sixteen recipients each with an
+attachment. A courier never opens an upload, so the setting has no
+courier counterpart.
 
 A knock is a post to the knock route, `POST /v1/mailbox/{fp}/knock`, and
 the relay judges it in this order: the route's cap, `knock_max_bytes`
