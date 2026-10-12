@@ -472,6 +472,12 @@ func TestLimitStoredRecordShapes(t *testing.T) {
 	if !bytes.Contains(data, []byte(`"relay":""`)) {
 		t.Errorf("the zero record marshals without its relay key: %s", data)
 	}
+	// The home's files beside the record are read strictly too (R24), and
+	// each has its shape here: strictFileShapes, in strictread_test.go.
+	t.Run("the home's files read strictly", strictFileShapes)
+	// And so is the record itself (R24a): strictRecordShapes, in
+	// loadstrict_test.go.
+	t.Run("a record read strictly", strictRecordShapes)
 }
 
 // TestLimitRelayRecordHashes: a relay record's two hashes, the pinned

@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // An identity whose secrets are elsewhere.
@@ -74,9 +76,11 @@ func (l *Locked) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
+// UnmarshalJSON reads a locked identity strictly, through wire.Decode, for
+// the reason Identity.UnmarshalJSON does (R24).
 func (l *Locked) UnmarshalJSON(b []byte) error {
 	var j lockedJSON
-	if err := json.Unmarshal(b, &j); err != nil {
+	if err := wire.Decode(b, &j); err != nil {
 		return err
 	}
 	bundle, err := base64.StdEncoding.DecodeString(j.Bundle)

@@ -110,7 +110,11 @@ func TestDamagedFilesAreNamed(t *testing.T) {
 			damage: func(t *testing.T, s *Store, r *Relay) string {
 				path := s.relayPath(r, relayFile)
 				write(t, path, `{"url": "https://work.example:9443",,}`)
-				return path + " is not valid JSON (invalid character ',' looking for beginning of object key string): " +
+				// relay.json is read through wire.Decode, which refuses
+				// more than bad syntax (an unknown key, a key twice), so
+				// the sentence is "will not read", as every strict
+				// record's is, where it was "is not valid JSON".
+				return path + " will not read (invalid character ',' looking for beginning of object key string): " +
 					"enrol again with a token, or remove the relay with 'auu relay rm work' and add it again"
 			},
 			read: func(s *Store, r *Relay) error { _, err := s.Relay("work"); return err },
@@ -143,7 +147,12 @@ func TestDamagedFilesAreNamed(t *testing.T) {
 			name: "cert.json truncated, met by CertFor",
 			damage: func(t *testing.T, s *Store, r *Relay) string {
 				write(t, s.relayPath(r, certFile), `{"relay": "https://work.ex`)
-				return s.relayPath(r, certFile) + " is not valid JSON (unexpected end of JSON input): run 'auu register --relay work --token TOKEN' to replace it"
+				// The read is strict now (wire.Decode, R24), which says a
+				// file cut short is io.ErrUnexpectedEOF where json.Unmarshal
+				// said "unexpected end of JSON input", and the sentence is
+				// "will not read" where it was "is not valid JSON", since a
+				// strict read refuses more than bad syntax.
+				return s.relayPath(r, certFile) + " will not read (unexpected EOF): run 'auu register --relay work --token TOKEN' to replace it"
 			},
 			read: func(s *Store, r *Relay) error { _, err := s.CertFor(r); return err },
 		},
@@ -151,7 +160,12 @@ func TestDamagedFilesAreNamed(t *testing.T) {
 			name: "cert.json truncated, met by the home's state",
 			damage: func(t *testing.T, s *Store, r *Relay) string {
 				write(t, s.relayPath(r, certFile), `{"relay": "https://work.ex`)
-				return s.relayPath(r, certFile) + " is not valid JSON (unexpected end of JSON input): run 'auu register --relay work --token TOKEN' to replace it"
+				// The read is strict now (wire.Decode, R24), which says a
+				// file cut short is io.ErrUnexpectedEOF where json.Unmarshal
+				// said "unexpected end of JSON input", and the sentence is
+				// "will not read" where it was "is not valid JSON", since a
+				// strict read refuses more than bad syntax.
+				return s.relayPath(r, certFile) + " will not read (unexpected EOF): run 'auu register --relay work --token TOKEN' to replace it"
 			},
 			read: func(s *Store, r *Relay) error { _, err := s.Identity(); return err },
 		},

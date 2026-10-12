@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 const (
@@ -213,9 +215,13 @@ func (id *Identity) MarshalJSON() ([]byte, error) {
 	return json.Marshal(out)
 }
 
+// UnmarshalJSON reads a key file's identity strictly, through wire.Decode
+// (R24): Decode's key scan stops at a type with its own UnmarshalJSON, so a
+// strict decode of the file around it does not make this one strict, and
+// a misspelt or repeated key here would read as the zero value.
 func (id *Identity) UnmarshalJSON(b []byte) error {
 	var j identityJSON
-	if err := json.Unmarshal(b, &j); err != nil {
+	if err := wire.Decode(b, &j); err != nil {
 		return err
 	}
 	signSeed, err := base64.StdEncoding.DecodeString(j.SignSeed)

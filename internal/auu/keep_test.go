@@ -1,6 +1,7 @@
 package auu
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -317,9 +318,12 @@ func TestAFetchRefusesADamagedSettingsFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := bob.tryRun("inbox")
+	// The read is strict now (G17, R24, R24b), so the sentence is "will
+	// not read" where it was "is not valid JSON"; a file cut short keeps
+	// encoding/json's words, since the file is walked by its decoder.
 	var exit *exitError
 	if !asExit(err, &exit) || exit.code != exitDamaged ||
-		!strings.Contains(err.Error(), s.ChannelSettingsPath()+" is not valid JSON") {
+		!strings.Contains(err.Error(), s.ChannelSettingsPath()+" will not read (unexpected end of JSON input): fix it") {
 		t.Fatalf("a fetch with a damaged settings file: %v", err)
 	}
 	if left := queuedOn(t, st, bob.exportFingerprint()); len(left) != 1 {
@@ -406,5 +410,57 @@ func TestAQuarantinedStreamWhoseBodyHasGoneFromTheRelay(t *testing.T) {
 	}
 	if last := recordOf(t, bob, store.Quarantine, "unasked"); !last.PayloadOnRelay {
 		t.Fatalf("the record after the refusal: %+v", last)
+	}
+}
+
+// TestChannelKeepTakesNamesThatDifferByCase (R24b): a channel's name is
+// case-sensitive in the directory, so "Bugs" and "bugs" are two channels,
+// and channel-settings.json holds a keep for each. The strict read refused
+// the pair as two keys alike under folding, so the second 'auu channel
+// keep' failed on the file the first wrote, and so did every fetch after
+// it. Here both commands succeed, and two fetches, with the settings one
+// way and then the other, each leave on the relay the mail of the channel
+// that keeps and acknowledge the other's.
+func TestChannelKeepTakesNamesThatDifferByCase(t *testing.T) {
+	relayURL, st := startRelayConfig(t, relay.Config{Streams: true, Limits: relay.DefaultLimits()})
+	alice, bob := watchers(t, relayURL)
+	bob.run("channel", "create", "Bugs")
+	bob.run("channel", "create", "bugs")
+	if out := bob.run("channel", "keep", "Bugs", "off"); out != "Bugs: mail is removed from the relay once it is fetched\n" {
+		t.Fatalf("keep Bugs off:\n%s", out)
+	}
+	if out := bob.run("channel", "keep", "bugs", "on"); out != "bugs: mail is kept on the relay after it is fetched\n" {
+		t.Fatalf("keep bugs on:\n%s", out)
+	}
+	if bob.keepOf("Bugs") || !bob.keepOf("bugs") {
+		t.Fatalf("Bugs keeps %v and bugs %v; want off and on", bob.keepOf("Bugs"), bob.keepOf("bugs"))
+	}
+
+	for round, upperKeeps := range []bool{false, true} {
+		if round > 0 {
+			bob.run("channel", "keep", "Bugs", "on")
+			bob.run("channel", "keep", "bugs", "off")
+		}
+		upper, lower := fmt.Sprintf("upper %d", round), fmt.Sprintf("lower %d", round)
+		alice.run("send", "--to", "bob", "--channel", "Bugs", "--subject", upper, "under Bugs")
+		alice.run("send", "--to", "bob", "--channel", "bugs", "--subject", lower, "under bugs")
+		in := bob.inboxJSON()
+		if in.Fetch.Delivered != 2 {
+			t.Fatalf("round %d: the fetch: %+v", round, in.Fetch)
+		}
+		u, l := recordOf(t, bob, store.Inbox, upper), recordOf(t, bob, store.Inbox, lower)
+		if u.Channel != "Bugs" || l.Channel != "bugs" {
+			t.Fatalf("round %d: the records are under %q and %q", round, u.Channel, l.Channel)
+		}
+		if u.OnRelay != upperKeeps || l.OnRelay != !upperKeeps {
+			t.Fatalf("round %d: Bugs's mail on the relay %v, bugs's %v; want %v and %v",
+				round, u.OnRelay, l.OnRelay, upperKeeps, !upperKeeps)
+		}
+		// What is left on the relay: bugs's first message, kept in round
+		// 0, and in round 1 Bugs's as well.
+		want := map[int]int{0: 1, 1: 2}[round]
+		if left := queuedOn(t, st, bob.exportFingerprint()); len(left) != want {
+			t.Fatalf("round %d: the relay holds %v, want %d", round, left, want)
+		}
 	}
 }

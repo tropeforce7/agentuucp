@@ -325,7 +325,11 @@ print slices at the point it is read. Those are a message's ids,
 fingerprints and digests at `Load`, a relay's pinned hashes, a
 certificate's serial, and an outbox record's id and recipient. So a file
 this program could not have written is refused with the file named rather
-than cut.
+than cut. The home's files are read strictly as well, an unknown,
+repeated or differently cased key refused by name, because a key dropped
+silently is a setting lost silently: a channel's `keep` misspelt in
+`channel-settings.json` read as keep off, and mail answered on it was
+removed from the relay.
 
 A stream from somebody who is not in `authorized_peers` is never downloaded.
 The receiver fetches the 1124-byte header and the signed manifest, sees who it

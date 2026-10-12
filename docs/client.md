@@ -580,8 +580,9 @@ nothing is pushed, no relay is told, and the command works with the keys
 locked. It lives in `channel-settings.json` in your home, so a copy of the
 home takes it to a second machine. `auu channel pull` never touches it. The
 name need not be a channel your directory still holds, since mail queued
-under a deleted channel still arrives. A file that will not read is refused
-by name with exit 5, and nothing is fetched under a guess.
+under a deleted channel still arrives. A file that will not read, that
+gives a channel no `keep` or that names a channel twice is refused by name
+with exit 5, and nothing is fetched under a guess.
 
 `auu channel ls` prints your channels: name, description, period,
 `open`, `opens T` or `closed T`, how many messages wait under each, and
@@ -1694,6 +1695,21 @@ Go's file modes say nothing about who can read.
 | `inbox/<id>.d/` | a large message's files, written straight to disk |
 | `outbox/` | what is sealed but not yet delivered, waiting for `auu send --resume`; `auu outbox` lists it |
 | `damaged/<relay>/<id>.bin`, `.json` | a message your key could not open, as the relay served it, with a record of which relay's message it was, when, and why in a word — `did not decrypt`, `not addressed to this key`, `sender signature failed`, `malformed`, `newer: section "NAME"` for a message with a critical section this build does not know, which `auu damaged reopen` opens once `auu` is updated, its record also saying the kind, channel, via and size the relay listed it with, or `misfiled` for a message the relay listed under a channel it was not sealed for, or listed as a kind its sealed record is not — a knock that is not one inside, or one that is inside a row listed as an ordinary envelope; a stream keeps its manifest chunk only. `auu damaged ls` lists them and `auu inbox` says how many are there until you remove them; nothing here is opened again but a `newer` one; the directory holds at most 64 MiB and at most 1,024 kept messages, the oldest going first, and a message that alone exceeds that is not kept, which the warning says; a file there that is not a kept message is not counted and `ls` names it |
+
+The files `auu` keeps for itself are read strictly: `identity.json` plain or
+locked, each relay's `relay.json` and `cert.json`, `channel-settings.json`,
+serve's ledger and every record in the spool. A key this program does not
+write, a key given twice, a key in another case or anything after the
+closing brace is refused with the file named, never read as if the key were
+absent; so a hand edit that misspells a key fails at the next command that
+reads the file, and the fix is to spell it as `auu` wrote it. The channel
+names in `channel-settings.json` are the one exception: they are
+case-sensitive, as the signed directory's are, so `Bugs` and `bugs` are two
+channels with a keep each, and only the same name given twice is refused.
+Every key v0.15.0 to v0.17.0 wrote is still read, so an upgraded home reads
+as before.
+The message kept under `damaged/` is not held to this: it is kept because it
+would not open, and `auu damaged reopen` tries it again as the fetch does.
 
 `authorized_peers` is the file that matters. Nothing on the network can add to
 it. Back it up alongside `identity.json`. Back up `home.key` and

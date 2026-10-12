@@ -16,6 +16,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/token"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // One home, several relays.
@@ -212,9 +213,11 @@ func (s *Store) readRelay(name string) (*Relay, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Strictly (G21, R24): a misspelt server_int_spki would read as no
+	// ratchet floor, and an intermediate retired would be taken again.
 	var r Relay
-	if err := json.Unmarshal(data, &r); err != nil {
-		return nil, damaged(path, "is not valid JSON", err, fmt.Sprintf(
+	if err := wire.Decode(data, &r); err != nil {
+		return nil, damaged(path, "will not read", err, fmt.Sprintf(
 			"enrol again with a token, or remove the relay with 'auu relay rm %s' and add it again", name))
 	}
 	// The directory is the name. A record that says otherwise would send

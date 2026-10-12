@@ -572,12 +572,17 @@ func TestTheCountOfWaitingStreamsIsQuiet(t *testing.T) {
 	if err := os.WriteFile(stray, []byte("not a record"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The record does not parse, so Load calls it damaged and the warning
+	// is "<path> will not read (...): <advice>; it is not listed". The
+	// inbox is held to never naming the file at all, which is stricter
+	// than either sentence.
 	stderr := captureStderr(t, func() { bob.tryRun("inbox", "--no-fetch") })
-	if strings.Contains(stderr, "could not be read") {
+	if strings.Contains(stderr, stray) || strings.Contains(stderr, "will not read") || strings.Contains(stderr, "could not be read") {
 		t.Errorf("auu inbox warned about a quarantine record it does not list:\n%s", stderr)
 	}
 	stderr = captureStderr(t, func() { bob.tryRun("quarantine", "ls") })
-	if !strings.Contains(stderr, stray+" could not be read") {
+	if !strings.Contains(stderr, "warning: "+stray+" will not read (") ||
+		!strings.Contains(stderr, "fix it, or move it out of the box; the rest of the box reads without it; it is not listed\n") {
 		t.Errorf("quarantine ls did not warn about its own record:\n%s", stderr)
 	}
 }

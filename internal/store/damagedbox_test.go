@@ -51,7 +51,11 @@ func TestAnUnreadableSpoolFileIsSaidToBe(t *testing.T) {
 	if len(msgs) != 1 || msgs[0].Inner.ID != good.Inner.ID {
 		t.Fatalf("listed %d, want the one good record", len(msgs))
 	}
-	want := "warning: " + flippedPath + " could not be read (invalid character 'z' looking for beginning of value) and is not listed\n" +
+	// A record that will not read is damage (Load wraps it as ErrDamaged,
+	// naming the file and what to do), and the warning prints that sentence
+	// whole; a record that reads and holds no message keeps the old form.
+	want := "warning: " + flippedPath + " will not read (invalid character 'z' looking for beginning of value): " +
+		"fix it, or move it out of the box; the rest of the box reads without it; it is not listed\n" +
 		"warning: " + emptyPath + " could not be read (the record holds no message) and is not listed\n"
 	if stderr != want {
 		t.Fatalf("stderr:\n%s\nwant:\n%s", stderr, want)
@@ -72,7 +76,7 @@ func TestAnUnreadableSpoolFileIsSaidToBe(t *testing.T) {
 		t.Fatal(err)
 	}
 	stderr = captureStderr(t, func() { _, err = s.List(Quarantine) })
-	if err != nil || !strings.HasPrefix(stderr, "warning: "+q+" could not be read (") {
+	if err != nil || !strings.HasPrefix(stderr, "warning: "+q+" will not read (") {
 		t.Fatalf("quarantine listing: %v, stderr %q", err, stderr)
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/clientca"
 	"github.com/tropeforce7/agentuucp/internal/keyfile"
 	"github.com/tropeforce7/agentuucp/internal/token"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // certFile holds this machine's client certificate for one relay, and the key
@@ -160,7 +161,7 @@ func (s *Store) CertFor(r *Relay) (*CertRecord, error) {
 		return nil, err
 	}
 	var c CertRecord
-	if err := json.Unmarshal(data, &c); err != nil {
+	if err := wire.Decode(data, &c); err != nil {
 		return nil, certDamaged(path, r.Name, err)
 	}
 	if !clientca.ValidSerial(c.Serial) {
@@ -188,7 +189,7 @@ func (s *Store) CertFor(r *Relay) (*CertRecord, error) {
 // certDamaged is a cert.json nothing can read: the register command that
 // replaces it is the whole of the advice, on every path that meets it.
 func certDamaged(path, relay string, cause error) error {
-	return damaged(path, "is not valid JSON", cause,
+	return damaged(path, "will not read", cause,
 		fmt.Sprintf("run 'auu register --relay %s --token TOKEN' to replace it", relay))
 }
 

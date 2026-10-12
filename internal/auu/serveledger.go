@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // The ledger is serve's record of what it has answered.
@@ -154,7 +155,10 @@ func loadLedger(path string) (*ledger, error) {
 		return nil, err
 	}
 	l.existed = true
-	if err := json.Unmarshal(data, l); err != nil {
+	// Strictly (G20, R24): a misspelt, repeated or case-variant key would
+	// otherwise read as absent, an answered message as pending, and be
+	// answered a second time.
+	if err := wire.Decode(data, l); err != nil {
 		return nil, fmt.Errorf("%s will not read (%v); it is the record of what has been answered, "+
 			"so fix it or move it aside knowing that everything in the inbox becomes new mail", path, err)
 	}

@@ -322,7 +322,10 @@ which only a hand could have written, is that message's failure in the
 ledger and the round goes on to the next.
 
 `serve/ledger.json` in the home is the record of what has been answered, and
-it is the only thing that decides. The mark that a message has been read is
+it is the only thing that decides. It is read strictly, as the home's other
+files are: a key serve does not write, a key given twice or one in another
+case is refused with the file named, and serve stops, since a key read as
+absent would make an answered message pending and answer it again. The mark that a message has been read is
 not: an owner reading their own expert's mail must not silently kill an
 answer. A message is marked read when its reply goes out, since the reply is
 the acknowledgement.

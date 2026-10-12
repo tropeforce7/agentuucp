@@ -745,6 +745,9 @@ func writeCursor(path string, n int64) error {
 	return writeFileAtomic(path, []byte(strconv.FormatInt(n, 10)+"\n"), fileMode)
 }
 
+// recordAdvice is what to do about a record in a box that will not read.
+const recordAdvice = "fix it, or move it out of the box; the rest of the box reads without it"
+
 // Stored is one message as kept on disk.
 type Stored struct {
 	RelayID int64 `json:"relay_id"`
@@ -926,9 +929,14 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Read strictly (R24, R24a): a key this program does not write, a key
+	// twice or one in another case is refused by name rather than dropped.
+	// Every key v0.15.0, v0.16.0 and v0.17.0 wrote, the message inside and
+	// each copy included, is still on Stored, so a record any of them wrote
+	// reads as it did.
 	var m Stored
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, err
+	if err := wire.Decode(data, &m); err != nil {
+		return nil, damaged(path, "will not read", err, recordAdvice)
 	}
 	if m.Inner == nil {
 		return nil, errors.New("the record holds no message")
@@ -1077,6 +1085,11 @@ var warnedOnce sync.Map
 func (s *Store) warnUnreadable(box Box, name string, err error) {
 	path := s.path(string(box), name)
 	if _, already := warnedOnce.LoadOrStore(path, true); already {
+		return
+	}
+	if errors.Is(err, ErrDamaged) {
+		// The sentence names the file and what to do already.
+		fmt.Fprintf(os.Stderr, "warning: %v; it is not listed\n", err)
 		return
 	}
 	fmt.Fprintf(os.Stderr, "warning: %s could not be read (%v) and is not listed\n", path, err)

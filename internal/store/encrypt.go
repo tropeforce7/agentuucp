@@ -15,6 +15,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/agent"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/keyfile"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // A home under a passphrase.
@@ -130,7 +131,7 @@ func (s *Store) state() (*homeState, error) {
 			return nil, err
 		}
 		var c CertRecord
-		if err := json.Unmarshal(raw, &c); err != nil {
+		if err := wire.Decode(raw, &c); err != nil {
 			return nil, certDamaged(s.relayPath(r, certFile), r.Name, err)
 		}
 		if keyfile.IsWrapped([]byte(c.Key)) {
@@ -273,8 +274,8 @@ func (s *Store) locked() (*identity.Locked, error) {
 		return nil, err
 	}
 	var l identity.Locked
-	if err := json.Unmarshal(data, &l); err != nil {
-		return nil, fmt.Errorf("identity file is corrupt: %w", err)
+	if err := wire.Decode(data, &l); err != nil {
+		return nil, damaged(s.path(identityFile), "will not read", err, identityLost)
 	}
 	return &l, nil
 }
@@ -601,8 +602,8 @@ func (s *Store) plainIdentity() (*identity.Identity, error) {
 		return nil, err
 	}
 	var id identity.Identity
-	if err := json.Unmarshal(data, &id); err != nil {
-		return nil, fmt.Errorf("identity file is corrupt: %w", err)
+	if err := wire.Decode(data, &id); err != nil {
+		return nil, damaged(s.path(identityFile), "will not read", err, identityLost)
 	}
 	return &id, nil
 }

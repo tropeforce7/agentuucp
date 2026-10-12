@@ -134,7 +134,11 @@ func TestADamagedSettingsFileIsExit5(t *testing.T) {
 	for _, tc := range []struct {
 		what, content, want string
 	}{
-		{"not JSON", "{", alice.keepPath() + " is not valid JSON"},
+		// The read is strict now (G17, R24, R24b): the sentence is "will
+		// not read", since it refuses well-formed JSON too (an unknown key,
+		// a key twice); the file is walked key by key by encoding/json's
+		// decoder, whose words for a file cut short are its own.
+		{"not JSON", "{", alice.keepPath() + " will not read (unexpected end of JSON input): " + advice},
 		{"a version nobody has", `{"v":2,"channels":{}}`, alice.keepPath() + " is version 2, which this build does not know: " + advice},
 		{"a name no directory could hold", `{"v":1,"channels":{"with/a/slash":{"keep":false}}}`,
 			alice.keepPath() + ` names a channel "with/a/slash" that no directory could hold`},

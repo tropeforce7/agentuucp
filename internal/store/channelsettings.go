@@ -1,12 +1,15 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/tropeforce7/agentuucp/internal/channels"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // channelSettingsFile is this machine's own fetching policy, per channel:
@@ -51,22 +54,71 @@ func (s *Store) ChannelSettings() (ChannelSettings, error) {
 	if err != nil {
 		return set, err
 	}
-	var read ChannelSettings
-	if err := json.Unmarshal(data, &read); err != nil {
-		return set, damaged(s.path(channelSettingsFile), "is not valid JSON", err, channelSettingsAdvice)
+	// Read strictly (G17, R24): a key the file does not have, a key given
+	// twice, and a channel whose keep is absent or null are damage, never
+	// keep off, since keep off acknowledges on the relay mail the owner
+	// meant to keep for another machine. The file is walked by
+	// eachKeyExactly rather than read by wire.Decode (R24b): a channel's
+	// name is case-sensitive, as the directory's is, so "Bugs" and "bugs"
+	// are two channels and only the same name twice is refused, where
+	// wire.Decode's scan refuses two keys alike under folding at any depth.
+	// The file's own two keys are matched exactly and each taken once, and
+	// every value is read by wire.Decode.
+	var v int
+	var chans json.RawMessage
+	var seenV, seenChannels bool
+	err = eachKeyExactly(data, "the file", true, func(key string, raw json.RawMessage) error {
+		switch {
+		case key == "v" && !seenV:
+			seenV = true
+			return wire.Decode(raw, &v)
+		case key == "channels" && !seenChannels:
+			seenChannels = true
+			chans = raw
+			return nil
+		case key == "v" || key == "channels":
+			return fmt.Errorf("key %q appears twice", key)
+		}
+		return fmt.Errorf("json: unknown field %q", key)
+	})
+	if err != nil {
+		return set, damaged(s.path(channelSettingsFile), "will not read", err, channelSettingsAdvice)
 	}
-	if read.V != channelSettingsV {
+	if v != channelSettingsV {
 		return set, damaged(s.path(channelSettingsFile),
-			fmt.Sprintf("is version %d, which this build does not know", read.V), nil, channelSettingsAdvice)
+			fmt.Sprintf("is version %d, which this build does not know", v), nil, channelSettingsAdvice)
 	}
-	for name := range read.Channels {
+	if string(chans) == "null" {
+		chans = nil
+	}
+	err = eachKeyExactly(chans, "channels", false, func(name string, raw json.RawMessage) error {
 		if err := channels.ValidName(name); err != nil {
-			return set, damaged(s.path(channelSettingsFile),
+			return damaged(s.path(channelSettingsFile),
 				fmt.Sprintf("names a channel %q that no directory could hold", name), err, channelSettingsAdvice)
 		}
-	}
-	if read.Channels != nil {
-		set.Channels = read.Channels
+		if _, twice := set.Channels[name]; twice {
+			return damaged(s.path(channelSettingsFile),
+				fmt.Sprintf("names the channel %q twice", name), nil, channelSettingsAdvice)
+		}
+		var one struct {
+			Keep *bool `json:"keep"`
+		}
+		if err := wire.Decode(raw, &one); err != nil {
+			return damaged(s.path(channelSettingsFile),
+				fmt.Sprintf("gives the channel %q a setting that will not read", name), err, channelSettingsAdvice)
+		}
+		if one.Keep == nil {
+			return damaged(s.path(channelSettingsFile),
+				fmt.Sprintf("gives the channel %q no keep", name), nil, channelSettingsAdvice)
+		}
+		set.Channels[name] = ChannelSetting{Keep: *one.Keep}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, ErrDamaged) {
+			return set, err
+		}
+		return set, damaged(s.path(channelSettingsFile), "will not read", err, channelSettingsAdvice)
 	}
 	return set, nil
 }
@@ -122,4 +174,50 @@ func channelOrDefault(channel string) string {
 		return channels.Default
 	}
 	return channel
+}
+
+// eachKeyExactly walks one JSON object key by key, handing each key and
+// its value to fn in the file's order; its keys are matched exactly, which
+// is why it is not wire.Decode's walk, and each value is fn's to read
+// strictly. what names the object in a refusal. Nothing at all is no
+// keys, unless whole says the object is the whole of data, when anything
+// after it is refused too, as wire.Decode refuses it.
+func eachKeyExactly(data []byte, what string, whole bool, fn func(key string, value json.RawMessage) error) error {
+	if len(data) == 0 && !whole {
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if tok, err := dec.Token(); err != nil {
+		return err
+	} else if tok != json.Delim('{') {
+		return fmt.Errorf("%s is not an object", what)
+	}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := tok.(string)
+		if !ok {
+			return errors.New("a key is not a string")
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return err
+		}
+		if err := fn(key, value); err != nil {
+			return err
+		}
+	}
+	if tok, err := dec.Token(); err != nil {
+		return err
+	} else if tok != json.Delim('}') {
+		return fmt.Errorf("%s does not end", what)
+	}
+	if whole {
+		if _, err := dec.Token(); err != io.EOF {
+			return fmt.Errorf("there is more after %s", what)
+		}
+	}
+	return nil
 }

@@ -743,7 +743,12 @@ func TestACertificateForAnotherRelayIsNamed(t *testing.T) {
 	if !errors.As(err, &e) || e.code != exitDamaged {
 		t.Fatalf("inbox with cert.json truncated: %v, want exit %d", err, exitDamaged)
 	}
-	if got := err.Error(); got != path+" is not valid JSON (unexpected end of JSON input): run 'auu register --relay "+r.Name+" --token TOKEN' to replace it" {
+	// The read is strict now (wire.Decode, R24), and a file cut short is
+	// io.ErrUnexpectedEOF, "unexpected EOF", where json.Unmarshal said
+	// "unexpected end of JSON input"; and the sentence is "will not read"
+	// where it was "is not valid JSON", since the strict read refuses more
+	// than bad syntax.
+	if got := err.Error(); got != path+" will not read (unexpected EOF): run 'auu register --relay "+r.Name+" --token TOKEN' to replace it" {
 		t.Fatalf("truncated cert.json said %q", got)
 	}
 	_ = relayURL
