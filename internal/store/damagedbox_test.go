@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -213,6 +214,129 @@ func TestDamagedMessagesAreKeptWithinTheBudget(t *testing.T) {
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Fatal("the orphan was not evicted")
 	}
+}
+
+// damaged/ keeps at most DamagedMaxMessages messages beside its bytes
+// (R5), evicted oldest first as the budget evicts: a keep with one under
+// the count held evicts nothing, a keep at the count evicts the oldest
+// one, and a directory over the count, as one kept under a higher count
+// is, comes down to it at the next keep. With the budget beside it, each
+// keep evicts until both hold, whichever binds.
+func TestLimitDamagedKeepsAtMostItsCount(t *testing.T) {
+	restoreCount, restoreBudget := DamagedMaxMessages, DamagedBudget
+	t.Cleanup(func() { DamagedMaxMessages, DamagedBudget = restoreCount, restoreBudget })
+	now := time.Now().UTC().Truncate(time.Second)
+	rec := func(id int64) DamagedRecord {
+		// Each later id received later, so the oldest is the lowest id.
+		return DamagedRecord{RelayID: id, Relay: "work", Received: now.Add(time.Duration(id) * time.Second), Cause: "did not decrypt"}
+	}
+	held := func(t *testing.T, s *Store) []int64 {
+		t.Helper()
+		entries, strays, err := s.DamagedEntries()
+		if err != nil || len(strays) != 0 {
+			t.Fatalf("damaged/: %v, strays %q", err, strays)
+		}
+		var ids []int64
+		for _, e := range entries {
+			ids = append(ids, e.RelayID)
+		}
+		return ids
+	}
+	keep := func(t *testing.T, s *Store, id int64, size int, wantEvicted int, wantHeld ...int64) {
+		t.Helper()
+		kept, evicted, err := s.KeepDamaged(rec(id), bytes.Repeat([]byte{byte(id)}, size))
+		if err != nil || !kept || evicted != wantEvicted {
+			t.Fatalf("keep %d: kept %v, evicted %d (%v); want kept, %d evicted", id, kept, evicted, err, wantEvicted)
+		}
+		if got := held(t, s); !slices.Equal(got, wantHeld) {
+			t.Fatalf("after keeping %d, damaged/ holds %v; want %v", id, got, wantHeld)
+		}
+		// An evicted message goes whole: no bytes and no record left.
+		for _, gone := range []int64{1, 2, 3, 4, 5, 6} {
+			if slices.Contains(wantHeld, gone) {
+				continue
+			}
+			p := damagedPathOf(t, s, "work", gone)
+			for _, f := range []string{p, recordPath(p)} {
+				if _, err := os.Lstat(f); !os.IsNotExist(err) {
+					t.Fatalf("%s is still there (%v)", f, err)
+				}
+			}
+		}
+	}
+
+	t.Run("the count alone", func(t *testing.T) {
+		DamagedMaxMessages, DamagedBudget = 3, restoreBudget
+		s := newStore(t)
+		keep(t, s, 1, 10, 0, 1)
+		keep(t, s, 2, 10, 0, 1, 2)
+		// Two held, one under the count: kept beside them.
+		keep(t, s, 3, 10, 0, 1, 2, 3)
+		// Three held, at the count: the oldest goes, and only it.
+		keep(t, s, 4, 10, 1, 2, 3, 4)
+		keep(t, s, 5, 10, 1, 3, 4, 5)
+		if n, size, err := s.DamagedKept(); err != nil || n != 3 || size != 30 {
+			t.Fatalf("kept: %d, %d bytes (%v); want 3, 30", n, size, err)
+		}
+	})
+
+	t.Run("over the count", func(t *testing.T) {
+		// Four held, kept under a count of four: at three, the next keep
+		// takes the two oldest, to two held and the new one.
+		DamagedMaxMessages, DamagedBudget = 4, restoreBudget
+		s := newStore(t)
+		var want []int64
+		for id := int64(1); id <= 4; id++ {
+			want = append(want, id)
+			keep(t, s, id, 10, 0, want...)
+		}
+		DamagedMaxMessages = 3
+		keep(t, s, 5, 10, 2, 3, 4, 5)
+	})
+
+	t.Run("bytes and count together", func(t *testing.T) {
+		DamagedMaxMessages, DamagedBudget = 3, 1000
+		// The bytes bind: two of 400 held, under the count, and 400 more
+		// is 1200; one eviction makes 800, and the count was never at issue.
+		s := newStore(t)
+		keep(t, s, 1, 400, 0, 1)
+		keep(t, s, 2, 400, 0, 1, 2)
+		keep(t, s, 3, 400, 1, 2, 3)
+
+		// The count binds: three of 100 held, 400 bytes with the next is
+		// well under the budget, and the oldest goes for the count.
+		s = newStore(t)
+		keep(t, s, 1, 100, 0, 1)
+		keep(t, s, 2, 100, 0, 1, 2)
+		keep(t, s, 3, 100, 0, 1, 2, 3)
+		keep(t, s, 4, 100, 1, 2, 3, 4)
+
+		// The bytes bind past the count: three of 300 held, 700 more; one
+		// eviction satisfies the count and leaves 1300, a second leaves
+		// exactly the budget.
+		s = newStore(t)
+		keep(t, s, 1, 300, 0, 1)
+		keep(t, s, 2, 300, 0, 1, 2)
+		keep(t, s, 3, 300, 0, 1, 2, 3)
+		keep(t, s, 4, 700, 2, 3, 4)
+		if n, size, err := s.DamagedKept(); err != nil || n != 2 || size != 1000 {
+			t.Fatalf("kept: %d, %d bytes (%v); want 2, 1000", n, size, err)
+		}
+
+		// The count binds past the bytes: three of 100 held under a count
+		// of four, now two; one eviction satisfies the bytes, the count
+		// takes a second.
+		DamagedMaxMessages = 4
+		s = newStore(t)
+		keep(t, s, 1, 100, 0, 1)
+		keep(t, s, 2, 100, 0, 1, 2)
+		keep(t, s, 3, 100, 0, 1, 2, 3)
+		DamagedMaxMessages = 2
+		keep(t, s, 4, 800, 2, 3, 4)
+		if n, size, err := s.DamagedKept(); err != nil || n != 2 || size != 900 {
+			t.Fatalf("kept: %d, %d bytes (%v); want 2, 900", n, size, err)
+		}
+	})
 }
 
 // The sizes in the sentence about a message that was not kept.

@@ -759,6 +759,29 @@ twice that plus 64 KiB, up to 128 MiB and 64 KiB whatever the relay
 says. A relay that does not say its `max_bytes` is one from before this
 version and is refused by name.
 
+A fetch takes what the relay held for you when it began. The first page
+gives the relay's highest number, and mail listed past it waits for the
+next fetch: the cursor is saved at the last message taken and nothing is
+said, and `auu inbox --json` sets `more` true on that relay's entry in
+`relays` and on `fetch`. A fetch also asks one relay for at most 64 pages,
+at most 12,800 messages at 200 a page, which bounds a relay whose highest
+number does not hold. At that cap it says once
+
+    work: this fetch took the 64 pages it asks at most; the rest waits for the next fetch
+
+sets `more` the same way, and exits 0. The next `auu inbox` takes the rest
+from the saved cursor, and `auu watch` and `auu serve` take it on their
+next round. A fetch from the relay's lowest number after a reset (*When the
+relay's numbering restarts*) runs to the end of what the relay lists and is
+held to the 64 pages alone. One cut there is not finished, and the account
+of what was left on the relay waits for a fetch that reaches the end. The
+check before such a fetch, which lists the relay's mail to match it against
+what this machine holds, asks at most 64 pages too; a relay that lists more
+fails the fetch, with nothing changed here; the next `auu inbox` asks
+again, while `auu watch` and `auu wait` take it for a relay that will not
+answer and end, exit 3. `auu wait` fetches at every poll and meets the rest
+there.
+
 A page over the hold is asked for again, with half as many messages each
 time, down to one, when the hold is already at 128 MiB and 64 KiB: at
 most seven more asks from 200. That is how `auu` reads a relay not yet
@@ -965,7 +988,10 @@ not read past:
 
 *What the fetch kept.* `auu damaged ls` lists what is under `damaged/`,
 oldest first: the relay, the relay's id for the message, when it was
-received, its size on this disk and its cause. It needs no key. A message
+received, its size on this disk and its cause. It needs no key. The
+directory holds at most 64 MiB and at most 1,024 messages, and the oldest
+go first to make room, by bytes or by count, so a relay that hands over
+small messages that do not open cannot fill it under the bytes. A message
 whose keep was cut off before its record was written is listed with
 `no record:` for its cause, and one beside a record that does not read
 with `unreadable record:` and why. For both, the time is the file's own.
@@ -1663,7 +1689,7 @@ Go's file modes say nothing about who can read.
 | `inbox/`, `sent/`, `quarantine/` | the message spool, one JSON file each; a record that will not read is said to be, once, and left out of the listing |
 | `inbox/<id>.d/` | a large message's files, written straight to disk |
 | `outbox/` | what is sealed but not yet delivered, waiting for `auu send --resume`; `auu outbox` lists it |
-| `damaged/<relay>/<id>.bin`, `.json` | a message your key could not open, as the relay served it, with a record of which relay's message it was, when, and why in a word — `did not decrypt`, `not addressed to this key`, `sender signature failed`, `malformed`, `newer: section "NAME"` for a message with a critical section this build does not know, which `auu damaged reopen` opens once `auu` is updated, its record also saying the kind, channel, via and size the relay listed it with, or `misfiled` for a message the relay listed under a channel it was not sealed for, or listed as a kind its sealed record is not — a knock that is not one inside, or one that is inside a row listed as an ordinary envelope; a stream keeps its manifest chunk only. `auu damaged ls` lists them and `auu inbox` says how many are there until you remove them; nothing here is opened again but a `newer` one; the directory holds at most 64 MiB of kept messages, the oldest going first, and a message that alone exceeds that is not kept, which the warning says; a file there that is not a kept message is not counted and `ls` names it |
+| `damaged/<relay>/<id>.bin`, `.json` | a message your key could not open, as the relay served it, with a record of which relay's message it was, when, and why in a word — `did not decrypt`, `not addressed to this key`, `sender signature failed`, `malformed`, `newer: section "NAME"` for a message with a critical section this build does not know, which `auu damaged reopen` opens once `auu` is updated, its record also saying the kind, channel, via and size the relay listed it with, or `misfiled` for a message the relay listed under a channel it was not sealed for, or listed as a kind its sealed record is not — a knock that is not one inside, or one that is inside a row listed as an ordinary envelope; a stream keeps its manifest chunk only. `auu damaged ls` lists them and `auu inbox` says how many are there until you remove them; nothing here is opened again but a `newer` one; the directory holds at most 64 MiB and at most 1,024 kept messages, the oldest going first, and a message that alone exceeds that is not kept, which the warning says; a file there that is not a kept message is not counted and `ls` names it |
 
 `authorized_peers` is the file that matters. Nothing on the network can add to
 it. Back it up alongside `identity.json`. Back up `home.key` and

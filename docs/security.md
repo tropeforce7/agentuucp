@@ -296,7 +296,14 @@ malformed, naming `id`, and the fetch treats that as a transport
 failure: nothing of it is acknowledged or kept. So a relay that answers
 the row at the cursor again and again stops the fetch there, and cannot
 have it acknowledge the row and write it under `damaged/` again on every
-turn for ever.
+turn for ever. A relay that numbers a new row upward on every page passes
+that check, so a fetch is bounded besides: it takes what the relay listed
+up to the highest id its first page gave, leaves what is listed past it
+for the next fetch, and asks one relay for at most 64 pages, 12,800 rows,
+for a relay whose highest id does not hold. What it cannot open it keeps
+under `damaged/`, which holds at most 64 MiB and at most 1,024 messages,
+the oldest evicted first, so junk small enough to stay under the bytes is
+held by the count.
 
 Every integer that enters the program from outside has a row in
 `internal/limits/ledger.txt`, and so does every slice of a string or a

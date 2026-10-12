@@ -42,6 +42,13 @@ const damagedDir = "damaged"
 // sixty-four mebibytes; nothing else sets it.
 var DamagedBudget int64 = 64 << 20
 
+// DamagedMaxMessages is the most messages damaged/ keeps, each its bytes and
+// its record, evicted oldest first as the budget is (R5): a relay that hands
+// over small junk keeps every one well under the bytes, and each keep reads
+// every record kept, so the count is what bounds both the directory and the
+// work. A variable for the reason DamagedBudget is one.
+var DamagedMaxMessages = 1024
+
 // DamagedRecord is what is kept beside the bytes: which relay's message it
 // was, when that relay received it, and the cause in a word.
 // CauseNewer begins the cause of a message kept because it carries a
@@ -336,12 +343,12 @@ func (s *Store) RemoveDamaged(relay string, id int64) error {
 }
 
 // KeepDamaged keeps the bytes of a message that could not be opened, with
-// its record beside them, within the budget: the oldest kept are evicted
-// first to make room, and a message that alone exceeds the budget is not
-// kept at all, reported as false. It returns how many were evicted. The
-// bytes are written before the record, so an interrupted keep leaves bytes
-// that count and can be evicted rather than a record naming bytes that are
-// not there.
+// its record beside them, within the budget and DamagedMaxMessages: the
+// oldest kept are evicted first to make room, and a message that alone
+// exceeds the budget is not kept at all, reported as false. It returns how
+// many were evicted. The bytes are written before the record, so an
+// interrupted keep leaves bytes that count and can be evicted rather than a
+// record naming bytes that are not there.
 func (s *Store) KeepDamaged(rec DamagedRecord, data []byte) (kept bool, evicted int, err error) {
 	if int64(len(data)) > DamagedBudget {
 		return false, 0, nil
@@ -359,8 +366,9 @@ func (s *Store) KeepDamaged(rec DamagedRecord, data []byte) (kept bool, evicted 
 	for _, k := range have {
 		total += k.size
 	}
+	count := len(have)
 	for _, k := range have {
-		if total+int64(len(data)) <= DamagedBudget {
+		if total+int64(len(data)) <= DamagedBudget && count < DamagedMaxMessages {
 			break
 		}
 		if err := os.Remove(k.bin); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -370,6 +378,7 @@ func (s *Store) KeepDamaged(rec DamagedRecord, data []byte) (kept bool, evicted 
 			return false, evicted, err
 		}
 		total -= k.size
+		count--
 		evicted++
 	}
 	bin, err := s.DamagedPath(rec.Relay, rec.RelayID)

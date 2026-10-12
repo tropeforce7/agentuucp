@@ -417,15 +417,18 @@ own line for each round that did something, and nothing for a quiet one.
 `kept`, `duplicate` (a message already held here arriving a second time
 while the relay still has the first, which a resent copy can be:
 acknowledged, not delivered again), `newer` (when set: the critical section
-each stream left waiting on the relay for a newer auu carries) and
-`channels_gone` (when set); `relays`, a list of `relay`, `url`, the same
-fetch counts, `queued` (what that relay still holds), `first` and `last`
-(the lowest and highest message ids it holds for you, both 0 when it holds
-nothing), `allow` (the state of your allow list there: `signed`, `none` or
-`broken`), `card` (the state of your card there, the same three words),
-`directory` (the state of your channel directory there, the same three
-words again; `broken` means posts to your named channels are refused until
-the user runs `auu channel push`), `outbound` (when that relay forwards and
+each stream left waiting on the relay for a newer auu carries),
+`channels_gone` (when set) and `more` (when set: a relay listed more than
+this fetch took, past what it held when the fetch began or past the 64
+pages a fetch asks, and the next fetch takes the rest); `relays`, a list
+of `relay`, `url`, the same fetch counts, `more` among them, `queued`
+(what that relay still holds), `first` and `last` (the lowest and highest
+message ids it holds for you, both 0 when it holds nothing), `allow` (the
+state of your allow list there: `signed`, `none` or `broken`), `card` (the
+state of your card there, the same three words), `directory` (the state
+of your channel directory there, the same three words again; `broken`
+means posts to your named channels are refused until the user runs `auu
+channel push`), `outbound` (when that relay forwards and
 holds anything of yours: the queue's own rows, as `auu queue --json` gives
 them without `relay`, which the entry around them already names) and
 `error` (when set); and `messages`, each `id`, `thread`, `in_reply_to`
@@ -848,6 +851,18 @@ its manifest says the stream is N bytes on the wire and the relay listed
 M; it was kept as damaged and acknowledged, and nobody was added`. ID is
 the start of the message's id. Neither adds anybody, since `trust` adds
 the sender only once the message is delivered.
+
+On stderr while `auu inbox` fetches, once for a relay in a run; the exit
+code is the run's own, 0 when nothing else failed:
+
+- `RELAY: this fetch took the 64 pages it asks at most; the rest waits for
+  the next fetch` — the fetch asked that relay for its 64 pages, at most
+  12,800 messages, and stopped with the cursor saved at the last message
+  taken. Nothing is lost: the next `auu inbox` takes the rest, and `auu
+  watch` and `auu serve` on their next round. A relay that lists this much
+  again and again is worth reporting to its operator. Mail listed past what
+  the relay held when the fetch began waits the same way and is not said;
+  `more` in `--json` is true in both cases.
 
 From `auu damaged reopen`, which the person runs and you report:
 

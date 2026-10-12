@@ -54,7 +54,16 @@ type fetchResult struct {
 	// longer in this machine's directory: a channel deleted with mail
 	// still queued, which arrives as usual and is filed under its name.
 	Gone map[string]int `json:"channels_gone,omitempty"`
+	// More says the fetch stopped with the relay listing more: past what
+	// it held when the fetch began, or at maxPagesPerFetch (R6). The cursor
+	// is saved at the last row taken, and the next fetch takes the rest.
+	More bool `json:"more,omitempty"`
 }
+
+// maxPagesPerFetch is the most listings one fetch of one relay asks for,
+// the backstop for a relay whose last lies: 64 pages at the listing limit
+// is 12,800 rows.
+const maxPagesPerFetch = 64
 
 func (f *fetchResult) add(o fetchResult) {
 	f.Delivered += o.Delivered
@@ -62,6 +71,7 @@ func (f *fetchResult) add(o fetchResult) {
 	f.Unreadable += o.Unreadable
 	f.Kept += o.Kept
 	f.Duplicate += o.Duplicate
+	f.More = f.More || o.More
 	f.Newer = append(f.Newer, o.Newer...)
 	for name, n := range o.Gone {
 		if f.Gone == nil {
@@ -232,13 +242,37 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 		// marks on what was left there are as fresh as the relay's rows.
 		reset            *resetRun
 		reckoned, marked bool
+		// stopAt is the relay's last as it stood on the first page (R6):
+		// a fetch takes what was there when it began, and what is listed
+		// past it waits for the next fetch, so a relay that numbers a junk
+		// row upward on every page ends the fetch at the second page. pages
+		// counts the listings, held to maxPagesPerFetch for a relay whose
+		// last lies. A re-fetch from the relay's first id runs to its empty
+		// page, since its accounting is made there, and is held to the
+		// pages alone; one cut there is not finished, and the next fetch
+		// asks from the saved cursor as any fetch does.
+		stopAt int64 = -1
+		pages  int
 	)
+	// stop ends the fetch with the relay listing more: what was met is
+	// settled and the cursor is already saved at the last row taken.
+	stop := func() (fetchResult, relaySaid, error) {
+		if err := met.settle(s); err != nil {
+			return res, said, err
+		}
+		res.More = true
+		return res, said, nil
+	}
 	for {
 		page, err := c.ListWait(ctx, client.ListRequest{After: cursor, Limit: relayapi.MaxListLimit, Wait: hold})
 		if err != nil {
 			return res, said, transportErr(err)
 		}
 		hold = 0
+		pages++
+		if stopAt < 0 {
+			stopAt = page.Last
+		}
 		said = relaySaid{Queued: page.Queued, First: page.First, Last: page.Last,
 			Allow: page.Allow, Card: page.Card, Directory: page.Directory}
 		if len(page.Messages) == 0 && !reckoned && cursor > page.Last {
@@ -314,6 +348,9 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 			return res, said, nil
 		}
 		for _, m := range page.Messages {
+			if reset == nil && m.ID > stopAt {
+				return stop()
+			}
 			if m.IsStream() {
 				if err := fetchOneStream(ctx, s, id, c, r, m, directory, settings, &res, met); err != nil {
 					return res, said, transportErr(err)
@@ -424,6 +461,14 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 			} else {
 				res.Quarantined++
 			}
+		}
+		if pages >= maxPagesPerFetch {
+			// A relay whose last does not hold, or a re-fetch longer than
+			// a fetch takes: said once, and the next fetch, a watch's or
+			// serve's next round, asks from where this one stopped.
+			fmt.Fprintf(os.Stderr, "%s: this fetch took the %d pages it asks at most; the rest waits for the next fetch\n",
+				r.Name, maxPagesPerFetch)
+			return stop()
 		}
 	}
 }

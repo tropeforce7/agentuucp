@@ -102,7 +102,9 @@ type pastAll struct {
 // matches each row. It costs one stubs listing a page of
 // relayapi.MaxListLimit rows, and downloads no envelope; a mailbox the
 // relay says is empty, last zero, costs no listing, since there is no row
-// to match.
+// to match. It asks at most maxPagesPerFetch pages, as a fetch does: a
+// relay that lists more is refused, with nothing changed here, since a
+// reset on a mailbox read in part would mark what it did not read as gone.
 func classifyPast(ctx context.Context, s *store.Store, c *client.Client, r *store.Relay, last int64) (*pastAll, error) {
 	records, entries, err := heldOf(s, r.Name)
 	if err != nil {
@@ -113,7 +115,11 @@ func classifyPast(ctx context.Context, s *store.Store, c *client.Client, r *stor
 	if last == 0 {
 		return p, nil
 	}
-	for after := int64(0); ; {
+	for after, pages := int64(0), 0; ; {
+		if pages++; pages > maxPagesPerFetch {
+			return nil, fmt.Errorf("the relay listed more than %d pages while this machine checked its cursor against it; "+
+				"nothing was changed, and the next fetch asks again", maxPagesPerFetch)
+		}
 		page, err := c.ListWait(ctx, client.ListRequest{After: after, Limit: relayapi.MaxListLimit, Stubs: true})
 		if err != nil {
 			return nil, err
