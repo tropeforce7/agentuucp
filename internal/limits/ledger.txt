@@ -583,7 +583,7 @@ internal/auu/serveproxy.go (*keyProxy).ServeHTTP cap http.MaxBytesReader(r.Body,
 internal/auu/serveproxy.go startKeyProxy cap MaxHeaderBytes: relayapi.MaxHeaderBytes = <= 32768 shown by TestLimitTheProxyCapsHeadersAndBodies
 internal/auu/stream.go uploadStream cap io.LimitReader(f, n) = local: n is the sealed copy's size less the attempt's offset, both the program's, and f is that copy
 internal/client/anchor.go FetchTrustAnchor cap io.LimitReader(resp.Body, anchorAnswerHold + 1) = <= 1048577 shown by TestLimitAnAnchorAnswerIsHeldToAMebibyte
-internal/client/client.go (*Client).attempt cap io.LimitReader(resp.Body, hold + 1) = <= hold + 1 shown by TestLimitAnAnswerIsHeldToWhatItsRouteHolds
+internal/client/client.go readCapped cap io.LimitReader(body, hold + 1) = <= hold + 1 shown by TestLimitAnAnswerIsHeldToWhatItsRouteHolds
 internal/client/client.go boundTransport cap t.MaxResponseHeaderBytes: relayapi.MaxHeaderBytes = <= 32768 shown by TestLimitResponseHeadersAreCapped
 internal/client/stream.go (*Client).Blob cap io.LimitReader(resp.Body, streamAnswerHold + 1) = <= 65537 shown by TestLimitAStreamAnswerIsHeldTo64KiB
 internal/client/stream.go (*Client).Blob cap io.LimitReader(resp.Body, span) = local: span is end-start+1 of a Content-Range checkRange held to the range asked for shown by TestLimitContentRange
@@ -686,3 +686,9 @@ internal/store/store.go Stored time Arrived = local: this machine's clock at the
 internal/store/store.go Stored time Received = local: the listing's received, which checkListing holds to the skew and to what can be written, or this machine's clock for a sent copy or a reopened damaged record kept with none; a record kept before is read as it is
 internal/stream/stream.go Manifest time Time = <= now + 42m shown by TestLimitAManifestTimeIsHeldToTheSkew
 internal/vouch/vouch.go Document time Issued = <= now + 42m shown by TestLimitAVouchIssuedIsHeldToTheSkew
+
+internal/wire/wire.go (*keyScan).key string raw[1:len(raw) - 1] = local: raw is a string str stepped over, its quotes first and last, two bytes at least
+internal/wire/wire.go (*keyScan).key string sc.data[start:sc.i] = local: start is where str began and sc.i where it ended, within data by str
+internal/wire/wire.go (*keyScan).str string sc.data[sc.i + 2:sc.i + 6] = local: sc.i + 5 < len(sc.data) by the check before it
+internal/wire/wire.go (*keyScan).value string sc.data[sc.i:] = local: sc.i < len(sc.data) by the check at the top of value
+internal/wire/wire.go (*keyScan).value string sc.data[start:sc.i] = local: start is sc.i before the number and sc.i only grows within data

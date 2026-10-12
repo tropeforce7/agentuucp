@@ -615,23 +615,23 @@ a test that needs a relay that answers otherwise than this one writes a
 handler that answers otherwise, for that test.
 
 **A strict decode refuses what follows the value and what reads two ways,
-and its test feeds both.** `wire.Decode` is the one strict decode, and every
-reader that must refuse an unknown field calls it. It refuses three things
-`DisallowUnknownFields` leaves alone. Trailing data is asked of the decoder
-as its next token, which must be the end of the input. `json.Decoder.More`
-reports whether another value follows and is false before a closing
-bracket, so a trailing `}` or `]` passed every "trailing data" check in the
-tree — ten of them, the grant documents and the manifest among them — until
-the check was `Token() == io.EOF`. A key given twice in one object, or two
-keys equal under case folding, is refused, where `encoding/json` keeps the
-last. And so is a key that matches a field only by case, which
-`encoding/json` takes as that field. Each would let two readers of one
-signed document read it two ways. The test for a strict reader feeds the
-document whole and sees it taken, then `}`, `]` and a stray letter after it
-and sees each refused in the reader's own words, so it proves the new check
-and not only the old one. A reader that keeps its own trailing-data
-sentence tells `wire.ErrTrailing` apart. Whoever writes a decode of their
-own copies the rule rather than the call, and says so.
+and its test feeds both.** `wire.Decode` is the one strict decode, and
+every reader that must refuse an unknown field calls it. It refuses three
+things `DisallowUnknownFields` leaves alone. Trailing data is anything but
+white space after the value, read off the bytes by the scan that checks the
+keys. `json.Decoder.More` reports whether another value follows and is
+false before a closing bracket, so a trailing `}` or `]` passed every
+"trailing data" check in the tree — ten of them, the grant documents and
+the manifest among them — until the check read the end of the input itself.
+A key given twice in one object, or two keys equal under case folding, is
+refused, where `encoding/json` keeps the last. And so is a key that matches
+a field only by case, which `encoding/json` takes as that field. Each would
+let two readers of one signed document read it two ways. The test for a
+strict reader feeds the document whole and sees it taken, then `}`, `]` and
+a stray letter after it and sees each refused in the reader's own words, so
+it proves the new check and not only the old one. A reader that keeps its
+own trailing-data sentence tells `wire.ErrTrailing` apart. Whoever writes a
+decode of their own copies the rule rather than the call, and says so.
 
 **A section, an answer type, a request type and a refusal code each come
 with the tests that hold the door open.** The door is `sections`, and a

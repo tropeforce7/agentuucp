@@ -24,6 +24,7 @@ import (
 	"reflect"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 const (
@@ -252,92 +253,225 @@ var ErrTrailing = errors.New("trailing data after the value")
 // target does not have is refused, and so are three things encoding/json
 // takes without complaint:
 //
-//   - anything after the value but white space, asked of the decoder as its
-//     next token, which must be the end of the input: json.Decoder.More
-//     reports false for a stray '}' or ']' and would let either through;
+//   - anything after the value but white space;
 //   - a key given twice in one object, or two keys equal under case
 //     folding, of which encoding/json would keep the last;
 //   - a key that matches a field of the target only without regard to
 //     case, which encoding/json would take as that field.
 //
 // So one document reads one way, and another reader of it, in this language
-// or another, has no second way to read it. The last two are a walk over
-// the tokens before the decode, holding the keys of each open object and
-// nothing more; a decoder's own error, a syntax error among them, is
-// returned as the decoder made it.
+// or another, has no second way to read it. A scan of the bytes before the
+// decode holds the keys of each open object against the type the decode
+// will fill and skips every value in place, so that it costs the keys and
+// nothing of what the document carries (G4); the document is then decoded
+// once, by json.Unmarshal. A decoder's own error, a syntax error among them,
+// is returned as the decoder made it. A document the scan cannot follow and
+// the decoder takes is refused, so that no document is decoded unchecked.
 func Decode(data []byte, v any) error {
-	if err := checkKeys(data, reflect.TypeOf(v)); err != nil {
+	sc := &keyScan{data: data}
+	err := sc.value(reflect.TypeOf(v), 0)
+	switch {
+	case errors.Is(err, errStop):
+		derr := json.Unmarshal(data, v)
+		if derr == nil {
+			return errUnscanned
+		}
+		// Input that ends inside the value, or holds none, gets the
+		// errors a json.Decoder gives, which a reader names a cut-short
+		// file by; any other the decoder's own words.
+		var syn *json.SyntaxError
+		if errors.As(derr, &syn) && syn.Error() == "unexpected end of JSON input" {
+			if len(bytes.TrimSpace(data)) == 0 {
+				return io.EOF
+			}
+			return io.ErrUnexpectedEOF
+		}
+		return derr
+	case err != nil:
 		return err
 	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		return err
-	}
-	if _, err := dec.Token(); err != io.EOF {
+	if sc.space(); sc.i < len(data) {
 		return ErrTrailing
 	}
-	return nil
+	return json.Unmarshal(data, v)
 }
 
-// maxDepth bounds the walk's recursion. encoding/json refuses nesting past
-// ten thousand, and so does the walk, leaving the refusal to the decode.
+// errUnscanned is a document the key scan could not follow which the
+// decoder nonetheless took: refused, since its keys went unchecked.
+var errUnscanned = errors.New("the document could not be checked key by key")
+
+// maxDepth bounds the scan's recursion. encoding/json refuses nesting past
+// ten thousand, and so does the scan, leaving the refusal to the decode.
 const maxDepth = 10000
 
-// errStop ends a walk that met something the decode will refuse in its own
+// errStop ends a scan that met something the decode will refuse in its own
 // words: a syntax error, or nesting past maxDepth.
 var errStop = errors.New("stop")
 
-// checkKeys walks the tokens of data with the type the decode will fill, and
-// refuses a repeated key and a key that matches a field only by case.
-func checkKeys(data []byte, t reflect.Type) error {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	err := walkValue(dec, t, 0)
-	if errors.Is(err, errStop) {
-		return nil
-	}
-	return err
+// keyScan walks a document's bytes, holding the keys of each object it
+// opens and reading no value but to step over it.
+type keyScan struct {
+	data []byte
+	i    int
 }
 
 var unmarshaler = reflect.TypeFor[json.Unmarshaler]()
 
-// walkValue reads one value. t is the Go type it decodes into, or nil when
+func (sc *keyScan) space() {
+	for sc.i < len(sc.data) {
+		switch sc.data[sc.i] {
+		case ' ', '\t', '\n', '\r':
+			sc.i++
+		default:
+			return
+		}
+	}
+}
+
+// value reads one value. t is the Go type it decodes into, or nil when
 // that is not known: inside a type with its own UnmarshalJSON, an
-// interface, or a key the target does not have, which the decode refuses.
-func walkValue(dec *json.Decoder, t reflect.Type, depth int) error {
-	tok, err := dec.Token()
-	if err != nil {
+// interface, or a key the target does not have.
+func (sc *keyScan) value(t reflect.Type, depth int) error {
+	sc.space()
+	if sc.i >= len(sc.data) {
 		return errStop
 	}
-	d, ok := tok.(json.Delim)
-	if !ok {
+	switch c := sc.data[sc.i]; {
+	case c == '{':
+		if depth+1 > maxDepth {
+			return errStop
+		}
+		sc.i++
+		return sc.object(target(t), depth+1)
+	case c == '[':
+		if depth+1 > maxDepth {
+			return errStop
+		}
+		sc.i++
+		return sc.array(target(t), depth+1)
+	case c == '"':
+		_, _, ok := sc.str()
+		if !ok {
+			return errStop
+		}
 		return nil
-	}
-	if depth+1 > maxDepth {
-		return errStop
-	}
-	t = target(t)
-	if d == '[' {
-		var elem reflect.Type
-		if t != nil && (t.Kind() == reflect.Slice || t.Kind() == reflect.Array) {
-			elem = t.Elem()
+	case c == '-' || (c >= '0' && c <= '9'):
+		// A number is held to the grammar by json.Valid, which reads it
+		// in place, so that a malformed one is the decoder's to name.
+		start := sc.i
+		for sc.i < len(sc.data) && strings.IndexByte("+-.0123456789eE", sc.data[sc.i]) >= 0 {
+			sc.i++
 		}
-		for dec.More() {
-			if err := walkValue(dec, elem, depth+1); err != nil {
-				return err
-			}
-		}
-		if _, err := dec.Token(); err != nil {
+		if !json.Valid(sc.data[start:sc.i]) {
 			return errStop
 		}
 		return nil
 	}
-	return walkObject(dec, t, depth+1)
+	for _, lit := range []string{"true", "false", "null"} {
+		if bytes.HasPrefix(sc.data[sc.i:], []byte(lit)) {
+			sc.i += len(lit)
+			return nil
+		}
+	}
+	return errStop
 }
 
-// walkObject reads the keys and values of one object, the '{' already read.
-func walkObject(dec *json.Decoder, t reflect.Type, depth int) error {
+// str steps over one string, sc.i at its opening quote, and answers where
+// its bytes lie, quotes included, and whether it has a backslash escape.
+// A control character, which the decoder refuses, or no closing quote, stops
+// the scan.
+func (sc *keyScan) str() (start int, escaped, ok bool) {
+	start = sc.i
+	for sc.i++; sc.i < len(sc.data); sc.i++ {
+		switch c := sc.data[sc.i]; {
+		case c == '"':
+			sc.i++
+			return start, escaped, true
+		case c == '\\':
+			// An escape is one of JSON's, held here so that the scan
+			// never reads past one the decoder refuses.
+			escaped = true
+			if sc.i+1 >= len(sc.data) {
+				return start, escaped, false
+			}
+			switch sc.data[sc.i+1] {
+			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+				sc.i++
+			case 'u':
+				if sc.i+5 >= len(sc.data) {
+					return start, escaped, false
+				}
+				for _, h := range sc.data[sc.i+2 : sc.i+6] {
+					if !strings.ContainsRune("0123456789abcdefABCDEF", rune(h)) {
+						return start, escaped, false
+					}
+				}
+				sc.i += 5
+			default:
+				return start, escaped, false
+			}
+		case c < 0x20:
+			return start, escaped, false
+		}
+	}
+	return start, escaped, false
+}
+
+// key reads one object key as the decoder will read it: a key with an
+// escape or a byte that is not UTF-8 is unquoted by encoding/json itself, so
+// that a lone surrogate or a stray byte becomes U+FFFD here as it does there
+// (R14), and two keys the decoder reads as one are one.
+func (sc *keyScan) key() (string, bool) {
+	start, escaped, ok := sc.str()
+	if !ok {
+		return "", false
+	}
+	raw := sc.data[start:sc.i]
+	if !escaped && utf8.Valid(raw) {
+		return string(raw[1 : len(raw)-1]), true
+	}
+	var k string
+	if json.Unmarshal(raw, &k) != nil {
+		return "", false
+	}
+	return k, true
+}
+
+// array reads the elements of one array, the '[' already read.
+func (sc *keyScan) array(t reflect.Type, depth int) error {
+	var elem reflect.Type
+	if t != nil && (t.Kind() == reflect.Slice || t.Kind() == reflect.Array) {
+		elem = t.Elem()
+	}
+	sc.space()
+	if sc.i < len(sc.data) && sc.data[sc.i] == ']' {
+		sc.i++
+		return nil
+	}
+	for {
+		if err := sc.value(elem, depth); err != nil {
+			return err
+		}
+		sc.space()
+		if sc.i >= len(sc.data) {
+			return errStop
+		}
+		switch sc.data[sc.i] {
+		case ',':
+			sc.i++
+		case ']':
+			sc.i++
+			return nil
+		default:
+			return errStop
+		}
+	}
+}
+
+// object reads the keys and values of one object, the '{' already read. A
+// key a struct target does not have is refused as encoding/json's
+// DisallowUnknownFields refuses it, in its words.
+func (sc *keyScan) object(t reflect.Type, depth int) error {
 	var fields map[string]reflect.Type
 	var mapElem reflect.Type
 	if t != nil {
@@ -349,12 +483,17 @@ func walkObject(dec *json.Decoder, t reflect.Type, depth int) error {
 		}
 	}
 	seen := map[string]string{}
-	for dec.More() {
-		tok, err := dec.Token()
-		if err != nil {
+	sc.space()
+	if sc.i < len(sc.data) && sc.data[sc.i] == '}' {
+		sc.i++
+		return nil
+	}
+	for {
+		sc.space()
+		if sc.i >= len(sc.data) || sc.data[sc.i] != '"' {
 			return errStop
 		}
-		key, ok := tok.(string)
+		key, ok := sc.key()
 		if !ok {
 			return errStop
 		}
@@ -376,19 +515,34 @@ func walkObject(dec *json.Decoder, t reflect.Type, depth int) error {
 						return fmt.Errorf("key %q matches the field %q only by case, in an object at depth %d", key, name, depth)
 					}
 				}
+				return fmt.Errorf("json: unknown field %q", key)
 			}
 			elem = ft
 		case mapElem != nil:
 			elem = mapElem
 		}
-		if err := walkValue(dec, elem, depth); err != nil {
+		sc.space()
+		if sc.i >= len(sc.data) || sc.data[sc.i] != ':' {
+			return errStop
+		}
+		sc.i++
+		if err := sc.value(elem, depth); err != nil {
 			return err
 		}
+		sc.space()
+		if sc.i >= len(sc.data) {
+			return errStop
+		}
+		switch sc.data[sc.i] {
+		case ',':
+			sc.i++
+		case '}':
+			sc.i++
+			return nil
+		default:
+			return errStop
+		}
 	}
-	if _, err := dec.Token(); err != nil {
-		return errStop
-	}
-	return nil
 }
 
 // target is the type a value decodes into for the walk's purposes: through

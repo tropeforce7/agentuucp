@@ -1143,7 +1143,7 @@ var capBounds = map[string]capBound{
 // row says the set they pass. The test of the tree as it stands fails on
 // an entry no <= row takes.
 var spelledBounds = map[string]string{
-	"internal/client/client.go (*Client).attempt cap io.LimitReader(resp.Body, hold + 1)": "its callers pass locals read from the relay's health answer (client.go listingCap, through holdFor, never above relayapi.MaxListingHold), which no walk can render, and the row names the hold each caller computes",
+	"internal/client/client.go readCapped cap io.LimitReader(body, hold + 1)": "attempt passes its hold, and attempt's callers pass locals read from the relay's health answer (client.go listingCap, through holdFor, never above relayapi.MaxListingHold), which no walk can render, and the row names the hold each caller computes",
 }
 
 // check walks the tree under root, reads the ledger, and returns every

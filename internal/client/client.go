@@ -621,6 +621,31 @@ func (c *Client) doWithin(ctx context.Context, method, path string, payload any,
 	}
 }
 
+// readCapped reads an answer's body under the route's hold. A body that
+// declares its length under the hold is read into a buffer of that length,
+// so a page at the hold costs its own size and not the doublings io.ReadAll
+// grows by (G4); one that declares more than the hold is refused before a
+// byte of it is read (errDeclaredOver); and one that declares none, a
+// chunked body, is read as before, hold plus one at most. net/http holds the
+// body to the length it declared.
+func readCapped(body io.Reader, declared, hold int64) ([]byte, error) {
+	switch {
+	case declared > hold:
+		return nil, errDeclaredOver
+	case declared >= 0:
+		buf := make([]byte, declared)
+		if _, err := io.ReadFull(body, buf); err != nil {
+			return nil, err
+		}
+		return buf, nil
+	}
+	return io.ReadAll(io.LimitReader(body, hold+1))
+}
+
+// errDeclaredOver is an answer whose Content-Length is over the route's
+// hold, refused as one read over it.
+var errDeclaredOver = errors.New("declared length over the hold")
+
 // errOverHold marks a malformed-answer refusal made for the answer's size
 // alone, so that a listing can tell a page over a hold it sized to a
 // max_bytes the relay may since have raised from any other malformed
@@ -723,11 +748,11 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 	// Cap the response: a hostile relay does not get to exhaust our memory,
 	// and an answer over what this route holds is refused by name rather
 	// than read short and failed as JSON.
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, hold+1))
-	if err != nil {
+	respBody, err := readCapped(resp.Body, resp.ContentLength, hold)
+	if err != nil && !errors.Is(err, errDeclaredOver) {
 		return fmt.Errorf("reading relay response: %w", err)
 	}
-	if int64(len(respBody)) > hold {
+	if errors.Is(err, errDeclaredOver) || int64(len(respBody)) > hold {
 		return fmt.Errorf("%w: %w", errOverHold, c.malformed("the answer", "the body", fmt.Sprintf("under %d bytes, the most this route holds", hold)))
 	}
 	if resp.StatusCode >= 300 && resp.StatusCode <= 399 {

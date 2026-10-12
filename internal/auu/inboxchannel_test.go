@@ -78,8 +78,12 @@ func (g *filingGate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rec.Body.Reset()
 		json.NewEncoder(rec.Body).Encode(answer)
 	}
+	// The relay declares its answer's length; the body above may be
+	// written again, so its length is the one written here.
 	for k, v := range rec.Header() {
-		w.Header()[k] = v
+		if k != "Content-Length" {
+			w.Header()[k] = v
+		}
 	}
 	w.WriteHeader(rec.Code)
 	w.Write(rec.Body.Bytes())

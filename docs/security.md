@@ -1120,8 +1120,8 @@ relay's setting, is read under twice the relay's own `max_bytes` plus
 the memory a relay can make a client spend on a page, on an `auu serve` or
 `auu watch` host that lists for days among them, is bounded by the client
 and not by the relay: a relay that says a gigabyte on its health answer
-cannot have a page of two read whole. The relay says that figure in its
-health answer, and the client learns it once. It asks for that figure
+cannot have a page of two read whole. The relay says its `max_bytes` in
+its health answer, and the client learns it once. It asks for that figure
 again only when a page is refused for its size, in case the setting was
 raised under a client that runs for days. A relay of this release stores
 no inline row over 64 MiB, whatever its `max_bytes`, and ends a page at
@@ -1133,27 +1133,37 @@ down to one. A lone row over the hold, stored before the relay's upgrade,
 on a relay not yet upgraded, or under a larger `max_bytes` than the relay
 says now, is the one size failure left: every fetch of that mailbox stops
 at it, as a transport failure on that relay alone, until the row goes or
-the cursor is moved past it. The operator's
-`auu-admin mailboxes purge FP`, which discards all the mailbox's queued
-mail, is the recovery that ends it. The owner can step past the row with
-`auu cursor reset --relay NAME --to ID`, losing that row alone and letting
-the mail after it through, but the row stays counted on the relay, so
-until the operator removes it every fetch from that relay ends at exit 5
-with the cursor said to skip mail, a multi-relay `auu inbox` stops there
-without fetching the relays after it, and `auu watch` stops watching that
-relay, and ends when it is the only one. A relay that does not say its
-`max_bytes` is refused by name. A stream route's answer, the placed
-stream's id or an error's sentence, is read under 64 KiB. The trust anchor
-answer is read under 1 MiB. Each is refused by name over it, the same rule
-and not a cut that fails later as JSON. A directory or an allow list is
-held to the 1 MiB cap before a byte is sent. The stream routes run on a
-client with no whole-exchange timeout and a stall rule of sixty seconds,
-the relay's resume window, on both bodies. A two-minute whole-exchange
-timeout, under the one-request wire, meant a stream needing more than
-about four minutes on the link could never be placed. An upload the relay
-stops taking, and a download the relay stops sending, are cut with a
-sentence naming the stall. The next attempt or the next range picks up
-from where the relay's copy ends.
+the cursor is moved past it. The operator's `auu-admin mailboxes purge
+FP`, which discards all the mailbox's queued mail, is the recovery that
+ends it. The owner can step past the row with `auu cursor reset --relay
+NAME --to ID`, losing that row alone and letting the mail after it
+through, but the row stays counted on the relay, so until the operator
+removes it every fetch from that relay ends at exit 5 with the cursor said
+to skip mail, a multi-relay `auu inbox` stops there without fetching the
+relays after it, and `auu watch` stops watching that relay, and ends when
+it is the only one. A relay that does not say its `max_bytes` is refused
+by name. A stream route's answer, the placed stream's id or an error's
+sentence, is read under 64 KiB. The trust anchor answer is read under
+1 MiB. Each is refused by name over it, the same rule and not a cut that
+fails later as JSON. A directory or an allow list is held to the 1 MiB cap
+before a byte is sent. The stream routes run on a client with no
+whole-exchange timeout and a stall rule of sixty seconds, the relay's
+resume window, on both bodies. A two-minute whole-exchange timeout, under
+the one-request wire, meant a stream needing more than about four minutes
+on the link could never be placed. An upload the relay stops taking, and a
+download the relay stops sending, are cut with a sentence naming the
+stall. The next attempt or the next range picks up from where the relay's
+copy ends.
+
+Within the hold, an answer that declares its length, as every answer of a
+relay of this release does, is read into a buffer of that length, its keys
+are checked in place, and it is decoded once: the read costs the page's
+own size, and what the page carries is copied out of it once into the
+values it decodes to, so a page of envelopes is held at about twice its
+size while it is taken. A relay that withholds the length has its page
+read as it comes, the buffer grown as the bytes arrive, at up to about
+four times a page in allocation and two and a quarter at once, bounded by
+the hold, the one cost a relay can add by not saying its length.
 
 ### 2.1 The round trip
 

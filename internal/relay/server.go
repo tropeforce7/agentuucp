@@ -558,9 +558,21 @@ func (r *statusRecorder) WriteHeader(code int) {
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
 
 func (s *Server) writeJSON(w http.ResponseWriter, status int, v any) {
+	// Marshalled first, so that the answer declares its length and a
+	// client sizes its buffer to it rather than growing one (G4). The bytes
+	// are the encoder's: json.Marshal escapes as Encoder does, and Encoder
+	// ends the value with a newline.
+	body, err := json.Marshal(v)
+	if err != nil {
+		s.log.Warn("write failed", "err", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	body = append(body, '\n')
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
+	if _, err := w.Write(body); err != nil {
 		s.log.Warn("write failed", "err", err)
 	}
 }
