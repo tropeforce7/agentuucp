@@ -92,11 +92,13 @@ func (s *Server) handleSetChannels(w http.ResponseWriter, r *http.Request, body 
 		return
 	}
 	// Only for a directory that replaced the stored one: a push of what
-	// the relay already holds changes nothing anyone is waiting on.
+	// the relay already holds changes nothing anyone is waiting on. After
+	// the answer, as every wake is (R25): the stored directory is what the
+	// woken watcher reads, and it is written already.
+	w.WriteHeader(http.StatusNoContent)
 	if stored {
 		s.notify.Wake(dirKey(fp))
 	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleGetChannels is GET /v1/mailbox/{fp}/channels, for anyone who may

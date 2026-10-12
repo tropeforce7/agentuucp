@@ -1427,9 +1427,10 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
-	// After the store has the row, so a listing woken by this finds it.
-	s.notify.Wake(mailKey(fp))
+	// After the store has the row, so a listing woken by this finds it,
+	// and after the answer (R25).
 	s.writeJSON(w, http.StatusOK, relayapi.PostResponse{ID: id})
+	s.notify.Wake(mailKey(fp))
 }
 
 func (s *Server) handleList(w http.ResponseWriter, r *http.Request, body []byte, callerFP string) {

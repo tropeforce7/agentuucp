@@ -785,15 +785,38 @@ func (h *harness) onlyOutbound(t *testing.T, state string) *Outbound {
 // TestAReportARelayWillNotTakeEndsTheChain: what becomes of an undeliverable
 // the next hop back refuses.
 //
-// A report is taken once, so a neighbour answering 404 or 409 has either never
-// held the row or has been told already, and both are final: no retry helps
-// and there is nobody left to tell. The row ends, the operator gets a line,
-// and — the part that matters now that failing a row carries reportBack — no
-// second report is made for it. This is exactly where a report for a report
-// would come from if the chain did not stop here.
+// A report is taken once, so a neighbour answering 409 has been told already,
+// and one answering 400 will not take what this relay sent: both are final,
+// no retry helps and there is nobody left to tell. The row ends, the operator
+// gets a line, and — the part that matters now that failing a row carries
+// reportBack — no second report is made for it. This is exactly where a
+// report for a report would come from if the chain did not stop here.
+//
+// A 404 was in that list and is not any more inside the row's lifetime
+// (G18, R23): the neighbour may not yet have written down the id this relay
+// answered it with, so the report waits on its own backoff and the operator
+// is told nothing about the chain ending. At the row's gives_up it is final
+// as before, and that case carries every assertion the other two do. The
+// drain's sweep runs before the attempt and ends a row already at its
+// gives_up, so the 404 that is final is the one whose answer takes the clock
+// across it: the turn starts a second inside, and the neighbour answers a
+// second later.
 func TestAReportARelayWillNotTakeEndsTheChain(t *testing.T) {
-	for _, status := range []int{http.StatusNotFound, http.StatusConflict, http.StatusBadRequest} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		// inside is how far inside the row's lifetime the turn starts, and
+		// late how long the neighbour takes to answer.
+		inside, late time.Duration
+		final        bool
+	}{
+		{"Conflict", http.StatusConflict, 0, 0, true},
+		{"Bad Request", http.StatusBadRequest, 0, 0, true},
+		{"Not Found inside the lifetime", http.StatusNotFound, 0, 0, false},
+		{"Not Found a second before the lifetime ends", http.StatusNotFound, time.Second, 0, false},
+		{"Not Found at the lifetime's end", http.StatusNotFound, time.Second, time.Second, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			bar := neighbourID(t, "bar")
 			alpha := neighbourID(t, "alpha")
 			h := peered(t, []string{"bar", "alpha"}, []*identity.Identity{bar, alpha}, nil)
@@ -809,12 +832,16 @@ func TestAReportARelayWillNotTakeEndsTheChain(t *testing.T) {
 			if len(queued) != 1 || queued[0].State != OutWaiting {
 				t.Fatalf("report rows: %+v", queued)
 			}
+			if tc.inside > 0 {
+				h.clock.advance(queued[0].GivesUp.Sub(h.clock.Now()) - tc.inside)
+			}
 
 			// alpha will not take it.
 			w := worker(t, h)
 			w.dial = func(*store.Relay) (*client.Client, error) { return nil, nil }
 			w.reportTo = func(context.Context, *client.Client, int64, string, string) error {
-				return &client.HTTPError{Status: status, Message: "no"}
+				h.clock.advance(tc.late)
+				return &client.HTTPError{Status: tc.status, Message: "no"}
 			}
 			r, ok := w.courier.Neighbour("alpha")
 			if !ok {
@@ -822,16 +849,11 @@ func TestAReportARelayWillNotTakeEndsTheChain(t *testing.T) {
 			}
 			w.drain(r)
 
-			// The row ends.
 			rows := h.reportRows(t)
 			if len(rows) != 1 {
 				t.Fatalf("%d report rows, want the one: a report begets no report", len(rows))
 			}
-			if rows[0].State != OutFinal {
-				t.Errorf("the report row is %q, want final: no retry helps and nobody is left to tell",
-					rows[0].State)
-			}
-			// The operator is told, in a courier line naming the neighbour
+			// The operator's lines, in a courier line naming the neighbour
 			// and not a fingerprint. The access log is a different thing and
 			// carries the caller's fingerprint on purpose, so the claim is
 			// about this relay's own remarks, as every other such claim here
@@ -843,15 +865,35 @@ func TestAReportARelayWillNotTakeEndsTheChain(t *testing.T) {
 				}
 			}
 			joined := strings.Join(courierLines, "\n")
-			if !strings.Contains(joined, "the chain ends here") {
-				t.Errorf("nothing in the log about the chain ending:\n%s", joined)
-			}
 			if strings.Contains(joined, alpha.Fingerprint()[:16]) ||
 				strings.Contains(joined, bar.Fingerprint()[:16]) {
 				t.Errorf("a fingerprint is in a courier line:\n%s", joined)
 			}
 			if !strings.Contains(joined, "alpha") {
 				t.Errorf("no courier line names the neighbour:\n%s", joined)
+			}
+
+			if !tc.final {
+				// The row waits on its own backoff, and nothing says the
+				// chain ended.
+				if rows[0].State != OutWaiting || rows[0].Tries != 1 || !rows[0].NextTry.After(h.clock.Now()) {
+					t.Errorf("the report row is %q after %d tries, next %s; want waiting, put off on its own backoff",
+						rows[0].State, rows[0].Tries, rows[0].NextTry)
+				}
+				if strings.Contains(joined, "the chain ends here") {
+					t.Errorf("the operator was told the chain ended inside the row's lifetime:\n%s", joined)
+				}
+				return
+			}
+
+			// The row ends.
+			if rows[0].State != OutFinal {
+				t.Errorf("the report row is %q, want final: no retry helps and nobody is left to tell",
+					rows[0].State)
+			}
+			// The operator is told.
+			if !strings.Contains(joined, "the chain ends here") {
+				t.Errorf("nothing in the log about the chain ending:\n%s", joined)
 			}
 			// And nothing was queued for anybody on its account.
 			for _, o := range rows {

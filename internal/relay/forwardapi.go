@@ -203,9 +203,14 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, body []by
 	}
 	// The worker for that neighbour is woken, and never waited for: the
 	// wake is a send on a channel that holds one and cannot block, so no
-	// request waits on the queue and the queue waits on no request.
-	s.wake(neighbour.Name)
+	// request waits on the queue and the queue waits on no request. It
+	// follows the answer, as every wake does (R25). That is order and not
+	// timing: the 201 is buffered and leaves when this handler returns,
+	// and the caller writes the id down only after reading it, so a report
+	// from the onward hop can still come back first; it is answered 404
+	// and asked again (G18, R23), which is the fix.
 	s.writeJSON(w, http.StatusCreated, relayapi.ForwardResponse{ID: id})
+	s.wake(neighbour.Name)
 }
 
 // deliver puts a forwarded envelope into a mailbox on this relay, which is
@@ -332,9 +337,10 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, env *relayapi.C
 		s.storageFault(w, r, err)
 		return
 	}
-	// After the store has the row, so a listing woken by this finds it.
-	s.notify.Wake(mailKey(fp))
+	// After the store has the row, so a listing woken by this finds it,
+	// and after the answer (R25).
 	s.writeJSON(w, http.StatusCreated, relayapi.ForwardResponse{ID: id})
+	s.notify.Wake(mailKey(fp))
 }
 
 // handleFailed takes an undeliverable coming back from a neighbour: the first
@@ -480,11 +486,14 @@ func (s *Server) handleFailed(w http.ResponseWriter, r *http.Request, body []byt
 	// That includes the case where this relay's queue has no room for the
 	// report: a report row is counted against the row bounds because it is a
 	// row, so a courier at its share can be refused one.
-	if name := reportBack(s.store, s.courier, s.cfg.CourierLimits, s.cfg.Now(),
-		row, req.Code, said(neighbour.Name, req.Said)); name != "" {
+	// The report back is queued before the answer and its worker woken
+	// after it (R25).
+	name := reportBack(s.store, s.courier, s.cfg.CourierLimits, s.cfg.Now(),
+		row, req.Code, said(neighbour.Name, req.Said))
+	w.WriteHeader(http.StatusNoContent)
+	if name != "" {
 		s.wake(name)
 	}
-	w.WriteHeader(http.StatusNoContent)
 }
 
 // reportBack queues an undeliverable for the courier that posted the row just

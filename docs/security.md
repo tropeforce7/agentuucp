@@ -472,7 +472,15 @@ say a message was refused when it was not, or give a reason of its own
 invention. That ends mail the courier was carrying anyway, which it could
 equally do by dropping it, and the sentence reaches a person with this relay's
 own name for that courier in front of it and escaped. The rate is bounded by
-`courier.reports_per_minute` beside the request budget.
+`courier.reports_per_minute` beside the request budget. A report answered
+`404`, no such message, is asked again on the ordinary backoff until the
+report row's `courier.forward_ttl` runs out, since the relay behind may not
+yet have written down the id it was answered with; every try is charged to
+the reporting relay's own report budget and the relay asked keeps nothing for
+an id it cannot match, so an invented id costs only the one inventing it.
+Where a neighbour's recreated database has made two handed rows share an id,
+the report is matched to the newest and answered `409` if that one has
+already been told, never taken for the older one.
 
 What a courier can also do is say nothing, and that is the limit worth stating
 plainly. **A courier that swallows a report, or a relay whose report the hop

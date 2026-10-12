@@ -1359,6 +1359,36 @@ neighbour cannot end mail it was not carrying. `courier.reports_per_minute`
 bounds how fast one may report at all, beside its posting rate, because an
 undeliverable is not mail arriving.
 
+A report can arrive before the relay behind knows the id it names, and is
+not lost for it. The relay behind writes down the id it was answered with
+only after reading the answer, and one that crashed after the neighbour's
+`201` learns the id only when its own retry is answered `already carried`;
+so a report that comes back fast enough meets `404`, no such message was
+handed to you. That answer is not final: the report row alone waits on the
+ordinary backoff, the rows behind it going on, and is asked again until its
+own end, the `courier.forward_ttl` it was queued with — three days by
+default — which is written in the row and so outlives a restart. Your log
+says so once in a while (`a neighbour does not yet know the message a
+report names; it will be asked again`); at that end the row is ended as
+any row still waiting is, in the `gave up on mail for a neighbour` line,
+or, when a `404` happens to come back just as the end passes, in the line
+below. Each try is charged to your relay's
+report budget at the neighbour, so a stale id costs the one asking and the
+neighbour keeps nothing for it. A `409`, already reported, is final as it
+always was. A row waiting so is still a row in the neighbour's share of
+your queue: a neighbour that answers every report `404`, as one whose
+couriers file and home name you differently does, keeps each for its whole
+`courier.forward_ttl`, and enough of them leave no room for its own mail,
+which is a reason to fix that naming when the start names it.
+
+Two rows handed to one neighbour can carry the same id, when the neighbour
+deleted its database and began its numbering again. A report is matched to
+the newest of them, whatever state it is in, since a report comes from the
+neighbour's present numbering; if that row has already been told how it
+ended the report is answered `409`, and never taken for an older row still
+handed. So the same report sent again after its answer was lost cannot end
+the older generation's message with the newer one's sentence.
+
 It is a tenth of the posting rate rather than equal to it, and the reason is
 worth stating because the two numbers sit side by side in the table above and
 invite the opposite guess. A report costs this relay a row of the reporting
@@ -1370,8 +1400,9 @@ lost by the slower drain: a relay passing back a long backlog of undeliverables
 honours the `Retry-After` it is given, and `courier.forward_ttl` is three days
 by default, so the news travels over hours rather than minutes and nobody's mail
 is affected by the wait. A report the next hop back will not
-take — it holds no such row, or the peering only goes one way, or its queue
-is full — is a line in your log naming that neighbour, and that line is the
+take — it still holds no such row when the report's own
+`courier.forward_ttl` has run, or it has already been told, or the peering
+only goes one way, or its queue is full — is a line in your log naming that neighbour, and that line is the
 only trace there will be. A report is never made for a report, so a chain ends
 rather than echoing.
 

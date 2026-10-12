@@ -271,6 +271,9 @@ func (w *workers) drain(r *store.Relay) time.Duration {
 	// not the neighbour's, so the neighbour is left alone until the next
 	// turn and the operator is told.
 	var last int64
+	// soonest is when the earliest row this turn put off on its own comes
+	// due, an empty queue's hour when none was.
+	soonest := maxRetry
 	// One connection for the turn, not one for each row. A dial is a
 	// post-quantum handshake with this courier's client certificate and a
 	// read of the certificate store, and a neighbour that has been down
@@ -297,7 +300,7 @@ func (w *workers) drain(r *store.Relay) time.Duration {
 		}
 		if row == nil {
 			w.report(r.Name, handed, failed)
-			return maxRetry
+			return soonest
 		}
 		if row.ID == last {
 			w.log.Error("courier: the queue is not moving; a message was attempted twice in one turn, "+
@@ -325,6 +328,11 @@ func (w *workers) drain(r *store.Relay) time.Duration {
 			handed++
 		case attemptFailed:
 			failed++
+		case attemptLater:
+			// The row's own next try is written down; the turn ends no
+			// later than it is due, so its wait is its own backoff and not
+			// the hour an empty queue sleeps.
+			soonest = min(soonest, wait)
 		default:
 			// The neighbour is not taking anything just now, so every row
 			// waiting for it waits: the next would meet the same answer at
@@ -346,6 +354,9 @@ const (
 	attemptBackOff attemptOutcome = iota
 	attemptHanded
 	attemptFailed
+	// attemptLater is this row's wait alone: the neighbour answered, and
+	// the rows behind it go on.
+	attemptLater
 )
 
 // waitFor is how long this neighbour is still being left alone, or zero.
@@ -472,11 +483,33 @@ func (w *workers) attemptReport(r *store.Relay, c *client.Client, row *Outbound)
 	var he *client.HTTPError
 	if errors.As(err, &he) {
 		switch he.Status {
-		case http.StatusNotFound, http.StatusConflict:
-			// The neighbour holds no such row, or is not waiting to hear
-			// about it: a report is taken once, and both of those are
-			// final. There is nobody to tell, so the row ends and the
-			// operator gets a line.
+		case http.StatusNotFound:
+			// The neighbour holds no row it handed here under this id.
+			// That is not final (G18, R23): the neighbour wakes its worker
+			// before it has written down the id this relay answered with,
+			// or crashes after its 201 and learns the id only when its own
+			// retry is answered already-carried, so a report that comes back
+			// fast enough is ahead of the row it is about. So the row waits
+			// on the ordinary schedule, its own wait and not the
+			// neighbour's, until its gives_up — the forward lifetime it was
+			// queued with, written in the row and so kept across a restart —
+			// when GiveUp ends it as it ends any row still waiting. Each try
+			// is charged to this relay's report budget at the neighbour, so
+			// an id that is stale or invented costs the one asking.
+			if !w.now().Before(row.GivesUp) {
+				w.store.faults.noteReportRefused(r.Name, said(r.Name, he.Message))
+				w.fail(row, row.Code, row.Said)
+				return attemptFailed, 0
+			}
+			if w.store.faults.due("report-unmatched:" + r.Name) {
+				w.log.Info("courier: a neighbour does not yet know the message a report names; it will be asked again",
+					"neighbour", r.Name, "id", row.ID, "their_id", row.TheirID, "until", row.GivesUp.Format(time.RFC3339))
+			}
+			return attemptLater, w.retry(row)
+		case http.StatusConflict:
+			// The neighbour is not waiting to hear about the row: a report
+			// is taken once, so this is final. There is nobody to tell, so
+			// the row ends and the operator gets a line.
 			w.store.faults.noteReportRefused(r.Name, said(r.Name, he.Message))
 			w.fail(row, row.Code, row.Said)
 			return attemptFailed, 0

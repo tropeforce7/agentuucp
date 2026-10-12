@@ -497,19 +497,22 @@ func (s *Store) EnqueueReport(o *Outbound, q CourierQuotas) error {
 // The pair is not unique and cannot be. A neighbour whose database was
 // recreated numbers its rows from one again, and this relay may still hold a
 // handed row from before with the same pair, inside the window a report could
-// still arrive in. So every row with the pair is read: none at all is no such
-// row; among them the newest handed row by id is the one, since a report
-// comes from the neighbour's present numbering and the newest row is the one
-// that numbering produced; and rows with none handed is a row that is not
-// one this relay is waiting to hear about — either never handed, or already
-// told about, which is the same answer because a report is taken once.
+// still arrive in. So the rows with the pair are read newest first: none at
+// all is no such row; the newest by id is the one, whatever its state, since
+// a report comes from the neighbour's present numbering and the newest row is
+// the one that numbering produced. When that row is not handed it is one this
+// relay is not waiting to hear about — never handed, or already told about,
+// which is the same answer because a report is taken once — and the answer
+// is that, never an older row still handed (G22, R26): the same report sent
+// again after a lost answer would otherwise end the older generation's row
+// with the newer one's sentence.
 //
 // found says whether any row carried the pair, which is what tells 404 from
-// 409; row is nil when found is true and none of them was handed.
+// 409; row is nil when found is true and the newest was not handed.
 func (s *Store) HandedTo(neighbour string, theirID int64) (row *Outbound, found bool, err error) {
 	rows, err := s.db.Query(`SELECT id, poster_fp, neighbour, path, via, to_fp, hash, size, kind,
 		received, state, tries, last_try, next_try, gives_up, their_id, code, said
-		FROM outbound WHERE neighbour = ? AND their_id = ? ORDER BY id DESC`, neighbour, theirID)
+		FROM outbound WHERE neighbour = ? AND their_id = ? ORDER BY id DESC LIMIT 1`, neighbour, theirID)
 	if err != nil {
 		return nil, false, err
 	}
@@ -520,7 +523,7 @@ func (s *Store) HandedTo(neighbour string, theirID int64) (row *Outbound, found 
 			return nil, false, err
 		}
 		found = true
-		if o.State == OutHanded && row == nil {
+		if o.State == OutHanded {
 			row = o
 		}
 	}

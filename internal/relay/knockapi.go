@@ -146,6 +146,7 @@ func (s *Server) handleKnock(w http.ResponseWriter, r *http.Request, body []byte
 		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
-	s.notify.Wake(mailKey(fp))
+	// After the answer (R25), the row being in the store already.
 	s.writeJSON(w, http.StatusOK, relayapi.PostResponse{ID: id})
+	s.notify.Wake(mailKey(fp))
 }

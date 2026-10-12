@@ -465,50 +465,51 @@ func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerF
 	// ended a read has spent the write's deadline too, and what the relay
 	// kept is said to anyone still listening.
 	rc.SetWriteDeadline(time.Now().Add(stall))
-	switch {
-	case err == nil:
-		// The upload is a message now, and a listing held for the
-		// recipient finds it.
-		s.notify.Wake(mailKey(u.To))
-		w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(received.Offset, 10))
-		s.writeJSON(w, http.StatusCreated, relayapi.PutStreamResponse{ID: received.Placed})
-		return
-	case badShape != nil:
-		s.refuseUnread(w, http.StatusBadRequest, badShape.Error())
-		return
-	case errors.Is(err, ErrNotAdmitted) && lastRefusal != nil:
-		s.writeRefusal(w, lastRefusal)
-		return
-	case errors.Is(err, ErrUploadOffset):
-		w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(received.Offset, 10))
-		s.refuseUnread(w, http.StatusConflict, "upload moved while this request was in flight")
-		return
-	case errors.Is(err, ErrNoUpload):
-		// Aborted or purged between the look above and the lock: the
-		// same answer as for an id never seen, which the sender does not
-		// retry.
-		s.refuseUnread(w, http.StatusNotFound, msgNoUpload)
-		return
-	case errors.Is(err, ErrRelayFull):
-		setLimit(w, limitRelayFull)
-		s.refuseUnreadWith(w, http.StatusInsufficientStorage, relayapi.RefusalRelayFull)
-		return
-	case errors.Is(err, ErrShortAttempt):
-		// The sender stopped, or the hunk deadline ended it; either way
-		// the sender is most likely gone, and the answer says what the
-		// relay kept for anyone still listening.
-		w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(received.Offset, 10))
-		if received.Kept {
+	if err != nil {
+		switch {
+		case badShape != nil:
+			s.refuseUnread(w, http.StatusBadRequest, badShape.Error())
+			return
+		case errors.Is(err, ErrNotAdmitted) && lastRefusal != nil:
+			s.writeRefusal(w, lastRefusal)
+			return
+		case errors.Is(err, ErrUploadOffset):
+			w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(received.Offset, 10))
+			s.refuseUnread(w, http.StatusConflict, "upload moved while this request was in flight")
+			return
+		case errors.Is(err, ErrNoUpload):
+			// Aborted or purged between the look above and the lock: the
+			// same answer as for an id never seen, which the sender does not
+			// retry.
+			s.refuseUnread(w, http.StatusNotFound, msgNoUpload)
+			return
+		case errors.Is(err, ErrRelayFull):
+			setLimit(w, limitRelayFull)
+			s.refuseUnreadWith(w, http.StatusInsufficientStorage, relayapi.RefusalRelayFull)
+			return
+		case errors.Is(err, ErrShortAttempt):
+			// The sender stopped, or the hunk deadline ended it; either way
+			// the sender is most likely gone, and the answer says what the
+			// relay kept for anyone still listening.
+			w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(received.Offset, 10))
+			if received.Kept {
+				s.refuseUnread(w, http.StatusBadRequest, fmt.Sprintf(
+					"the attempt stopped short at %d of %d bytes; kept for one resume until %s",
+					received.Offset, u.Size, received.Expires.UTC().Format(time.RFC3339)))
+				return
+			}
 			s.refuseUnread(w, http.StatusBadRequest, fmt.Sprintf(
-				"the attempt stopped short at %d of %d bytes; kept for one resume until %s",
-				received.Offset, u.Size, received.Expires.UTC().Format(time.RFC3339)))
+				"the attempt stopped short at %d of %d bytes and nothing is kept; open a new stream", offset, u.Size))
 			return
 		}
-		s.refuseUnread(w, http.StatusBadRequest, fmt.Sprintf(
-			"the attempt stopped short at %d of %d bytes and nothing is kept; open a new stream", offset, u.Size))
+		s.refuseUnreadWith(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
 	}
-	s.refuseUnreadWith(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
+	// The upload is a message now, and a listing held for the recipient
+	// finds it: woken after the answer, as every wake is (R25).
+	w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(received.Offset, 10))
+	s.writeJSON(w, http.StatusCreated, relayapi.PutStreamResponse{ID: received.Placed})
+	s.notify.Wake(mailKey(u.To))
 }
 
 // deadlineReader is a request body that moves the hunk deadline on each
