@@ -711,6 +711,20 @@ func (s *Server) callerAuthedBody(limit int64, hint string, fn func(w http.Respo
 			s.fail(w, http.StatusForbidden, msgBlocked)
 			return
 		}
+		// A courier is held to the minute (D83), once its signature has
+		// verified and never before, so a stranger naming a courier's
+		// fingerprint learns nothing from the answer. Refused 503 with a
+		// minute's Retry-After, so the neighbour waits and asks again
+		// rather than taking it for its enrolment, and said in the log once
+		// a minute by this relay's name for the neighbour.
+		if s.courier != nil {
+			if name, ok := s.courier.Accepts(auth.FP); ok && !auth.FreshWithin(time.Now(), relayapi.CourierSkew) {
+				s.store.faults.noteCourierClock(name)
+				w.Header().Set("Retry-After", strconv.Itoa(int(relayapi.CourierSkew/time.Second)))
+				s.refuse(w, http.StatusServiceUnavailable, relayapi.RefusalCourierClock)
+				return
+			}
+		}
 		fn(w, r, body, auth.FP)
 	}
 }

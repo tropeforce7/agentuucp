@@ -38,6 +38,23 @@ const (
 
 	// MaxSkew is how far a request timestamp may be from the relay's clock.
 	MaxSkew = 5 * time.Minute
+	// CourierSkew is how far a courier's request may be from its
+	// neighbour's clock (D83): relays keep to the minute, and a neighbour
+	// refuses a courier whose clock is further out, after its signature
+	// has verified, 503 with a Retry-After of a minute.
+	CourierSkew = time.Minute
+	// MaxStampAhead is how far ahead of this machine's clock a sealed stamp
+	// may be, an envelope's, a manifest's or a vouch's (D83). It is the
+	// chain of clocks a stamp crosses, each held to the next: the sender's
+	// to its relay within MaxSkew on the post, each relay's to the next
+	// within CourierSkew on a courier's request, for at most MaxHops of
+	// them, and the last relay's to this machine within MaxSkew on the
+	// listing's received. Forty-two minutes over the protocol's hops;
+	// eighteen at the default courier max_hops of 8, and eleven over one
+	// courier hop. Two honest peers on one relay may differ by twice
+	// MaxSkew, which is why a stamp's bound is not a request's. Compared
+	// in whole seconds, as every link is (Ahead).
+	MaxStampAhead = 2*MaxSkew + MaxHops*CourierSkew
 	// NonceTTL is how long a used nonce is remembered. It must exceed MaxSkew.
 	NonceTTL = 10 * time.Minute
 
@@ -505,6 +522,11 @@ const (
 	CodeCertMismatch     = "cert-mismatch"
 	CodeCertRefused      = "cert-refused"
 	CodeNoAdministrators = "no-administrators"
+	// CodeCourierClock is a courier's request whose clock is more than
+	// CourierSkew from its neighbour's, refused 503 with a Retry-After of
+	// a minute, so that the courier waits and asks again rather than
+	// taking the refusal for its enrolment.
+	CodeCourierClock = "courier-clock"
 	// CodeTooManyRecipients is a request carrying a copy of a message to
 	// more recipients than this relay's max_recipients, refused 413 with
 	// MsgTooManyRecipients, a sentence that carries the count and the
@@ -526,6 +548,8 @@ const (
 	MsgCertMismatch     = "client certificate does not belong to the signing identity"
 	MsgCertRefused      = "client certificate was refused"
 	MsgNoAdministrators = "this relay has no administrators"
+	// MsgCourierClock is CodeCourierClock's sentence.
+	MsgCourierClock = "this relay's clock and yours differ by more than a minute; relays keep to the minute"
 )
 
 // Refusal is a fixed sentence and its code as one value, so that the two
@@ -549,6 +573,7 @@ var (
 	RefusalCertExpired      = Refusal{CodeCertExpired, MsgCertExpired}
 	RefusalCertMismatch     = Refusal{CodeCertMismatch, MsgCertMismatch}
 	RefusalNoAdministrators = Refusal{CodeNoAdministrators, MsgNoAdministrators}
+	RefusalCourierClock     = Refusal{CodeCourierClock, MsgCourierClock}
 )
 
 const (
@@ -1489,10 +1514,25 @@ func ParseAuth(header string) (*Auth, error) {
 // chosen to make the subtraction wrap stays negative after negation and
 // compares as fresh. Nothing here subtracts.
 func (a *Auth) FreshAt(now time.Time) bool {
-	skew := int64(MaxSkew / time.Second)
+	return a.FreshWithin(now, MaxSkew)
+}
+
+// FreshWithin is FreshAt with a window of skew either side, in whole
+// seconds: CourierSkew for a courier's request at its neighbour.
+func (a *Auth) FreshWithin(now time.Time, skew time.Duration) bool {
+	s := int64(skew / time.Second)
 	n := now.Unix()
-	// n is a real clock reading, so these cannot overflow.
-	return a.TS >= n-skew && a.TS <= n+skew
+	// n is a real clock reading and s a constant's, so these cannot
+	// overflow.
+	return a.TS >= n-s && a.TS <= n+s
+}
+
+// Ahead reports whether t is more than by ahead of now, in whole seconds
+// as FreshAt judges a request, so that a bound on a stamp and a request's
+// window are one bound. Unix floors both; t is a time this program
+// decoded, within the years it reads, so nothing overflows.
+func Ahead(t, now time.Time, by time.Duration) bool {
+	return t.Unix() > now.Unix()+int64(by/time.Second)
 }
 
 // Verify checks the signature against a peer's key.

@@ -107,7 +107,7 @@ func OpenManifest(self *identity.Identity, header, sealed []byte) (*Opened, erro
 		return nil, fmt.Errorf("%w: %w: manifest is addressed to %s", ErrForm, ErrNotForUs, m.To)
 	}
 	// Old is fine, the future is not: the same bound the envelope keeps.
-	if m.Time.After(time.Now().Add(relayapi.MaxSkew)) {
+	if relayapi.Ahead(m.Time, time.Now(), relayapi.MaxStampAhead) {
 		return nil, fmt.Errorf("%w: manifest is stamped %s, in the future", ErrForm, m.Time.UTC().Format(time.RFC3339))
 	}
 

@@ -86,7 +86,11 @@
 # Its row is one of
 #
 #   <= now + 5m    a stamp held to no more than relayapi.MaxSkew ahead of
-#                  the reader's clock, the one bound a stamp has; its test
+#                  the reader's clock: an owner's document and a relay's
+#                  own stamps
+#   <= now + 42m   a sealed stamp, an envelope's, a manifest's or a
+#                  vouch's, held to relayapi.MaxStampAhead, the chain of
+#                  clocks it crossed (D83); either bound's test
 #                  feeds the edge and a second either side, a day and a
 #                  year ahead, a year past, and the earliest and latest
 #                  instants: through the reader where the wire can carry
@@ -637,7 +641,7 @@ internal/card/card.go Document time Issued = <= now + 5m shown by TestLimitACard
 internal/channels/channels.go Channel time NotAfter = deadline: the channel's close, compared with now, with its opening and with the directory before shown by TestLimitAChannelWindowAtTheExtremes
 internal/channels/channels.go Channel time NotBefore = deadline: the channel's opening, compared with now, with its close and with the directory before shown by TestLimitAChannelWindowAtTheExtremes
 internal/channels/channels.go Directory time Issued = <= now + 5m shown by TestLimitADirectoryIssuedIsHeldToTheSkew
-internal/envelope/envelope.go Inner time Time = <= now + 5m shown by TestLimitAnInnerTimeIsHeldToTheSkew
+internal/envelope/envelope.go Inner time Time = <= now + 42m shown by TestLimitAnInnerTimeIsHeldToTheSkew
 internal/pki/bundle.go Bundle time Issued = local: auu-ca's own clock, read back from its own bundle
 internal/pki/store.go RelayRecord time Updated = local: auu-ca's own clock, read back from its own record
 internal/relay/adminstore.go (*Store).Blocks time time.Parse(created) = local: the relay's own clock, read back from its own database
@@ -680,5 +684,5 @@ internal/store/relay.go Relay time Added = local: this machine's clock when the 
 internal/store/relay.go Relay time ServerIntNotBefore = local: the verified intermediate's NotBefore, which certificate verification held before now
 internal/store/store.go Stored time Arrived = local: this machine's clock at the record's first Save, read back from its own file; absent read as received at Load when relayapi.Writable holds it, otherwise as the file's modification time or this machine's clock, D80
 internal/store/store.go Stored time Received = local: the listing's received, which checkListing holds to the skew and to what can be written, or this machine's clock for a sent copy or a reopened damaged record kept with none; a record kept before is read as it is
-internal/stream/stream.go Manifest time Time = <= now + 5m shown by TestLimitAManifestTimeIsHeldToTheSkew
-internal/vouch/vouch.go Document time Issued = <= now + 5m shown by TestLimitAVouchIssuedIsHeldToTheSkew
+internal/stream/stream.go Manifest time Time = <= now + 42m shown by TestLimitAManifestTimeIsHeldToTheSkew
+internal/vouch/vouch.go Document time Issued = <= now + 42m shown by TestLimitAVouchIssuedIsHeldToTheSkew

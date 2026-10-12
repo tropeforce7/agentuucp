@@ -70,7 +70,9 @@ var ranges = regexp.MustCompile(`^(0 or )?(\[-?\d+[a-z]*, -?\d+[a-z]*\]|>= -?\d+
 
 // timeRanges is every shape a time row's range may take that names no
 // prose: "<= now + 5m", a stamp held to no more than relayapi.MaxSkew
-// ahead of the reader's clock, the one bound a stamp has; "[lo, hi]", a
+// ahead of the reader's clock, the bound of a document an owner posts and
+// of a relay's own stamps; "<= now + 42m", a sealed stamp held to
+// relayapi.MaxStampAhead, the chain of clocks it crossed; "[lo, hi]", a
 // window with both edges, named as the code names them; "display", shown
 // and never compared or ordered, which the walk holds by the field's uses
 // as far as compared says it can see them; and "output", as for an
@@ -81,7 +83,7 @@ var ranges = regexp.MustCompile(`^(0 or )?(\[-?\d+[a-z]*, -?\d+[a-z]*\]|>= -?\d+
 // an earlier copy of itself, or for the earliest to show, never ordered
 // across records, and written to a file only as a record of it, whose
 // test feeds the extremes.
-var timeRanges = regexp.MustCompile(`^(<= now \+ 5m|\[[A-Za-z_.]+, [A-Za-z_.]+\]|display|output)$`)
+var timeRanges = regexp.MustCompile(`^(<= now \+ 5m|<= now \+ 42m|\[[A-Za-z_.]+, [A-Za-z_.]+\]|display|output)$`)
 
 // timeOperators are the time.Time methods that compare or order: a
 // display field is an operand of none of them.

@@ -421,6 +421,20 @@ relay it belongs to cannot. The file is protected the way the bundle is, by
 the host — the relay's user alone, 0600, under the unit's hardening.
 `docs/relay.md` section 1.10 says how the peering is set up.
 
+A courier is also held to a closer clock than a user. A user's request is
+fresh within five minutes of the relay's clock; a courier's, on the
+forward route and the report route, within one minute of its neighbour's,
+since relays keep to the minute and run NTP. The minute is judged only
+after the request's signature has verified, so a stranger who names a
+courier's fingerprint is answered as any stranger is and learns nothing
+about the courier or its clock. A courier between one and five minutes out
+is refused `503` with the code `courier-clock` and a `Retry-After` of a
+minute, and waits the minute and asks again, rather than taking the
+refusal for a removed line and holding its mail an hour; past five, its
+request meets the `401` every request that far out meets before its
+signature is read, and waits the hour. The minute is what bounds a sealed
+stamp, below.
+
 **A control message, and what a lying courier can do with one.** There is one
 route on which a relay tells another relay something rather than handing it
 something: an undeliverable, `POST /v1/forward/failed`, carrying an id, a code
@@ -1426,8 +1440,9 @@ and the signature as signed; a message of type `vouch-ask` names the
 fingerprint it asks about as `about`; and a knock may carry up to four as
 `vouches`. Each field is refused by name on any other type, at the open
 and when a stored record is read back, and neither type is ever a stream.
-An issue time more than five minutes ahead of the reader's clock is
-refused, as a message's is. What the relay sees is an ordinary post.
+An issue time more than forty-two minutes ahead of the reader's clock is
+refused, as a message's is, by the chain of clocks given below. What the
+relay sees is an ordinary post.
 
 A message posted to a channel names it in the clear, as `ch` on the outer
 envelope at step 3 and `channel` on the request that opens a stream. The
@@ -1459,8 +1474,24 @@ relay's counter. A message an earlier release kept here counts as
 arriving at its `received`, or, if that cannot be written back, when its
 file was last written. The one bound on the stamp is the future. A
 message may be old, since it was stored and forwarded. But one stamped
-more than the request skew (five minutes) past the receiver's clock is
-refused at open as malformed, on the envelope and on the manifest alike.
+too far past the receiver's clock is refused at open as malformed, on
+the envelope and on the manifest alike, and a vouch's `issued` is held
+to the same bound.
+
+The bound is the chain of clocks the stamp crossed, each held to the
+next. The sender's clock is within five minutes of its relay's on the
+post. Each relay's is within a minute of the next one's on a courier's
+request. The last relay's is within five minutes of the receiver's on
+the listing's `received`. So the bound is twice five minutes and a
+minute for each hop: eleven minutes over one courier hop, eighteen at
+the default `courier.max_hops` of 8, and forty-two over the protocol's
+thirty-two, which is the bound every client holds, compared in whole
+seconds as a request's freshness is. It is not the request's five
+minutes, because two honest peers on one relay may differ by twice
+that: alice four minutes ahead of the relay and bob four behind are
+both accepted, and a bound of five refused alice's message at bob's as
+from the future, kept it under `damaged/` and acknowledged it, with
+nothing said to alice.
 
 The listing at step 7 takes three more parameters, all optional. `wait=D`
 asks the relay to hold the answer until a message arrives after the id asked

@@ -625,6 +625,7 @@ status and the request. The codes this release writes:
 | `cert-mismatch` | 401 | the certificate names another identity |
 | `cert-refused` | 401 | the certificate could not be read as this relay's, with the reason |
 | `no-administrators` | 403 | the relay has no administrators |
+| `courier-clock` | 503 | a neighbour's courier whose clock is more than a minute and at most five from this relay's (past five its request is a `401`, as anyone's is): `this relay's clock and yours differ by more than a minute; relays keep to the minute`, with `Retry-After: 60` |
 | `too-many-recipients` | 413 | a copy of a message to more recipients than `max_recipients`, naming both numbers |
 
 An owner document, the allow list, the card or the channel directory,
@@ -946,6 +947,31 @@ the one `systemd-creds encrypt --name=` was given. The administrator file
 only has to be readable, so leaving it at `/etc/auu/admins` under
 `ProtectSystem=strict` is right. The relay never writes it.
 
+**Run NTP on the host.** A relay holds every user's request to within five
+minutes of its own clock, and a relay that forwards is held closer by its
+neighbours: relays keep to the minute. A courier's request whose clock is
+more than a minute from the neighbour's, and no more than five, is refused
+`503` with `Retry-After: 60` and the code `courier-clock`, and the
+neighbour's log says so once a minute for each of its neighbours. Past five
+minutes the request is refused `401` before its signature is read, as any
+request that far out is, and the courier takes that for a refusal of its
+enrolment (section 1.10):
+
+```
+level=WARN msg="a neighbour's courier was refused: its clock and this relay's differ by more than a minute; relays keep to the minute, so check NTP on both" neighbour=foo
+```
+
+The relay whose courier was refused says it from its side, once a
+minute for each neighbour, and its mail waits until the clocks agree:
+
+```
+level=WARN msg="courier: a neighbour says this relay's clock and its own differ by more than a minute; relays keep to the minute, so check NTP" neighbour=bar
+```
+
+A relay that forwards nothing is held to nothing closer than a user's
+five minutes, but its clock is still every user's on it, so run NTP
+there too. Section 1.10 says what the queue does while it waits.
+
 A complete walk-through for a Linux host with systemd is in
 [`docs/deploy-linux.md`](deploy-linux.md), with the unit and the
 settings file beside it under `docs/systemd/`. It covers the user, the
@@ -1258,6 +1284,21 @@ neighbour that refuses one message finally — an address it cannot route, a
 request it will not take — ends that message and goes on to the next, and
 the sentence it gave is kept with the hop's name in front of it, so the
 person who sent it reads which relay refused and why.
+
+A neighbour that will not accept this relay's courier at all, a `401` for a
+line removed from its couriers file or a certificate it refuses, holds every
+row for it an hour at a time, since no retry mends it and the operator is
+told. A clock is different. A neighbour holds a courier's request on the
+forward route and the report route to within a minute of its own clock,
+judged only once the request's signature has verified, so a stranger naming
+a courier's fingerprint learns nothing from the answer. Between one and five
+minutes out, it refuses `503` `courier-clock` with `Retry-After: 60`, and
+this relay waits the minute and asks again, as it does for any busy answer,
+and says once a minute that the two clocks differ (section 1.7 has both log
+lines). The mail moves again the minute NTP brings either clock back. Past
+five minutes the neighbour's answer is the `401` any request that far out
+gets, before the signature is read, so the row waits the hour as for a
+refused courier.
 
 `courier.forward_ttl` is how long the relay keeps trying a neighbour that
 is not answering — three days by default — after which the mail is failed

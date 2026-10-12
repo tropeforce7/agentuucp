@@ -10,7 +10,8 @@ import (
 )
 
 // TestLimitAVouchIssuedIsHeldToTheSkew: a vouch issued more than
-// relayapi.MaxSkew ahead of the clock it is held to is refused, by Verify
+// relayapi.MaxStampAhead ahead of the clock it is held to, the chain of
+// clocks a sealed stamp crosses (D83), is refused, by Verify
 // and by Sign, and one issued at any time before that edge is taken, since
 // a stamp has no past bound. It feeds now, the edge and a second either
 // side, a day and a year ahead, a year past, the ends of what the wire
@@ -18,8 +19,11 @@ import (
 // has the edge and a second either side as well.
 //
 // The clock is injected, so the dates are exact against now. The check is
-// After and not Sub, so no difference saturates, and the far-future values
-// are the year 10000 and the latest instant a time.Time holds.
+// relayapi.Ahead, in whole seconds as a request's freshness is, so nine
+// tenths of a second past the edge is the edge's second and taken, and a
+// whole second past is refused; it compares Unix seconds and subtracts
+// nothing, so no difference saturates, and the far-future values are the
+// year 10000 and the latest instant a time.Time holds.
 //
 // A vouch travels as JSON, and json.Marshal refuses a year outside 0000 to
 // 9999, so time.Unix(math.MinInt64, 0) and the year 10000 written in UTC
@@ -29,12 +33,14 @@ import (
 // rule both Sign and Verify run, and through Sign, which refuses the far
 // past at the encoding.
 //
-// time.Unix(math.MaxInt64, 0) is not the far future: the seconds overflow
-// time.Time's internal count and the instant lands before the epoch,
-// before even time.Unix(math.MinInt64, 0), so fromTheFuture takes it as
-// old. The latest instant the type holds is time.Unix(math.MaxInt64 -
-// 62135596800, 999999999), the seconds from year 1 to the epoch taken
-// off, and that one is refused.
+// time.Unix(math.MaxInt64, 0) overflows time.Time's internal count, and
+// compared as a time it lands before the epoch, before even
+// time.Unix(math.MinInt64, 0), which After took as old. Ahead reads it
+// back through Unix, which undoes the wrap and gives MaxInt64 seconds, so
+// fromTheFuture now refuses it as the far future it was written as:
+// stricter than After, not weaker. The latest instant the type holds is
+// time.Unix(math.MaxInt64 - 62135596800, 999999999), the seconds from
+// year 1 to the epoch taken off, and that one is refused too.
 func TestLimitAVouchIssuedIsHeldToTheSkew(t *testing.T) {
 	v, x := gen(t, "v"), gen(t, "x")
 	refusal := "ahead of this machine's clock"
@@ -45,9 +51,11 @@ func TestLimitAVouchIssuedIsHeldToTheSkew(t *testing.T) {
 		ok     bool
 	}{
 		{"now", now, true},
-		{"a second inside the skew", now.Add(relayapi.MaxSkew - time.Second), true},
-		{"at the skew", now.Add(relayapi.MaxSkew), true},
-		{"a second past the skew", now.Add(relayapi.MaxSkew + time.Second), false},
+		{"a second inside the edge", now.Add(relayapi.MaxStampAhead - time.Second), true},
+		{"at the edge", now.Add(relayapi.MaxStampAhead), true},
+		{"nine tenths of a second past the edge, its second", now.Add(relayapi.MaxStampAhead + 900*time.Millisecond), true},
+		{"a second past the edge", now.Add(relayapi.MaxStampAhead + time.Second), false},
+		{"the old edge a second past, five minutes and a second", now.Add(relayapi.MaxSkew + time.Second), true},
 		{"a day ahead", now.Add(24 * time.Hour), false},
 		{"a year ahead", now.AddDate(1, 0, 0), false},
 		{"a year past", now.AddDate(-1, 0, 0), true},
@@ -77,7 +85,7 @@ func TestLimitAVouchIssuedIsHeldToTheSkew(t *testing.T) {
 		ok     bool
 	}{
 		{"time.Unix(math.MinInt64, 0)", time.Unix(math.MinInt64, 0), true},
-		{"time.Unix(math.MaxInt64, 0), which overflows to the past", time.Unix(math.MaxInt64, 0), true},
+		{"time.Unix(math.MaxInt64, 0), read back by Unix as the far future", time.Unix(math.MaxInt64, 0), false},
 		{"the year 10000", time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC), false},
 		{"the latest instant a time.Time holds", latest, false},
 	} {
@@ -103,7 +111,7 @@ func TestLimitAVouchIssuedIsHeldToTheSkew(t *testing.T) {
 			}
 		})
 	}
-	if !time.Unix(math.MaxInt64, 0).Before(time.Unix(math.MinInt64, 0)) {
-		t.Error("time.Unix(math.MaxInt64, 0) is no longer before time.Unix(math.MinInt64, 0); the comment above is out of date")
+	if !time.Unix(math.MaxInt64, 0).Before(time.Unix(math.MinInt64, 0)) || time.Unix(math.MaxInt64, 0).Unix() != math.MaxInt64 {
+		t.Error("time.Unix(math.MaxInt64, 0) no longer compares before time.Unix(math.MinInt64, 0) while reading back as MaxInt64 seconds; the comment above is out of date")
 	}
 }

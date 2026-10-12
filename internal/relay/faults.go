@@ -96,6 +96,22 @@ func (f *faultLog) noteCarriedAgain(neighbour string) {
 		"neighbour", neighbour)
 }
 
+// noteCourierClock says a neighbour's courier was refused for a clock more
+// than relayapi.CourierSkew from this relay's, once a minute per neighbour,
+// keyed by this relay's own name for it as noteCarriedAgain is: relays keep
+// to the minute, and the operator of one or the other has a clock to fix.
+func (f *faultLog) noteCourierClock(neighbour string) {
+	if f == nil || f.log == nil {
+		return
+	}
+	if !f.due("courier-clock:" + neighbour) {
+		return
+	}
+	f.log.Warn("a neighbour's courier was refused: its clock and this relay's differ by more than a minute; "+
+		"relays keep to the minute, so check NTP on both",
+		"neighbour", neighbour)
+}
+
 // noteUnfed says an upload went unplaced with no byte held, its declared
 // size charged to its sender and not given back, so that an operator can
 // see who is holding mailboxes full with reservations. It is the one line

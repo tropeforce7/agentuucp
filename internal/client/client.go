@@ -603,6 +603,13 @@ func (c *Client) doWithin(ctx context.Context, method, path string, payload any,
 			// make the same answer take a minute and a half to arrive.
 			return err
 		}
+		if httpErr.Code == relayapi.CodeCourierClock {
+			// A neighbour holds this relay's clock to the minute and finds
+			// it further out. A clock is not fixed by asking again within
+			// the minute, so the courier's worker is told at once and waits
+			// the Retry-After on the row, where the operator is told why.
+			return err
+		}
 		if c.maxRetryWait > 0 && httpErr.RetryAfter > c.maxRetryWait {
 			// The caller has said it would rather know now than wait this
 			// long; what the relay asked for is on the error.

@@ -91,14 +91,15 @@ var (
 
 // stamp says whether a time the relay says something happened at may be
 // kept: no further ahead of this machine's clock than a request may be
-// (relayapi.MaxSkew), the one bound a stamp has, and within what this
-// program can write back (relayapi.Writable). Each says when something
-// happened, which no clock may put ahead of now. The listing's received
-// is kept in the record, copied into the left-behind file and the damaged
-// box and written into serve's ledger, and orders the inbox, a thread's
-// latest and serve's opener; the others are printed and written in --json
-// answers. One this program cannot write breaks the first of those it
-// reaches. The zero time, a field the relay left empty, passes.
+// (relayapi.MaxSkew), the bound of a stamp a relay writes itself, and
+// within what this program can write back (relayapi.Writable). Each says
+// when something happened, which no clock may put ahead of now. The
+// listing's received is kept in the record, copied into the left-behind
+// file and the damaged box and written into serve's ledger, and orders the
+// inbox, a thread's latest and serve's opener; the others are printed and
+// written in --json answers. One this program cannot write breaks the
+// first of those it reaches. The zero time, a field the relay left empty,
+// passes.
 func stamp(t time.Time) bool { return stampAt(t, time.Now()) }
 
 // stampAt is stamp against a given now, so that its edges can be shown.

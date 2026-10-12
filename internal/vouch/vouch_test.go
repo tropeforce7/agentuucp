@@ -182,7 +182,7 @@ func TestSignFillsTheVoucherAndRefusesAnInvalidVouch(t *testing.T) {
 			`name "x\x1bv": letters, digits, '.', '_' and '-' only, beginning with a letter or digit`},
 		{"issued zero", func(d *Document) { d.Issued = time.Time{} }, "issued is missing"},
 		{"issued in 2099", func(d *Document) { d.Issued = time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC) },
-			"issued 2099-01-01T00:00:00Z is more than 5m0s ahead of this machine's clock"},
+			"issued 2099-01-01T00:00:00Z is more than 42m0s ahead of this machine's clock"},
 	}
 	for _, c := range cases {
 		d := base(v, x)
@@ -240,10 +240,12 @@ func TestAVouchIsCheckedAtEveryEdge(t *testing.T) {
 	}
 }
 
-// The one rule with a clock: an issue time more than relayapi.MaxSkew
-// ahead of now is refused at Verify as at Sign, one second either side of
-// the edge, and a year ahead; one from long ago is a statement at a time
-// and taken.
+// The one rule with a clock: an issue time more than
+// relayapi.MaxStampAhead ahead of now, the chain of clocks a vouch crosses
+// (D83), is refused at Verify as at Sign, one second either side of the
+// edge, and a year ahead; one from long ago is a statement at a time and
+// taken. Two honest peers on one relay may differ by twice MaxSkew, so a
+// vouch issued more than MaxSkew ahead is taken.
 func TestAVouchFromTheFutureIsRefused(t *testing.T) {
 	v, x := gen(t, "v"), gen(t, "x")
 	for _, c := range []struct {
@@ -253,9 +255,10 @@ func TestAVouchFromTheFutureIsRefused(t *testing.T) {
 	}{
 		{"a year ago", now.AddDate(-1, 0, 0), true},
 		{"now", now, true},
-		{"a second inside the skew", now.Add(relayapi.MaxSkew - time.Second), true},
-		{"at the skew", now.Add(relayapi.MaxSkew), true},
-		{"a second past the skew", now.Add(relayapi.MaxSkew + time.Second), false},
+		{"twice the skew, two peers on one relay", now.Add(2 * relayapi.MaxSkew), true},
+		{"a second inside the edge", now.Add(relayapi.MaxStampAhead - time.Second), true},
+		{"at the edge", now.Add(relayapi.MaxStampAhead), true},
+		{"a second past the edge", now.Add(relayapi.MaxStampAhead + time.Second), false},
 		{"in 2099", time.Date(2099, 1, 1, 0, 0, 0, 0, time.UTC), false},
 	} {
 		t.Run(c.label, func(t *testing.T) {

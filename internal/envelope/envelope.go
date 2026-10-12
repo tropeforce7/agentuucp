@@ -413,10 +413,11 @@ func Open(recipient *identity.Identity, env *Envelope) (*Inner, *identity.Public
 	}
 	// A message can be old — it was stored and forwarded — but not from
 	// the future: the stamp is the sender's word, shown as such, and one
-	// past the receiver's clock by more than the skew a relay allows a
-	// request is malformed. Nothing here orders by it any more; the bound
-	// is so that what is shown is at least possible.
-	if inner.Time.After(time.Now().Add(relayapi.MaxSkew)) {
+	// past the receiver's clock by more than the chain of clocks it
+	// crossed allows (relayapi.MaxStampAhead) is malformed. Nothing here
+	// orders by it any more; the bound is so that what is shown is at
+	// least possible.
+	if relayapi.Ahead(inner.Time, time.Now(), relayapi.MaxStampAhead) {
 		return nil, nil, fail(ErrMalformed, "stamped %s, in the future", inner.Time.UTC().Format(time.RFC3339))
 	}
 	if err := inner.Body.Validate(); err != nil {

@@ -13,24 +13,27 @@ import (
 )
 
 // TestLimitAManifestTimeIsHeldToTheSkew: OpenManifest refuses a manifest
-// stamped more than relayapi.MaxSkew ahead of the reader's clock, as a
-// form error saying it is in the future, and takes every stamp up to that
-// edge, however old, since a stamp has no past bound: the envelope's rule,
-// on the stream's path.
+// stamped more than relayapi.MaxStampAhead ahead of the reader's clock,
+// the chain of clocks a sealed stamp crosses (D83), as a form error saying
+// it is in the future, and takes every stamp up to that edge, however
+// old, since a stamp has no past bound: the envelope's rule, on the
+// stream's path.
 //
-// OpenManifest reads time.Now() after the test does, so the accepted rows
-// at the edge cannot flake; the row a second past it is judged only when
-// less than a second passed between the two clocks, and tried again
-// otherwise.
+// The bound is in whole seconds (relayapi.Ahead), so the edge rows are
+// stamped from the test clock's whole second: nine tenths of a second
+// past the edge is the edge's second and taken. OpenManifest reads
+// time.Now() after the test does, so the accepted rows cannot flake; the
+// row a second past is judged only when OpenManifest's clock was in the
+// test's second, and tried again otherwise.
 //
-// The check is After and not Sub, so no difference saturates; the
-// far-future rows are the latest instant the wire carries, the year 10000
-// in UTC, instead. The type's own extremes, its earliest instant
-// time.Unix(math.MinInt64, 0) and its latest
-// time.Unix(math.MaxInt64-62135596800, 999999999), and the year 10000
-// written in UTC, cannot be sealed, since json.Marshal refuses a year
-// outside 0000 to 9999 with an error and not a panic, so the earliest and
-// latest instants an RFC 3339 stamp carries,
+// Ahead compares Unix seconds and subtracts nothing, so no difference
+// saturates; the far-future rows are the latest instant the wire carries,
+// the year 10000 in UTC, instead. The type's own extremes, its earliest
+// instant time.Unix(math.MinInt64, 0) and its latest
+// time.Unix(math.MaxInt64-62135596800, 999999999), time.Unix(math.MaxInt64,
+// 0), and the year 10000 written in UTC, cannot be sealed, since
+// json.Marshal refuses a year outside 0000 to 9999 with an error and not a
+// panic, so the earliest and latest instants an RFC 3339 stamp carries,
 // the first of year 0 at +23:59 and the last instant of 9999 at -23:59,
 // stand for them at OpenManifest.
 func TestLimitAManifestTimeIsHeldToTheSkew(t *testing.T) {
@@ -73,25 +76,27 @@ func TestLimitAManifestTimeIsHeldToTheSkew(t *testing.T) {
 		label string
 		ahead time.Duration
 	}{
-		{"a second inside the skew", relayapi.MaxSkew - time.Second},
-		{"at the skew", relayapi.MaxSkew},
+		{"twice the skew, two peers the relay accepts", 2 * relayapi.MaxSkew},
+		{"a second inside the edge", relayapi.MaxStampAhead - time.Second},
+		{"at the edge", relayapi.MaxStampAhead},
+		{"nine tenths of a second past the edge, its second", relayapi.MaxStampAhead + 900*time.Millisecond},
 		{"now", 0},
 		{"a year past", -365 * 24 * time.Hour},
 	} {
-		if err := open(time.Now().Add(c.ahead)); err != nil {
+		if err := open(time.Unix(time.Now().Unix(), 0).Add(c.ahead)); err != nil {
 			t.Errorf("%s: %v; want opened", c.label, err)
 		}
 	}
 
 	for attempt := 0; ; attempt++ {
-		start := time.Now()
-		err := open(start.Add(relayapi.MaxSkew + time.Second))
-		if err != nil || time.Since(start) < time.Second {
-			refusedAsFuture("a second past the skew", err)
+		sec := time.Now().Unix()
+		err := open(time.Unix(sec, 0).Add(relayapi.MaxStampAhead + time.Second))
+		if err != nil || time.Now().Unix() == sec {
+			refusedAsFuture("a second past the edge", err)
 			break
 		}
 		if attempt == 4 {
-			t.Fatal("a second past the skew: five tries each took a second or more to seal and open")
+			t.Fatal("a second past the edge: five tries each crossed a second to seal and open")
 		}
 	}
 
@@ -122,6 +127,7 @@ func TestLimitAManifestTimeIsHeldToTheSkew(t *testing.T) {
 		{"time.Unix(math.MinInt64, 0)", time.Unix(math.MinInt64, 0)},
 		{"the year 10000", time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)},
 		{"the latest instant a time.Time holds", time.Unix(math.MaxInt64-62135596800, 999999999)},
+		{"time.Unix(math.MaxInt64, 0)", time.Unix(math.MaxInt64, 0)},
 	} {
 		m := build()
 		m.Time = c.when

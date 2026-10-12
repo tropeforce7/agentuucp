@@ -101,13 +101,14 @@ func (d *Document) Validate() error {
 }
 
 // fromTheFuture is the one rule that needs a clock: a vouch issued further
-// ahead of now than a request may be (relayapi.MaxSkew) was stamped by a
-// clock no relay would have accepted, and the sender's clock is the one
-// thing about it that may be old but not ahead.
+// ahead of now than the chain of clocks it crossed allows
+// (relayapi.MaxStampAhead) was stamped by a clock further out than some
+// link of that chain would take, and the sender's clock is the one thing
+// about it that may be old but not ahead.
 func fromTheFuture(d *Document, now time.Time) error {
-	if d.Issued.After(now.Add(relayapi.MaxSkew)) {
+	if relayapi.Ahead(d.Issued, now, relayapi.MaxStampAhead) {
 		return fmt.Errorf("issued %s is more than %s ahead of this machine's clock",
-			d.Issued.UTC().Format(time.RFC3339), relayapi.MaxSkew)
+			d.Issued.UTC().Format(time.RFC3339), relayapi.MaxStampAhead)
 	}
 	return nil
 }

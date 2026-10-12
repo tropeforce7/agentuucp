@@ -555,6 +555,14 @@ func (w *workers) classify(r *store.Relay, row *Outbound, err error) (attemptOut
 		}
 		return attemptBackOff, w.wait(row, maxRetry)
 	case http.StatusTooManyRequests, http.StatusServiceUnavailable:
+		if he.Code == relayapi.CodeCourierClock && w.store.faults.due("courier-clock-at:"+r.Name) {
+			// The neighbour holds this relay's clock to the minute and
+			// finds it further out: the row waits the Retry-After as any
+			// busy answer's does, and the operator is told it is a clock.
+			w.log.Warn("courier: a neighbour says this relay's clock and its own differ by more than a minute; "+
+				"relays keep to the minute, so check NTP",
+				"neighbour", r.Name)
+		}
 		if he.RetryAfter > 0 {
 			// The neighbour's own answer to when it wants to be asked
 			// again, which it knows better than this relay's arithmetic
