@@ -498,19 +498,20 @@ one an hour, to learn the code.
 
 That answer rests on the relay's memory of what it has carried: a hash of
 the recipient and the ciphertext of every envelope it forwards or
-delivers, kept as long as the envelope could still be alive ahead of it.
-A hash is never evicted, so `courier.carried_max_rows` is a ceiling the
-relay refuses new mail at. A hash outlives the row that wrote it, so the
-queue's shares do not bound it, and one person or one neighbour could
-otherwise fill the ceiling alone and stop every forward and every
-delivery from a neighbour for days. So a hash is charged to whoever
-posted it, by the fingerprint the signature proved, against
+delivers, kept as long as the envelope could still be alive ahead of it. A
+hash that stands is never evicted, so `courier.carried_max_rows` is a
+ceiling the relay refuses new mail at; one whose window has passed is not
+counted, and is purged before the relay refuses. A hash outlives the row
+that wrote it, so the queue's shares do not bound it, and one person or
+one neighbour could otherwise fill the ceiling alone and stop every
+forward and every delivery from a neighbour for days. So a hash is charged
+to whoever posted it, by the fingerprint the signature proved, against
 `courier.carried_rows_per_poster` for a person and
 `courier.carried_rows_per_courier` for a neighbour. It costs one for each
 `courier.forward_ttl` it is kept, and over the share the answer is `429`.
 One poster's standing hashes stay at or under its share at every moment,
-across any window and any mix of paths. `docs/relay.md` section 1.10
-gives the numbers.
+across any window and any mix of paths. `docs/relay.md` section 1.10 gives
+the numbers.
 
 What remains is this. The shares are kept in memory and the hashes on
 disk, so a restart refills every share while the hashes stay. A

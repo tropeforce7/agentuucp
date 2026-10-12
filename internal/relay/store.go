@@ -911,7 +911,7 @@ func (s *Store) Put(toFP, channel, kind, knocker string, raw []byte, q Quotas, f
 	// deliver twice on a crash between the two. Inside this transaction,
 	// so the two decide together.
 	if f.Hash != "" {
-		if err := noteCarried(tx, f.Hash, f.Quotas, f.Expires); err != nil {
+		if err := noteCarried(tx, f.Hash, f.Quotas, f.Expires, f.Now); err != nil {
 			return 0, err
 		}
 	}
@@ -1050,7 +1050,10 @@ type Forwarded struct {
 	// which is what a message posted here wants.
 	Hash    string
 	Expires time.Time
-	Quotas  CourierQuotas
+	// Now is the relay's clock at the delivery, which the carried ceiling
+	// counts the standing hashes by.
+	Now    time.Time
+	Quotas CourierQuotas
 }
 
 type Row struct {

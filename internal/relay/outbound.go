@@ -174,7 +174,7 @@ func (s *Store) Enqueue(o *Outbound, raw []byte, q CourierQuotas, expires time.T
 	}
 	defer tx.Rollback()
 
-	if err := noteCarried(tx, o.Hash, q, expires); err != nil {
+	if err := noteCarried(tx, o.Hash, q, expires, o.Received); err != nil {
 		return 0, err
 	}
 	if err := roomInQueue(tx, o.PosterFP, size, q); err != nil {
@@ -211,8 +211,12 @@ func (s *Store) Enqueue(o *Outbound, raw []byte, q CourierQuotas, expires time.T
 // The ceiling is checked only when the hash is new, since a repeat stores
 // nothing: a relay at its ceiling still answers a retry as it answered the
 // first attempt, which is what makes the answer idempotent rather than
-// dependent on how full the table is.
-func noteCarried(tx *sql.Tx, hash string, q CourierQuotas, expires time.Time) error {
+// dependent on how full the table is. It counts the hashes still standing
+// at now, the relay's clock (G7): one whose window has passed stands for
+// nothing and waits only for the purge, so a quiet relay whose purge runs
+// every hundredth request would otherwise refuse a neighbour's delivery for
+// hashes it no longer needs.
+func noteCarried(tx *sql.Tx, hash string, q CourierQuotas, expires, now time.Time) error {
 	var found int
 	err := tx.QueryRow(`SELECT 1 FROM carried WHERE hash = ?`, hash).Scan(&found)
 	if err == nil {
@@ -223,7 +227,7 @@ func noteCarried(tx *sql.Tx, hash string, q CourierQuotas, expires time.Time) er
 	}
 	if q.CarriedMaxRows > 0 {
 		var rows int64
-		if err := tx.QueryRow(`SELECT COUNT(*) FROM carried`).Scan(&rows); err != nil {
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM carried WHERE expires > ?`, now.Unix()).Scan(&rows); err != nil {
 			return err
 		}
 		if rows >= q.CarriedMaxRows {
@@ -260,8 +264,19 @@ func (s *Store) Carried(hash string) (bool, error) {
 // A hash goes when the envelope it stands for can no longer be alive
 // anywhere ahead of it, which is what CarriedWindow computes.
 func (s *Store) PurgeCarried(now time.Time) error {
-	_, err := s.db.Exec(`DELETE FROM carried WHERE expires <= ?`, now.Unix())
+	_, err := s.purgeCarried(now)
 	return err
+}
+
+// purgeCarried is PurgeCarried answering how many hashes went, for the
+// carried 507, which asks the store once more only when the purge let
+// something go.
+func (s *Store) purgeCarried(now time.Time) (int64, error) {
+	res, err := s.db.Exec(`DELETE FROM carried WHERE expires <= ?`, now.Unix())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // CourierQuotas is what the queue and the carried table are bounded by.

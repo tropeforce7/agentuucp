@@ -167,6 +167,9 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request, body []by
 		return
 	}
 	id, err := s.store.Enqueue(row, req.Envelope, quotas, expires)
+	if s.carriedFreed(err) {
+		id, err = s.store.Enqueue(row, req.Envelope, quotas, expires)
+	}
 	if err != nil {
 		s.returnCarried(callerFP, tokens, isCourier)
 	}
@@ -289,11 +292,12 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, env *relayapi.C
 				Via:     via,
 				Hash:    hash,
 				Expires: s.cfg.Now().Add(s.cfg.CourierLimits.CarriedWindow(0)),
+				Now:     s.cfg.Now(),
 				Quotas:  s.cfg.CourierLimits.Quotas(),
 			})
 	}
 	id, err := put()
-	if s.roomFreed(err) {
+	if s.roomFreed(err) || s.carriedFreed(err) {
 		id, err = put()
 	}
 	if err != nil {

@@ -1390,13 +1390,17 @@ bound, on top of a message that could not be delivered in the first place.
 
 The relay also remembers the envelopes it has carried, by a hash of the
 recipient and the ciphertext, so that it never carries or delivers one
-twice: a retry whose answer was lost is idempotent, and mail going round
-in a circle stops at the first relay it comes back to. A hash is kept for
-as long as the envelope could still be alive in the network ahead of it,
-and `courier.carried_max_rows` bounds how many there are. At that ceiling
-the relay refuses to take anything new rather than forgetting one, since
-forgetting is what the table exists to prevent. The refusal names the
-setting.
+twice: a retry whose answer was lost is idempotent, and mail going round in
+a circle stops at the first relay it comes back to. A hash is kept for as
+long as the envelope could still be alive in the network ahead of it, and
+`courier.carried_max_rows` bounds how many stand at once. A hash whose
+window has passed stands for nothing and is not counted, though it waits for
+the purge to go. At that ceiling the relay also lets go any hash whose
+window ended while the request ran, as it lets expired uploads go before
+refusing for room, says so in its log (`expired carried hashes removed`),
+and asks again; it refuses to take anything new only when the ceiling is
+still reached, rather than forgetting a hash that stands, since forgetting
+is what the table exists to prevent. The refusal names the setting.
 
 A hash outlives the row that wrote it, so a share of the queue does not
 bound it. A row handed on leaves the queue at once, and its hash stays.

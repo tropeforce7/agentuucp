@@ -437,6 +437,25 @@ func (s *Server) roomFreed(err error) bool {
 	return s.purgeUploads(s.cfg.Now()) > 0
 }
 
+// carriedFreed is roomFreed for the carried ceiling (G7): a refusal for it
+// purges the hashes whose window has passed and says whether any went, so
+// the store is asked once more, as a648843 asks it for room. The purge
+// that lets something go says so in the log, as the upload purge does.
+func (s *Server) carriedFreed(err error) bool {
+	if !errors.Is(err, ErrCarriedFull) {
+		return false
+	}
+	n, perr := s.store.purgeCarried(s.cfg.Now())
+	if perr != nil {
+		s.log.Warn("carried purge failed", "err", perr)
+		return false
+	}
+	if n > 0 {
+		s.log.Info("expired carried hashes removed", "count", n)
+	}
+	return n > 0
+}
+
 // returnUnheld settles a sender's post bytes when an upload's row goes
 // unplaced, by abort, by expiry at a route or the purge, or by an attempt
 // that deleted it whole, as the row stood when it went.
