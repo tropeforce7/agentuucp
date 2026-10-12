@@ -585,7 +585,8 @@ internal/auu/stream.go uploadStream cap io.LimitReader(f, n) = local: n is the s
 internal/client/anchor.go FetchTrustAnchor cap io.LimitReader(resp.Body, anchorAnswerHold + 1) = <= 1048577 shown by TestLimitAnAnchorAnswerIsHeldToAMebibyte
 internal/client/client.go readCapped cap io.LimitReader(body, hold + 1) = <= hold + 1 shown by TestLimitAnAnswerIsHeldToWhatItsRouteHolds
 internal/client/client.go boundTransport cap t.MaxResponseHeaderBytes: relayapi.MaxHeaderBytes = <= 32768 shown by TestLimitResponseHeadersAreCapped
-internal/client/stream.go (*Client).Blob cap io.LimitReader(resp.Body, streamAnswerHold + 1) = <= 65537 shown by TestLimitAStreamAnswerIsHeldTo64KiB
+internal/client/stream.go (*Client).Blob cap io.LimitReader(resp.Body, streamAnswerHold + 1) = <= 65537 shown by TestLimitABlobRetrysRefusalIsHeldToTheHold
+internal/client/stream.go (*Client).Blob cap io.LimitReader(resp.Body, streamAnswerHold + 1) #2 = <= 65537 shown by TestLimitAStreamAnswerIsHeldTo64KiB
 internal/client/stream.go (*Client).Blob cap io.LimitReader(resp.Body, span) = local: span is end-start+1 of a Content-Range checkRange held to the range asked for shown by TestLimitContentRange
 internal/client/stream.go parseContentRange int strconv.ParseInt(s) = >= 0 shown by TestLimitContentRange
 internal/client/stream.go (*Client).PutStream cap io.LimitReader(resp.Body, streamAnswerHold + 1) = <= 65537 shown by TestLimitAStreamAnswerIsHeldTo64KiB

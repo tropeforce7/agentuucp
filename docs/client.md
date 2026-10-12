@@ -780,7 +780,11 @@ what this machine holds, asks at most 64 pages too; a relay that lists more
 fails the fetch, with nothing changed here; the next `auu inbox` asks
 again, while `auu watch` and `auu wait` take it for a relay that will not
 answer and end, exit 3. `auu wait` fetches at every poll and meets the rest
-there.
+there. A page holds no more messages than the fetch asked for: one listing
+more is refused as a malformed answer before any of them is taken. A
+stream's refusal that the client waits out is read to at most 64 KiB, as
+every stream answer is, and one longer is refused the same way, the
+connection given up.
 
 A page over the hold is asked for again, with half as many messages each
 time, down to one, when the hold is already at 128 MiB and 64 KiB: at

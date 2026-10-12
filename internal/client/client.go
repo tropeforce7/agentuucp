@@ -1418,6 +1418,14 @@ func (c *Client) ListWait(ctx context.Context, req ListRequest) (Listing, error)
 	if err != nil {
 		return Listing{}, err
 	}
+	// A page holds no more rows than were asked for, the limit as the
+	// halving left it and never past MaxListLimit (G15): the listing hold
+	// bounds a page's bytes and commit 4's cap a fetch's pages, and this
+	// bounds the rows taken from one, before any of them is.
+	if asked := min(limit, relayapi.MaxListLimit); len(resp.Messages) > asked {
+		return Listing{}, c.malformed("the listing", "the count of its messages",
+			fmt.Sprintf("at most %d, the limit asked for (%d listed)", asked, len(resp.Messages)))
+	}
 	if err := c.checkListing(&resp, req.After, req.Stubs); err != nil {
 		return Listing{}, err
 	}

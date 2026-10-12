@@ -176,7 +176,20 @@ func (c *Client) Blob(ctx context.Context, fp string, id int64, from, to int64) 
 			break
 		}
 		wait := retryWait(refusal)
-		io.Copy(io.Discard, resp.Body)
+		// The refusal's body is drained for the connection's reuse, held
+		// to the hold every stream answer is (G16): one over it, declared
+		// or read, is refused as malformed and the body closed undrained,
+		// so the connection is given up rather than read to its end.
+		if resp.ContentLength > streamAnswerHold {
+			resp.Body.Close()
+			watch.stop()
+			return nil, 0, c.malformed("the answer", "the body", fmt.Sprintf("under %d bytes, the most this route holds", streamAnswerHold))
+		}
+		if n, _ := io.Copy(io.Discard, io.LimitReader(resp.Body, streamAnswerHold+1)); n > streamAnswerHold {
+			resp.Body.Close()
+			watch.stop()
+			return nil, 0, c.malformed("the answer", "the body", fmt.Sprintf("under %d bytes, the most this route holds", streamAnswerHold))
+		}
 		resp.Body.Close()
 		if err := c.sleep(ctx, wait); err != nil {
 			break
