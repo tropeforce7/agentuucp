@@ -165,41 +165,73 @@ func TestASectionWritesEveryField(t *testing.T) {
 	}
 }
 
+// fourPaths is every path a section is read on, each with its name for a
+// test's sentence.
+var fourPaths = []struct {
+	on    Path
+	label string
+}{
+	{OnMessage, "a message"},
+	{OnManifest, "a manifest"},
+	{OnRequest, "a request"},
+	{OnAnswer, "an answer"},
+}
+
 // The registry is empty in this package's tests, which link no feature that
-// fills it, so every section is unknown: one
+// fills it, so every section is unknown on every path: one
 // that is not critical is ignored, and one that is stops the sort by name.
 func TestSortIgnoresTheUnknownAndRefusesTheCritical(t *testing.T) {
 	if len(known) != 0 {
 		t.Fatalf("this release knows %d sections; it ships the door and nothing through it", len(known))
 	}
-	k, ign, err := Sort([]Section{section("later", false), section("other", false)})
-	if err != nil || len(k) != 0 || len(ign) != 2 || ign[0].Name != "later" || ign[1].Name != "other" {
-		t.Fatalf("two unknown, not critical: known %v, ignored %v, %v", k, ign, err)
-	}
-	k, ign, err = Sort([]Section{section("later", false), section("first", true), section("second", true)})
-	var nn *NeedsNewerError
-	if !errors.Is(err, ErrNeedsNewer) || !errors.As(err, &nn) || nn.Name != "first" || k != nil || ign != nil {
-		t.Fatalf("an unknown critical section: known %v, ignored %v, %v; want the first named and nothing else", k, ign, err)
-	}
-	if err.Error() != `section "first" is critical and this build of auu does not know it; it needs a newer auu` {
-		t.Fatalf("the sentence is %q", err)
-	}
-	if k, ign, err := Sort(nil); err != nil || k != nil || ign != nil {
-		t.Fatalf("no list: %v %v %v", k, ign, err)
+	for _, p := range fourPaths {
+		t.Run(p.label, func(t *testing.T) {
+			k, ign, err := Sort([]Section{section("later", false), section("other", false)}, p.on)
+			if err != nil || len(k) != 0 || len(ign) != 2 || ign[0].Name != "later" || ign[1].Name != "other" {
+				t.Fatalf("two unknown, not critical: known %v, ignored %v, %v", k, ign, err)
+			}
+			k, ign, err = Sort([]Section{section("later", false), section("first", true), section("second", true)}, p.on)
+			var nn *NeedsNewerError
+			if !errors.Is(err, ErrNeedsNewer) || !errors.As(err, &nn) || nn.Name != "first" || k != nil || ign != nil {
+				t.Fatalf("an unknown critical section: known %v, ignored %v, %v; want the first named and nothing else", k, ign, err)
+			}
+			if err.Error() != `section "first" is critical and this build of auu does not know it; it needs a newer auu` {
+				t.Fatalf("the sentence is %q", err)
+			}
+			if k, ign, err := Sort(nil, p.on); err != nil || k != nil || ign != nil {
+				t.Fatalf("no list: %v %v %v", k, ign, err)
+			}
+		})
 	}
 }
 
-// A section this build knows goes to its rule whether or not it is
-// critical, and Sort asks whether the name is known on any path: one
-// registered only for requests and answers is handed on as well. The
-// registry is empty in this package's tests, so the test fills it.
+// A section this build knows on the path it is read on goes to its rule
+// whether or not it is critical, and one known only on another path is not
+// handed on (G23, R27): a critical one stops the sort as an unknown one
+// does. The registry is empty in this package's tests, so the test fills
+// it.
 func TestSortHandsAKnownSectionOn(t *testing.T) {
 	known["recipients"] = OnMessage
 	known["asked"] = OnRequest | OnAnswer
 	t.Cleanup(func() { delete(known, "recipients"); delete(known, "asked") })
-	k, ign, err := Sort([]Section{section("recipients", true), section("asked", true), section("later", false)})
-	if err != nil || len(k) != 2 || k[0].Name != "recipients" || k[1].Name != "asked" || len(ign) != 1 || ign[0].Name != "later" {
-		t.Fatalf("known %v, ignored %v, %v", k, ign, err)
+	k, ign, err := Sort([]Section{section("recipients", true), section("recipients-too", false), section("later", false)}, OnMessage)
+	if err != nil || len(k) != 1 || k[0].Name != "recipients" || len(ign) != 2 || ign[0].Name != "recipients-too" || ign[1].Name != "later" {
+		t.Fatalf("on a message: known %v, ignored %v, %v", k, ign, err)
+	}
+	for _, on := range []Path{OnRequest, OnAnswer} {
+		k, ign, err = Sort([]Section{section("asked", true), section("later", false)}, on)
+		if err != nil || len(k) != 1 || k[0].Name != "asked" || len(ign) != 1 || ign[0].Name != "later" {
+			t.Fatalf("on %04b: known %v, ignored %v, %v", on, k, ign, err)
+		}
+	}
+	// Each name critical on a path it is not registered on: refused by name,
+	// and nothing handed on.
+	var nn *NeedsNewerError
+	if k, ign, err = Sort([]Section{section("recipients", false), section("asked", true)}, OnMessage); !errors.As(err, &nn) || nn.Name != "asked" || k != nil || ign != nil {
+		t.Fatalf("a request-and-answer section critical on a message: known %v, ignored %v, %v; want it named as needing a newer auu", k, ign, err)
+	}
+	if k, ign, err = Sort([]Section{section("asked", false), section("recipients", true)}, OnRequest); !errors.As(err, &nn) || nn.Name != "recipients" || k != nil || ign != nil {
+		t.Fatalf("a message section critical on a request: known %v, ignored %v, %v; want it named as needing a newer auu", k, ign, err)
 	}
 	if !Known("recipients", OnMessage) || Known("later", AnyPath) {
 		t.Fatal("Known disagrees with the registry")
@@ -424,20 +456,27 @@ func TestRegisterAddsANameOnce(t *testing.T) {
 // sort. Each edge is one step apart, and the order is shown by a list that
 // breaks two rules at once.
 func TestLimitCheckBody(t *testing.T) {
+	for _, p := range fourPaths[2:] {
+		t.Run(p.label, func(t *testing.T) { checkBodyLimits(t, p.on) })
+	}
+}
+
+// checkBodyLimits is TestLimitCheckBody on one body path.
+func checkBodyLimits(t *testing.T, on Path) {
 	sized := func(n int) []Section {
 		empty, _ := json.Marshal([]Section{{Name: "later", Data: json.RawMessage(`""`)}})
 		return []Section{{Name: "later", Data: json.RawMessage(`"` + strings.Repeat("a", n-len(empty)) + `"`)}}
 	}
 	for _, n := range []int{MaxAPISectionBytes - 1, MaxAPISectionBytes} {
-		if err := CheckBody(sized(n)); err != nil {
+		if err := CheckBody(sized(n), on); err != nil {
 			t.Errorf("%d bytes: %v; want them taken", n, err)
 		}
 	}
 	var size *SizeError
-	if err := CheckBody(sized(MaxAPISectionBytes + 1)); !errors.As(err, &size) || size.Bytes != MaxAPISectionBytes+1 {
+	if err := CheckBody(sized(MaxAPISectionBytes+1), on); !errors.As(err, &size) || size.Bytes != MaxAPISectionBytes+1 {
 		t.Errorf("%d bytes: %v; want a SizeError of that many", MaxAPISectionBytes+1, err)
 	}
-	if err := CheckBody(nil); err != nil {
+	if err := CheckBody(nil, on); err != nil {
 		t.Errorf("no sections: %v", err)
 	}
 
@@ -448,10 +487,10 @@ func TestLimitCheckBody(t *testing.T) {
 		}
 		return out
 	}
-	if err := CheckBody(count(MaxSections)); err != nil {
+	if err := CheckBody(count(MaxSections), on); err != nil {
 		t.Errorf("%d sections: %v; want them taken", MaxSections, err)
 	}
-	if err := CheckBody(count(MaxSections + 1)); !errors.Is(err, ErrForm) {
+	if err := CheckBody(count(MaxSections+1), on); !errors.Is(err, ErrForm) {
 		t.Errorf("%d sections: %v; want ErrForm", MaxSections+1, err)
 	}
 
@@ -459,19 +498,19 @@ func TestLimitCheckBody(t *testing.T) {
 	// after it is a list that is not one, never a body that needs a newer
 	// build, so nothing unread is advised about.
 	twoWrong := []Section{section("must-know", true), section("Bad", false)}
-	if err := CheckBody(twoWrong); !errors.Is(err, ErrForm) || errors.Is(err, ErrNeedsNewer) {
+	if err := CheckBody(twoWrong, on); !errors.Is(err, ErrForm) || errors.Is(err, ErrNeedsNewer) {
 		t.Errorf("a critical section then a bad name: %v; want ErrForm and not ErrNeedsNewer", err)
 	}
 	// The size before the sort: a critical section in a list over the size.
 	big := append(sized(MaxAPISectionBytes), section("must-know", true))
-	if err := CheckBody(big); !errors.As(err, &size) {
+	if err := CheckBody(big, on); !errors.As(err, &size) {
 		t.Errorf("a critical section in a list over the size: %v; want a SizeError", err)
 	}
 	var newer *NeedsNewerError
-	if err := CheckBody([]Section{section("later", false), section("must-know", true)}); !errors.As(err, &newer) || newer.Name != "must-know" {
+	if err := CheckBody([]Section{section("later", false), section("must-know", true)}, on); !errors.As(err, &newer) || newer.Name != "must-know" {
 		t.Errorf("a critical section this build does not know: %v; want NeedsNewerError naming it", err)
 	}
-	if err := CheckBody([]Section{section("later", false)}); err != nil {
+	if err := CheckBody([]Section{section("later", false)}, on); err != nil {
 		t.Errorf("a section this build does not know, not critical: %v; want it ignored", err)
 	}
 }

@@ -235,8 +235,32 @@ func TestTheSectionsAreKnownOnTheirPathsAlone(t *testing.T) {
 		{MaxName, wire.OnAnswer},
 	} {
 		for _, p := range paths {
-			if got, want := wire.Known(c.name, p.on), c.on&p.on != 0; got != want {
+			want := c.on&p.on != 0
+			if got := wire.Known(c.name, p.on); got != want {
 				t.Errorf("%s known on %s: %v; want %v", c.name, p.label, got, want)
+			}
+			// The sort agrees with Known on the same path (G23, R27): known,
+			// the section is handed on critical or not; not known, a
+			// critical one needs a newer auu by its name and an optional one
+			// is ignored.
+			for _, critical := range []bool{false, true} {
+				s := wire.Section{Name: c.name, Critical: critical, Data: json.RawMessage(`{"n":1}`)}
+				k, ign, err := wire.Sort([]wire.Section{s}, p.on)
+				var nn *wire.NeedsNewerError
+				switch {
+				case want:
+					if err != nil || len(k) != 1 || len(ign) != 0 {
+						t.Errorf("%s (critical %v) sorted on %s: known %v, ignored %v, %v; want it handed on", c.name, critical, p.label, k, ign, err)
+					}
+				case critical:
+					if !errors.As(err, &nn) || nn.Name != c.name || k != nil || ign != nil {
+						t.Errorf("%s critical sorted on %s: known %v, ignored %v, %v; want it named as needing a newer auu", c.name, p.label, k, ign, err)
+					}
+				default:
+					if err != nil || len(k) != 0 || len(ign) != 1 {
+						t.Errorf("%s optional sorted on %s: known %v, ignored %v, %v; want it ignored", c.name, p.label, k, ign, err)
+					}
+				}
 			}
 		}
 		if !wire.Known(c.name, wire.AnyPath) {

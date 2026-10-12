@@ -472,7 +472,7 @@ func routeOf(resp *http.Response) string {
 // arrived), and then sorted, a section this build does not know ignored and
 // one marked critical refusing the body by its name.
 func sectionsProblem(list []wire.Section) error {
-	err := wire.CheckBody(list)
+	err := wire.CheckBody(list, wire.OnAnswer)
 	var size *wire.SizeError
 	var newer *wire.NeedsNewerError
 	switch {

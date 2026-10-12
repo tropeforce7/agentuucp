@@ -98,7 +98,11 @@ func TestASectionNotReadOnTheMessagePathIsHeldToTheKeptCap(t *testing.T) {
 	postSections(t, au, bu, "the mebibyte one", []wire.Section{big})
 	postSections(t, au, bu, "at the kept size", []wire.Section{
 		{Name: recipients.MaxName, Data: at(wire.MaxKeptBytes)},
-		{Name: recipients.CountName, Critical: true, Data: json.RawMessage(`3`)},
+		// Optional: recipient-count is a request's section, and since G23
+		// a critical one on a message needs a newer auu, which the envelope
+		// package's TestASectionKnownOnlyOnAnotherPathIsUnknownOnAMessage
+		// shows. Here it is one more section held to the kept size.
+		{Name: recipients.CountName, Data: json.RawMessage(`3`)},
 	})
 	in, stderr := fetchJSON(t, bu)
 	if in.Fetch.Delivered != 2 || in.Fetch.Unreadable != 0 || in.Fetch.Kept != 0 || len(in.Fetch.Newer) != 0 {
@@ -124,7 +128,7 @@ func TestASectionNotReadOnTheMessagePathIsHeldToTheKeptCap(t *testing.T) {
 		t.Fatalf("the mebibyte one's record: %+v, %v; want no section and one dropped", m, err)
 	}
 	m, err = bs.Load(store.Inbox, under.ID)
-	if err != nil || m.Newer != "" || len(m.Inner.Sections) != 2 || m.Inner.Sections[0].Name != recipients.MaxName || len(m.Inner.Sections[0].Data) != wire.MaxKeptBytes || !m.Inner.Sections[1].Critical || m.DroppedSections != 0 {
+	if err != nil || m.Newer != "" || len(m.Inner.Sections) != 2 || m.Inner.Sections[0].Name != recipients.MaxName || len(m.Inner.Sections[0].Data) != wire.MaxKeptBytes || m.Inner.Sections[1].Name != recipients.CountName || m.DroppedSections != 0 {
 		t.Fatalf("the record at the kept size: %+v, %v; want both sections kept, the first at the kept size", m, err)
 	}
 }

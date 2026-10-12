@@ -482,13 +482,17 @@ not expect, a field the data does not have among it
 (`TestTheRuleTakesAListAndRefusesWhatBreaksIt`). So what a name says, it
 says for good, and `wire.known` is one namespace in which each name says
 one thing. A name is known on the paths its feature reads it on,
-registered with those paths through `wire.Register`, and held to
-`wire.MaxKeptBytes` as an unknown one is on every other, though a
-critical one is never refused as needing a newer auu, since whether a
-name needs one does not depend on the path: `recipient-count` is
-registered for requests alone and `max-recipients` for answers alone, so
-on a sealed message each is kept only up to `wire.MaxKeptBytes` and
-dropped and counted over it, as a name this build never heard of is. The
+registered with those paths through `wire.Register`, and on every other
+path it is an unknown one, held to `wire.MaxKeptBytes` as any is:
+`wire.Sort` and `wire.CheckBody` take the reader's own path and classify
+each section by it alone, so a critical name this build knows only
+elsewhere is refused as needing a newer auu, as a name it never heard of
+is (G23). Before, a name known on any path counted as known on all, and a
+message carrying a critical `recipient-count` opened with no error and the
+part never read. `recipient-count` is registered for requests alone and
+`max-recipients` for answers alone, so on a sealed message each is kept
+only up to `wire.MaxKeptBytes` and dropped and counted over it, and
+refused if marked critical, as a name this build never heard of is. The
 design for messages to several reached for one name three times: the
 sealed list, a list on the request for the relay's cap, and the relay's
 number on the health answer, all `recipients`. A list on a forward

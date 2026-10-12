@@ -654,7 +654,7 @@ func (s *Server) decodeRequest(w http.ResponseWriter, body []byte, req interface
 		s.fail(w, http.StatusBadRequest, fmt.Sprintf("malformed %s: %v", what, err))
 		return false
 	}
-	err := wire.CheckBody(req.SectionList())
+	err := wire.CheckBody(req.SectionList(), wire.OnRequest)
 	var newer *wire.NeedsNewerError
 	switch {
 	case err == nil:

@@ -34,7 +34,11 @@ func fetchKnownNow(ctx context.Context, s *store.Store, id *identity.Identity, c
 			return err
 		}
 		for _, m := range msgs {
-			if m.Newer == "" || m.Relay != r.Name || !wire.Known(m.Newer, wire.AnyPath) || m.PayloadGone {
+			// Known on the manifest's path, which is the path the mark was
+			// made on (OpenManifest's sort) and the one it is lifted on
+			// (G23): a name this build knows only on a request or an answer
+			// still needs a newer auu here.
+			if m.Newer == "" || m.Relay != r.Name || !wire.Known(m.Newer, wire.OnManifest) || m.PayloadGone {
 				continue
 			}
 			if box == store.Quarantine {

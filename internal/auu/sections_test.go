@@ -5,9 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +19,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/relay"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
@@ -585,4 +590,94 @@ func TestTheCountOfWaitingStreamsIsQuiet(t *testing.T) {
 		!strings.Contains(stderr, "fix it, or move it out of the box; the rest of the box reads without it; it is not listed\n") {
 		t.Errorf("quarantine ls did not warn about its own record:\n%s", stderr)
 	}
+}
+
+// blobCounter counts every request for a mailbox message's bytes, the small
+// manifest ranges and the payload's open-ended one alike, so a test can be
+// sure a drain asked the relay for nothing of a waiting stream.
+type blobCounter struct {
+	inner http.Handler
+	n     atomic.Int64
+}
+
+func (b *blobCounter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/blob") {
+		b.n.Add(1)
+	}
+	b.inner.ServeHTTP(w, r)
+}
+
+// G23: a stream marked as waiting on a name this build knows only on a
+// request (recipients.CountName) still needs a newer auu on the manifest's
+// path, so a later drain neither fetches it again from the inbox nor lifts
+// its mark in the quarantine.
+func TestAStreamWaitingOnANameKnownOnlyOnAnotherPathStaysWaiting(t *testing.T) {
+	if wire.Known(recipients.CountName, wire.OnManifest) || !wire.Known(recipients.CountName, wire.AnyPath) {
+		t.Fatalf("%s must be known on another path and not on the manifest's", recipients.CountName)
+	}
+	start := func(t *testing.T) (string, *blobCounter) {
+		t.Helper()
+		dir := t.TempDir()
+		st, err := relay.OpenStore(filepath.Join(dir, "relay.db"), filepath.Join(dir, "messages"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { st.Close() })
+		handler := relay.NewServer(st, relay.Config{
+			Streams: true,
+			Logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
+			Limits:  relay.DefaultLimits(),
+		})
+		c := &blobCounter{inner: handler}
+		srv := httptest.NewServer(c)
+		t.Cleanup(func() { srv.Close(); handler.Close() })
+		return srv.URL, c
+	}
+
+	t.Run("inbox", func(t *testing.T) {
+		url, blobs := start(t)
+		alice := newUser(t, "alice", url)
+		bob := newUser(t, "bob", url)
+		alice.run("peers", "add", bob.exportLine())
+		bob.run("peers", "add", alice.exportLine())
+		alice.run("allow", "push")
+		bob.run("allow", "push")
+		streamSections(t, alice, bob, "a request's section", critical(recipients.CountName))
+		in, stderr := fetchJSON(t, bob)
+		if len(in.Fetch.Newer) != 1 || in.Fetch.Newer[0] != recipients.CountName {
+			t.Fatalf("fetch: %+v, want the stream waiting on %s\n%s", in.Fetch, recipients.CountName, stderr)
+		}
+		if m := recordOf(t, bob, store.Inbox, "a request's section"); m.Newer != recipients.CountName || !m.PayloadOnRelay {
+			t.Fatalf("the record: newer %q, on relay %v", m.Newer, m.PayloadOnRelay)
+		}
+		before := blobs.n.Load()
+		again, stderr := fetchJSON(t, bob)
+		if n := blobs.n.Load() - before; n != 0 {
+			t.Errorf("the later drain asked the relay for the waiting stream %d time(s); want none\n%s", n, stderr)
+		}
+		if again.Fetch.Delivered != 0 || len(again.Fetch.Newer) != 0 {
+			t.Errorf("the later drain: %+v; want nothing", again.Fetch)
+		}
+		if m := recordOf(t, bob, store.Inbox, "a request's section"); m.Newer != recipients.CountName || !m.PayloadOnRelay {
+			t.Errorf("after the later drain the record: newer %q, on relay %v; want it still waiting", m.Newer, m.PayloadOnRelay)
+		}
+	})
+
+	t.Run("quarantine", func(t *testing.T) {
+		url, _ := start(t)
+		carol := newUser(t, "carol", url)
+		bob := newUser(t, "bob", url)
+		streamSections(t, carol, bob, "a stranger's request section", critical(recipients.CountName))
+		in, stderr := fetchJSON(t, bob)
+		if len(in.Fetch.Newer) != 1 || in.Fetch.Newer[0] != recipients.CountName {
+			t.Fatalf("fetch: %+v, want the stream waiting on %s\n%s", in.Fetch, recipients.CountName, stderr)
+		}
+		if m := recordOf(t, bob, store.Quarantine, "a stranger's request section"); m.Newer != recipients.CountName {
+			t.Fatalf("the quarantined record: newer %q", m.Newer)
+		}
+		fetchJSON(t, bob)
+		if m := recordOf(t, bob, store.Quarantine, "a stranger's request section"); m.Newer != recipients.CountName || !m.PayloadOnRelay {
+			t.Errorf("after the later drain the quarantined record: newer %q, on relay %v; want the mark kept", m.Newer, m.PayloadOnRelay)
+		}
+	})
 }

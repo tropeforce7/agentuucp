@@ -1331,8 +1331,15 @@ manifest, answer and request carries and every reader of this build was
 written to read: a part it does not know it ignores, and a part marked
 critical it refuses by name, saying that the reader, this machine or the
 relay, needs a newer auu, rather than read the rest with that part
-dropped. A message that needs a newer auu is kept under `damaged/` with
-the cause `newer` and the section's name, and is not deleted: updating auu
+dropped. A part is known on the path it is read on and nowhere else: a
+name this build reads only on another path is one it does not know on
+this one, a request's or an answer's on a message or a manifest, a
+request's on an answer and an answer's on a request, so a critical one
+there is refused as needing a newer auu, never opened past in silence
+with its data unread. Whoever reads a message, a manifest, a request or
+an answer understands every critical part on it. A message that needs a
+newer auu is kept under `damaged/` with the cause `newer` and the
+section's name, and is not deleted: updating auu
 and opening it with `auu damaged reopen` is what to do about it, and asking
 the sender to send it again is not. That is the one cause for which
 anything under `damaged/` is ever opened again. The outer envelope a relay

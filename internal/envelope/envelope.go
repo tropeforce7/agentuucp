@@ -438,7 +438,7 @@ func Open(recipient *identity.Identity, env *Envelope) (*Inner, *identity.Public
 	// not know judged: an unsigned record is never one that needs a newer
 	// auu (R7). The record and its sender come back with the error, so the
 	// receiver can say whose message it is and keep it.
-	if _, _, err := wire.Sort(inner.Sections); err != nil {
+	if _, _, err := wire.Sort(inner.Sections, wire.OnMessage); err != nil {
 		return &inner, sender, &openError{cause: err}
 	}
 	return &inner, sender, nil

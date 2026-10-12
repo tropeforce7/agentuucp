@@ -134,10 +134,10 @@ func Check(sections []Section) error {
 
 // Path is where a section is read: in a sealed message, in a stream's
 // manifest, in a request body or in an answer body. A section is known on
-// the paths its feature reads it on and on no other; elsewhere it is held
-// to wire.MaxKeptBytes where it is kept, as an unknown one is (D76), but a
-// critical one is never refused as needing a newer build, since Sort asks
-// whether the name is known at all.
+// the paths its feature reads it on and on no other; elsewhere it is an
+// unknown one, held to wire.MaxKeptBytes where it is kept (D76), and a
+// critical one is refused as needing a newer build, since Sort and
+// CheckBody ask whether the name is known on the reader's own path (G23).
 type Path uint8
 
 const (
@@ -147,8 +147,8 @@ const (
 	OnAnswer
 	// AnyPath is every path, for the one question that does not depend on
 	// where a section came: whether this build knows the name at all, which
-	// is what Sort and a message waiting for a newer build ask, and what a
-	// record's load asks of the sections an earlier release kept (R13).
+	// is what a record's load asks of the sections an earlier release kept
+	// (R13).
 	AnyPath = OnMessage | OnManifest | OnRequest | OnAnswer
 )
 
@@ -195,10 +195,17 @@ func Register(name string, on Path) (unregister func()) {
 // record whose signature has verified: an unsigned record is never kept as
 // one that needs a newer build, and never puts that advice in front of
 // anybody.
-func Sort(sections []Section) (knownSections, ignored []Section, err error) {
+//
+// A section is known on the path it is read on and nowhere else (G23,
+// R27): on is the reader's own path, and a name this build knows only on
+// another is a section it does not know here, so a critical one stops the
+// sort as any unknown critical section does. A later build that gave such
+// a name a meaning on this path would otherwise be read in silence by
+// every reader built today.
+func Sort(sections []Section, on Path) (knownSections, ignored []Section, err error) {
 	for _, s := range sections {
 		switch {
-		case known[s.Name] != 0:
+		case Known(s.Name, on):
 			knownSections = append(knownSections, s)
 		case s.Critical:
 			return nil, nil, &NeedsNewerError{Name: s.Name}
@@ -226,8 +233,9 @@ func (e *SizeError) Error() string {
 // build does not know; each caller says it in its own words. A body is
 // sorted here before anything else in it is read, since a body is either
 // already authenticated by its request's signature or keeps nothing and
-// advises nobody when refused.
-func CheckBody(list []Section) error {
+// advises nobody when refused. on is the body's path, OnRequest at the
+// relay and OnAnswer at the client, and the sort holds each section to it.
+func CheckBody(list []Section, on Path) error {
 	if len(list) == 0 {
 		return nil
 	}
@@ -241,7 +249,7 @@ func CheckBody(list []Section) error {
 	if len(encoded) > MaxAPISectionBytes {
 		return &SizeError{Bytes: len(encoded)}
 	}
-	_, _, err = Sort(list)
+	_, _, err = Sort(list, on)
 	return err
 }
 
