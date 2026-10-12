@@ -848,16 +848,31 @@ N bytes on the wire and the relay listed M; it was kept as damaged and
 acknowledged, and nobody was added`. That clears such a stream from a
 stranger that a build from v0.14.0 to v0.17.0 quarantined. A record made
 by a build before v0.14.0 kept no size, and for it only the size goes
-unchecked. The sender is added to your peer list once the message is
+unchecked. The same stream whose manifest verifies but whose payload will
+not open, because it does not decrypt or fails its digest, or whose relay
+says the range asked for lies beyond its stored file, is settled as the
+fetch settles a peer's: its manifest chunk kept under
+`damaged/` with the fetch's warning, the stream acknowledged and taken
+out of the quarantine, and the command exits 0 with `its payload will not
+open; it was settled as damaged and acknowledged, and nobody was added`;
+an earlier build called it a transport failure and downloaded the whole
+payload again at every trust. A relay that has dropped its copy, and
+answers that the body is gone, is not the sender's doing and is not
+settled: the command exits 2 with `its body is no longer on the relay;
+ask the sender to send it again`, nothing is kept or acknowledged, and
+the message stays in the quarantine. A connection that drops while the
+payload comes is still a transport failure, exit 2, and the message stays
+in the quarantine to be trusted again. The sender is added to your peer list once the message is
 delivered and, where its channel does not keep it on the relay,
 acknowledged, so a trust refused for any of these adds nobody and leaves
 the list as it was: a transport failure, a body no longer on the relay, a
 stream on the relay that is not the one quarantined, a size that
-disagrees, or a name already taken. To trust the sender anyway, add them
-with `auu peers add` and their export line, `ccx2.<base64>.name`, as for
-any colleague. A stream whose signed manifest disagrees with the size the
-relay lists is not quarantined: the fetch keeps it under `damaged/` with
-both numbers and acknowledges it, whoever sent it. The exception is a
+disagrees, a payload that will not open, or a name already taken. To
+trust the sender anyway, add them with `auu peers add` and their export
+line, `ccx2.<base64>.name`, as for any colleague. A stream whose signed
+manifest disagrees with the size the relay lists is not quarantined: the
+fetch keeps it under `damaged/` with both numbers and acknowledges it,
+whoever sent it. The exception is a
 stream that waits for a newer auu, which is recorded before its size is
 checked; from a stranger, `trust` checks it once a build knows its
 section, and from a peer the newer build's fetch does.

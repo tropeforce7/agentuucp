@@ -848,9 +848,17 @@ the quarantine. One whose manifest disagrees with the size the relay
 listed when it was quarantined is kept under `damaged/` with the fetch's
 warning, acknowledged and taken out of the quarantine, exit 2, with `ID:
 its manifest says the stream is N bytes on the wire and the relay listed
-M; it was kept as damaged and acknowledged, and nobody was added`. ID is
-the start of the message's id. Neither adds anybody, since `trust` adds
-the sender only once the message is delivered.
+M; it was kept as damaged and acknowledged, and nobody was added`. One
+whose manifest verifies but whose payload will not open, because it does
+not decrypt or fails its digest, or whose relay says the range asked for
+lies beyond its stored file, is settled the same way but exits 0, with `ID: its payload will not open; it was settled
+as damaged and acknowledged, and nobody was added`. One whose copy the
+relay has dropped, answering that the body is gone, is not settled: exit
+2, with `ID: its body is no longer on the relay; ask the sender to send
+it again`, nothing kept or acknowledged, the record left in the
+quarantine. A dropped connection while the payload comes is still a
+transport failure, exit 2, the record left in the quarantine. ID is the start of the message's id. None of these adds
+anybody, since `trust` adds the sender only once the message is delivered.
 
 On stderr while `auu inbox` fetches, once for a relay in a run; the exit
 code is the run's own, 0 when nothing else failed:

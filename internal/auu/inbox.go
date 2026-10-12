@@ -2168,6 +2168,36 @@ func cmdQuarantine(args []string) error {
 				if isMissingOnRelay(err) {
 					return bodyGone(m)
 				}
+				// A 410 is the relay dropping a stored file it found
+				// damaged, which the fetch reads as the relay's doing and
+				// never the sender's: the body is gone, nothing is kept or
+				// acknowledged, and the record stays to say so.
+				if isGone(err) {
+					return bodyGone(m)
+				}
+				// A payload that will never open is settled as the fetch
+				// settles it (G8), as is a 416, the relay saying the range
+				// lies beyond its stored file, which the fetch also settles:
+				// the manifest chunk kept under damaged/ in the fetch's own
+				// sentence, the stream acknowledged, the quarantine record
+				// gone, and nobody added. Reading it as a transport failure
+				// would fetch the whole payload again at every trust and
+				// never end.
+				if isPermanent(err) {
+					var res fetchResult
+					if err := keepDamaged(s, r, m.RelayID, m.Received, manifest, streamCause(err), &res); err != nil {
+						return err
+					}
+					if err := c.Ack(ctx(), m.RelayID); err != nil {
+						return transportErr(err)
+					}
+					if err := s.Remove(store.Quarantine, m.Inner.ID); err != nil {
+						return err
+					}
+					fmt.Printf("%s: its payload will not open; it was settled as damaged and acknowledged, and nobody was added\n",
+						m.Inner.ID[:12])
+					return nil
+				}
 				return transportErr(err)
 			}
 			if !keep {
