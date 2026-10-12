@@ -309,12 +309,35 @@ func (s *Server) upload(w http.ResponseWriter, r *http.Request, callerFP string)
 	return u, true
 }
 
+// stillAdmitted judges an upload's sender and channel again as the open
+// judged them, answering nil when the upload is still admitted (R22). A
+// courier's mailbox refuses every sender: the store's placement has no
+// business knowing which relays this one peers with, so it is judged here,
+// in the allow list's words, as on the open, since what has changed under
+// the sender is that the recipient now admits nobody.
+func (s *Server) stillAdmitted(u *Upload) *judged {
+	if s.isCourierMailbox(u.To) {
+		return &judged{status: http.StatusForbidden, msg: msgNotAllowed}
+	}
+	allowed, err := s.store.MayPost(u.To, u.From)
+	if err != nil {
+		return &judged{storage: true}
+	}
+	if !allowed {
+		return &judged{status: http.StatusForbidden, msg: msgNotAllowed}
+	}
+	_, refused := s.judgeChannel(u.To, u.Channel)
+	return refused
+}
+
 // handlePutStream is one attempt: the sealed stream from an offset to the
 // end in one request, streamed onto the upload's file under the stall
 // deadline, shape-checked as its first bytes pass, and placed in the
 // mailbox when the last byte lands.
 //
-// The length is judged before a byte is read: an attempt with no
+// The upload is admitted again before anything else (stillAdmitted, R22),
+// and once more before its placement. Then the length is judged, still
+// before a byte is read: an attempt with no
 // Content-Length (a chunked body) cannot be judged and is 411; one whose
 // offset and length do not reach the stream's size is 400, since an
 // attempt runs to the end or is not an attempt; the body is not read for
@@ -328,15 +351,22 @@ func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerF
 	if !ok {
 		return
 	}
-	// A courier's mailbox refuses every sender, and an upload opened
-	// before its owner was admitted as one is the way round the refusal on
-	// the open: the bytes are refused here, before any of them is read,
-	// rather than at the placement, which is the store's and has no
-	// business knowing which relays this one peers with. The sentence is
-	// the allow list's, as on the open, since what has changed under this
-	// sender is that the recipient now admits nobody.
-	if s.isCourierMailbox(u.To) {
-		s.refuseUnread(w, http.StatusForbidden, msgNotAllowed)
+	// What the open judged is judged again before a byte of the attempt
+	// is read (R22): a sender the recipient has since removed from the
+	// allow list, or whose channel has since closed, or a recipient since
+	// admitted as a courier, would otherwise land an upload opened before
+	// it, for as long as it keeps the pace, hours for a large one. The
+	// refusal is the open's, the upload goes with it, its file and its
+	// reservation, and the open's charge stands, as a refused post's does.
+	// No byte of the body has been read, and the wrapper's mark closes the
+	// connection behind the answer.
+	if refused := s.stillAdmitted(u); refused != nil {
+		if !refused.storage {
+			if _, err := s.store.AbortUpload(u.ID); err != nil && !errors.Is(err, ErrNoUpload) {
+				refused = &judged{storage: true}
+			}
+		}
+		s.writeRefusal(w, refused)
 		return
 	}
 	offset, err := strconv.ParseInt(r.Header.Get(relayapi.UploadOffsetHeader), 10, 64)
@@ -386,7 +416,19 @@ func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerF
 	extend()
 	body := &deadlineReader{r: r.Body, extend: extend, hunk: relayapi.HunkBytes}
 	var badShape error
-	received, err := s.store.ReceiveUpload(u.ID, offset, s.cfg.MaxBytes, s.cfg.Now, relayapi.ResumeWindow,
+	// The same judgement once more before the placement, under the
+	// upload's lock, for a sender removed or a channel closed while this
+	// attempt ran (R22).
+	var lastRefusal *judged
+	mayPlace := func() (bool, error) {
+		refused := s.stillAdmitted(u)
+		if refused != nil && refused.storage {
+			return false, errors.New("relay: the upload's admission could not be judged at its placement")
+		}
+		lastRefusal = refused
+		return refused == nil, nil
+	}
+	received, err := s.store.ReceiveUploadAdmitted(u.ID, offset, s.cfg.MaxBytes, s.cfg.Now, relayapi.ResumeWindow,
 		func(f *os.File, want int64) (int64, error) {
 			if offset == 0 {
 				// The shape of the first bytes, before they are written:
@@ -410,11 +452,13 @@ func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerF
 				return int64(n) + rest, err
 			}
 			return io.Copy(f, io.LimitReader(body, want))
-		})
-	if received.Gone {
+		}, mayPlace)
+	if received.Gone && !errors.Is(err, ErrNotAdmitted) {
 		// The attempt deleted the upload whole, with the row as it stood
 		// before the attempt: received at the offset, since the row is
-		// written only on the kept path, which keeps.
+		// written only on the kept path, which keeps. One no longer
+		// admitted at its placement keeps the open's charge, as a refused
+		// post's charge stands.
 		s.returnUnheld(&Upload{From: callerFP, Size: u.Size, Received: offset})
 	}
 	// The answer is written under a window of its own: the stall that
@@ -431,6 +475,9 @@ func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerF
 		return
 	case badShape != nil:
 		s.refuseUnread(w, http.StatusBadRequest, badShape.Error())
+		return
+	case errors.Is(err, ErrNotAdmitted) && lastRefusal != nil:
+		s.writeRefusal(w, lastRefusal)
 		return
 	case errors.Is(err, ErrUploadOffset):
 		w.Header().Set(relayapi.UploadOffsetHeader, strconv.FormatInt(received.Offset, 10))

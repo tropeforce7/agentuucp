@@ -143,17 +143,21 @@ for about eleven hours: 256 MiB at a hunk every ten seconds is 4,096
 hunks, 40,960 seconds. That takes feeding them at about 26 KiB a second in
 all, a hunk every ten seconds each, and the cost to the attacker is the
 bytes, a mailbox's worth sent. It holds only on a mailbox whose owner
-admits the identity. A reservation fed to the resume threshold,
-`max_bytes`, and then dropped is kept for one resume. When it goes it is
-given back its size less the kept bytes, which were held. So it costs its
-sender only the threshold, and an identity may hold room for longer each
-hour that way, paying `max_bytes` each time. The allow list is the owner's
-answer to both, and the registration budget the operator's. The rule costs
-honest senders something too. A first attempt that ends short of the
-resume threshold leaves nothing, and so is charged the declared size for
-the hour. So is a first attempt the relay's own disk fails. An open the
-budget then cannot afford is refused `429` `rate limited: post bytes`,
-with `Retry-After` saying when the budget allows it.
+admits the identity, and only while the owner does: the allow list and
+the upload's channel are judged again at every attempt and before the
+placement, so a removal or a closed channel ends the upload at its next
+attempt, with nothing given back. A reservation fed to the resume
+threshold, `max_bytes`, and then dropped is kept for one resume. When it
+goes it is given back its size less the kept bytes, which were held. So
+it costs its sender only the threshold, and an identity may hold room for
+longer each hour that way, paying `max_bytes` each time. The allow list is
+the owner's answer to both, and the registration budget the operator's.
+The rule costs honest senders something too. A first attempt that ends
+short of the resume threshold leaves nothing, and so is charged the
+declared size for the hour. So is a first attempt the relay's own disk
+fails. An open the budget then cannot afford is refused `429`
+`rate limited: post bytes`, with `Retry-After` saying when the budget
+allows it.
 
 **What the relay sees.** More than it stores, and this is worth being plain
 about. Posting is authenticated, so at the moment a message is accepted the
@@ -619,9 +623,10 @@ table of who invited whom is a social graph of a different kind.
 **The allow list.** Owner-signed, like the channel directory. `auu allow
 push` signs the list of who may post to you with your identity key. The
 relay verifies the signature against your registered key before storing
-it and again on every post, with no cache. A row edited in the relay's
-database therefore refuses every sender but the owner rather than
-admitting one. A sender is told what a refused sender is always told.
+it and again on every post, and on a stream at its open, at each of its
+attempts and before its placement, with no cache. A row edited in the
+relay's database therefore refuses every sender but the owner rather
+than admitting one. A sender is told what a refused sender is always told.
 Your own listing says `broken`, `auu inbox` says so, and your next
 `auu allow push` is the whole repair, whatever issue time an editor left
 on the row, since the newer-issued rule holds only between two lists you
@@ -635,6 +640,19 @@ altogether. What this does not cover is root on the relay's host, who can
 replace the relay itself. That is where *What is not protected* below
 draws the line. The signature moves the bar from editing one table to
 replacing the binary.
+
+A removal takes effect for an upload already open, not at the sender's
+next open alone. Before a byte of each attempt is read the relay asks the
+list again, and asks it once more after the last byte and before the
+stream is placed, under the upload's lock. A sender you removed is
+refused at its next attempt with the sentence a refused post gets, and an
+attempt running when you removed it places nothing and is refused the
+same way. Either way the upload goes whole, its reservation released and
+the bytes the sender sent before the removal deleted with it, and the
+open's charge stands, as a refused post's does. Without this a sender
+removed an hour into a large stream, which at the pace runs for hours,
+would land it all the same. A channel closed under an upload is judged
+at the same two points and ends it the same way.
 
 **The card.** Owner-signed, the third document. `auu card push` signs
 your name and two words, `listed` and `knocks`, with your identity key,
@@ -1487,7 +1505,11 @@ learns nothing about channels. The relay refuses `404 no such channel "x"`
 for a name the directory does not hold (`default`, for a mailbox with no
 directory). It refuses `403 channel "x" is not open: opens T` or `closed T`
 for one outside its period, judged by the relay's clock with both edges
-inclusive. The sealed record and the signed manifest carry the same name,
+inclusive. A stream's channel, and its sender's place on the allow list,
+are judged again at every attempt and before the placement, so a channel
+that closes while an upload is open ends the upload at its next attempt
+with the same refusal, and one that closes mid-attempt places nothing.
+The sealed record and the signed manifest carry the same name,
 so a message the relay filed elsewhere is found out on opening. Absent
 means `default` everywhere. That is the sender's rule, a message for
 `default` carrying no name, and the one place on the wire where absence
@@ -1633,12 +1655,16 @@ upload id, when it expires, and two numbers the sender needs,
 sealed stream from an offset to the end in one request, with
 `Upload-Offset` saying where it starts and `Content-Length` required and
 equal to the bytes left. So an attempt runs to the end or is not an
-attempt. The relay judges the headers before it reads a byte. No length is
+attempt. Before it reads a byte the relay judges again what the open
+judged, the allow list, a courier's mailbox and the channel, and refuses
+as the open would, the upload going with the refusal. Then it judges the
+headers, still before it reads a byte. No length is
 `411`, a length that does not reach the end is `400`, and an offset that is
 not where the relay's copy ends is `409` carrying that offset. Then it
 streams the body to the upload's file, checking the shape of the first
-bytes as they pass. When the last byte lands the stream is placed in the
-mailbox and the answer is `201` with the message id. `DELETE
+bytes as they pass. When the last byte lands the allow list and the
+channel are judged once more, and only then is the stream placed in the
+mailbox and the answer `201` with the message id. `DELETE
 /v1/uploads/{id}` lets go of an upload before then.
 
 An attempt that stops short is judged by one rule. That is one whose

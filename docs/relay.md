@@ -172,8 +172,9 @@ and pushes — the channel directory in `directories` and `channels`, the
 allow list in `allowlists`, and the card in `cards`, each the bytes the
 owner signed and the signature over them, verified against the mailbox's
 registered key at the push and again wherever the relay acts on one: the
-allow list at every post, the card at every knock, and the directory at
-every post and every stream open, `default` included. The
+allow list and the directory at every post, and at a stream's open, at
+each of its attempts and before its placement, `default` included, and
+the card at every knock. The
 `channels` rows beside the directory's bytes are the relay's parse at the
 push, kept for the administrator's count and for the watch's issue time.
 Nothing routes by them, so a row inserted or edited with the database open
@@ -301,6 +302,23 @@ ever. The download of a placed stream is served under a stall deadline of
 sixty seconds, moved by every write that delivers bytes. So a slow reader is
 served to the end and a reader that stops is cut inside the window. The
 server's five-minute read and write timeouts stand on every other route.
+
+An upload is held to what admitted it for as long as it lives, not at its
+open alone. At the start of every attempt, before a byte of its body is
+read, the relay judges again what the open judged: that the sender is on
+the recipient's allow list, that the recipient is not a courier's
+mailbox, and that the upload's channel exists and is open. It judges them
+once more after the last byte and before the stream is placed, under the
+upload's lock. A refusal is the answer the open would give, `403` with
+the allow list's sentence, or the channel's `404`, or `403`
+`channel-closed` with its sentence. The upload goes with it, its partial
+and its reservation, and the open's charge stands, as a refused post's
+does. So removing a sender from the allow list, or closing a channel,
+takes effect at the sender's next attempt on an upload already open and
+at any placement after it, never only at its next open. A large stream
+runs for hours at the pace, and one whose sender is removed partway
+through does not land, nor does an attempt running at the moment of the
+removal, which places nothing.
 
 A relay takes a `max_bytes` above 64 MiB, but it holds every inline row
 to 64 MiB whatever the setting: a post, a forward, delivered here or
@@ -439,7 +457,9 @@ short of the resume threshold leaves nothing, and neither does a first
 attempt the relay's own disk fails, so each is charged the declared size
 for the hour. An open the budget then cannot afford is refused `429`
 `rate limited: post bytes`, with `Retry-After` saying when the budget
-allows it. A placed stream gives nothing back. An open the relay refuses
+allows it. A placed stream gives nothing back, and neither does an upload
+refused at an attempt or at its placement because the allow list or the
+channel no longer admits it, whatever it held. An open the relay refuses
 before any upload exists, a full mailbox, a full relay or the sender's own
 count among the reasons, gives back the whole size. So a refused open
 costs a post and no bytes.

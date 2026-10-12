@@ -188,23 +188,58 @@ func (s *Server) handleGetChannels(w http.ResponseWriter, r *http.Request, body 
 // It reports whether the caller may go on; when not, the refusal has been
 // written.
 func (s *Server) channelForPost(w http.ResponseWriter, fp, name string) (string, bool) {
+	name, refused := s.judgeChannel(fp, name)
+	if refused != nil {
+		s.writeRefusal(w, refused)
+		return "", false
+	}
+	return name, true
+}
+
+// judged is a refusal the relay has judged and writes later: a status,
+// the code a client acts on where there is one, the sentence, and the time
+// a refusal about a time carries as data. storage marks the storage error's
+// fixed refusal.
+type judged struct {
+	status  int
+	code    string
+	msg     string
+	at      time.Time
+	storage bool
+}
+
+// writeRefusal writes a judged refusal the way its kind is written.
+func (s *Server) writeRefusal(w http.ResponseWriter, r *judged) {
+	switch {
+	case r.storage:
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
+	case !r.at.IsZero():
+		s.failAt(w, r.status, r.code, r.msg, r.at)
+	case r.code != "":
+		s.failCode(w, r.status, r.code, r.msg)
+	default:
+		s.fail(w, r.status, r.msg)
+	}
+}
+
+// judgeChannel is channelForPost's judgement, the refusal answered rather
+// than written, for the stream routes to judge an upload's channel again
+// after its open (R22).
+func (s *Server) judgeChannel(fp, name string) (string, *judged) {
 	if name == "" {
 		name = channels.Default
 	}
 	// Before the lookup, so the refusal never echoes a name longer than a
 	// directory could hold.
 	if err := channels.ValidName(name); err != nil {
-		s.fail(w, http.StatusBadRequest, "channel "+err.Error())
-		return "", false
+		return "", &judged{status: http.StatusBadRequest, msg: "channel " + err.Error()}
 	}
 	exists, ch, err := s.store.ChannelState(fp, name)
 	if err != nil {
-		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
-		return "", false
+		return "", &judged{storage: true}
 	}
 	if !exists {
-		s.failCode(w, http.StatusNotFound, relayapi.CodeNoSuchChannel, fmt.Sprintf("no such channel %q", name))
-		return "", false
+		return "", &judged{status: http.StatusNotFound, code: relayapi.CodeNoSuchChannel, msg: fmt.Sprintf("no such channel %q", name)}
 	}
 	now := s.cfg.Now()
 	if open, why := ch.OpenAt(now); !open {
@@ -217,11 +252,10 @@ func (s *Server) channelForPost(w http.ResponseWriter, fp, name string) (string,
 		case ch.NotAfter != nil:
 			at = *ch.NotAfter
 		}
-		s.failAt(w, http.StatusForbidden, relayapi.CodeChannelClosed,
-			fmt.Sprintf("channel %q %s: %s", name, relayapi.MsgChannelClosed, why), at)
-		return "", false
+		return "", &judged{status: http.StatusForbidden, code: relayapi.CodeChannelClosed,
+			msg: fmt.Sprintf("channel %q %s: %s", name, relayapi.MsgChannelClosed, why), at: at}
 	}
-	return name, true
+	return name, nil
 }
 
 // issuedRefusal is the sentence for an owner document CheckIssued refused:

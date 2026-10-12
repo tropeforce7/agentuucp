@@ -33,6 +33,10 @@ var (
 	// ErrShortAttempt is an attempt that stopped before the end: the
 	// Received beside it says what, if anything, is kept.
 	ErrShortAttempt = errors.New("relay: upload attempt stopped short of the end")
+	// ErrNotAdmitted is an attempt that reached the end of an upload whose
+	// sender or channel its placement no longer admits (R22): the upload
+	// is gone whole, its file and its row.
+	ErrNotAdmitted  = errors.New("relay: upload no longer admitted at its placement")
 	ErrStreamTooBig = errors.New("relay: stream is larger than this relay accepts")
 	// ErrOpenUploads is an open refused because the sender has as many
 	// uploads open as the quotas allow. The error returned is an
@@ -304,6 +308,20 @@ type Received struct {
 // ENOSPC), reported after the same rule has run.
 func (s *Store) ReceiveUpload(id string, offset int64, threshold int64, now func() time.Time, window time.Duration,
 	r func(w *os.File, want int64) (int64, error)) (Received, error) {
+	return s.ReceiveUploadAdmitted(id, offset, threshold, now, window, r, nil)
+}
+
+// ReceiveUploadAdmitted is ReceiveUpload with mayPlace asked, under the
+// upload's lock, once the copy has reached the end and before the stream
+// is placed (R22): a sender the recipient has removed while the attempt
+// ran, or a channel that has closed, places nothing, and the upload goes
+// whole, its file and its row, as a resumed attempt that stops short does,
+// answered ErrNotAdmitted. A mayPlace that cannot judge, its error, leaves
+// the upload as a placement that failed does, the file put back to what
+// the row says for the sender's next attempt. A nil mayPlace admits
+// everything.
+func (s *Store) ReceiveUploadAdmitted(id string, offset int64, threshold int64, now func() time.Time, window time.Duration,
+	r func(w *os.File, want int64) (int64, error), mayPlace func() (bool, error)) (Received, error) {
 
 	unlock := s.uploadLock(id)
 	u, err := s.Upload(id)
@@ -360,6 +378,30 @@ func (s *Store) ReceiveUpload(id string, offset int64, threshold int64, now func
 			s.abortLocked(id)
 			s.forgetUploadLock(id, unlock)
 			return Received{Gone: true}, s.fault(s.uploadPath(id), err)
+		}
+		if mayPlace != nil {
+			admitted, err := mayPlace()
+			if err != nil {
+				if terr := s.truncateUpload(id, u.Received); terr != nil {
+					s.abortLocked(id)
+					s.forgetUploadLock(id, unlock)
+					return Received{Gone: true}, err
+				}
+				unlock()
+				return Received{Offset: u.Received}, err
+			}
+			if !admitted {
+				// Put back to what the row says first, so that an abort
+				// that fails leaves a file its row names and never one
+				// the next attempt would append a second copy to.
+				s.truncateUpload(id, u.Received)
+				gone, abortErr := s.abortLocked(id)
+				s.forgetUploadLock(id, unlock)
+				if abortErr != nil {
+					return Received{Gone: gone != nil}, fmt.Errorf("%w: %v", ErrNotAdmitted, abortErr)
+				}
+				return Received{Gone: true}, ErrNotAdmitted
+			}
 		}
 		messageID, err := s.placeUpload(u)
 		if err != nil {
