@@ -763,7 +763,8 @@ type Stored struct {
 	// when it is zero and never after, so a record moved, marked or
 	// rewritten keeps it; a record an earlier release wrote has none, and
 	// Load reads it as Received, or as the file's time when Received
-	// cannot be written back (arrivedBefore).
+	// cannot be written back or is more than relayapi.MaxSkew ahead of
+	// this machine's clock (arrivedBefore, G9).
 	Arrived    time.Time       `json:"arrived"`
 	Read       bool            `json:"read"`
 	Inner      *envelope.Inner `json:"inner"`
@@ -945,9 +946,10 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	// relay's received stands in for it, which is the order it was listed
 	// in when it was written. Those releases kept whatever received a
 	// relay sent, and one outside what this program can write back would
-	// put a time in serve's ledger its save refuses, at every start; for
-	// that record the file's own time stands in, and this machine's clock
-	// if that cannot be written back either.
+	// put a time in serve's ledger its save refuses, at every start, and
+	// one ahead of this machine's clock would list the message newest for
+	// good (G9); for that record the file's own time stands in, held to
+	// the same two, and this machine's clock otherwise.
 	if m.Arrived.IsZero() {
 		m.Arrived = s.arrivedBefore(f, path, m.Received)
 	}
@@ -1096,22 +1098,46 @@ func (s *Store) warnUnreadable(box Box, name string, err error) {
 }
 
 // arrivedBefore is the arrival Load gives a record an earlier release
-// wrote: its received when that can be written back, otherwise the time
-// the record's file was last written, otherwise now, said once per file
-// per command.
+// wrote: its received when that can be written back and is not ahead of
+// this machine's clock by more than relayapi.MaxSkew (G9), otherwise the
+// time the record's file was last written held to the same two rules,
+// otherwise now, said once per file per command with which it took. The
+// arrival is UTC, as Save writes one. A received in the year 9000 lent as
+// the arrival would list the message newest for good, and a read would
+// write it back as its own.
 func (s *Store) arrivedBefore(f *os.File, path string, received time.Time) time.Time {
-	if relayapi.Writable(received) {
-		return received
+	var modTime *time.Time
+	if fi, err := f.Stat(); err == nil {
+		t := fi.ModTime()
+		modTime = &t
 	}
-	arrived := time.Now().UTC()
-	if fi, err := f.Stat(); err == nil && relayapi.Writable(fi.ModTime()) {
-		arrived = fi.ModTime().UTC()
+	arrived, which := legacyArrival(received, modTime, time.Now())
+	if which == "" {
+		return arrived
 	}
 	if _, already := warnedOnce.LoadOrStore(path+"#arrived", true); !already {
-		fmt.Fprintf(os.Stderr, "warning: %s holds a received time this program cannot write back; it is ordered as arriving at %s\n",
-			path, arrived.Format(time.RFC3339))
+		fmt.Fprintf(os.Stderr, "warning: %s holds a received time this program cannot write back or that is ahead of this machine's clock; "+
+			"it is ordered as arriving at %s, %s\n", path, arrived.Format(time.RFC3339), which)
 	}
 	return arrived
+}
+
+// legacyArrival is arrivedBefore's choice, given the clock: received when it
+// fits, otherwise the file's time when there is one and it fits, otherwise
+// now, each UTC. A time fits when relayapi.Writable holds it and it is not
+// after now plus relayapi.MaxSkew. which is empty when received was lent,
+// and otherwise names what was taken, for the warning.
+func legacyArrival(received time.Time, modTime *time.Time, now time.Time) (arrived time.Time, which string) {
+	fits := func(t time.Time) bool {
+		return relayapi.Writable(t) && !t.After(now.Add(relayapi.MaxSkew))
+	}
+	if fits(received) {
+		return received.UTC(), ""
+	}
+	if modTime != nil && fits(*modTime) {
+		return modTime.UTC(), "the file's time"
+	}
+	return now.UTC(), "this machine's clock"
 }
 
 // List returns every message in a spool directory, oldest first.

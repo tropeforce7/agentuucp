@@ -684,7 +684,7 @@ internal/store/leftbehind.go (*Store).SetLeftBehind time time.Parse(received) = 
 internal/store/leftbehind.go parseLeftEntry time time.Parse(fields[2]) = local: this program's own line, which SetLeftBehind refuses to write unless this parse reads it back; a file written before is read as it is
 internal/store/relay.go Relay time Added = local: this machine's clock when the relay was added, read back from its own file
 internal/store/relay.go Relay time ServerIntNotBefore = local: the verified intermediate's NotBefore, which certificate verification held before now
-internal/store/store.go Stored time Arrived = local: this machine's clock at the record's first Save, read back from its own file; absent read as received at Load when relayapi.Writable holds it, otherwise as the file's modification time or this machine's clock, D80
+internal/store/store.go Stored time Arrived = local: this machine's clock at the record's first Save, read back from its own file; absent read as received at Load when relayapi.Writable holds it and it is not after this machine's clock plus relayapi.MaxSkew, otherwise as the file's modification time held to both bounds, otherwise this machine's clock, D80, G9
 internal/store/store.go Stored time Received = local: the listing's received, which checkListing holds to the skew and to what can be written, or this machine's clock for a sent copy or a reopened damaged record kept with none; a record kept before is read as it is
 internal/stream/stream.go Manifest time Time = <= now + 42m shown by TestLimitAManifestTimeIsHeldToTheSkew
 internal/vouch/vouch.go Document time Issued = <= now + 42m shown by TestLimitAVouchIssuedIsHeldToTheSkew

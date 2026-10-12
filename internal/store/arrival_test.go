@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 // The inbox, a thread's latest and serve's opener are in the order of
@@ -269,23 +271,30 @@ func v0170Record(t *testing.T, id, received string) string {
 // its received as it was, and says so once on standard error across two
 // loads; marked read, it is saved with that arrival, which the file's new
 // time does not move. The stamps either side of each end are the nearest
-// RFC 3339 can carry: at the latest and the earliest a received still
-// stands in for the arrival, a nanosecond past either it does not. The
-// third branch, this machine's clock when the file's time cannot be
-// written back either, is not tested: this filesystem cannot hold a file
-// time outside the years 0000 to 9999, and os.Chtimes wraps one asked for.
+// RFC 3339 can carry: at the earliest a received still stands in for the
+// arrival, a nanosecond past either end it does not. The latest is
+// writable but far ahead of this machine's clock, so since G9 it is not
+// lent either and the record arrives at its file's time. A past received
+// given at -12:00 is lent, and the loaded arrival is UTC whichever branch
+// gave it, as Save writes one (NEXT.md item 20: under UTC a file time in
+// the local zone was invisible here). The third branch, this machine's
+// clock, is TestALegacyArrivalIsHeldToTheSkew's.
 func TestARecordKeptWithAnUnwritableReceivedArrivesAtItsFilesTime(t *testing.T) {
 	fileTime := time.Date(2026, time.March, 14, 15, 9, 26, 0, time.UTC)
 	for _, c := range []struct {
 		name, received string
-		writable       bool
+		writable, lent bool
 	}{
-		{"the trace's stamp, UTC year 10000", "9999-12-31T23:59:59-12:00", false},
-		{"a nanosecond after the latest", "9999-12-31T23:59:00-00:01", false},
-		{"the latest", "9999-12-31T23:59:59.999999999Z", true},
-		{"the earliest", "0000-01-01T00:00:00Z", true},
-		{"a nanosecond before the earliest", "0000-01-01T00:00:59.999999999+00:01", false},
-		{"the year 0 at +01:00, UTC year -1", "0000-01-01T00:00:00+01:00", false},
+		{"the trace's stamp, UTC year 10000", "9999-12-31T23:59:59-12:00", false, false},
+		{"a nanosecond after the latest", "9999-12-31T23:59:00-00:01", false, false},
+		// Writable, and once lent as the arrival; G9 refuses it as ahead
+		// of this machine's clock by more than relayapi.MaxSkew, so it
+		// now arrives at the file's time and is warned about.
+		{"the latest", "9999-12-31T23:59:59.999999999Z", true, false},
+		{"the earliest", "0000-01-01T00:00:00Z", true, true},
+		{"a nanosecond before the earliest", "0000-01-01T00:00:59.999999999+00:01", false, false},
+		{"the year 0 at +01:00, UTC year -1", "0000-01-01T00:00:00+01:00", false, false},
+		{"a past received at -12:00, behind UTC", "2026-03-13T20:00:00-12:00", true, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			received, err := time.Parse(time.RFC3339Nano, c.received)
@@ -307,8 +316,8 @@ func TestARecordKeptWithAnUnwritableReceivedArrivesAtItsFilesTime(t *testing.T) 
 			if err := os.Chtimes(path, fileTime, fileTime); err != nil {
 				t.Fatal(err)
 			}
-			want := received
-			if !c.writable {
+			want := received.UTC()
+			if !c.lent {
 				want = fileTime
 			}
 			var loads [2]*Stored
@@ -326,13 +335,16 @@ func TestARecordKeptWithAnUnwritableReceivedArrivesAtItsFilesTime(t *testing.T) 
 				if !m.Arrived.Equal(want) || !m.Received.Equal(received) {
 					t.Errorf("loaded with arrived %v and received %v; want %v and %v", m.Arrived, m.Received, want, received)
 				}
+				if m.Arrived.Location() != time.UTC {
+					t.Errorf("loaded with arrived %v in %v; want UTC, as Save writes one", m.Arrived, m.Arrived.Location())
+				}
 			}
-			warning := "warning: " + path + " holds a received time this program cannot write back; it is ordered as arriving at " +
-				fileTime.Format(time.RFC3339) + "\n"
-			if c.writable && stderr != "" {
-				t.Errorf("a writable received was warned about:\n%s", stderr)
+			warning := "warning: " + path + " holds a received time this program cannot write back or that is ahead of this machine's clock; " +
+				"it is ordered as arriving at " + fileTime.Format(time.RFC3339) + ", the file's time\n"
+			if c.lent && stderr != "" {
+				t.Errorf("a received lent as the arrival was warned about:\n%s", stderr)
 			}
-			if !c.writable && stderr != warning {
+			if !c.lent && stderr != warning {
 				t.Errorf("two loads said:\n%q\nwant once:\n%q", stderr, warning)
 			}
 
@@ -358,6 +370,135 @@ func TestARecordKeptWithAnUnwritableReceivedArrivesAtItsFilesTime(t *testing.T) 
 			}
 			if !m.Read || !m.Arrived.Equal(want) || !m.Received.Equal(received) {
 				t.Errorf("marked read: read %v, arrived %v, received %v; want read, %v and %v", m.Read, m.Arrived, m.Received, want, received)
+			}
+		})
+	}
+}
+
+// G9's edges. A record an earlier release kept with no arrived lends its
+// received as the arrival only up to this machine's clock plus
+// relayapi.MaxSkew, and its file's time is held to the same bound. A
+// received at now plus the skew is lent with nothing said; one a second
+// further is not, and the record arrives at its file's time. A file time
+// at now plus the skew is taken; one a second further is not, and the
+// record arrives at this machine's clock at the load, said as such.
+// arrivedBefore reads the real clock, so "now" here is taken before the
+// write and the load runs a moment later: the stamp on the edge is inside
+// it by that moment, and the second past it is outside by all but that.
+func TestALegacyArrivalIsHeldToTheSkew(t *testing.T) {
+	past := time.Date(2026, time.March, 14, 15, 9, 26, 0, time.UTC)
+	for _, c := range []struct {
+		name string
+		// received and file are offsets from now; a received of zero
+		// is the year 9000, which no clock lends.
+		received, file time.Duration
+		pastFile       bool
+		want           string // "received", "file" or "clock"
+	}{
+		{"a received at now plus the skew", relayapi.MaxSkew, 0, true, "received"},
+		{"a received a second past it", relayapi.MaxSkew + time.Second, 0, true, "file"},
+		{"a file time at now plus the skew", 0, relayapi.MaxSkew, false, "file"},
+		{"a file time a second past it", 0, relayapi.MaxSkew + time.Second, false, "clock"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newStore(t)
+			id := "00000000000000000000000000000002"
+			path := s.msgPath(Inbox, id)
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC()
+			received := time.Date(9000, time.January, 1, 0, 0, 0, 0, time.UTC)
+			if c.received != 0 {
+				received = now.Add(c.received)
+			}
+			fileTime := past
+			if !c.pastFile {
+				fileTime = now.Add(c.file)
+			}
+			if err := os.WriteFile(path, []byte(v0170Record(t, id, received.Format(time.RFC3339Nano))), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chtimes(path, fileTime, fileTime); err != nil {
+				t.Fatal(err)
+			}
+			if fi, err := os.Stat(path); err != nil || !fi.ModTime().Equal(fileTime) {
+				t.Fatalf("the file's time is %v (%v); want %v, or the case proves nothing", fi.ModTime(), err, fileTime)
+			}
+			var m *Stored
+			var err error
+			stderr := captureStderr(t, func() { m, err = s.Load(Inbox, id) })
+			loaded := time.Now().UTC()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if m.Arrived.Location() != time.UTC {
+				t.Errorf("loaded with arrived %v in %v; want UTC", m.Arrived, m.Arrived.Location())
+			}
+			prefix := "warning: " + path + " holds a received time this program cannot write back or that is ahead of this machine's clock; " +
+				"it is ordered as arriving at "
+			switch c.want {
+			case "received":
+				if !m.Arrived.Equal(received) || stderr != "" {
+					t.Errorf("arrived %v, said %q; want the received %v lent with nothing said", m.Arrived, stderr, received)
+				}
+			case "file":
+				want := prefix + fileTime.Format(time.RFC3339) + ", the file's time\n"
+				if !m.Arrived.Equal(fileTime) || stderr != want {
+					t.Errorf("arrived %v, said %q; want the file's time %v, said %q", m.Arrived, stderr, fileTime, want)
+				}
+			case "clock":
+				want := prefix + m.Arrived.Format(time.RFC3339) + ", this machine's clock\n"
+				if m.Arrived.Before(now) || m.Arrived.After(loaded) || stderr != want {
+					t.Errorf("arrived %v, said %q; want this machine's clock between %v and %v, said %q", m.Arrived, stderr, now, loaded, want)
+				}
+			}
+		})
+	}
+}
+
+// legacyArrival's bounds, one nanosecond apart, against a fixed now: a
+// received at now plus relayapi.MaxSkew is lent and a nanosecond past it
+// is not, the file's time is held to the same bound, and the writable
+// span's two ends are where Writable puts them, the latest falling to the
+// file's time since it is past the skew. Every cell asserts the arrival,
+// its zone and which source the warning names.
+func TestLimitALegacyArrivalsBoundsAreExact(t *testing.T) {
+	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
+	bound := now.Add(relayapi.MaxSkew)
+	file := time.Date(2026, time.March, 14, 15, 9, 26, 0, time.UTC)
+	ptr := func(t time.Time) *time.Time { return &t }
+	behind := time.FixedZone("UTC-12", -12*3600)
+	past := now.Add(-time.Hour)
+	const lent, fileTime, clock = "", "the file's time", "this machine's clock"
+	for _, c := range []struct {
+		name     string
+		received time.Time
+		modTime  *time.Time
+		want     time.Time
+		which    string
+		zone     *time.Location // now's zone, UTC when nil
+	}{
+		{"received at now plus the skew", bound, ptr(file), bound, lent, nil},
+		{"received a nanosecond past it", bound.Add(time.Nanosecond), ptr(file), file, fileTime, nil},
+		{"file time at now plus the skew", bound.Add(time.Nanosecond), ptr(bound), bound, fileTime, nil},
+		{"file time a nanosecond past it", bound.Add(time.Nanosecond), ptr(bound.Add(time.Nanosecond)), now, clock, nil},
+		{"no file time", bound.Add(time.Nanosecond), nil, now, clock, nil},
+		{"received at the earliest writable", relayapi.EarliestWritable, ptr(file), relayapi.EarliestWritable, lent, nil},
+		{"received a nanosecond before it", relayapi.EarliestWritable.Add(-time.Nanosecond), ptr(file), file, fileTime, nil},
+		{"received at the latest writable", relayapi.LatestWritable, ptr(file), file, fileTime, nil},
+		{"received in a zone behind UTC", past.In(behind), ptr(file), past, lent, nil},
+		{"file time in a zone behind UTC", bound.Add(time.Nanosecond), ptr(file.In(behind)), file, fileTime, nil},
+		{"now in a zone behind UTC", bound.Add(time.Nanosecond), nil, now, clock, behind},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			at := now
+			if c.zone != nil {
+				at = now.In(c.zone)
+			}
+			got, which := legacyArrival(c.received, c.modTime, at)
+			if !got.Equal(c.want) || got.Location() != time.UTC || which != c.which {
+				t.Errorf("legacyArrival = %v (%v), %q; want %v in UTC, %q", got, got.Location(), which, c.want, c.which)
 			}
 		})
 	}

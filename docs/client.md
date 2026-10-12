@@ -731,10 +731,12 @@ read` shows the sender's stamp as `sent:`, labelled the sender's clock,
 beside `received:`, the relay's. `--json` carries all three, as `time`,
 `received` and `arrived`. Mail an earlier release kept here counts as
 arriving when the relay received it, unless that time is one this program
-cannot write back, which no honest relay sends; then it counts from when
-its file was last written, and auu warns once per command until the record
-is next saved. A message stamped more than forty-two minutes in the future
-is refused when it is opened. The bound is the chain of clocks a message
+cannot write back or is more than five minutes ahead of this machine's
+clock, which no honest relay sends; then it counts from when its file was
+last written, held to the same two, and otherwise from now, and auu warns
+once per command, naming which it took, until the record is next saved.
+A message stamped more than forty-two minutes in the future is refused
+when it is opened. The bound is the chain of clocks a message
 may cross: the sender within five minutes of its relay, each relay within a
 minute of the next, the last within five minutes of this machine, which
 over the protocol's thirty-two hops between relays is forty-two minutes. An

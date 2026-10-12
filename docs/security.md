@@ -1012,8 +1012,9 @@ who saw an id could post a note under it once the owner removed the
 original. A record is therefore taken as a carried-over entry's message
 only when it is on the entry's thread and, on a thread tried or answered,
 the earlier release fetched it: such a record has no arrival of its own and
-is lent the relay's received (or, when that cannot be written back, its
-file's time, and is then never taken), which must be no later than the
+is lent the relay's received (or, when that cannot be written back or is
+more than five minutes ahead of this machine's clock, its file's time or
+now, and is then never taken), which must be no later than the
 thread's last attempt and the five minutes the relay's clock is held to. A
 record this release fetched came after the upgrade, after every attempt the
 earlier release made, and is never taken there. For mail fetched before the
@@ -1539,12 +1540,13 @@ relay with its clock ahead cannot pin its message atop the inbox or a
 thread. The inbox and a thread's latest take this one order, and serve's
 opener takes it as far as its ledger keeps it: arrival here, then the
 relay's counter. A message an earlier release kept here counts as
-arriving at its `received`, or, if that cannot be written back, when its
-file was last written. The one bound on the stamp is the future. A
-message may be old, since it was stored and forwarded. But one stamped
-too far past the receiver's clock is refused at open as malformed, on
-the envelope and on the manifest alike, and a vouch's `issued` is held
-to the same bound.
+arriving at its `received`, or, if that cannot be written back or is
+more than five minutes ahead of this machine's clock, when its file was
+last written, held to the same two, and otherwise now. The one bound on
+the stamp is the future. A message may be old, since it was stored and
+forwarded. But one stamped too far past the receiver's clock is refused
+at open as malformed, on the envelope and on the manifest alike, and a
+vouch's `issued` is held to the same bound.
 
 The bound is the chain of clocks the stamp crossed, each held to the
 next. The sender's clock is within five minutes of its relay's on the
