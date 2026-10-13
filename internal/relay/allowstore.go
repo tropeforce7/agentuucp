@@ -196,5 +196,5 @@ func allowDecision(bundle, doc, sig []byte) (state string, d *allowlist.Document
 // push; only the key holder could have put the row there. The clock is
 // read here, inside the push's transaction, beside the decision it makes.
 func heldFromTheFuture(issued time.Time) bool {
-	return issued.After(time.Now().Add(relayapi.MaxSkew))
+	return relayapi.Ahead(issued, time.Now(), relayapi.MaxSkew)
 }

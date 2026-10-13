@@ -250,7 +250,8 @@ func decode(doc []byte) (*Document, error) {
 // stored document is read as it is, by Verify, which never asks: a bound
 // at the read would close a mailbox over a clock.
 func CheckIssued(d *Document, now time.Time) error {
-	if d.Issued.After(now.Add(relayapi.MaxSkew)) {
+	// In whole seconds, as the request carrying it is judged (G13).
+	if relayapi.Ahead(d.Issued, now, relayapi.MaxSkew) {
 		return fmt.Errorf("issued %s is more than %s %w",
 			d.Issued.UTC().Format(time.RFC3339), relayapi.MaxSkew, relayapi.ErrAheadOfNow)
 	}

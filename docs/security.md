@@ -1418,7 +1418,8 @@ on it, since the relay verifies the stored row before its time can refuse
 a push and holds the push to the time inside the verified document. Right
 after the signature verifies, and before anything is stored, the relay
 holds `issued` to its own clock: a directory issued more than five minutes
-(the request skew) ahead of it, outside the years 0000 to 9999 the relay
+(the request skew, counted in whole seconds as a request's timestamp is)
+ahead of it, outside the years 0000 to 9999 the relay
 can write, or outside about 1677 to 2262, which a watch carries as
 nanoseconds, is answered `400` with no refusal code, as is a channel
 whose `not_before` or `not_after` lies outside the years 0000 to 9999.
