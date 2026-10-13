@@ -138,7 +138,7 @@ var lenientDecodeAllowed = map[string]string{
 	"cmd/auu-relay/config.go checkEmptyCourier json.Unmarshal":             "probe of courier present or absent before wire.Decode of the same raw settings",
 	"cmd/auu-relay/config.go checkRemovedKeys json.Unmarshal":              "probe of removed keys and sub-keys before wire.Decode of the same raw settings",
 	"cmd/auu-relay/config.go courierSharesSet json.Unmarshal":              "probe of set, null or absent before wire.Decode of the same raw settings",
-	"cmd/auu-relay/config.go checkCourierNumbersAlone json.Unmarshal":      "probe of numbers without a peering before wire.Decode of the same raw settings",
+	"cmd/auu-relay/config.go courierBlockGiven json.Unmarshal":             "probe of a non-empty courier block before wire.Decode of the same raw settings",
 }
 
 // funcName is the receiver-qualified name of a function declaration.

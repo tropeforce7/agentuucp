@@ -108,6 +108,11 @@ func loadServeConfig(path string) (*serveConfig, error) {
 	base := filepath.Dir(path)
 	for _, name := range cfg.names() {
 		ch := cfg.Channels[name]
+		// The strict decode takes null for a pointer as nil, so a channel
+		// written as null is refused here by name, before anything reads it.
+		if ch == nil {
+			return nil, cfg.errf(name, "it is null; a channel is an object, with dir and exec at least")
+		}
 		ch.name = name
 		if ch.Mode == "" {
 			ch.Mode = modeReadOnly

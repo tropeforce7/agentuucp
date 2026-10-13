@@ -61,6 +61,15 @@ func courierHome(t *testing.T, neighbour, url string) string {
 	return root
 }
 
+// resolvePeered is resolve with no file and a peering in front of args: an
+// empty couriers file given by --courier-file, which accepts from nobody
+// yet is a peering, so the courier numbers in args are bounds on something
+// and are judged on their own edges rather than refused as numbers alone.
+func resolvePeered(t *testing.T, args ...string) (Config, error) {
+	t.Helper()
+	return resolve(t, "", append([]string{"--courier-file", couriersFile(t)}, args...)...)
+}
+
 // TestARelayPeersWithNobodyByDefault: forwarding is something an operator
 // asks for. A relay with no courier block dials nobody, accepts nothing
 // forwarded, and hands the library a nil courier, which is what every relay
@@ -318,7 +327,7 @@ func TestLimitCourierSettingRanges(t *testing.T) {
 			{1, true}, {8, true}, {relayapi.MaxHops, true},
 			{relayapi.MaxHops + 1, false}, {math.MaxInt64, false},
 		} {
-			_, err := resolve(t, "", "--courier-max-hops", strconv.FormatInt(tc.hops, 10))
+			_, err := resolvePeered(t, "--courier-max-hops", strconv.FormatInt(tc.hops, 10))
 			if tc.ok && err != nil {
 				t.Errorf("max_hops %d: %v; want it taken", tc.hops, err)
 			}
@@ -344,7 +353,7 @@ func TestLimitCourierSettingRanges(t *testing.T) {
 			if tc.ttl != "" {
 				args = []string{"--courier-forward-ttl", tc.ttl}
 			}
-			_, err := resolve(t, "", args...)
+			_, err := resolvePeered(t, args...)
 			if tc.ok && err != nil {
 				t.Errorf("forward_ttl %q: %v; want it taken", tc.ttl, err)
 			}
@@ -365,16 +374,16 @@ func TestLimitCourierSettingRanges(t *testing.T) {
 		} {
 			// Zero is unlimited and is taken; a negative one is refused with
 			// the sentence that says what zero means.
-			if _, err := resolve(t, "", f, "0"); err != nil {
+			if _, err := resolvePeered(t, f, "0"); err != nil {
 				t.Errorf("%s 0: %v; want unlimited", f, err)
 			}
-			_, err := resolve(t, "", f, "-1")
+			_, err := resolvePeered(t, f, "-1")
 			if err == nil {
 				t.Errorf("%s -1 was taken", f)
 			} else if !strings.Contains(err.Error(), "use 0 for unlimited") {
 				t.Errorf("%s -1: %v; want the sentence naming what zero means", f, err)
 			}
-			if _, err := resolve(t, "", f, strconv.FormatInt(math.MinInt64, 10)); err == nil {
+			if _, err := resolvePeered(t, f, strconv.FormatInt(math.MinInt64, 10)); err == nil {
 				t.Errorf("%s MinInt64 was taken", f)
 			}
 		}
@@ -391,14 +400,14 @@ func TestLimitCourierSettingRanges(t *testing.T) {
 			{"--courier-queue-max-messages-per-courier", maxQueuePerCourierCeiling},
 		} {
 			f := tc.flag
-			if _, err := resolve(t, "", f, strconv.Itoa(tc.ceiling)); err != nil {
+			if _, err := resolvePeered(t, f, strconv.Itoa(tc.ceiling)); err != nil {
 				t.Errorf("%s at its ceiling: %v", f, err)
 			}
-			_, err := resolve(t, "", f, strconv.Itoa(tc.ceiling+1))
+			_, err := resolvePeered(t, f, strconv.Itoa(tc.ceiling+1))
 			if err == nil || !strings.Contains(err.Error(), "at most") {
 				t.Errorf("%s one over its ceiling: %v; want the refusal", f, err)
 			}
-			if _, err := resolve(t, "", f, strconv.FormatInt(math.MaxInt64, 10)); err == nil {
+			if _, err := resolvePeered(t, f, strconv.FormatInt(math.MaxInt64, 10)); err == nil {
 				t.Errorf("%s MaxInt64 was taken", f)
 			}
 		}
@@ -440,7 +449,7 @@ func TestLimitCourierSettingRanges(t *testing.T) {
 				{ceiling + 1, "at most courier.carried_max_rows (1000000), got 1000001"},
 				{math.MaxInt64, "at most courier.carried_max_rows (1000000)"},
 			} {
-				_, err := resolve(t, "", f, strconv.FormatInt(tc.share, 10))
+				_, err := resolvePeered(t, f, strconv.FormatInt(tc.share, 10))
 				switch {
 				case tc.want == "" && err != nil:
 					t.Errorf("%s %d: %v; want it taken", f, tc.share, err)
@@ -451,7 +460,7 @@ func TestLimitCourierSettingRanges(t *testing.T) {
 				}
 			}
 			// An unlimited ceiling has no top for a share to pass.
-			if _, err := resolve(t, "", f, strconv.FormatInt(math.MaxInt64, 10),
+			if _, err := resolvePeered(t, f, strconv.FormatInt(math.MaxInt64, 10),
 				"--courier-carried-max-rows", "0"); err != nil {
 				t.Errorf("%s MaxInt64 under an unlimited ceiling: %v; want it taken", f, err)
 			}
@@ -461,12 +470,12 @@ func TestLimitCourierSettingRanges(t *testing.T) {
 			want := fmt.Sprintf("%s must be courier.carried_max_rows (5) or 0, got 3: the ceiling "+
 				"is below %d, the least share that pays for a path of courier.max_hops (8) relays, "+
 				"so a share must be the ceiling itself", name, floor)
-			_, err := resolve(t, "", "--courier-carried-max-rows", "5", f, "3")
+			_, err := resolvePeered(t, "--courier-carried-max-rows", "5", f, "3")
 			if err == nil || !strings.Contains(err.Error(), want) {
 				t.Errorf("%s 3 under a ceiling of 5: %v; want %q", f, err, want)
 			}
 			for _, share := range []string{"5", "0"} {
-				if _, err := resolve(t, "", "--courier-carried-max-rows", "5", f, share); err != nil {
+				if _, err := resolvePeered(t, "--courier-carried-max-rows", "5", f, share); err != nil {
 					t.Errorf("%s %s under a ceiling of 5: %v; want it taken", f, share, err)
 				}
 			}
@@ -570,7 +579,7 @@ func TestTheCarriedSharesFollowTheCeiling(t *testing.T) {
 			"--courier-carried-rows-per-courier", "1600"}, 100, 1600},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := resolve(t, "", tc.args...)
+			cfg, err := resolvePeered(t, tc.args...)
 			if err != nil {
 				t.Fatalf("%v: %v; want the derived shares to validate", tc.args, err)
 			}
@@ -603,7 +612,7 @@ func TestTheCarriedSharesFollowTheCeiling(t *testing.T) {
 // TestPrintedConfigCarriesTheCourierNumbers: the printed configuration is the
 // record of what the relay is doing, so every bound is in it and loads again.
 func TestPrintedConfigCarriesTheCourierNumbers(t *testing.T) {
-	cfg, err := resolve(t, "", "--courier-max-hops", "3", "--courier-forward-ttl", "5h",
+	cfg, err := resolvePeered(t, "--courier-max-hops", "3", "--courier-forward-ttl", "5h",
 		"--courier-carried-max-rows", "7")
 	if err != nil {
 		t.Fatal(err)

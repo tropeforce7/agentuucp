@@ -133,7 +133,9 @@ given twice in one object, of which it would keep the last. Nothing may
 follow the closing brace but white space.
 
 Use `--print-config` to see exactly what the relay resolved, paths
-included. Its output is valid input for `--config`.
+included. Its output is valid input for `--config`. A relay that peers
+with nobody prints no `courier` block, since a block of numbers without
+`courier.home` or `courier.authorized_file` is refused (see 1.10).
 
 ### 1.1 Where the mail lives
 
@@ -1201,6 +1203,25 @@ like, and what it costs is somebody's reply, so the start says it and you
 decide which it is. A relay given a home and no file, or a file and no
 home, is one-way on purpose and is not remarked on.
 
+**The numbers need a peering.** Every other setting under `courier` bounds
+forwarding, and only `courier.home` or `courier.authorized_file` makes the
+relay forward at all. So a courier setting, in the file or as a
+`--courier-*` flag, with neither of the two set once the flags are merged
+in, stops the relay at its start:
+
+```
+courier sets bounds on a peering this relay does not have: the numbers
+under courier bound forwarding, and courier.home or
+courier.authorized_file is what makes this relay forward at all; give it
+a peering, or delete the courier block and the --courier flags
+```
+
+A home or a file given as `""` or `null` is no peering. A flag alone,
+`--courier-max-hops 4` with no path, is refused as the same line in the
+file is. A `--courier-home` or `--courier-file` flag may supply the path
+the file left empty, and the relay takes it. `--print-config` prints the
+`courier` block only for a relay that peers, so its output still loads.
+
 The relay also says at the start when its own certificate for a neighbour
 cannot be read, naming the home and what to run in it, rather than leaving
 it to be found by the first person whose mail it was meant to carry.
@@ -1465,7 +1486,7 @@ unset, the shares are a sixteenth and a quarter of
 default. Since standing hashes never pass the share, nobody fills the
 ceiling alone: sixteen people's shares, or four neighbours', add up to
 it. An unlimited ceiling takes the default ceiling's fractions.
-`--print-config` prints the numbers.
+`--print-config` prints the numbers on a relay that peers.
 
 The floor of a share is `courier.max_hops` × (1 + H), rounded up: 30 at
 the default eight hops. Below it, what a poster may spend at once cannot

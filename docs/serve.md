@@ -68,7 +68,8 @@ nothing would be a channel nobody was serving. So is a field in another
 case than this guide's (`"Exec"` for `exec`), a field given twice, and
 anything after the closing brace, each of which the JSON reader would
 otherwise take without a word. The split proxy's own file is read the same
-way.
+way. A channel is an object, with `dir` and `exec` at least, and one
+written as `null` is refused naming the channel.
 
 `auu serve check` reads the file, checks every directory and program it
 names, and prints what it would serve, without touching a key, a relay or

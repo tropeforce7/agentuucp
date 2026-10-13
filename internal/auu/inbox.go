@@ -795,8 +795,16 @@ func toJSON(s *store.Store, box store.Box, m *store.Stored, includeText bool) me
 	}
 	out.Newer = m.Newer
 	out.DroppedSections = m.DroppedSections
+	// A record's sections are listed as ignored on the path they were
+	// sorted on: a message's on the message's, and a stream's, which
+	// innerFromManifest took from its manifest, on the manifest's. A name
+	// known only on another path was ignored there.
+	path := wire.OnMessage
+	if m.Streamed {
+		path = wire.OnManifest
+	}
 	for _, sec := range m.Inner.Sections {
-		if !wire.Known(sec.Name, wire.OnMessage|wire.OnManifest) {
+		if !wire.Known(sec.Name, path) {
 			out.IgnoredSections = append(out.IgnoredSections, sec.Name)
 		}
 	}

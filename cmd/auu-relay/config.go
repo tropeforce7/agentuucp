@@ -158,6 +158,10 @@ type CourierConfig struct {
 	// posterShareSet and courierShareSet say the file or a flag set the
 	// share, so Resolve leaves it as written.
 	posterShareSet, courierShareSet bool
+	// given says the file or a flag set any courier setting at all, so
+	// Validate can refuse bounds on a peering the merged settings do not
+	// have; see courierNumbersAlone.
+	given bool
 }
 
 // maxQueuePerCourierCeiling is the most queue_max_messages_per_courier may
@@ -182,7 +186,7 @@ const (
 // set reports whether this relay peers with anybody: a home to dial from, a
 // file to accept from, or both. The numbers below are bounds on a peering and
 // not a peering, so a block of nothing but numbers is a relay that still
-// forwards nothing, which checkCourierNumbersAlone refuses at the file.
+// forwards nothing, which courierNumbersAlone refuses.
 func (c CourierConfig) set() bool { return c.Home != "" || c.AuthorizedFile != "" }
 
 // ParsedForwardTTL is ForwardTTL as a duration.
@@ -565,9 +569,7 @@ func Load(path string) (Config, string, error) {
 	if err := checkEmptyCourier(raw); err != nil {
 		return cfg, "", fmt.Errorf("%s: %w", path, err)
 	}
-	if err := checkCourierNumbersAlone(raw); err != nil {
-		return cfg, "", fmt.Errorf("%s: %w", path, err)
-	}
+	cfg.Courier.given = courierBlockGiven(raw)
 	cfg.Courier.posterShareSet, cfg.Courier.courierShareSet = courierSharesSet(raw)
 
 	// A misspelled key is a silent misconfiguration otherwise, and the whole
@@ -645,6 +647,9 @@ func trailingCommaHint(raw []byte, offset int64) string {
 // read every flag value.
 func (c *Config) Merge(fs *flag.FlagSet, f *flagValues) {
 	fs.Visit(func(fl *flag.Flag) {
+		if strings.HasPrefix(fl.Name, "courier-") {
+			c.Courier.given = true
+		}
 		switch fl.Name {
 		case "listen":
 			c.Listen = f.listen
@@ -1132,6 +1137,9 @@ func (l LimitsConfig) Relay() relay.Limits {
 // first forwarded message so that a typo in it is a relay that does not
 // start, with the line number in the sentence.
 func (c Config) courierValidate() error {
+	if err := c.courierNumbersAlone(); err != nil {
+		return err
+	}
 	for _, f := range []struct {
 		name  string
 		value int64
@@ -1232,33 +1240,38 @@ func (c Config) courierValidate() error {
 	return nil
 }
 
-// courierNumbersWithoutAPeering refuses a courier block that bounds a peering
-// this relay does not have.
-//
-// The numbers are bounds and not a peering: with neither home nor file the
-// relay forwards nothing and accepts nothing, so an operator who set
-// max_hops and nothing else has written a line that does nothing, which is
-// the misconfiguration an empty block is and is caught the same way — in the
-// raw bytes, because after the decode a block of numbers and the defaults
-// are the same values.
-func checkCourierNumbersAlone(raw []byte) error {
+// courierBlockGiven reports whether a settings file has a courier block with
+// anything in it, read from the raw bytes, because after the decode a block
+// of numbers and the defaults are the same values. An empty block is
+// checkEmptyCourier's, and malformed JSON the strict decode's.
+func courierBlockGiven(raw []byte) bool {
 	var probe struct {
 		Courier *map[string]json.RawMessage `json:"courier"`
 	}
 	if err := json.Unmarshal(raw, &probe); err != nil {
-		return nil
+		return false
 	}
-	if probe.Courier == nil || len(*probe.Courier) == 0 {
+	return probe.Courier != nil && len(*probe.Courier) > 0
+}
+
+// courierNumbersAlone refuses courier settings that bound a peering this
+// relay does not have.
+//
+// The numbers are bounds and not a peering: with neither home nor file the
+// relay forwards nothing and accepts nothing, so an operator who set
+// max_hops and nothing else has written a line that does nothing, which is
+// the misconfiguration an empty block is. It is judged on the merged
+// settings rather than on the file's keys, so that a home or a file given
+// as "" or null is no peering, a flag alone is judged as the file is, and a
+// flag can supply the path the file left empty.
+func (c Config) courierNumbersAlone() error {
+	if !c.Courier.given || c.Courier.set() {
 		return nil
-	}
-	for _, key := range []string{"home", "authorized_file"} {
-		if _, ok := (*probe.Courier)[key]; ok {
-			return nil
-		}
 	}
 	return errors.New("courier sets bounds on a peering this relay does not have: " +
 		"the numbers under courier bound forwarding, and courier.home or " +
-		"courier.authorized_file is what makes this relay forward at all")
+		"courier.authorized_file is what makes this relay forward at all; " +
+		"give it a peering, or delete the courier block and the --courier flags")
 }
 
 // clientCertsValidate checks the client certificate settings.
@@ -1324,11 +1337,25 @@ const msgOpenWithCerts = "client certificates are required but registration is o
 // HTML escaping is off: encoding/json would otherwise render the redaction
 // marker as \u003credacted\u003e, and this output is meant to be read by a
 // person and pasted back into a config file.
+//
+// A relay that peers with nobody prints no courier block: its numbers bound
+// nothing, and a block of numbers without a home or a file is refused by
+// courierNumbersAlone, so printing them would make output that does not
+// load again.
 func Encode(w io.Writer, cfg Config) error {
 	enc := json.NewEncoder(w)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
-	return enc.Encode(cfg)
+	out := struct {
+		Config
+		// Courier, at the outer level, hides Config.Courier from the
+		// encoder, and is left out when it is nil.
+		Courier *CourierConfig `json:"courier,omitempty"`
+	}{Config: cfg}
+	if cfg.Courier.set() {
+		out.Courier = &cfg.Courier
+	}
+	return enc.Encode(out)
 }
 
 // Redacted returns a copy safe to print.
