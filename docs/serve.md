@@ -164,7 +164,23 @@ says the same line on standard error,
 `read-only` the untracked scratch goes with it. In `side-copy` the line
 ends `; the thread's work in it is gone`: what the thread had written and
 committed there is lost, and every patch after is taken against the new
-base. A git that cannot be run at all still ends the run.
+base. A directory git cannot be started in, one the handler took the
+permissions off or that is gone, is not a worktree and is made again the
+same way. A registration the handler locked with `git worktree lock` is
+unlocked first, so the prune can clear it. A directory inside it the
+handler took the permissions off is given them back, the owner's alone,
+and removed; links are never followed. Only a tree its owner cannot
+remove even so, a file made immutable or one another user owns, is moved
+aside, to
+`serve/NAME.damaged-N` in the home, NAME the thread id or the
+channel's name and N the first that is free, and serve says
+`auu: worktree PATH could not be removed and was moved aside to ASIDE;
+remove it by hand`. What can be neither removed nor moved aside is the
+message's failure, `its worktree PATH could not be removed or moved aside`
+in the ledger, retried and given up on after `retries` as any failure is,
+and the run goes on to the next message. A git that is not installed, or
+a checkout git will not answer for or cannot be started in, still ends the
+run, as does a worktree git fails to add.
 
 Making the worktree again writes nothing to the ledger by itself. A
 handler that damages its worktree and exits non-zero has failed, and is

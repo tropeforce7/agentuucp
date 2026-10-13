@@ -3,6 +3,7 @@ package auu
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -107,6 +108,15 @@ func worktreeFor(root string, ch *serveChannel, thread, stateDir string, newThre
 // for good. Making it again writes nothing to the ledger: a turn that
 // failed for the damage was counted there as any failed turn is, and the
 // message in hand is not made to answer for what stood here.
+//
+// A handler can also leave what will not be mended: a registration it
+// locked, which the prune passes over and the add then refuses, is
+// unlocked first; a directory that cannot be removed is moved aside under
+// the serve root, the worktrees directory's parent, and said; and what
+// still cannot be removed or moved is an unmendableError, which handle
+// counts against the message in hand rather than ending the run. What is
+// the host's — git not there, the checkout git will not answer for, a
+// prune or an add that fails — is an error as before.
 func ensureWorktree(dir, path string) (made, remade bool, err error) {
 	if info, err := os.Lstat(path); err == nil {
 		if info.IsDir() {
@@ -120,12 +130,23 @@ func ensureWorktree(dir, path string) (made, remade bool, err error) {
 		}
 		// For a file or a link git has not been asked anything yet: the
 		// prune shows it runs before anything is removed, so a git that
-		// cannot start never costs what stands here.
+		// cannot start never costs what stands here. A lock the handler
+		// put on the registration would keep it from the prune; a path
+		// git holds no lock for refuses the unlock, which says nothing.
+		gitRun(dir, "worktree", "unlock", path)
 		if _, err := gitRun(dir, "worktree", "prune"); err != nil {
 			return false, false, err
 		}
 		if err := os.RemoveAll(path); err != nil {
-			return false, false, err
+			// What the handler took the permissions off is serve's own, so
+			// they are given back and the removal tried once more before
+			// the path is moved aside.
+			openUp(path)
+			if err := os.RemoveAll(path); err != nil {
+				if err := moveAside(path); err != nil {
+					return false, false, err
+				}
+			}
 		}
 		remade = true
 	}
@@ -141,6 +162,69 @@ func ensureWorktree(dir, path string) (made, remade bool, err error) {
 	return true, remade, nil
 }
 
+// openUp makes every directory under path, path among them, the owner's
+// to read, write and enter again, so that what a handler took the
+// permissions off can be removed. A link is never followed: the walk
+// stats each entry without following it and directories alone are
+// changed. Each directory is changed before the walk reads it, which is
+// what lets it go on into one that was 000. Failures are left for the
+// removal after to report.
+//
+// A directory swapped for a link between the walk's look and the chmod
+// would have the chmod follow it, and the walk go on through it, onto a
+// subtree of the serve user's.
+// That is nothing the handler could not do itself: it runs as the serve
+// user and can chmod any directory that user owns.
+func openUp(path string) {
+	filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			os.Chmod(p, 0o700)
+		}
+		return nil
+	})
+}
+
+// unmendableError is a worktree's path that could be neither removed nor
+// moved aside: what a handler left there is the message's failure, never
+// the run's.
+type unmendableError struct {
+	path string
+	err  error
+}
+
+func (e *unmendableError) Error() string {
+	return fmt.Sprintf("its worktree %s could not be removed or moved aside: %v", e.path, e.err)
+}
+
+func (e *unmendableError) Unwrap() error { return e.err }
+
+// maxAside is how many moved-aside copies of one worktree are looked past
+// for a free name before the path is given up as unmendable.
+const maxAside = 1000
+
+// moveAside renames a worktree that cannot be removed to
+// <name>.damaged-<n> in the serve root, n the first that is free, and says
+// where on the console for a person to remove. The name is the worktree's
+// own, a thread id or a channel name already held to its rule, and the
+// place is outside worktrees/ and threads/, so nothing serve keeps is ever
+// named by it.
+func moveAside(path string) error {
+	root := filepath.Dir(filepath.Dir(path))
+	for n := 1; n <= maxAside; n++ {
+		aside := filepath.Join(root, fmt.Sprintf("%s.damaged-%d", filepath.Base(path), n))
+		if _, err := os.Lstat(aside); !errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err := os.Rename(path, aside); err != nil {
+			return &unmendableError{path: path, err: err}
+		}
+		fmt.Fprintf(os.Stderr, "%s: worktree %s could not be removed and was moved aside to %s; remove it by hand\n",
+			prog, path, aside)
+		return nil
+	}
+	return &unmendableError{path: path, err: fmt.Errorf("%s.damaged-1 to -%d are all taken", filepath.Base(path), maxAside)}
+}
+
 // lostWorktree says whether a directory is no longer a git worktree of the
 // checkout's. 'rev-parse HEAD' is not the question: git looks upward for a
 // repository, so a worktree whose .git was removed inside a home that is
@@ -151,9 +235,10 @@ func ensureWorktree(dir, path string) (made, remade bool, err error) {
 // handler made a repository of its own with 'git init' is not taken for
 // it. A git that ran and refused to answer there is taken as saying the
 // directory is not one, since the checkout has just been answered for and
-// whatever made git refuse is the directory's; a git that could not be run
-// has said nothing, and that is an error, as is a checkout git will not
-// answer for.
+// whatever made git refuse is the directory's, and so is a git that could
+// not be started there, in a directory a handler took the permissions off;
+// a git that is not there at all has said nothing, and that is an error, as
+// is a checkout git will not answer for or cannot be started in.
 //
 // Directories are compared as files, not as names: a home reached by a
 // name in another case, or under a link, is the same directory, and taken
@@ -167,6 +252,9 @@ func lostWorktree(dir, path string) (bool, error) {
 		return false, fmt.Errorf("git rev-parse --git-common-dir in %s: the checkout is not a git repository", dir)
 	}
 	top, answered, err := gitAsk(path, "--show-toplevel")
+	if errors.Is(err, errCannotStartIn) {
+		return true, nil
+	}
 	if err != nil {
 		return false, err
 	}
@@ -174,18 +262,27 @@ func lostWorktree(dir, path string) (bool, error) {
 		return true, nil
 	}
 	common, answered, err := gitAsk(path, "--git-common-dir")
+	if errors.Is(err, errCannotStartIn) {
+		return true, nil
+	}
 	if err != nil {
 		return false, err
 	}
 	return !answered || !sameDir(common, shared), nil
 }
 
+// errCannotStartIn is git, which is there, failing to start in the
+// directory it was asked about: the directory is the trouble, not git.
+var errCannotStartIn = errors.New("git could not be started there")
+
 // gitAsk asks 'git rev-parse' one question about a directory and answers
 // with the path git gave, made absolute, since a repository's own common
 // directory is given relative to where it was asked. answered is false
 // when git ran and refused, which is how it says a directory is not in a
-// repository and how lostWorktree reads every refusal; an error is git that
-// could not be run.
+// repository and how lostWorktree reads every refusal. An error is git that
+// could not be run: one wrapping errCannotStartIn when git is there and the
+// directory would not let it start, any other when git is not there or
+// the host would not start it.
 func gitAsk(dir, question string) (answer string, answered bool, err error) {
 	cmd := exec.Command("git", "rev-parse", question)
 	cmd.Dir = dir
@@ -194,6 +291,12 @@ func gitAsk(dir, question string) (answer string, answered bool, err error) {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
 			return "", false, nil
+		}
+		// A directory that will not be entered fails the start with its
+		// permission or its absence; git missing is ErrNotFound before
+		// any start, and a fork the host refused is neither.
+		if !errors.Is(err, exec.ErrNotFound) && (errors.Is(err, os.ErrPermission) || errors.Is(err, os.ErrNotExist)) {
+			return "", false, fmt.Errorf("git rev-parse %s in %s: %w: %v", question, dir, errCannotStartIn, err)
 		}
 		return "", false, fmt.Errorf("git rev-parse %s in %s: %v", question, dir, err)
 	}

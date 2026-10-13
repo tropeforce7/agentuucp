@@ -695,7 +695,11 @@ channel's checkout is serve's to mend and not the run's to stop on: a
 handler can do that to it, and ending the run there let one `rm -f .git`
 stop the expert for every asker, so serve removes what stands at the path
 under the serve root, makes the worktree again from the checkout's `HEAD`
-and says so, and a git that cannot be run still ends the run. And a limit
+and says so, and a git that cannot be run still ends the run. That means
+git not there or a checkout it cannot answer for, never a worktree a
+handler locked or took the permissions off, which serve unlocks and gives
+back; and a path a handler left that can be neither removed nor moved
+aside is the message's failure in the ledger, not the run's. And a limit
 keyed on a string the sender chose is not a limit: `max_turns` counted
 answers by the thread id in the follow-up, so a peer renaming the thread on
 each reply was on turn one every time; a reply is answered on the thread
