@@ -847,12 +847,13 @@ with `ID: the stream on the relay is not the one that was quarantined;
 nothing was delivered and the record is as it was`, the record left in
 the quarantine. One whose manifest disagrees with the size the relay
 listed when it was quarantined is kept under `damaged/` with the fetch's
-warning, acknowledged and taken out of the quarantine, exit 2, with `ID:
-its manifest says the stream is N bytes on the wire and the relay listed
-M; it was kept as damaged and acknowledged, and nobody was added`. One
-whose manifest verifies but whose payload will not open, because it does
-not decrypt or fails its digest, or whose relay says the range asked for
-lies beyond its stored file, is settled the same way but exits 0, with `ID: its payload will not open; it was settled
+warning, acknowledged and taken out of the quarantine, settled with exit 0,
+with `ID: its manifest says the stream is N bytes on the wire and the
+relay listed M; it was settled as damaged and acknowledged, and nobody
+was added`. One whose manifest verifies but whose payload will not open,
+because it does not decrypt or fails its digest, or whose relay says the
+range asked for lies beyond its stored file, is settled the same way,
+exit 0, with `ID: its payload will not open; it was settled
 as damaged and acknowledged, and nobody was added`. One whose copy the
 relay has dropped, answering that the body is gone, is not settled: exit
 2, with `ID: its body is no longer on the relay; ask the sender to send

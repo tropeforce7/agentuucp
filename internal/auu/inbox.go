@@ -2192,8 +2192,9 @@ func cmdQuarantine(args []string) error {
 			// to v0.17.0 quarantined. It is done with as the fetch does
 			// it, kept under damaged/ with the two numbers and
 			// acknowledged, and taken out of the quarantine; nobody is
-			// added. A record from before v0.14.0 kept no size, and only
-			// its size goes unchecked.
+			// added, and the trust is settled with exit 0. A record from
+			// before v0.14.0 kept no size, and only its size goes
+			// unchecked.
 			if want := stream.Size(opened.SealedManifestBytes, opened.Manifest.PayloadBytes, opened.Manifest.ChunkSize); m.RelaySize != 0 && want != m.RelaySize {
 				var res fetchResult
 				if err := keepDamaged(s, r, m.RelayID, m.Received, manifest, sizeCause(want, m.RelaySize), &res); err != nil {
@@ -2205,9 +2206,13 @@ func cmdQuarantine(args []string) error {
 				if err := s.Remove(store.Quarantine, m.Inner.ID); err != nil {
 					return err
 				}
-				return &exitError{code: exitTransport, err: fmt.Errorf(
-					"%s: its manifest says the stream is %d bytes on the wire and the relay listed %d; "+
-						"it was kept as damaged and acknowledged, and nobody was added", m.Inner.ID[:12], want, m.RelaySize)}
+				// Settled, as the payload that will not open is (G8): the
+				// person asked for a decision and it is made, so the exit
+				// is 0 and the sentence is on stdout, one code for kept as
+				// damaged, acknowledged and nobody added.
+				fmt.Printf("%s: its manifest says the stream is %d bytes on the wire and the relay listed %d; "+
+					"it was settled as damaged and acknowledged, and nobody was added\n", m.Inner.ID[:12], want, m.RelaySize)
+				return nil
 			}
 			// The body is here now, so the payload is no longer on the
 			// relay; whether the message is depends on the channel, as

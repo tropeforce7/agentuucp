@@ -2032,15 +2032,20 @@ func TestTrustHoldsTheStreamToItsRecord(t *testing.T) {
 // overstatedAtTrust fails unless trust of id found the manifest weighing
 // manifest bytes and the record listed, kept the stream as damaged with the
 // two numbers, acknowledged it, took it out of the quarantine and added
-// nobody.
+// nobody, and said so on stdout with exit 0. The exit and the sentence match
+// the payload that will not open (G8), by the reviewer's ruling: the person
+// asked for a decision and it was made, so trust is settled, not a transport
+// failure.
 func overstatedAtTrust(t *testing.T, bob *user, st *relay.Store, id string, relayID, manifest, listed int64) {
 	t.Helper()
-	_, err := bob.answer("mallory", "quarantine", "trust", id)
-	var e *exitError
+	out, err := bob.answer("mallory", "quarantine", "trust", id)
+	if err != nil {
+		t.Fatalf("trust of a stream whose manifest overstates it: %v; want exit 0, settled as G8 is", err)
+	}
 	want := fmt.Sprintf("%s: its manifest says the stream is %d bytes on the wire and the relay listed %d; "+
-		"it was kept as damaged and acknowledged, and nobody was added", id[:12], manifest, listed)
-	if !asExit(err, &e) || e.code != exitTransport || err.Error() != want {
-		t.Fatalf("trust of a stream whose manifest overstates it: %v; want exit %d and %q", err, exitTransport, want)
+		"it was settled as damaged and acknowledged, and nobody was added\n", id[:12], manifest, listed)
+	if !strings.HasSuffix(out, want) {
+		t.Fatalf("trust said:\n%s\nwant it to end %q", out, want)
 	}
 	s, _, _ := bob.opened()
 	if box, _, err := s.Find(id); err == nil {
@@ -2060,7 +2065,8 @@ func overstatedAtTrust(t *testing.T, bob *user, st *relay.Store, id string, rela
 // A record whose size the stream's signed manifest disagrees with, the
 // sender, id and channel all the record's: trust keeps it as damaged with
 // the manifest's number and the record's, acknowledges it, takes it out of
-// the quarantine and adds nobody.
+// the quarantine and adds nobody, settled with exit 0 as the payload that
+// will not open is (G8).
 func TestATrustWhoseRecordSizeDisagreesKeepsItAsDamaged(t *testing.T) {
 	_, st, bob, rec, _ := strangersStream(t)
 	s, _, _ := bob.opened()
@@ -2079,7 +2085,7 @@ func TestATrustWhoseRecordSizeDisagreesKeepsItAsDamaged(t *testing.T) {
 // from its manifest alone, with the size the relay listed, which the
 // manifest overstates. Trusting it now does what the fetch does with such a
 // stream: kept as damaged with the two numbers, acknowledged, out of the
-// quarantine and in no box, and nobody added.
+// quarantine and in no box, nobody added, and exit 0 as G8 is.
 func TestATrustOfAnOverstatedStreamQuarantinedBeforeTheCheckIsKeptAsDamaged(t *testing.T) {
 	srv, st := startRelayServer(t, relay.Config{Limits: relay.DefaultLimits()})
 	bob := newUser(t, "bob", srv.URL)

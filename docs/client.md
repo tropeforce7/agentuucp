@@ -849,9 +849,10 @@ was quarantined; nothing was delivered and the record is as it was`. The
 same stream whose manifest disagrees with the size the relay listed when
 it was quarantined is done with as the fetch does it: kept under
 `damaged/` with both numbers and acknowledged, taken out of the
-quarantine, and the command exits 2 with `its manifest says the stream is
-N bytes on the wire and the relay listed M; it was kept as damaged and
-acknowledged, and nobody was added`. That clears such a stream from a
+quarantine, and the command exits 0 with `its manifest says the stream is
+N bytes on the wire and the relay listed M; it was settled as damaged and
+acknowledged, and nobody was added`, as the payload that will not open
+below is settled. That clears such a stream from a
 stranger that a build from v0.14.0 to v0.17.0 quarantined. A record made
 by a build before v0.14.0 kept no size, and for it only the size goes
 unchecked. The same stream whose manifest verifies but whose payload will
