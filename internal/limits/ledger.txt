@@ -82,7 +82,23 @@
 # defined over it (which the decoder cannot read from a string, but which
 # holds one), or a pointer, slice, array or map of these, a map by its key
 # too, written as the field; or a time.Parse or time.ParseInLocation, written
-# as the callee with the value it parses.
+# as the callee with the value it parses. A field of such a type is a
+# site as well in any struct a decode reaches, with a json tag or none,
+# embedded or named, exported or not (a type with its own UnmarshalJSON
+# or UnmarshalText fills what it likes), and a generic struct's field is
+# read with the type argument it is given, so that Box[time.Time]'s V is
+# a time. A decode is json.Unmarshal or a Decoder's Decode called, a
+# helper whose parameter of interface type reaches one, followed to its
+# callers, or a generic helper whose type parameter does, followed by its
+# type argument at each call; a json.RawMessage or []byte decoded later is
+# decoded by one of these, and a decode straight into a time is a site of
+# its own, written as the call. An UnmarshalText, UnmarshalJSON or
+# UnmarshalBinary called on a time is a site, written as the call, and so
+# is a time.Unix, time.UnixMilli or time.UnixMicro, which makes a time of
+# an integer: its row is read off the int row of the field its arguments
+# read, and may not say local: where that row gives a range rather than
+# output or local:. A decode, or a helper that reaches one, taken as a
+# value rather than called is refused, since the walk cannot follow it.
 # Its row is one of
 #
 #   <= now + 5m    a stamp held to no more than relayapi.MaxSkew ahead of
@@ -96,7 +112,9 @@
 #                  instants: through the reader where the wire can carry
 #                  them, and to the encoder, which refuses them, where it
 #                  cannot
-#   [lo, hi]       a window with both edges, named as the code names them
+#   [lo, hi]       a window with both edges, named as the code names them,
+#                  or written as numbers where the code's edge is a number
+#                  or a value the test pins to one
 #   deadline: <its use>
 #                  a time that names a moment to come, compared with now,
 #                  with the other edge of its own window or with an
@@ -131,7 +149,8 @@
 #
 # The sweep that wrote this file found 285 sites, and the cap kind added
 # twelve. The walk had found 454 by the time the time kind added 88; 542
-# is the floor in the test.
+# was the floor in the test. Seeing every decoded time and every
+# time.Unix brought the walk to 572, the floor now.
 
 cmd/auu-admin/commands.go blockAdd string fp[:16] #2 = local: ValidFingerprint at oneFingerprint shown by TestLimitFingerprintAndSerialArgsOneShort
 cmd/auu-admin/commands.go blockAdd string fp[:16] = local: ValidFingerprint at oneFingerprint shown by TestLimitFingerprintAndSerialArgsOneShort
@@ -688,6 +707,29 @@ internal/store/store.go Stored time Arrived = local: this machine's clock at the
 internal/store/store.go Stored time Received = local: the listing's received, which checkListing holds to the skew and to what can be written, or this machine's clock for a sent copy or a reopened damaged record kept with none; a record kept before is read as it is
 internal/stream/stream.go Manifest time Time = <= now + 42m shown by TestLimitAManifestTimeIsHeldToTheSkew
 internal/vouch/vouch.go Document time Issued = <= now + 42m shown by TestLimitAVouchIssuedIsHeldToTheSkew
+
+# Times made of an integer, time.Unix, UnixMilli and UnixMicro, each with a
+# row of its own read off where its integer comes from (R19): the relay's
+# own column or a constant is local:, an integer from outside has a bound
+# and its test.
+internal/channels/channels.go a package-level declaration time time.Unix(0, math.MaxInt64) = local: a constant, the latest instant UnixNano can say, which CheckIssued holds a pushed directory's issued under
+internal/channels/channels.go a package-level declaration time time.Unix(0, math.MinInt64) = local: a constant, the earliest instant UnixNano can say, which CheckIssued holds a pushed directory's issued above
+internal/relay/certstore.go (*Store).CertBySerial time time.Unix(notAfter, 0) = local: the relay's own column, the not_after of a certificate its own client authority issued, written from the issue at insertCert
+internal/relay/certstore.go (*Store).CertBySerial time time.Unix(notBefore, 0) = local: the relay's own column, the not_before of a certificate its own client authority issued, written from the issue at insertCert
+internal/relay/certstore.go (*Store).certRows time time.Unix(notAfter, 0) = local: the relay's own column, the not_after of a certificate its own client authority issued, written from the issue at insertCert
+internal/relay/certstore.go (*Store).certRows time time.Unix(notBefore, 0) = local: the relay's own column, the not_before of a certificate its own client authority issued, written from the issue at insertCert
+internal/relay/outbound.go (*Store).GiveUp time time.Unix(received, 0) = local: the relay's own column, its clock at the receipt, written at the enqueue
+internal/relay/outbound.go (*Store).PurgeOutbound time time.Unix(lastTry, 0) = local: the relay's own column, its clock at the last attempt, written at the hand-over or the final answer
+internal/relay/outbound.go outboundFrom time time.Unix(givesUp, 0) = local: the relay's own column, its clock at the receipt plus forward_ttl, written at the enqueue
+internal/relay/outbound.go outboundFrom time time.Unix(lastTry, 0) = local: the relay's own column, its clock at the last attempt, written at the hand-over, the final answer or a retry; zero, never tried, is not made a time
+internal/relay/outbound.go outboundFrom time time.Unix(nextTry, 0) = local: the relay's own column, its clock at the receipt or at a failed attempt plus the backoff, written at the enqueue or a retry
+internal/relay/outbound.go outboundFrom time time.Unix(received, 0) = local: the relay's own column, its clock at the receipt, written at the enqueue
+internal/relay/streamstore.go (*Store).OpenUpload time time.Unix(soonest, 0) = local: the relay's own column, the earliest expires of the caller's open uploads, its clock at the open or the last hunk plus the window
+internal/relay/streamstore.go (*Store).Upload time time.Unix(expires, 0) = local: the relay's own column, its clock at the open or the last hunk plus the window
+internal/relay/watch.go (*Server).look time time.Unix(0, issued.UnixNano()) = local: the relay's own directories column, read by DirectoryIssued, carried into the form a watcher sends it in
+internal/relay/watch.go (*Server).watchParams time time.Unix(0, nanos) = [channels.earliestNano, channels.latestNano] shown by TestLimitWatchIssued
+internal/token/token.go (Claims).NotAfterTime time time.Unix(c.NotAfter, 0) = [1, 253402300799] shown by TestLimitATokensDatesAreHeldToTheLastWritableSecond
+internal/token/token.go (Claims).NotBeforeTime time time.Unix(c.NotBefore, 0) = [1, 253402300799] shown by TestLimitATokensDatesAreHeldToTheLastWritableSecond
 
 internal/wire/wire.go (*keyScan).key string raw[1:len(raw) - 1] = local: raw is a string str stepped over, its quotes first and last, two bytes at least
 internal/wire/wire.go (*keyScan).key string sc.data[start:sc.i] = local: start is where str began and sc.i where it ended, within data by str

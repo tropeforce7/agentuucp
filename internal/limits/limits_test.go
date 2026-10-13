@@ -44,15 +44,23 @@ import (
 // including a function literal's parameter, unless a named exception says
 // why. A bound the row gives as one of a set must be a parameter, and the
 // set is held to what every caller passes. A fourth kind is a time: a
-// field of a type that holds a time in a json-tagged struct, and a
-// time.Parse or time.ParseInLocation. Its row says how far ahead the code
-// takes it, or its window, deadline, display, output or local; the test
-// refuses a display row on a field it sees compared or ordered, and a
-// deadline or bound with no test.
+// field of a type that holds a time in a json-tagged struct, or in any
+// struct a decode reaches, tagged or not, embedded or not, a generic
+// struct's by the type argument it is given; a decode straight into a
+// time; an UnmarshalText, UnmarshalJSON or UnmarshalBinary called on one;
+// and a time.Parse, time.ParseInLocation, time.Unix, time.UnixMilli or
+// time.UnixMicro. Its row says how far ahead the code takes it, or its
+// window, deadline, display, output or local; the test refuses a display
+// row on a field it sees compared or ordered, a deadline or bound with no
+// test, and local: on a time made of an integer whose own row says it is
+// from outside. json.Unmarshal, a Decoder's Decode, or a helper that
+// reaches one, taken as a value rather than called, is refused.
 
-// floor is what the walk found when the time kind was added, every kind
-// together. A walk that finds fewer is not reaching the tree.
-const floor = 542
+// floor is what the walk finds, every kind together, raised with each row
+// added: 542 when the time kind was added, 572 when it was made to see
+// every decoded time and every time.Unix. A walk that finds fewer is not
+// reaching the tree.
+const floor = 572
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.
@@ -73,7 +81,8 @@ var ranges = regexp.MustCompile(`^(0 or )?(\[-?\d+[a-z]*, -?\d+[a-z]*\]|>= -?\d+
 // ahead of the reader's clock, the bound of a document an owner posts and
 // of a relay's own stamps; "<= now + 42m", a sealed stamp held to
 // relayapi.MaxStampAhead, the chain of clocks it crossed; "[lo, hi]", a
-// window with both edges, named as the code names them; "display", shown
+// window with both edges, named as the code names them or written as
+// numbers, as a token's dates are (G26); "display", shown
 // and never compared or ordered, which the walk holds by the field's uses
 // as far as compared says it can see them; and "output", as for an
 // integer. The rest take a reason after a colon: "local: <why>", this
@@ -83,7 +92,7 @@ var ranges = regexp.MustCompile(`^(0 or )?(\[-?\d+[a-z]*, -?\d+[a-z]*\]|>= -?\d+
 // an earlier copy of itself, or for the earliest to show, never ordered
 // across records, and written to a file only as a record of it, whose
 // test feeds the extremes.
-var timeRanges = regexp.MustCompile(`^(<= now \+ 5m|<= now \+ 42m|\[[A-Za-z_.]+, [A-Za-z_.]+\]|display|output)$`)
+var timeRanges = regexp.MustCompile(`^(<= now \+ 5m|<= now \+ 42m|\[(-?\d+|[A-Za-z_.]+), (-?\d+|[A-Za-z_.]+)\]|display|output)$`)
 
 // timeOperators are the time.Time methods that compare or order: a
 // display field is an operand of none of them.
@@ -126,6 +135,11 @@ type site struct {
 	boundExpr ast.Expr
 	fd        *ast.FuncDecl
 	p         *pkg
+
+	// For a time made of an integer, time.Unix and its kin, the position
+	// of every struct field its arguments read: the int site it comes
+	// from, whose row says where the integer is from.
+	from []string
 }
 
 // row is one ledger line.
@@ -680,8 +694,8 @@ func ask(b []byte) (Answer, error) {
 // struct embedding a time and one of a struct embedding a pointer to it,
 // with a time.Parse and a time.ParseInLocation, and asserts the fifteen
 // sentences; a time field of a
-// struct with no json tag is not a site, and neither is a field of a
-// struct with no time inside.
+// struct with no json tag that no decode reaches is not a site, and
+// neither is a field of a struct with no time inside.
 func TestALedgerFindsATimeWithNoRow(t *testing.T) {
 	root := plantFiles(t, map[string]string{"internal/planted/planted.go": `package planted
 
@@ -1181,6 +1195,19 @@ func checkWith(t *testing.T, root, ledger string, bounds map[string]capBound, se
 	reached, taken := map[string]bool{}, map[string]bool{}
 	rows, rowProblems := parseLedger(ledger)
 	problems = append(problems, rowProblems...)
+	// An int site of a struct's field by its position, and a row by its
+	// key, so that a time made of an integer is read off the int row it
+	// comes from.
+	intAt := map[string]site{}
+	for _, s := range sites {
+		if s.kind == "int" && s.typeName != "" {
+			intAt[s.pos.String()] = s
+		}
+	}
+	rowOf := map[string]row{}
+	for _, r := range rows {
+		rowOf[r.key] = r
+	}
 	seen := map[string]bool{}
 	for _, r := range rows {
 		s, ok := byKey[r.key]
@@ -1289,6 +1316,27 @@ func checkWith(t *testing.T, root, ledger string, bounds map[string]capBound, se
 			// a value a check already held.
 			reason := func(prefix string) bool {
 				return strings.HasPrefix(r.rng, prefix) && strings.TrimSpace(strings.TrimPrefix(r.rng, prefix)) != ""
+			}
+			// A time made of an integer from outside is from outside: an
+			// argument that reads a field whose int row gives it a range,
+			// rather than output or local:, may not be local: here.
+			if strings.HasPrefix(r.rng, "local:") {
+				var outside []string
+				for _, pos := range s.from {
+					is, ok := intAt[pos]
+					if !ok {
+						continue
+					}
+					ir, ok := rowOf[is.key]
+					if ok && (ir.rng == "output" || strings.HasPrefix(ir.rng, "local:")) {
+						continue
+					}
+					outside = append(outside, is.key)
+				}
+				if len(outside) > 0 {
+					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says local:, but it makes a time of an integer from outside, %s; give it a bound and a test", r.line, r.key, strings.Join(outside, ", ")))
+					continue
+				}
 			}
 			switch {
 			case r.rng == "display":
@@ -1883,6 +1931,9 @@ type tree struct {
 	// excluded is, by package directory, every file the host's build
 	// constraints leave out, parsed without types.
 	excluded map[string][]leftFile
+
+	// walk is what the decodes reach, found once (see decodes).
+	walk *decodeWalk
 }
 
 // leftFile is one file the host's build leaves out, by its path from the
@@ -1962,6 +2013,7 @@ func load(t *testing.T, root string) *tree {
 			Defs:       map[*ast.Ident]types.Object{},
 			Uses:       map[*ast.Ident]types.Object{},
 			Selections: map[*ast.SelectorExpr]*types.Selection{},
+			Instances:  map[*ast.Ident]types.Instance{},
 		}
 		cfg := types.Config{Importer: imp, Error: func(err error) { t.Logf("type-checking %s: %v", p.dir, err) }}
 		tp, err := cfg.Check(modulePath+"/"+p.dir, tr.fset, p.files, p.info)
@@ -1998,6 +2050,7 @@ func (tr *tree) leftOut(path, rel string) {
 			s := types.ExprString(x.Fun)
 			if strings.HasPrefix(s, "strconv.Atoi") || strings.HasPrefix(s, "strconv.Parse") || strings.HasPrefix(s, "binary.") || strings.HasPrefix(s, "flag.") ||
 				s == "time.Parse" || s == "time.ParseInLocation" ||
+				s == "time.Unix" || s == "time.UnixMilli" || s == "time.UnixMicro" ||
 				s == "http.MaxBytesReader" || s == "io.LimitReader" {
 				tr.problems = append(tr.problems, fmt.Sprintf("%s calls %s, and the host's build constraints leave the file out; the walk does not see it", rel, s))
 			}
@@ -2021,10 +2074,16 @@ func (tr *tree) leftOut(path, rel string) {
 // package level, inside a function, or as a literal's anonymous type), a
 // strconv.Atoi or Parse*, a binary.*.Uint* read, and an integer or
 // duration flag on a FlagSet; every time from outside, a field in such a
-// struct, tagged or not, of a type that holds a time (see timeType), and a time.Parse or time.ParseInLocation; and the string
-// cuts and caps.
+// struct, tagged or not, of a type that holds a time (see timeType), a
+// field holding one in any struct a decode reaches (see decodes and
+// timesIn), a decode straight into one, an UnmarshalText, UnmarshalJSON or
+// UnmarshalBinary called on one, and a time.Parse, time.ParseInLocation,
+// time.Unix, time.UnixMilli or time.UnixMicro; and the string cuts and
+// caps.
 func (tr *tree) sites() []site {
 	var out []site
+	decodedTimes := tr.decodes().times
+	at := func(id *ast.Ident) string { return tr.fset.Position(id.Pos()).String() }
 	for _, p := range tr.pkgs {
 		for _, f := range p.files {
 			rel := filepath.ToSlash(mustRel(tr.root, tr.fset.Position(f.Pos()).Filename))
@@ -2040,7 +2099,19 @@ func (tr *tree) sites() []site {
 				stack = append(stack, n)
 				switch x := n.(type) {
 				case *ast.StructType:
-					if !jsonTagged(x) {
+					// A struct with a json tag, or one a decode reaches that
+					// holds a time: untagged, embedded, or a generic struct
+					// given a time for its type argument.
+					tagged := jsonTagged(x)
+					reached := false
+					for _, fl := range x.Fields.List {
+						for _, name := range fieldNames(fl) {
+							if _, is := decodedTimes[at(name)]; is {
+								reached = true
+							}
+						}
+					}
+					if !tagged && !reached {
 						return true
 					}
 					enclosing := ""
@@ -2063,14 +2134,16 @@ func (tr *tree) sites() []site {
 					}
 					for _, fl := range x.Fields.List {
 						// A type that holds a time, alone or in a pointer, a
-						// slice, an array or a map (see timeType).
-						if timeType(p.info.TypeOf(fl.Type)) {
-							names := fl.Names
-							if len(names) == 0 {
-								// An embedded time is the field its type names.
-								names = []*ast.Ident{embeddedName(fl.Type)}
+						// slice, an array or a map (see timeType), or a field
+						// a decode reaches as one.
+						isTime := tagged && timeType(p.info.TypeOf(fl.Type))
+						for _, name := range fieldNames(fl) {
+							if _, is := decodedTimes[at(name)]; is {
+								isTime = true
 							}
-							for _, name := range names {
+						}
+						if isTime {
+							for _, name := range fieldNames(fl) {
 								out = append(out, site{
 									key:      fmt.Sprintf("%s %s time %s", rel, enclosing, name.Name),
 									kind:     "time",
@@ -2083,7 +2156,7 @@ func (tr *tree) sites() []site {
 						// An integer field, a pointer to one, or a map or slice
 						// whose values are integers, which the decoder fills
 						// with numbers all the same.
-						if !integerType(p.info.TypeOf(fl.Type)) && !integerElems(p.info.TypeOf(fl.Type)) {
+						if !tagged || !integerType(p.info.TypeOf(fl.Type)) && !integerElems(p.info.TypeOf(fl.Type)) {
 							continue
 						}
 						for _, name := range fl.Names {
@@ -2116,6 +2189,7 @@ func (tr *tree) sites() []site {
 							key:  fmt.Sprintf("%s %s time %s", rel, enclosing, text),
 							kind: "time",
 							pos:  tr.fset.Position(x.Pos()),
+							from: tr.fieldsRead(p, x),
 						})
 					}
 					if text, bound, is := tr.capCall(p, x); is {
@@ -2167,6 +2241,8 @@ func (tr *tree) sites() []site {
 			})
 		}
 	}
+	// A decode straight into a time.
+	out = append(out, tr.decodes().sites...)
 	// Two calls that read as one in one function are told apart by order.
 	count := map[string]int{}
 	for i := range out {
@@ -2344,25 +2420,94 @@ func (tr *tree) capSite(p *pkg, rel string, stack []ast.Node, pos token.Pos, tex
 
 // decoded is every named type the program decodes JSON into, directly
 // or through a helper whose parameter of interface type reaches
-// json.Unmarshal or Decoder.Decode, and every type reachable from one
-// through fields, slices, arrays, maps and pointers; the value says how.
-func (tr *tree) decoded() map[string]string {
+// json.Unmarshal or Decoder.Decode, or a generic helper whose type
+// parameter does, and every type reachable from one through fields,
+// slices, arrays, maps and pointers; the value says how.
+func (tr *tree) decoded() map[string]string { return tr.decodes().types }
+
+// decodeWalk is what the program's decodes reach.
+type decodeWalk struct {
+	// types is decoded's answer.
+	types map[string]string
+	// times is every field of a type that holds a time (see timeType) in
+	// a struct a decode reaches, tagged or not, embedded or not, a generic
+	// struct's field by the type argument it is given, by the position of
+	// its declaration; the value says how it is reached.
+	times map[string]string
+	// sites is every decode straight into a type that holds a time, which
+	// no field names: a json.RawMessage or a []byte decoded later into a
+	// *time.Time, the decode itself is the site.
+	sites []site
+}
+
+// decodeTarget is one value a decode fills, and the call that fills it.
+type decodeTarget struct {
+	typ  types.Type
+	why  string
+	call *ast.CallExpr
+	p    *pkg
+	fd   *ast.FuncDecl
+	rel  string
+}
+
+// decodes follows every decode in the tree: json.Unmarshal and
+// (*json.Decoder).Decode called, a helper's parameter of interface type
+// that reaches one followed to its callers, and a generic helper's type
+// parameter that reaches one followed by its type argument at each call.
+// Every json.RawMessage or []byte the program decodes later is decoded by
+// one of these calls, so following the calls follows the bytes. A decode
+// function used as a value, rather than called, is refused: the walk
+// cannot follow what it holds.
+func (tr *tree) decodes() *decodeWalk {
+	if tr.walk != nil {
+		return tr.walk
+	}
 	// A decoding parameter: a function, by its full name, and the index
 	// of a parameter that reaches a decoder. Found to a fixpoint, since a
 	// helper may call a helper. The name and not the object, since each
 	// package is checked on its own and a helper seen from another
-	// package, wire.Decode from everywhere, is another object for it.
+	// package, wire.Decode from everywhere, is another object for it. A
+	// generic function's type parameter is one too, by its index among
+	// the function's type parameters, or among its receiver's.
 	type param struct {
 		fn    string
 		index int
+		kind  string // "" a parameter, "type" a type parameter, "recv" a receiver's
 	}
 	reaches := map[param]string{}
 	direct := map[string]bool{} // a concrete argument already taken, by type and route
-	var targets []struct {
-		typ types.Type
-		why string
+	var targets []decodeTarget
+	// typeParams registers every type parameter of fd that t mentions as a
+	// decoding type parameter, and says whether there was one.
+	typeParams := func(p *pkg, fd *ast.FuncDecl, t types.Type, why string) (found, changed bool) {
+		if fd == nil {
+			return false, false
+		}
+		fn, ok := p.info.Defs[fd.Name].(*types.Func)
+		if !ok {
+			return false, false
+		}
+		sig := fn.Type().(*types.Signature)
+		mentions(t, func(tp *types.TypeParam) {
+			for _, list := range []struct {
+				l    *types.TypeParamList
+				kind string
+			}{{sig.TypeParams(), "type"}, {sig.RecvTypeParams(), "recv"}} {
+				for i := 0; i < list.l.Len(); i++ {
+					if list.l.At(i).Obj() == tp.Obj() {
+						found = true
+						k := param{fn.FullName(), i, list.kind}
+						if _, known := reaches[k]; !known {
+							reaches[k] = why
+							changed = true
+						}
+					}
+				}
+			}
+		})
+		return found, changed
 	}
-	record := func(p *pkg, fd *ast.FuncDecl, arg ast.Expr, why string) {
+	record := func(p *pkg, fd *ast.FuncDecl, rel string, call *ast.CallExpr, arg ast.Expr, why string) {
 		// A parameter of the enclosing function of interface type is a
 		// decoding parameter; anything else is a target now.
 		if id, ok := arg.(*ast.Ident); ok {
@@ -2371,17 +2516,32 @@ func (tr *tree) decoded() map[string]string {
 					sig := fn.Type().(*types.Signature)
 					for i := 0; i < sig.Params().Len(); i++ {
 						if sig.Params().At(i) == v && types.IsInterface(v.Type()) {
-							reaches[param{fn.FullName(), i}] = why
+							reaches[param{fn.FullName(), i, ""}] = why
 							return
 						}
 					}
 				}
 			}
 		}
-		targets = append(targets, struct {
-			typ types.Type
-			why string
-		}{p.info.TypeOf(arg), why})
+		// A type parameter of the enclosing function is followed to its
+		// type arguments; what the target holds besides it is a target all
+		// the same.
+		typ := p.info.TypeOf(arg)
+		typeParams(p, fd, typ, why)
+		targets = append(targets, decodeTarget{typ, why, call, p, fd, rel})
+	}
+	jsonDecoder := func(p *pkg, id *ast.Ident) (string, bool) {
+		fn, ok := p.info.Uses[id].(*types.Func)
+		if !ok || fn.Pkg() == nil || fn.Pkg().Path() != "encoding/json" {
+			return "", false
+		}
+		switch fn.FullName() {
+		case "encoding/json.Unmarshal":
+			return "json.Unmarshal", true
+		case "(*encoding/json.Decoder).Decode":
+			return "(*json.Decoder).Decode", true
+		}
+		return "", false
 	}
 	for _, p := range tr.pkgs {
 		for _, f := range p.files {
@@ -2397,16 +2557,16 @@ func (tr *tree) decoded() map[string]string {
 					if !ok {
 						return true
 					}
-					fn, ok := p.info.Uses[sel.Sel].(*types.Func)
-					if !ok || fn.Pkg() == nil || fn.Pkg().Path() != "encoding/json" {
+					name, ok := jsonDecoder(p, sel.Sel)
+					if !ok {
 						return true
 					}
 					where := rel + " " + enclosingName(fd)
 					switch {
-					case fn.Name() == "Unmarshal" && len(call.Args) == 2:
-						record(p, fd, call.Args[1], "json.Unmarshal at "+where)
-					case fn.Name() == "Decode" && len(call.Args) == 1:
-						record(p, fd, call.Args[0], "Decoder.Decode at "+where)
+					case name == "json.Unmarshal" && len(call.Args) == 2:
+						record(p, fd, rel, call, call.Args[1], "json.Unmarshal at "+where)
+					case name == "(*json.Decoder).Decode" && len(call.Args) == 1:
+						record(p, fd, rel, call, call.Args[0], "Decoder.Decode at "+where)
 					}
 					return true
 				})
@@ -2418,6 +2578,7 @@ func (tr *tree) decoded() map[string]string {
 		changed = false
 		for _, p := range tr.pkgs {
 			for _, f := range p.files {
+				rel := filepath.ToSlash(mustRel(tr.root, tr.fset.Position(f.Pos()).Filename))
 				for _, decl := range f.Decls {
 					fd, _ := decl.(*ast.FuncDecl)
 					ast.Inspect(decl, func(n ast.Node) bool {
@@ -2425,21 +2586,41 @@ func (tr *tree) decoded() map[string]string {
 						if !ok {
 							return true
 						}
-						var id *ast.Ident
-						switch fun := call.Fun.(type) {
-						case *ast.Ident:
-							id = fun
-						case *ast.SelectorExpr:
-							id = fun.Sel
-						default:
+						id := calleeIdent(call.Fun)
+						if id == nil {
 							return true
 						}
 						callee, ok := p.info.Uses[id].(*types.Func)
 						if !ok {
 							return true
 						}
+						name := callee.Origin().FullName()
 						for pr, why := range reaches {
-							if pr.fn != callee.FullName() || pr.index >= len(call.Args) {
+							if pr.fn != name {
+								continue
+							}
+							if pr.kind != "" {
+								// A generic helper: its type argument at this
+								// call is the target, or a type parameter of the
+								// caller's, followed in turn.
+								arg := typeArg(p, call, id, pr.kind, pr.index)
+								if arg == nil {
+									continue
+								}
+								through := why + " through the type argument of " + callee.Name()
+								if generic, more := typeParams(p, fd, arg, through); generic {
+									changed = changed || more
+									continue
+								}
+								key := types.TypeString(arg, nil) + " at " + through
+								if !direct[key] {
+									direct[key] = true
+									targets = append(targets, decodeTarget{arg, through, call, p, fd, rel})
+									changed = true
+								}
+								continue
+							}
+							if pr.index >= len(call.Args) {
 								continue
 							}
 							arg := call.Args[pr.index]
@@ -2450,8 +2631,8 @@ func (tr *tree) decoded() map[string]string {
 										sig := fn.Type().(*types.Signature)
 										for i := 0; i < sig.Params().Len(); i++ {
 											if sig.Params().At(i) == v && types.IsInterface(v.Type()) {
-												if _, known := reaches[param{fn.FullName(), i}]; !known {
-													reaches[param{fn.FullName(), i}] = through
+												if _, known := reaches[param{fn.FullName(), i, ""}]; !known {
+													reaches[param{fn.FullName(), i, ""}] = through
 													changed = true
 												}
 												return true
@@ -2464,13 +2645,13 @@ func (tr *tree) decoded() map[string]string {
 							if typ == nil {
 								continue
 							}
+							if generic, more := typeParams(p, fd, typ, through); generic {
+								changed = changed || more
+							}
 							key := types.TypeString(typ, nil) + " at " + through
 							if !direct[key] {
 								direct[key] = true
-								targets = append(targets, struct {
-									typ types.Type
-									why string
-								}{typ, through})
+								targets = append(targets, decodeTarget{typ, through, call, p, fd, rel})
 								changed = true
 							}
 						}
@@ -2480,11 +2661,199 @@ func (tr *tree) decoded() map[string]string {
 			}
 		}
 	}
-	out := map[string]string{}
-	for _, tg := range targets {
-		reach(tg.typ, tg.why, out, map[string]bool{})
+	// A decode, or a helper that reaches one, taken as a value rather than
+	// called: what it holds is called where the walk cannot see it.
+	helpers := map[string]bool{}
+	for pr := range reaches {
+		helpers[pr.fn] = true
 	}
-	return out
+	for _, p := range tr.pkgs {
+		for _, f := range p.files {
+			rel := filepath.ToSlash(mustRel(tr.root, tr.fset.Position(f.Pos()).Filename))
+			called := map[*ast.Ident]bool{}
+			ast.Inspect(f, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if id := calleeIdent(call.Fun); id != nil {
+						called[id] = true
+					}
+				}
+				return true
+			})
+			for _, decl := range f.Decls {
+				fd, _ := decl.(*ast.FuncDecl)
+				ast.Inspect(decl, func(n ast.Node) bool {
+					id, ok := n.(*ast.Ident)
+					if !ok || called[id] {
+						return true
+					}
+					name, is := jsonDecoder(p, id)
+					if !is {
+						fn, ok := p.info.Uses[id].(*types.Func)
+						if !ok || !helpers[fn.Origin().FullName()] {
+							return true
+						}
+						name = fn.Name()
+					}
+					tr.problems = append(tr.problems, fmt.Sprintf("%s:%d: %s takes %s as a value rather than calling it; the walk follows a decode only where it is called, so call it there", rel, tr.fset.Position(id.Pos()).Line, enclosingName(fd), name))
+					return true
+				})
+			}
+		}
+	}
+	w := &decodeWalk{types: map[string]string{}, times: map[string]string{}}
+	for _, tg := range targets {
+		reach(tg.typ, tg.why, w.types, map[string]bool{})
+		tr.timesIn(tg.typ, tg.why, w.times, map[string]bool{})
+		// A decode straight into a time, which no field of a struct names.
+		if tg.call == nil || !timeType(tg.typ) {
+			continue
+		}
+		generic := false
+		mentions(tg.typ, func(*types.TypeParam) { generic = true })
+		if generic {
+			continue
+		}
+		w.sites = append(w.sites, site{
+			key:  fmt.Sprintf("%s %s time %s", tg.rel, enclosingName(tg.fd), types.ExprString(tg.call)),
+			kind: "time",
+			pos:  tr.fset.Position(tg.call.Pos()),
+		})
+	}
+	// One call reached by two routes is one site; the order is the tree's.
+	sort.Slice(w.sites, func(i, j int) bool {
+		a, b := w.sites[i].pos, w.sites[j].pos
+		if a.Filename != b.Filename {
+			return a.Filename < b.Filename
+		}
+		return a.Offset < b.Offset
+	})
+	w.sites = slices.CompactFunc(w.sites, func(a, b site) bool { return a.pos == b.pos })
+	tr.walk = w
+	return w
+}
+
+// timesIn adds, by the position of its declaration, every field of a type
+// that holds a time in a struct reachable from t: tagged or not, embedded
+// or not, exported or not, since a type with its own UnmarshalJSON or
+// UnmarshalText fills what it likes. A generic struct's field is read with
+// the type argument it was given. A field that holds a time is not looked
+// inside; it is the site. A type outside the module is not followed.
+func (tr *tree) timesIn(t types.Type, why string, out map[string]string, seen map[string]bool) {
+	if t == nil {
+		return
+	}
+	switch x := types.Unalias(t).(type) {
+	case *types.Pointer:
+		tr.timesIn(x.Elem(), why, out, seen)
+	case *types.Slice:
+		tr.timesIn(x.Elem(), why, out, seen)
+	case *types.Array:
+		tr.timesIn(x.Elem(), why, out, seen)
+	case *types.Map:
+		tr.timesIn(x.Key(), why, out, seen)
+		tr.timesIn(x.Elem(), why, out, seen)
+	case *types.Named:
+		pk := x.Obj().Pkg()
+		if pk == nil || (pk.Path() != tr.modulePath && !strings.HasPrefix(pk.Path(), tr.modulePath+"/")) {
+			return
+		}
+		key := types.TypeString(x, nil)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		// The instance's own underlying type, its fields given the type
+		// arguments: Box[time.Time]'s V is a time where Box[T]'s is a T.
+		tr.timesIn(x.Underlying(), why+" through "+short(key), out, seen)
+	case *types.Struct:
+		for i := 0; i < x.NumFields(); i++ {
+			f := x.Field(i)
+			if timeType(f.Type()) {
+				pos := tr.fset.Position(f.Pos()).String()
+				if _, ok := out[pos]; !ok {
+					out[pos] = why
+				}
+				continue
+			}
+			tr.timesIn(f.Type(), why, out, seen)
+		}
+	}
+}
+
+// mentions calls f with every type parameter t is built from.
+func mentions(t types.Type, f func(*types.TypeParam)) {
+	if t == nil {
+		return
+	}
+	switch x := types.Unalias(t).(type) {
+	case *types.TypeParam:
+		f(x)
+	case *types.Pointer:
+		mentions(x.Elem(), f)
+	case *types.Slice:
+		mentions(x.Elem(), f)
+	case *types.Array:
+		mentions(x.Elem(), f)
+	case *types.Map:
+		mentions(x.Key(), f)
+		mentions(x.Elem(), f)
+	case *types.Named:
+		args := x.TypeArgs()
+		for i := 0; i < args.Len(); i++ {
+			mentions(args.At(i), f)
+		}
+	}
+}
+
+// calleeIdent is the name a call's function is written with: a function,
+// a method or field by its selector, either with its type arguments, in
+// parentheses or not.
+func calleeIdent(fun ast.Expr) *ast.Ident {
+	for {
+		switch x := fun.(type) {
+		case *ast.Ident:
+			return x
+		case *ast.SelectorExpr:
+			return x.Sel
+		case *ast.IndexExpr:
+			fun = x.X
+		case *ast.IndexListExpr:
+			fun = x.X
+		case *ast.ParenExpr:
+			fun = x.X
+		default:
+			return nil
+		}
+	}
+}
+
+// typeArg is the type argument a call gives a generic function's type
+// parameter, by its index, or a generic type's method's receiver's.
+func typeArg(p *pkg, call *ast.CallExpr, id *ast.Ident, kind string, index int) types.Type {
+	if kind == "type" {
+		inst, ok := p.info.Instances[id]
+		if !ok || inst.TypeArgs == nil || index >= inst.TypeArgs.Len() {
+			return nil
+		}
+		return inst.TypeArgs.At(index)
+	}
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+	sn := p.info.Selections[sel]
+	if sn == nil {
+		return nil
+	}
+	recv := sn.Recv()
+	if ptr, ok := types.Unalias(recv).(*types.Pointer); ok {
+		recv = ptr.Elem()
+	}
+	named, ok := types.Unalias(recv).(*types.Named)
+	if !ok || index >= named.TypeArgs().Len() {
+		return nil
+	}
+	return named.TypeArgs().At(index)
 }
 
 // compared is every time field that is compared or ordered somewhere in
@@ -2628,6 +2997,8 @@ func embeddedName(e ast.Expr) *ast.Ident {
 	case *ast.SelectorExpr:
 		return x.Sel
 	case *ast.IndexExpr:
+		return embeddedName(x.X)
+	case *ast.IndexListExpr:
 		return embeddedName(x.X)
 	case *ast.Ident:
 		return x
@@ -2849,25 +3220,79 @@ func isTime(t types.Type, depth int) bool {
 	return false
 }
 
-// timeCall says whether a call parses a time, and how the ledger writes
-// it: the callee and the value it parses, which is the second argument
-// of both; the first is the layout.
+// timeCall says whether a call makes a time from outside, and how the
+// ledger writes it. A time.Parse or time.ParseInLocation is written as the
+// callee and the value it parses, which is the second argument of both;
+// the first is the layout. A time.Unix, time.UnixMilli or time.UnixMicro
+// makes a time of an integer and is written whole, as is an UnmarshalText,
+// UnmarshalJSON or UnmarshalBinary called on a time: the bytes it is given
+// are the value.
 func timeCall(p *pkg, call *ast.CallExpr) (string, bool) {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return "", false
 	}
 	fn, ok := p.info.Uses[sel.Sel].(*types.Func)
-	if !ok || fn.Pkg() == nil || fn.Pkg().Path() != "time" {
+	if !ok || fn.Pkg() == nil {
 		return "", false
 	}
-	if fn.Name() != "Parse" && fn.Name() != "ParseInLocation" {
+	if sn := p.info.Selections[sel]; sn != nil && sn.Kind() == types.MethodVal {
+		switch fn.Name() {
+		case "UnmarshalText", "UnmarshalJSON", "UnmarshalBinary":
+			if timeType(sn.Recv()) {
+				return types.ExprString(call), true
+			}
+		}
 		return "", false
 	}
-	if len(call.Args) < 2 {
+	if fn.Pkg().Path() != "time" {
 		return "", false
 	}
-	return fmt.Sprintf("time.%s(%s)", fn.Name(), types.ExprString(call.Args[1])), true
+	switch fn.Name() {
+	case "Parse", "ParseInLocation":
+		if len(call.Args) < 2 {
+			return "", false
+		}
+		return fmt.Sprintf("time.%s(%s)", fn.Name(), types.ExprString(call.Args[1])), true
+	case "Unix", "UnixMilli", "UnixMicro":
+		return types.ExprString(call), true
+	}
+	return "", false
+}
+
+// fieldsRead is, by the position of its declaration, every struct field a
+// time.Unix or its kin reads in its arguments, directly or through
+// arithmetic: where the integer it makes a time of comes from, when it
+// comes from a field. A local is not followed.
+func (tr *tree) fieldsRead(p *pkg, call *ast.CallExpr) []string {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return nil
+	}
+	if fn, ok := p.info.Uses[sel.Sel].(*types.Func); !ok || fn.Pkg() == nil || fn.Pkg().Path() != "time" || !strings.HasPrefix(fn.Name(), "Unix") {
+		return nil
+	}
+	var out []string
+	for _, arg := range call.Args {
+		ast.Inspect(arg, func(n ast.Node) bool {
+			if se, ok := n.(*ast.SelectorExpr); ok {
+				if sn := p.info.Selections[se]; sn != nil && sn.Kind() == types.FieldVal {
+					out = append(out, tr.fset.Position(sn.Obj().Pos()).String())
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// fieldNames is the names a struct field declares, an embedded field's
+// being the name its type gives it.
+func fieldNames(fl *ast.Field) []*ast.Ident {
+	if len(fl.Names) > 0 {
+		return fl.Names
+	}
+	return []*ast.Ident{embeddedName(fl.Type)}
 }
 
 func typeKey(t types.Type) string {

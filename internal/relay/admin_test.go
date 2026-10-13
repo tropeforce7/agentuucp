@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -425,6 +426,130 @@ func TestTokenRegistrationRules(t *testing.T) {
 			t.Fatalf("status %d, want a refusal: %s", status, body)
 		}
 	})
+}
+
+// TestATokenDatedPastTheYear9999IsRefusedAtIssueAndOneAtTheEdgeIsListed
+// (G26): a token whose not_before or not_after was one second past the
+// last second of the year 9999 was stored, and then the issue answer and
+// every listing failed with a 500, since a time past 9999 cannot be
+// written. The issue route now answers 400 naming the field, the value
+// and the bound, and nothing is stored; a token whose not_after is the
+// last second is issued and listed.
+func TestATokenDatedPastTheYear9999IsRefusedAtIssueAndOneAtTheEdgeIsListed(t *testing.T) {
+	const last = 253402300799
+	boss := ids(t, "boss")[0]
+	h := newHarness(t, Config{AdminFile: adminFile(t, boss)})
+	stored := func() int {
+		t.Helper()
+		all, err := h.store.Tokens(true, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(all)
+	}
+
+	for _, c := range []struct {
+		field               string
+		notBefore, notAfter int64
+	}{
+		{"not_after", time.Now().Unix(), last + 1},
+		{"not_before", last + 1, last + 2},
+	} {
+		t.Run(c.field+" one second past", func(t *testing.T) {
+			// Issue refuses to make one, so it is signed by hand, as an
+			// older auu-admin or a hand-made token would have it.
+			raw := forgeToken(t, boss, func(m map[string]any) {
+				m["relay"] = token.NormaliseRelay(h.srv.URL)
+				m["not_before"], m["not_after"] = c.notBefore, c.notAfter
+			})
+			before := stored()
+			status, body, _ := h.send(boss, "POST", "/v1/admin/tokens",
+				relayapi.RegisterTokenRequest{Token: raw}, nil)
+			if status != http.StatusBadRequest {
+				t.Fatalf("status %d, want 400: %s", status, body)
+			}
+			n := c.notAfter
+			if c.field == "not_before" {
+				n = c.notBefore
+			}
+			want := "malformed token: " + c.field + " is " + strconv.FormatInt(n, 10) + ", past 253402300799, the end of the year 9999"
+			if got := errorText(t, body); got != want {
+				t.Fatalf("error %q, want %q", got, want)
+			}
+			if after := stored(); after != before {
+				t.Fatalf("%d tokens stored before, %d after; the refused one was kept", before, after)
+			}
+		})
+	}
+
+	t.Run("at the edge, issued and listed", func(t *testing.T) {
+		// not_after at the edge, from now; not_before at its edge is shown
+		// in the token package, since here it would be not yet valid.
+		raw := h.addToken(boss, func(c *token.Claims) {
+			c.NotAfter = last
+		})
+		u, err := token.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		status, body, _ := h.send(boss, "GET", "/v1/admin/tokens?all=1", nil, nil)
+		if status != http.StatusOK {
+			t.Fatalf("listing: status %d, want 200: %s", status, body)
+		}
+		var list relayapi.TokenListResponse
+		if err := json.Unmarshal(body, &list); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range list.Tokens {
+			if r.ID != u.Claims.ID {
+				continue
+			}
+			if r.NotBefore.Unix() != u.Claims.NotBefore || r.NotAfter.Unix() != last {
+				t.Fatalf("listed as %v to %v, want %d to %d", r.NotBefore, r.NotAfter, u.Claims.NotBefore, int64(last))
+			}
+			return
+		}
+		t.Fatalf("the token at the edge is not in the listing: %s", body)
+	})
+}
+
+// TestATokenThatStartsLaterIsRegisteredAndListed: the add-token route takes
+// a token that is not yet valid, as its comment says, where it read the
+// claims Verify had not given back and the handler panicked (G27).
+func TestATokenThatStartsLaterIsRegisteredAndListed(t *testing.T) {
+	boss := ids(t, "boss")[0]
+	h := newHarness(t, Config{AdminFile: adminFile(t, boss)})
+	later := time.Now().Add(time.Hour).Unix()
+	raw := forgeToken(t, boss, func(m map[string]any) {
+		m["relay"] = token.NormaliseRelay(h.srv.URL)
+		m["not_before"], m["not_after"] = later, later+3600
+	})
+	status, body, _ := h.send(boss, "POST", "/v1/admin/tokens",
+		relayapi.RegisterTokenRequest{Token: raw}, nil)
+	if status != http.StatusCreated {
+		t.Fatalf("a token starting in an hour: status %d, want 201: %s", status, body)
+	}
+	u, err := token.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, body, _ = h.send(boss, "GET", "/v1/admin/tokens?all=1", nil, nil)
+	if status != http.StatusOK {
+		t.Fatalf("listing: status %d, want 200: %s", status, body)
+	}
+	var list relayapi.TokenListResponse
+	if err := json.Unmarshal(body, &list); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range list.Tokens {
+		if r.ID == u.Claims.ID {
+			if r.NotBefore.Unix() != later {
+				t.Fatalf("listed from %v, want %d", r.NotBefore, later)
+			}
+			return
+		}
+	}
+	t.Fatalf("the token that starts later is not in the listing: %s", body)
 }
 
 // forgeToken builds a token whose payload Issue would never produce, signed

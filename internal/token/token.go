@@ -106,9 +106,16 @@ type Claims struct {
 	Uses      int    `json:"uses"`
 }
 
-// NotBeforeTime and NotAfterTime are the window as times.
-func (c Claims) NotBeforeTime() time.Time { return time.Unix(c.NotBefore, 0) }
-func (c Claims) NotAfterTime() time.Time  { return time.Unix(c.NotAfter, 0) }
+// NotBeforeTime and NotAfterTime are the window as times, in UTC, so that
+// what a listing writes does not move with this machine's zone. Validate
+// holds both to what this program can write.
+func (c Claims) NotBeforeTime() time.Time { return time.Unix(c.NotBefore, 0).UTC() }
+func (c Claims) NotAfterTime() time.Time  { return time.Unix(c.NotAfter, 0).UTC() }
+
+// latestWritableUnix is the last whole second this program can write, the
+// bound on a token's dates: one past it was stored, and then every answer
+// that carried it as a time, the issue's and every listing's, failed.
+var latestWritableUnix = relayapi.LatestWritable.Unix()
 
 // Issue signs claims with the issuer's identity and returns the token string.
 //
@@ -264,8 +271,12 @@ func (u *Unverified) Verify(issuer *identity.Public, now time.Time, skew time.Du
 	if !ValidUse(c.Use) {
 		return nil, fmt.Errorf("%w: %q", ErrUse, c.Use)
 	}
+	// The claims are verified by now, signature and issuer both, and only
+	// the window is not yet open, so they are given back with the error: a
+	// caller that may take a token starting later, the relay registering
+	// one, reads them (G27), and every other refuses on the error alone.
 	if now.Add(skew).Unix() < c.NotBefore {
-		return nil, ErrNotYetValid
+		return &c, ErrNotYetValid
 	}
 	if now.Add(-skew).Unix() > c.NotAfter {
 		return nil, ErrExpired
@@ -326,6 +337,12 @@ func (c Claims) Validate() error {
 	}
 	if c.NotAfter <= 0 {
 		return fmt.Errorf("%w: not_after is required", ErrForm)
+	}
+	if c.NotBefore > latestWritableUnix {
+		return fmt.Errorf("%w: not_before is %d, past %d, the end of the year 9999", ErrForm, c.NotBefore, latestWritableUnix)
+	}
+	if c.NotAfter > latestWritableUnix {
+		return fmt.Errorf("%w: not_after is %d, past %d, the end of the year 9999", ErrForm, c.NotAfter, latestWritableUnix)
 	}
 	if c.NotAfter <= c.NotBefore {
 		return fmt.Errorf("%w: not_after is not after not_before", ErrForm)

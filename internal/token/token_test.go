@@ -416,7 +416,10 @@ func TestClaimTimeExtremes(t *testing.T) {
 		{"zero not_after", 1, 0, false},
 		{"equal", 100, 100, false},
 		{"one second apart", 100, 101, true},
-		{"MaxInt64 not_after", 100, math.MaxInt64, true},
+		// G26: a date past the year 9999 is refused at issue, since no
+		// answer that carries it as a time can be written.
+		{"MaxInt64 not_after", 100, math.MaxInt64, false},
+		{"the last writable second as not_after", 100, 253402300799, true},
 		{"MaxInt64 both", math.MaxInt64, math.MaxInt64, false},
 		{"MinInt64 not_after", 100, math.MinInt64, false},
 	} {
@@ -430,9 +433,11 @@ func TestClaimTimeExtremes(t *testing.T) {
 		})
 	}
 
-	// A far-future expiry must not make the human-readable form panic.
+	// The furthest expiry a token can carry must not make the
+	// human-readable form panic. G26: that is the last second of the year
+	// 9999, since Issue refuses anything later.
 	c := base(time.Now())
-	c.NotAfter = math.MaxInt64
+	c.NotAfter = 253402300799
 	raw, err := Issue(id, c)
 	if err != nil {
 		t.Fatal(err)
@@ -442,10 +447,10 @@ func TestClaimTimeExtremes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s := Describe(u.Claims, "", false, time.Now()); s == "" {
-		t.Fatal("Describe produced nothing for a MaxInt64 expiry")
+		t.Fatal("Describe produced nothing for the latest expiry")
 	}
 	if s := Until(u.Claims.NotAfterTime(), time.Now()); s == "" {
-		t.Fatal("Until produced nothing for a MaxInt64 expiry")
+		t.Fatal("Until produced nothing for the latest expiry")
 	}
 }
 

@@ -385,7 +385,10 @@ func (s *Server) handleAdminAddToken(w http.ResponseWriter, r *http.Request, bod
 	switch {
 	case err == nil, errors.Is(err, token.ErrNotYetValid):
 	case errors.Is(err, token.ErrForm):
-		s.fail(w, http.StatusBadRequest, "malformed token")
+		// The signature has verified, so the sentence goes back to the
+		// administrator who wrote the claims: a date past the year 9999,
+		// which no answer could carry as a time, is named (G26).
+		s.fail(w, http.StatusBadRequest, "malformed token: "+strings.TrimPrefix(err.Error(), token.ErrForm.Error()+": "))
 		return
 	case errors.Is(err, token.ErrUse):
 		s.fail(w, http.StatusBadRequest, "unsupported token use")

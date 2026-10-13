@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
@@ -243,7 +244,11 @@ func TestLimitManifestChunkLength(t *testing.T) {
 // each a time the relay compares with the directory's, never subtracts
 // from, so each is 200; the text one past the type's maximum, a sign
 // inside the digits, an empty stamp and a digit outside ASCII are each
-// 400 "bad peers parameter".
+// 400 "bad peers parameter". Made a time by time.Unix(0, nanos), every
+// stamp lies in [channels.earliestNano, channels.latestNano], the ends
+// of what UnixNano can say, and is compared by Equal alone: against a
+// directory issued now, the type's minimum and maximum each wake the
+// watcher, and the issue's own nanoseconds do not.
 func TestLimitWatchIssued(t *testing.T) {
 	h := newHarness(t, Config{})
 	people := ids(t, "alice", "bob")
@@ -260,6 +265,17 @@ func TestLimitWatchIssued(t *testing.T) {
 		status, body := h.do(bob, "GET", "/v1/mailbox/"+bob.Fingerprint()+"?peers="+alice.Fingerprint()+":"+issued, nil, nil)
 		if status != http.StatusOK {
 			t.Errorf("issued %s: %d %s; want 200", issued, status, body)
+		}
+	}
+	issued := h.clock.Now().UTC().Truncate(time.Second)
+	if status, body, _ := h.pushDirectory(alice, alice, issued, dflt); status != http.StatusNoContent {
+		t.Fatalf("alice's push: %d %s", status, body)
+	}
+	for _, nanos := range []int64{math.MinInt64, math.MaxInt64, issued.UnixNano()} {
+		status, resp, body := h.list(bob, peersQuery(alice.Fingerprint()+":"+strconv.FormatInt(nanos, 10))).answer(t)
+		woken := len(resp.DirectoriesChanged) == 1 && resp.DirectoriesChanged[0] == alice.Fingerprint()
+		if status != http.StatusOK || woken != (nanos != issued.UnixNano()) {
+			t.Errorf("a watch holding %d against a directory issued %s: %d, woken %v; want 200, woken %v\n%s", nanos, issued, status, woken, nanos != issued.UnixNano(), body)
 		}
 	}
 }

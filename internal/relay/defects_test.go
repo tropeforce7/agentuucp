@@ -48,13 +48,14 @@ func TestTokenLifetimeCapDoesNotOverflow(t *testing.T) {
 			t.Fatalf("error %q does not name the cap", got)
 		}
 	})
-	// The overflow cases. Each of these has a lifetime far past the cap, and
-	// each used to produce a negative Duration and be accepted.
+	// The overflow cases. Each of these has a lifetime far past the cap and
+	// past the 292 years a Duration holds, and each used to produce a
+	// negative Duration and be accepted. Since G26 a token's dates end with
+	// the year 9999, so the longest span the cap can still be asked about is
+	// to the last writable second, some eight thousand years.
 	for name, notAfter := range map[string]int64{
-		"MaxInt64":         math.MaxInt64,
-		"half of MaxInt64": math.MaxInt64 / 2,
-		"a thousand years": now.Unix() + 1000*365*24*3600,
-		"2^40 seconds":     now.Unix() + 1<<40,
+		"a thousand years":         now.Unix() + 1000*365*24*3600,
+		"the last writable second": 253402300799,
 	} {
 		t.Run(name+" is refused", func(t *testing.T) {
 			status, body := register(now.Unix(), notAfter)
@@ -63,6 +64,23 @@ func TestTokenLifetimeCapDoesNotOverflow(t *testing.T) {
 			}
 			if got := errorText(t, body); !strings.Contains(got, "token_max_age") {
 				t.Fatalf("error %q does not name the cap", got)
+			}
+		})
+	}
+	// Past the year 9999 the date itself is refused first (G26), before the
+	// cap is reached, still 400 and nothing stored.
+	for name, notAfter := range map[string]int64{
+		"MaxInt64":         math.MaxInt64,
+		"half of MaxInt64": math.MaxInt64 / 2,
+		"2^40 seconds":     now.Unix() + 1<<40,
+	} {
+		t.Run(name+" is refused for its date", func(t *testing.T) {
+			status, body := register(now.Unix(), notAfter)
+			if status != http.StatusBadRequest {
+				t.Fatalf("not_after=%d gave status %d, want 400: %s", notAfter, status, body)
+			}
+			if got := errorText(t, body); !strings.Contains(got, "past 253402300799, the end of the year 9999") {
+				t.Fatalf("error %q does not name the year 9999", got)
 			}
 		})
 	}
