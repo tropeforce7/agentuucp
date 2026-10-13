@@ -12,9 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/stream"
+	"github.com/tropeforce7/agentuucp/internal/testutil"
 )
 
 // TestLimitOpenStreamSize: the size a sender declares for a stream is
@@ -271,7 +273,24 @@ func TestLimitWatchIssued(t *testing.T) {
 	if status, body, _ := h.pushDirectory(alice, alice, issued, dflt); status != http.StatusNoContent {
 		t.Fatalf("alice's push: %d %s", status, body)
 	}
-	for _, nanos := range []int64{math.MinInt64, math.MaxInt64, issued.UnixNano()} {
+	// The grammar's values around each end of what a watch carries: those
+	// inside are held by a watch, and those outside cannot be carried, so a
+	// directory issued at one is refused at the push, by the check the
+	// relay runs on every pushed directory, and no watch ever holds it.
+	earliest, latest := time.Unix(0, math.MinInt64), time.Unix(0, math.MaxInt64)
+	held := []int64{math.MinInt64, math.MaxInt64, issued.UnixNano()}
+	for _, end := range []time.Time{earliest, latest} {
+		for _, e := range testutil.TimeEdges(end) {
+			if !e.At.Before(earliest) && !e.At.After(latest) {
+				held = append(held, e.At.UnixNano())
+				continue
+			}
+			if err := channels.CheckIssued(&channels.Directory{Issued: e.At}, h.clock.Now()); err == nil {
+				t.Errorf("%s from %v, which a watch cannot carry, is taken at the push", e.Name, end)
+			}
+		}
+	}
+	for _, nanos := range held {
 		status, resp, body := h.list(bob, peersQuery(alice.Fingerprint()+":"+strconv.FormatInt(nanos, 10))).answer(t)
 		woken := len(resp.DirectoriesChanged) == 1 && resp.DirectoriesChanged[0] == alice.Fingerprint()
 		if status != http.StatusOK || woken != (nanos != issued.UnixNano()) {

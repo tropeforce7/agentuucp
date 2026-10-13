@@ -3,7 +3,6 @@ package auu
 import (
 	"encoding/json"
 	"io"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/testutil"
 )
 
 // The ends of what an RFC 3339 stamp carries: time.Time's decoder takes
@@ -37,8 +37,9 @@ var (
 // JSON and its decoder refuses a year outside 0000 to 9999. The ends of
 // what the wire does carry are fed too and picked the same way.
 func TestLimitQueueTimesAtTheExtremes(t *testing.T) {
-	far := time.Unix(math.MinInt64, 0)
-	y10k := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+	// The deadline grammar's two values.
+	far := testutil.EarliestInstant()
+	y10k := testutil.PastYear9999()
 	row := func(id int64, last, next, up time.Time) relayapi.QueuedMessage {
 		return relayapi.QueuedMessage{ID: id, Neighbour: "bar", State: "waiting", Tries: 1,
 			LastTry: last, NextTry: next, GivesUp: up}
@@ -165,8 +166,9 @@ func TestLimitACertificatesNotAfterAtTheExtremes(t *testing.T) {
 	}
 
 	// The type's extremes, which no relay can send.
-	far := time.Unix(math.MinInt64, 0)
-	y10k := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+	// The deadline grammar's two values.
+	far := testutil.EarliestInstant()
+	y10k := testutil.PastYear9999()
 	for _, when := range []time.Time{far, y10k} {
 		if _, err := json.Marshal(relayapi.CertRecord{Serial: oldSerial, NotAfter: when}); err == nil || !strings.Contains(err.Error(), "year outside of range") {
 			t.Errorf("a not_after of %v was encoded with %v; want the year refused", when, err)

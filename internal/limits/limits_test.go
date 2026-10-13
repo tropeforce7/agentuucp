@@ -51,16 +51,21 @@ import (
 // and a time.Parse, time.ParseInLocation, time.Unix, time.UnixMilli or
 // time.UnixMicro. Its row says how far ahead the code takes it, or its
 // window, deadline, display, output or local; the test refuses a display
-// row on a field it sees compared or ordered, a deadline or bound with no
-// test, and local: on a time made of an integer whose own row says it is
-// from outside. json.Unmarshal, a Decoder's Decode, or a helper that
+// row on a field that reaches anything but a format, a print, a marshal,
+// a field whose own row is display or output, or a helper that only shows
+// it; a deadline or bound with no test, or with a test that does not feed
+// the grammar's values through testutil.TimeEdges; local: on a time made
+// of an integer whose own row says it is from outside; and local: on a
+// field a decode fills unless it names the rule that holds it, the rule's
+// test and every function of the tree that writes the field. json.Unmarshal, a Decoder's Decode, or a helper that
 // reaches one, taken as a value rather than called, is refused.
 
 // floor is what the walk finds, every kind together, raised with each row
 // added: 542 when the time kind was added, 572 when it was made to see
-// every decoded time and every time.Unix. A walk that finds fewer is not
-// reaching the tree.
-const floor = 572
+// every decoded time and every time.Unix, 574 when a field a display
+// field is copied into became a site of its own (HTTPError.At and
+// Loaded.Issued). A walk that finds fewer is not reaching the tree.
+const floor = 574
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.
@@ -937,11 +942,17 @@ type Late struct {
 `,
 		"internal/planted/planted_test.go": `package planted
 
-import "testing"
+import (
+	"testing"
+	"time"
 
-func TestLimitStamp(t *testing.T) {}
+	"planted/internal/testutil"
+)
+
+func TestLimitStamp(t *testing.T) { testutil.TimeEdges(time.Time{}) }
 func TestStamp(t *testing.T)      {}
 `,
+		"internal/testutil/testutil.go": plantedTestutil,
 		"internal/other/other.go": `package other
 
 import (
@@ -1208,6 +1219,34 @@ func checkWith(t *testing.T, root, ledger string, bounds map[string]capBound, se
 	for _, r := range rows {
 		rowOf[r.key] = r
 	}
+	// A field's row by the field's declaration, so that a display field
+	// copied into another is read against the other's row.
+	rngAt := map[string]string{}
+	for _, s := range sites {
+		if r, ok := rowOf[s.key]; ok && s.kind == "time" && s.typeName != "" {
+			rngAt[s.pos.String()] = r.rng
+		}
+	}
+	// A field a display field is copied into holds the same time under
+	// another name, and is a site of its own with a row of its own.
+	var display []string
+	for _, s := range sites {
+		if r, ok := rowOf[s.key]; ok && s.kind == "time" && r.rng == "display" {
+			display = append(display, s.pos.String())
+		}
+	}
+	for _, s := range tree.copiedInto(display) {
+		if _, dup := byKey[s.key]; dup {
+			continue
+		}
+		sites = append(sites, s)
+		byKey[s.key] = s
+		if r, ok := rowOf[s.key]; ok {
+			rngAt[s.pos.String()] = r.rng
+		}
+	}
+	shown := tree.displayUses(func(pos string) string { return rngAt[pos] })
+	calls := tree.testutilCalls()
 	seen := map[string]bool{}
 	for _, r := range rows {
 		s, ok := byKey[r.key]
@@ -1320,6 +1359,47 @@ func checkWith(t *testing.T, root, ledger string, bounds map[string]capBound, se
 			// A time made of an integer from outside is from outside: an
 			// argument that reads a field whose int row gives it a range,
 			// rather than output or local:, may not be local: here.
+			// A local: on a field a decode fills names the rule that holds
+			// it and the test that shows it; the reason alone is prose the
+			// walk cannot hold, and what a decode fills came from a file or
+			// a wire whose writer it cannot see.
+			if strings.HasPrefix(r.rng, "local:") && s.typeName != "" {
+				if why, is := decoded[s.typeName]; is {
+					m := localTimeRule.FindStringSubmatch(r.rng)
+					if m == nil {
+						problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says local: with a reason the walk cannot hold, but %s is decoded: it is reached from %s; say local: held by <Rule> at <point> shown by <TestLimit...>, or give the row a bound and a test", r.line, r.key, short(s.typeName), why))
+						continue
+					}
+					rule := m[1]
+					if k := strings.LastIndex(rule, "."); k >= 0 {
+						rule = rule[k+1:]
+					}
+					if !funcs[rule] {
+						problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s names the rule %s, which is not a function in the tree", r.line, r.key, m[1]))
+						continue
+					}
+					if r.test == "" {
+						problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s names the rule %s and no test; the rule's test shows it holding the value at %s", r.line, r.key, m[1], m[2]))
+						continue
+					}
+					// Every function of the tree that writes the field is
+					// named in the row, so that what holds it is all that
+					// puts a value there; a writer the row does not name is
+					// another path.
+					var unnamed []string
+					for _, w := range tree.fieldWriters(s.pos.String()) {
+						// The name as a whole word, not the tail of another
+						// qualified name: Other.Stamp does not name Stamp.
+						if !regexp.MustCompile(`(^|[^A-Za-z0-9_.])` + regexp.QuoteMeta(w.name) + `\b`).MatchString(r.rng) {
+							unnamed = append(unnamed, w.name+" at "+w.at)
+						}
+					}
+					if len(unnamed) > 0 {
+						problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says it is held by %s, but the field is written in %s, which the row does not name; name every writer, or give the row a bound and a test", r.line, r.key, m[1], strings.Join(unnamed, ", ")))
+						continue
+					}
+				}
+			}
 			if strings.HasPrefix(r.rng, "local:") {
 				var outside []string
 				for _, pos := range s.from {
@@ -1344,6 +1424,8 @@ func checkWith(t *testing.T, root, ledger string, bounds map[string]capBound, se
 					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says display, but only a struct's field can be display", r.line, r.key))
 				} else if where := compared[s.pos.String()]; len(where) > 0 {
 					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says display, but the field is compared or ordered at %s; give the row a bound and a test", r.line, r.key, strings.Join(where, ", ")))
+				} else if where := shown[s.pos.String()]; len(where) > 0 {
+					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says display, but the field is used other than shown at %s; a display field reaches a format, a print, a marshal, a field whose row is display or output, or a helper that only shows it, so give the row a bound and a test", r.line, r.key, strings.Join(where, ", ")))
 				} else if r.test != "" {
 					problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s says display and names a test; a field that is only shown has none", r.line, r.key))
 				}
@@ -1354,6 +1436,21 @@ func checkWith(t *testing.T, root, ledger string, bounds map[string]capBound, se
 					continue
 				}
 			case reason("deadline:"), timeRanges.MatchString(r.rng):
+				// A bound's test feeds the values the grammar lists, and the
+				// walk holds it to doing so through testutil.TimeEdges, or a
+				// deadline's through each of the two it names.
+				if tests[r.test] == 1 && strings.HasPrefix(r.test, "TestLimit") {
+					c := calls[r.test]
+					deadline := strings.HasPrefix(r.rng, "deadline:")
+					if !c["TimeEdges"] && !(deadline && c["EarliestInstant"] && c["PastYear9999"]) {
+						want := "testutil.TimeEdges"
+						if deadline {
+							want += ", or each of testutil.EarliestInstant and testutil.PastYear9999"
+						}
+						problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s names %s, which does not call %s; a bound's test feeds the values the grammar lists through it", r.line, r.key, r.test, want))
+						continue
+					}
+				}
 			default:
 				problems = append(problems, fmt.Sprintf("ledger.txt:%d: %s has the range %q, which is not <= now + 5m, [lo, hi], display, output, local: or deadline: with its reason", r.line, r.key, r.rng))
 				continue
@@ -1934,6 +2031,10 @@ type tree struct {
 
 	// walk is what the decodes reach, found once (see decodes).
 	walk *decodeWalk
+
+	// candidates is, by its declaration, every time field of a named
+	// struct that is no site of its own, for copiedInto.
+	candidates map[string]site
 }
 
 // leftFile is one file the host's build leaves out, by its path from the
@@ -2084,6 +2185,7 @@ func (tr *tree) sites() []site {
 	var out []site
 	decodedTimes := tr.decodes().times
 	at := func(id *ast.Ident) string { return tr.fset.Position(id.Pos()).String() }
+	candidates := map[string]site{}
 	for _, p := range tr.pkgs {
 		for _, f := range p.files {
 			rel := filepath.ToSlash(mustRel(tr.root, tr.fset.Position(f.Pos()).Filename))
@@ -2112,6 +2214,25 @@ func (tr *tree) sites() []site {
 						}
 					}
 					if !tagged && !reached {
+						// A named struct's time field is a site too when a
+						// site's time is copied into it (see copiedInto).
+						if ts := declaring(stack, x); ts != nil && enclosingFunc(stack) == nil {
+							if obj := p.info.Defs[ts.Name]; obj != nil {
+								for _, fl := range x.Fields.List {
+									if !timeType(p.info.TypeOf(fl.Type)) {
+										continue
+									}
+									for _, name := range fieldNames(fl) {
+										candidates[at(name)] = site{
+											key:      fmt.Sprintf("%s %s time %s", rel, ts.Name.Name, name.Name),
+											kind:     "time",
+											pos:      tr.fset.Position(name.Pos()),
+											typeName: fullName(obj),
+										}
+									}
+								}
+							}
+						}
 						return true
 					}
 					enclosing := ""
@@ -2241,6 +2362,7 @@ func (tr *tree) sites() []site {
 			})
 		}
 	}
+	tr.candidates = candidates
 	// A decode straight into a time.
 	out = append(out, tr.decodes().sites...)
 	// Two calls that read as one in one function are told apart by order.
@@ -3415,4 +3537,532 @@ func plantFiles(t *testing.T, files map[string]string) string {
 		t.Fatal(err)
 	}
 	return root
+}
+
+// localTimeRule is the form of a time row's local: on a field the walk
+// finds decoded: "local: held by <Rule> at <point>", the function that
+// holds the value and the point it runs, as a string row's local: names
+// the rule that fixed its operand's length. The rule is held to the tree
+// and the row names the TestLimit test that shows it. A prose reason is
+// not enough there, since what a decode fills came from a file or a wire
+// whose writer the walk cannot see. What the walk holds is that much and
+// no more: the rule is a function of the tree, the test exists, and the
+// row names every function of the tree that writes the field (see
+// fieldWriters). That the bytes the decode reads are this home's own file
+// and not a wire is the row's claim, which the walk cannot see, held by
+// review.
+var localTimeRule = regexp.MustCompile(`^local: held by ([A-Za-z_][A-Za-z0-9_.()*]*) at (\S.*)$`)
+
+// shownMethods are the time.Time methods a display field may be read by:
+// each writes it out, or asks only whether it is there.
+var shownMethods = map[string]bool{
+	"Format": true, "AppendFormat": true, "String": true, "GoString": true,
+	"MarshalJSON": true, "MarshalText": true, "IsZero": true,
+}
+
+// shownFuncs are the calls outside the tree a display field may be handed
+// to: a format, a print, a log line or a marshal.
+func shownFunc(fn *types.Func) bool {
+	if fn == nil || fn.Pkg() == nil {
+		return false
+	}
+	switch fn.Pkg().Path() {
+	case "fmt", "log", "log/slog":
+		return true
+	case "encoding/json":
+		return fn.Name() == "Marshal" || fn.Name() == "MarshalIndent" || fn.Name() == "Encode"
+	}
+	return false
+}
+
+// displayUses is, by a time field's declaration, every use of it that is
+// neither a comparison (see compared) nor a way of showing it: a display
+// field may reach a format, a print, a marshal, a field whose own row is
+// display or output, or a helper of the tree whose body uses the
+// parameter it is handed in those ways alone, and nothing else. rowAt
+// gives the row's range of a field by its declaration, "" for none.
+func (tr *tree) displayUses(rowAt func(pos string) string) map[string][]string {
+	out := map[string][]string{}
+	for _, p := range tr.pkgs {
+		for _, f := range p.files {
+			var stack []ast.Node
+			ast.Inspect(f, func(n ast.Node) bool {
+				if n == nil {
+					stack = stack[:len(stack)-1]
+					return true
+				}
+				stack = append(stack, n)
+				sel, ok := n.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				sn := p.info.Selections[sel]
+				if sn == nil || sn.Kind() != types.FieldVal || !timeType(sn.Obj().Type()) {
+					return true
+				}
+				decl := tr.fset.Position(sn.Obj().Pos()).String()
+				if rowAt(decl) != "display" {
+					return true
+				}
+				if comparedAs(p, stack) != "" {
+					return true // said as compared
+				}
+				if how := tr.shownOnly(p, stack, rowAt, map[string]bool{}); how != "" {
+					where := fmt.Sprintf("%s (%s)", tr.at(sel), how)
+					if !slices.Contains(out[decl], where) {
+						out[decl] = append(out[decl], where)
+					}
+				}
+				return true
+			})
+		}
+	}
+	return out
+}
+
+// shownOnly says how the time at the top of the stack is used other than
+// shown, or "" when it is only shown or written. It follows the time up
+// through what still holds it, as comparedAs does, and reads where that
+// ends.
+func (tr *tree) shownOnly(p *pkg, stack []ast.Node, rowAt func(string) string, seen map[string]bool) string {
+	i := len(stack) - 1
+	cur := stack[i].(ast.Expr)
+	for i >= 1 {
+		switch parent := stack[i-1].(type) {
+		case *ast.ParenExpr, *ast.StarExpr:
+			cur, i = parent.(ast.Expr), i-1
+			continue
+		case *ast.UnaryExpr:
+			// Its address, which holds the same time: followed to where
+			// the pointer goes.
+			if parent.Op == token.AND {
+				cur, i = parent, i-1
+				continue
+			}
+		case *ast.IndexExpr:
+			if parent.X == cur {
+				cur, i = parent, i-1
+				continue
+			}
+		case *ast.SelectorExpr:
+			if parent.X == cur && i >= 2 && !timeOperators[parent.Sel.Name] {
+				if call, ok := stack[i-2].(*ast.CallExpr); ok && call.Fun == parent && timeType(p.info.TypeOf(call)) && timeType(p.info.TypeOf(cur)) {
+					cur, i = call, i-2
+					continue
+				}
+			}
+		}
+		break
+	}
+	if i < 1 {
+		return "used where the walk cannot see"
+	}
+	fieldRow := func(obj types.Object) string {
+		v, ok := obj.(*types.Var)
+		if !ok || !v.IsField() {
+			return "copied into something that is not a field"
+		}
+		decl := tr.fset.Position(v.Pos())
+		owner := fmt.Sprintf("%s declared at %s:%d", v.Name(), filepath.ToSlash(mustRel(tr.root, decl.Filename)), decl.Line)
+		switch rng := rowAt(tr.fset.Position(v.Pos()).String()); {
+		case rng == "display" || rng == "output":
+			return ""
+		case rng == "":
+			return "copied into the field " + owner + ", which has no row"
+		default:
+			return "copied into the field " + owner + ", whose row says " + rng
+		}
+	}
+	switch parent := stack[i-1].(type) {
+	case *ast.SelectorExpr:
+		if parent.X != cur {
+			break
+		}
+		switch {
+		case shownMethods[parent.Sel.Name]:
+			return ""
+		case strings.HasPrefix(parent.Sel.Name, "Unix"):
+			return "turned into a number by " + parent.Sel.Name
+		default:
+			return "read by its method " + parent.Sel.Name
+		}
+	case *ast.CallExpr:
+		for k, a := range parent.Args {
+			if a != cur {
+				continue
+			}
+			if tv, ok := p.info.Types[parent.Fun]; ok && tv.IsType() {
+				return "converted to " + types.ExprString(parent.Fun)
+			}
+			fn := calleeFunc(p, parent)
+			if shownFunc(fn) {
+				return ""
+			}
+			if fn == nil {
+				return "passed to " + types.ExprString(parent.Fun) + ", which the walk cannot follow"
+			}
+			name := objName(fn)
+			if fn.Pkg() != nil {
+				name = fn.Pkg().Name() + "." + name
+			}
+			hp, fd := tr.declOf(fn)
+			if fd == nil {
+				return "passed to " + name
+			}
+			// A helper of the tree's own: the parameter it is handed may be
+			// used there only as the field may be here.
+			sig := fn.Type().(*types.Signature)
+			idx := k
+			if sig.Variadic() && idx >= sig.Params().Len()-1 {
+				idx = sig.Params().Len() - 1
+			}
+			if idx >= sig.Params().Len() {
+				return "passed to " + name + ", which the walk cannot follow"
+			}
+			param := sig.Params().At(idx)
+			key := fmt.Sprintf("%s#%d", fullName(fn), idx)
+			if seen[key] {
+				return ""
+			}
+			seen[key] = true
+			if fd.Body == nil {
+				return "passed to " + name
+			}
+			why := ""
+			var inner []ast.Node
+			ast.Inspect(fd.Body, func(n ast.Node) bool {
+				if n == nil {
+					inner = inner[:len(inner)-1]
+					return true
+				}
+				inner = append(inner, n)
+				if why != "" {
+					return false
+				}
+				if id, ok := n.(*ast.Ident); ok && hp.info.Uses[id] == types.Object(param) {
+					if how := tr.shownOnly(hp, inner, rowAt, seen); how != "" {
+						why = fmt.Sprintf("passed to %s, where %s is %s at %s", name, param.Name(), how, tr.at(id))
+					}
+				}
+				return true
+			})
+			return why
+		}
+	case *ast.KeyValueExpr:
+		if parent.Value != cur || i < 2 {
+			break
+		}
+		lit, ok := stack[i-2].(*ast.CompositeLit)
+		if !ok {
+			break
+		}
+		if _, isStruct := types.Unalias(p.info.TypeOf(lit)).Underlying().(*types.Struct); !isStruct {
+			return "put in a " + types.TypeString(p.info.TypeOf(lit), nil)
+		}
+		if key, ok := parent.Key.(*ast.Ident); ok {
+			return fieldRow(p.info.Uses[key])
+		}
+	case *ast.CompositeLit:
+		st, ok := types.Unalias(p.info.TypeOf(parent)).Underlying().(*types.Struct)
+		if !ok {
+			return "put in a " + types.TypeString(p.info.TypeOf(parent), nil)
+		}
+		for k, e := range parent.Elts {
+			if e == cur && k < st.NumFields() {
+				return fieldRow(st.Field(k))
+			}
+		}
+	case *ast.AssignStmt:
+		for k, lhs := range parent.Lhs {
+			if lhs == cur {
+				return "" // written, not read
+			}
+			if k < len(parent.Rhs) && parent.Rhs[k] == cur || len(parent.Rhs) == 1 && parent.Rhs[0] == cur {
+				switch l := lhs.(type) {
+				case *ast.Ident:
+					return "assigned to the local " + l.Name
+				case *ast.SelectorExpr:
+					if sn := p.info.Selections[l]; sn != nil && sn.Kind() == types.FieldVal {
+						return fieldRow(sn.Obj())
+					}
+				}
+				return "assigned to " + types.ExprString(lhs)
+			}
+		}
+	case *ast.ValueSpec:
+		for _, name := range parent.Names {
+			return "assigned to the local " + name.Name
+		}
+	case *ast.BinaryExpr:
+		other := parent.X
+		if other == cur {
+			other = parent.Y
+		}
+		if id, ok := other.(*ast.Ident); ok && id.Name == "nil" {
+			return ""
+		}
+		return "an operand of " + parent.Op.String()
+	case *ast.ReturnStmt:
+		return "returned"
+	case *ast.UnaryExpr:
+		return "an operand of " + parent.Op.String()
+	case *ast.RangeStmt:
+		return "ranged over"
+	}
+	return fmt.Sprintf("used in a %s", strings.TrimPrefix(fmt.Sprintf("%T", stack[i-1]), "*ast."))
+}
+
+// testutilCalls is, by the name of every Test function in the tree's
+// _test.go files, the functions of internal/testutil its body calls,
+// written in it or in a function literal inside it.
+func (tr *tree) testutilCalls() map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	want := tr.modulePath + "/internal/testutil"
+	fset := token.NewFileSet()
+	for _, top := range []string{"internal", "cmd"} {
+		filepath.WalkDir(filepath.Join(tr.root, top), func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, "_test.go") {
+				return nil
+			}
+			f, err := parser.ParseFile(fset, path, nil, 0)
+			if err != nil {
+				return nil
+			}
+			name := ""
+			for _, imp := range f.Imports {
+				if strings.Trim(imp.Path.Value, `"`) != want {
+					continue
+				}
+				name = "testutil"
+				if imp.Name != nil {
+					name = imp.Name.Name
+				}
+			}
+			for _, decl := range f.Decls {
+				fd, ok := decl.(*ast.FuncDecl)
+				if !ok || fd.Recv != nil || !strings.HasPrefix(fd.Name.Name, "Test") || fd.Body == nil {
+					continue
+				}
+				calls := out[fd.Name.Name]
+				if calls == nil {
+					calls = map[string]bool{}
+					out[fd.Name.Name] = calls
+				}
+				ast.Inspect(fd.Body, func(n ast.Node) bool {
+					call, ok := n.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					switch fun := call.Fun.(type) {
+					case *ast.SelectorExpr:
+						if x, ok := fun.X.(*ast.Ident); ok && name != "" && x.Name == name {
+							calls[fun.Sel.Name] = true
+						}
+					case *ast.Ident:
+						// Within internal/testutil's own tests.
+						if f.Name.Name == "testutil" {
+							calls[fun.Name] = true
+						}
+					}
+					return true
+				})
+			}
+			return nil
+		})
+	}
+	return out
+}
+
+// copiedInto is every time field of a named struct that is no site of its
+// own (tr.candidates) that a field declared at one of from is copied
+// into, by an assignment or a composite literal, itself or its address:
+// such a field holds a display field's time under another name, and the
+// display row is held through it only if it has a row of its own. A
+// field so reached is followed in turn.
+func (tr *tree) copiedInto(from []string) []site {
+	held := map[string]bool{}
+	for _, pos := range from {
+		held[pos] = true
+	}
+	candidates := tr.candidates
+	fieldPos := func(p *pkg, e ast.Expr) string {
+		for {
+			switch x := e.(type) {
+			case *ast.ParenExpr:
+				e = x.X
+				continue
+			case *ast.StarExpr:
+				e = x.X
+				continue
+			case *ast.UnaryExpr:
+				if x.Op == token.AND {
+					e = x.X
+					continue
+				}
+			case *ast.SelectorExpr:
+				if sn := p.info.Selections[x]; sn != nil && sn.Kind() == types.FieldVal {
+					return tr.fset.Position(sn.Obj().Pos()).String()
+				}
+			case *ast.Ident:
+				if v, ok := p.info.Uses[x].(*types.Var); ok && v.IsField() {
+					return tr.fset.Position(v.Pos()).String()
+				}
+			}
+			return ""
+		}
+	}
+	var out []site
+	for changed := true; changed; {
+		changed = false
+		for _, p := range tr.pkgs {
+			for _, f := range p.files {
+				ast.Inspect(f, func(n ast.Node) bool {
+					var pairs [][2]string
+					switch x := n.(type) {
+					case *ast.AssignStmt:
+						if len(x.Lhs) == len(x.Rhs) {
+							for i := range x.Lhs {
+								pairs = append(pairs, [2]string{fieldPos(p, x.Lhs[i]), fieldPos(p, x.Rhs[i])})
+							}
+						}
+					case *ast.KeyValueExpr:
+						if key, ok := x.Key.(*ast.Ident); ok {
+							pairs = append(pairs, [2]string{fieldPos(p, key), fieldPos(p, x.Value)})
+						}
+					}
+					for _, pr := range pairs {
+						to, from := pr[0], pr[1]
+						if to == "" || !held[from] || held[to] {
+							continue
+						}
+						if c, ok := candidates[to]; ok {
+							held[to] = true
+							out = append(out, c)
+							changed = true
+						}
+					}
+					return true
+				})
+			}
+		}
+	}
+	return out
+}
+
+// plantedTestutil is a planted module's internal/testutil, for a planted
+// bound row's test to call as the tree's tests call the real one.
+const plantedTestutil = `package testutil
+
+import "time"
+
+type TimeEdge struct {
+	Name string
+	At   time.Time
+}
+
+func TimeEdges(edge time.Time) []TimeEdge { return nil }
+
+func EarliestInstant() time.Time { return time.Time{} }
+
+func PastYear9999() time.Time { return time.Time{} }
+`
+
+// fieldWriter is a function of the tree that writes a field, by the name
+// a row must give it, and where. A method is named with its receiver's
+// type, Store.Load, and a function of another package than the field's
+// with its package, auu.deliverStream; a function of the field's own
+// package by its name alone. A bare name is not unique in the tree
+// ((*serveRun).settle, (*meeter).settle and regular.settle), so a row
+// that names one by it would take any of them.
+type fieldWriter struct{ name, at string }
+
+// fieldWriters is every place in the non-test tree that writes the field
+// declared at pos: an assignment to it, a composite literal that sets it,
+// by its key or by its place, or its address taken, which lets anything
+// write it. A decode fills it by none of these, and is the read the row
+// is about.
+func (tr *tree) fieldWriters(pos string) []fieldWriter {
+	var out []fieldWriter
+	var fieldPkg *types.Package
+	is := func(obj types.Object) bool {
+		v, ok := obj.(*types.Var)
+		if ok && v.IsField() && tr.fset.Position(v.Pos()).String() == pos {
+			fieldPkg = v.Pkg()
+			return true
+		}
+		return false
+	}
+	qualified := func(p *pkg, fd *ast.FuncDecl) string {
+		if fd == nil {
+			return "a package-level declaration"
+		}
+		if fd.Recv != nil && len(fd.Recv.List) > 0 {
+			recv := fd.Recv.List[0].Type
+			for {
+				switch x := recv.(type) {
+				case *ast.StarExpr:
+					recv = x.X
+					continue
+				case *ast.IndexExpr:
+					recv = x.X
+					continue
+				case *ast.IndexListExpr:
+					recv = x.X
+					continue
+				}
+				break
+			}
+			return types.ExprString(recv) + "." + fd.Name.Name
+		}
+		if fieldPkg != nil && p.types != fieldPkg {
+			return p.types.Name() + "." + fd.Name.Name
+		}
+		return fd.Name.Name
+	}
+	for _, p := range tr.pkgs {
+		for _, f := range p.files {
+			var stack []ast.Node
+			ast.Inspect(f, func(n ast.Node) bool {
+				if n == nil {
+					stack = stack[:len(stack)-1]
+					return true
+				}
+				stack = append(stack, n)
+				var hit ast.Node
+				switch x := n.(type) {
+				case *ast.AssignStmt:
+					for _, lhs := range x.Lhs {
+						if sel, ok := lhs.(*ast.SelectorExpr); ok {
+							if sn := p.info.Selections[sel]; sn != nil && sn.Kind() == types.FieldVal && is(sn.Obj()) {
+								hit = sel
+							}
+						}
+					}
+				case *ast.KeyValueExpr:
+					if key, ok := x.Key.(*ast.Ident); ok && is(p.info.Uses[key]) {
+						hit = x
+					}
+				case *ast.CompositeLit:
+					if st, ok := types.Unalias(p.info.TypeOf(x)).Underlying().(*types.Struct); ok {
+						for k, e := range x.Elts {
+							if _, kv := e.(*ast.KeyValueExpr); !kv && k < st.NumFields() && is(st.Field(k)) {
+								hit = e
+							}
+						}
+					}
+				case *ast.UnaryExpr:
+					if sel, ok := x.X.(*ast.SelectorExpr); ok && x.Op == token.AND {
+						if sn := p.info.Selections[sel]; sn != nil && sn.Kind() == types.FieldVal && is(sn.Obj()) {
+							hit = x
+						}
+					}
+				}
+				if hit != nil {
+					out = append(out, fieldWriter{qualified(p, enclosingFunc(stack)), tr.at(hit)})
+				}
+				return true
+			})
+		}
+	}
+	return out
 }

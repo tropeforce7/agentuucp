@@ -9,6 +9,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/testutil"
 	"github.com/tropeforce7/agentuucp/internal/token"
 )
 
@@ -39,21 +40,36 @@ func TestLimitATokensNotAfterAtTheExtremes(t *testing.T) {
 		at    time.Time
 		want  string
 	}{
-		{"time.Unix(math.MinInt64, 0)", time.Unix(math.MinInt64, 0), "expired long ago"},
 		{"a nanosecond past where Sub saturates", now.Add(-time.Duration(math.MaxInt64)).Add(-time.Nanosecond), "expired long ago"},
 		{"where the difference is the largest Duration", now.Add(-time.Duration(math.MaxInt64)), "expired long ago"},
 		{"a nanosecond inside it", now.Add(-time.Duration(math.MaxInt64)).Add(time.Nanosecond), "expired 106751 days ago"},
-		{"a year past", now.AddDate(-1, 0, 0), "expired 365 days ago"},
-		{"a day ahead", now.Add(24 * time.Hour), "in 24 hours"},
-		{"a year ahead", now.AddDate(1, 0, 0), "in 365 days"},
 		{"a nanosecond inside where Sub saturates", now.Add(time.Duration(math.MaxInt64)), most},
 		{"a nanosecond past it", now.Add(time.Duration(math.MaxInt64)).Add(time.Nanosecond), most},
-		{"the year 10000", time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC), most},
-		{"the latest instant a time.Time holds", time.Unix(math.MaxInt64-62135596800, 999999999), most},
 		{"time.Unix(math.MaxInt64, 0), which overflows to the past", time.Unix(math.MaxInt64, 0), "expired long ago"},
 	} {
 		if got := token.Until(c.at, now); got != c.want {
 			t.Errorf("%s: %q, want %q", c.label, got, c.want)
+		}
+	}
+	// The grammar's values around the deadline's edge, now.
+	edges := map[string]string{
+		testutil.AtTheEdge:       "in less than a minute",
+		testutil.ASecondBefore:   "expired 1s ago; a relay accepts it for 5 minutes past that",
+		testutil.ASecondPast:     "in less than a minute",
+		testutil.ADayAhead:       "in 24 hours",
+		testutil.AYearAhead:      "in 365 days",
+		testutil.AYearPast:       "expired 365 days ago",
+		testutil.TheEarliest:     "expired long ago",
+		testutil.OnePastYear9999: most,
+		testutil.TheLatest:       most,
+	}
+	for _, e := range testutil.TimeEdges(now) {
+		want, ok := edges[e.Name]
+		if !ok {
+			t.Fatalf("no answer for %s", e.Name)
+		}
+		if got := token.Until(e.At, now); got != want {
+			t.Errorf("%s: %q, want %q", e.Name, got, want)
 		}
 	}
 

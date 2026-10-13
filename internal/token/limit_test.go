@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/testutil"
 )
 
 // TestLimitClaimsIntegers: the three integers a token carries, at the
@@ -133,6 +135,27 @@ func TestLimitATokensDatesAreHeldToTheLastWritableSecond(t *testing.T) {
 		err := claims(now.Unix(), last+1).Validate()
 		if !errors.Is(err, ErrForm) || !strings.Contains(err.Error(), pastSays("not_after", last+1)) {
 			t.Errorf("not_after %d: %v; want ErrForm saying %q", int64(last+1), err, pastSays("not_after", last+1))
+		}
+	})
+
+	// The grammar's values around the last second, as not_after: those
+	// that are not past it are taken, and the rest refused by the form.
+	t.Run("the grammar's values around the bound", func(t *testing.T) {
+		for _, e := range testutil.TimeEdges(time.Unix(last, 0)) {
+			n := e.At.Unix()
+			err := claims(now.Unix(), n).Validate()
+			switch e.Name {
+			case testutil.AtTheEdge, testutil.ASecondBefore, testutil.AYearPast:
+				if err != nil {
+					t.Errorf("%s, not_after %d: refused: %v", e.Name, n, err)
+				}
+			case testutil.ASecondPast, testutil.ADayAhead, testutil.AYearAhead, testutil.OnePastYear9999, testutil.TheLatest, testutil.TheEarliest:
+				if !errors.Is(err, ErrForm) {
+					t.Errorf("%s, not_after %d: %v; want ErrForm", e.Name, n, err)
+				}
+			default:
+				t.Fatalf("no answer for %s", e.Name)
+			}
 		}
 	})
 

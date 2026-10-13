@@ -217,7 +217,8 @@ func When(b []byte) (time.Time, error) {
 func Milli(n int64) time.Time { return time.UnixMilli(n) }
 
 func Micro(n int64) time.Time { return time.UnixMicro(n) }
-`, "internal/planted/planted_test.go": "package planted\n\nimport \"testing\"\n\nfunc TestLimitX(t *testing.T) {}\n"})
+`, "internal/planted/planted_test.go": "package planted\n\nimport (\n\t\"testing\"\n\n\t\"planted/internal/testutil\"\n)\n\nfunc TestLimitX(t *testing.T) { testutil.EarliestInstant(); testutil.PastYear9999() }\n",
+		"internal/testutil/testutil.go": plantedTestutil})
 	const intRow = "internal/planted/planted.go Wire int At int64 = >= 0 shown by TestLimitX\n"
 	const others = "internal/planted/planted.go Milli time time.UnixMilli(n) = local: a constant\ninternal/planted/planted.go Micro time time.UnixMicro(n) = local: a constant\n"
 	const key = "internal/planted/planted.go When time time.Unix(w.At, 0)"

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/testutil"
 )
 
 // The two ends of what an RFC 3339 stamp can carry. time.Time's decoder
@@ -73,69 +74,78 @@ func TestLimitAnInnerTimeIsHeldToTheSkew(t *testing.T) {
 		}
 	}
 
+	// The grammar's values around the edge, from the test clock's whole
+	// second, so a row is the second it names whatever the fraction of the
+	// clock.
+	edgeFrom := func(sec int64) []testutil.TimeEdge {
+		return testutil.TimeEdges(time.Unix(sec, 0).Add(relayapi.MaxStampAhead))
+	}
+	secondPast := func(sec int64) time.Time {
+		for _, e := range edgeFrom(sec) {
+			if e.Name == testutil.ASecondPast {
+				return e.At
+			}
+		}
+		t.Fatal("TimeEdges gives no second past the edge")
+		return time.Time{}
+	}
+	for _, e := range edgeFrom(time.Now().Unix()) {
+		switch e.Name {
+		case testutil.AtTheEdge, testutil.ASecondBefore, testutil.AYearPast:
+			if _, _, err := Open(bob, stamped(e.At)); err != nil {
+				t.Errorf("%s: %v; want opened", e.Name, err)
+			}
+		case testutil.ASecondPast:
+			// Tried until Open's clock read in the test's second.
+			for attempt := 0; ; attempt++ {
+				sec := time.Now().Unix()
+				_, _, err := Open(bob, stamped(secondPast(sec)))
+				if err != nil || time.Now().Unix() == sec {
+					refusedAsFuture(e.Name, err)
+					break
+				}
+				if attempt == 4 {
+					t.Fatal("a second past the edge: five tries each crossed a second to seal and open")
+				}
+			}
+		case testutil.ADayAhead, testutil.AYearAhead:
+			_, _, err := Open(bob, stamped(e.At))
+			refusedAsFuture(e.Name, err)
+		case testutil.TheEarliest, testutil.OnePastYear9999, testutil.TheLatest:
+			// The type's extremes cannot be sealed, so they never reach
+			// Open; the refusal is json's error and not a panic.
+			if _, err := json.Marshal(inner(e.At)); err == nil || !strings.Contains(err.Error(), "year outside of range") {
+				t.Errorf("%s: marshalled with %v; want the year refused", e.Name, err)
+			}
+		default:
+			t.Fatalf("no answer for %s", e.Name)
+		}
+	}
+
+	// This bound's own rows.
 	for _, c := range []struct {
 		label string
 		ahead time.Duration
 	}{
 		{"twice the skew, two peers the relay accepts", 2 * relayapi.MaxSkew},
-		{"a second inside the edge", relayapi.MaxStampAhead - time.Second},
-		{"at the edge", relayapi.MaxStampAhead},
 		{"nine tenths of a second past the edge, its second", relayapi.MaxStampAhead + 900*time.Millisecond},
 		{"now", 0},
-		{"a year past", -365 * 24 * time.Hour},
 	} {
-		// From the test clock's whole second, so the row is the second it
-		// names whatever the fraction of the clock.
 		at := time.Unix(time.Now().Unix(), 0).Add(c.ahead)
 		if _, _, err := Open(bob, stamped(at)); err != nil {
 			t.Errorf("%s: %v; want opened", c.label, err)
 		}
 	}
-
-	// A second past the edge, tried until Open's clock read in the test's
-	// second.
-	for attempt := 0; ; attempt++ {
-		sec := time.Now().Unix()
-		_, _, err := Open(bob, stamped(time.Unix(sec, 0).Add(relayapi.MaxStampAhead+time.Second)))
-		if err != nil || time.Now().Unix() == sec {
-			refusedAsFuture("a second past the edge", err)
-			break
-		}
-		if attempt == 4 {
-			t.Fatal("a second past the edge: five tries each crossed a second to seal and open")
-		}
-	}
-
-	for _, c := range []struct {
-		label string
-		when  time.Time
-	}{
-		{"a day ahead", time.Now().Add(24 * time.Hour)},
-		{"a year ahead", time.Now().AddDate(1, 0, 0)},
-		{"the latest instant the wire carries, the year 10000 in UTC", wireLatest},
-	} {
-		_, _, err := Open(bob, stamped(c.when))
-		refusedAsFuture(c.label, err)
-	}
+	_, _, err := Open(bob, stamped(wireLatest))
+	refusedAsFuture("the latest instant the wire carries, the year 10000 in UTC", err)
 
 	// No past bound: the earliest instant the wire carries is opened.
 	if _, _, err := Open(bob, stamped(wireEarliest)); err != nil {
 		t.Errorf("the earliest instant the wire carries: %v; want opened", err)
 	}
 
-	// The type's extremes cannot be sealed, so they never reach Open; the
-	// refusal is json's error and not a panic.
-	for _, c := range []struct {
-		label string
-		when  time.Time
-	}{
-		{"time.Unix(math.MinInt64, 0)", time.Unix(math.MinInt64, 0)},
-		{"the year 10000", time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)},
-		{"the latest instant a time.Time holds", time.Unix(math.MaxInt64-62135596800, 999999999)},
-		{"time.Unix(math.MaxInt64, 0)", time.Unix(math.MaxInt64, 0)},
-	} {
-		if _, err := json.Marshal(inner(c.when)); err == nil || !strings.Contains(err.Error(), "year outside of range") {
-			t.Errorf("%s: marshalled with %v; want the year refused", c.label, err)
-		}
+	// Nor can time.Unix(math.MaxInt64, 0), which wraps to before 1970.
+	if _, err := json.Marshal(inner(time.Unix(math.MaxInt64, 0))); err == nil || !strings.Contains(err.Error(), "year outside of range") {
+		t.Errorf("time.Unix(math.MaxInt64, 0): marshalled with %v; want the year refused", err)
 	}
 }

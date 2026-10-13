@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tropeforce7/agentuucp/internal/testutil"
 )
 
 // TestLimitAChannelWindowAtTheExtremes: a channel's not_before and
@@ -34,10 +36,11 @@ import (
 func TestLimitAChannelWindowAtTheExtremes(t *testing.T) {
 	id := owner(t)
 	now := time.Now()
-	far := time.Unix(math.MinInt64, 0)
-	y10k := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+	// The deadline grammar's two values, and the latest instant.
+	far := testutil.EarliestInstant()
+	y10k := testutil.PastYear9999()
 	wrapped := time.Unix(math.MaxInt64, 0)
-	latest := time.Unix(math.MaxInt64-62135596800, 999999999)
+	latest := testutil.LatestInstant()
 	ptr := func(t time.Time) *time.Time { return &t }
 
 	for _, c := range []struct {

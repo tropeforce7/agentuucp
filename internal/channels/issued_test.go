@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/testutil"
 )
 
 // A pushed directory's issued is held to the relay's allowance for a
@@ -22,27 +23,34 @@ func TestLimitADirectoryIssuedIsHeldToTheSkew(t *testing.T) {
 		watch   = "a watch can carry"
 	)
 	ns := time.Nanosecond
-	for _, c := range []struct {
+	// The grammar's values around the skew's edge, then this bound's own.
+	expect := map[string]string{
+		testutil.AtTheEdge: "", testutil.ASecondBefore: "", testutil.ASecondPast: ahead,
+		testutil.ADayAhead: ahead, testutil.AYearAhead: ahead, testutil.AYearPast: "",
+		testutil.TheEarliest: outside, testutil.OnePastYear9999: ahead, testutil.TheLatest: ahead,
+	}
+	type edgeCase = struct {
 		name   string
 		issued time.Time
 		refuse string // "" when accepted
-	}{
+	}
+	var cases []edgeCase
+	for _, e := range testutil.TimeEdges(now.Add(relayapi.MaxSkew)) {
+		refuse, ok := expect[e.Name]
+		if !ok {
+			t.Fatalf("no answer for %s", e.Name)
+		}
+		cases = append(cases, edgeCase{e.Name, e.At, refuse})
+	}
+	for _, c := range append(cases, []edgeCase{
 		{"now", now, ""},
-		{"a second inside the skew", now.Add(relayapi.MaxSkew - time.Second), ""},
-		{"at the skew", now.Add(relayapi.MaxSkew), ""},
-		{"a second past the skew", now.Add(relayapi.MaxSkew + time.Second), ahead},
-		{"a day ahead", now.AddDate(0, 0, 1), ahead},
-		{"a year ahead", now.AddDate(1, 0, 0), ahead},
-		{"a year past", now.AddDate(-1, 0, 0), ""},
 		// The earliest writable is before what a watch can carry, so it
 		// is refused here, by the watch's bound and not the writer's.
 		{"the earliest writable", relayapi.EarliestWritable, watch},
 		{"a nanosecond before the earliest writable", relayapi.EarliestWritable.Add(-ns), outside},
-		{"the least Unix second", time.Unix(math.MinInt64, 0), outside},
-		{"the latest instant", time.Unix(math.MaxInt64-62135596800, 999999999), ahead},
 		{"the earliest a watch can carry", time.Unix(0, math.MinInt64), ""},
 		{"a nanosecond before the earliest a watch can carry", time.Unix(0, math.MinInt64).Add(-ns), watch},
-	} {
+	}...) {
 		err := CheckIssued(&Directory{Issued: c.issued}, now)
 		switch {
 		case c.refuse == "" && err != nil:

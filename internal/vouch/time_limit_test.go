@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/testutil"
 )
 
 // TestLimitAVouchIssuedIsHeldToTheSkew: a vouch issued more than
@@ -45,25 +46,38 @@ func TestLimitAVouchIssuedIsHeldToTheSkew(t *testing.T) {
 	v, x := gen(t, "v"), gen(t, "x")
 	refusal := "ahead of this machine's clock"
 
-	for _, c := range []struct {
+	// The grammar's values around the edge: the five the wire carries go
+	// through Verify, and the three it cannot through the rule and Sign.
+	type edgeCase = struct {
 		label  string
 		issued time.Time
 		ok     bool
-	}{
+	}
+	var carried, extremes []edgeCase
+	for _, e := range testutil.TimeEdges(now.Add(relayapi.MaxStampAhead)) {
+		switch e.Name {
+		case testutil.AtTheEdge, testutil.ASecondBefore, testutil.AYearPast:
+			carried = append(carried, edgeCase{e.Name, e.At, true})
+		case testutil.ASecondPast, testutil.ADayAhead, testutil.AYearAhead:
+			carried = append(carried, edgeCase{e.Name, e.At, false})
+		case testutil.TheEarliest:
+			extremes = append(extremes, edgeCase{e.Name, e.At, true})
+		case testutil.OnePastYear9999, testutil.TheLatest:
+			extremes = append(extremes, edgeCase{e.Name, e.At, false})
+		default:
+			t.Fatalf("no answer for %s", e.Name)
+		}
+	}
+
+	for _, c := range append(carried, []edgeCase{
 		{"now", now, true},
-		{"a second inside the edge", now.Add(relayapi.MaxStampAhead - time.Second), true},
-		{"at the edge", now.Add(relayapi.MaxStampAhead), true},
 		{"nine tenths of a second past the edge, its second", now.Add(relayapi.MaxStampAhead + 900*time.Millisecond), true},
-		{"a second past the edge", now.Add(relayapi.MaxStampAhead + time.Second), false},
 		{"the old edge a second past, five minutes and a second", now.Add(relayapi.MaxSkew + time.Second), true},
-		{"a day ahead", now.Add(24 * time.Hour), false},
-		{"a year ahead", now.AddDate(1, 0, 0), false},
-		{"a year past", now.AddDate(-1, 0, 0), true},
 		{"the latest instant the wire carries, the year 10000 in UTC",
 			time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.FixedZone("", -(23*3600+59*60))), false},
 		{"the earliest instant the wire carries, the year -1 in UTC",
 			time.Date(0, 1, 1, 0, 0, 0, 0, time.FixedZone("", 23*3600+59*60)), true},
-	} {
+	}...) {
 		t.Run(c.label, func(t *testing.T) {
 			d := base(v, x)
 			d.Issued = c.issued
@@ -78,17 +92,9 @@ func TestLimitAVouchIssuedIsHeldToTheSkew(t *testing.T) {
 		})
 	}
 
-	latest := time.Unix(math.MaxInt64-62135596800, 999999999)
-	for _, c := range []struct {
-		label  string
-		issued time.Time
-		ok     bool
-	}{
-		{"time.Unix(math.MinInt64, 0)", time.Unix(math.MinInt64, 0), true},
-		{"time.Unix(math.MaxInt64, 0), read back by Unix as the far future", time.Unix(math.MaxInt64, 0), false},
-		{"the year 10000", time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC), false},
-		{"the latest instant a time.Time holds", latest, false},
-	} {
+	for _, c := range append(extremes, edgeCase{
+		"time.Unix(math.MaxInt64, 0), read back by Unix as the far future", time.Unix(math.MaxInt64, 0), false,
+	}) {
 		t.Run(c.label, func(t *testing.T) {
 			d := base(v, x)
 			d.Issued = c.issued

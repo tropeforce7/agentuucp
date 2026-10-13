@@ -2,12 +2,12 @@ package card
 
 import (
 	"errors"
-	"math"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/testutil"
 )
 
 // A pushed document's issued is held to the relay's own allowance for a
@@ -17,23 +17,30 @@ func TestLimitACardIssuedIsHeldToTheSkew(t *testing.T) {
 	now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 	const ahead = "ahead of now"
 	const outside = "outside the years 0000 to 9999"
-	for _, c := range []struct {
+	// The grammar's values around the skew's edge, then this bound's own.
+	expect := map[string]string{
+		testutil.AtTheEdge: "", testutil.ASecondBefore: "", testutil.ASecondPast: ahead,
+		testutil.ADayAhead: ahead, testutil.AYearAhead: ahead, testutil.AYearPast: "",
+		testutil.TheEarliest: outside, testutil.OnePastYear9999: ahead, testutil.TheLatest: ahead,
+	}
+	type edgeCase = struct {
 		name   string
 		issued time.Time
 		refuse string // "" when accepted
-	}{
+	}
+	var cases []edgeCase
+	for _, e := range testutil.TimeEdges(now.Add(relayapi.MaxSkew)) {
+		refuse, ok := expect[e.Name]
+		if !ok {
+			t.Fatalf("no answer for %s", e.Name)
+		}
+		cases = append(cases, edgeCase{e.Name, e.At, refuse})
+	}
+	for _, c := range append(cases, []edgeCase{
 		{"now", now, ""},
-		{"a second inside the skew", now.Add(relayapi.MaxSkew - time.Second), ""},
-		{"at the skew", now.Add(relayapi.MaxSkew), ""},
-		{"a second past the skew", now.Add(relayapi.MaxSkew + time.Second), ahead},
-		{"a day ahead", now.AddDate(0, 0, 1), ahead},
-		{"a year ahead", now.AddDate(1, 0, 0), ahead},
-		{"a year past", now.AddDate(-1, 0, 0), ""},
 		{"the earliest writable", relayapi.EarliestWritable, ""},
 		{"a nanosecond before the earliest writable", relayapi.EarliestWritable.Add(-time.Nanosecond), outside},
-		{"the least Unix second", time.Unix(math.MinInt64, 0), outside},
-		{"the latest instant", time.Unix(math.MaxInt64-62135596800, 999999999), ahead},
-	} {
+	}...) {
 		err := CheckIssued(&Document{Issued: c.issued}, now)
 		switch {
 		case c.refuse == "" && err != nil:

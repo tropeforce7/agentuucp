@@ -11,6 +11,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/testutil"
 	"github.com/tropeforce7/agentuucp/internal/token"
 )
 
@@ -47,26 +48,33 @@ func TestLimitARelaysStampsAreHeldToTheSkew(t *testing.T) {
 	t.Run("stampAt", func(t *testing.T) {
 		now := time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 		nearLatest := relayapi.LatestWritable.Add(-relayapi.MaxSkew / 2)
+		// The grammar's values around the edge, now + MaxSkew.
+		for _, e := range testutil.TimeEdges(now.Add(relayapi.MaxSkew)) {
+			var taken bool
+			switch e.Name {
+			case testutil.AtTheEdge, testutil.ASecondBefore, testutil.AYearPast:
+				taken = true
+			case testutil.ASecondPast, testutil.ADayAhead, testutil.AYearAhead,
+				testutil.TheEarliest, testutil.OnePastYear9999, testutil.TheLatest:
+			default:
+				t.Fatalf("no answer for %s", e.Name)
+			}
+			if got := stampAt(e.At, now); got != taken {
+				t.Errorf("%s: stampAt(%v, %v) = %v; want %v", e.Name, e.At, now, got, taken)
+			}
+		}
 		for _, tc := range []struct {
 			name   string
 			t, now time.Time
 			taken  bool
 		}{
 			{"now", now, now, true},
-			{"the edge, now + MaxSkew", now.Add(relayapi.MaxSkew), now, true},
-			{"a second inside the edge", now.Add(relayapi.MaxSkew - time.Second), now, true},
-			{"a second past the edge", now.Add(relayapi.MaxSkew + time.Second), now, false},
 			{"a nanosecond past the edge", now.Add(relayapi.MaxSkew + time.Nanosecond), now, false},
-			{"a day ahead", now.Add(24 * time.Hour), now, false},
-			{"a year ahead", now.AddDate(1, 0, 0), now, false},
-			{"a year past", now.AddDate(-1, 0, 0), now, true},
 			{"the zero time", time.Time{}, now, true},
 			{"EarliestWritable", relayapi.EarliestWritable, now, true},
 			{"a nanosecond before EarliestWritable", relayapi.EarliestWritable.Add(-time.Nanosecond), now, false},
 			{"LatestWritable, now near it", relayapi.LatestWritable, nearLatest, true},
 			{"a nanosecond after LatestWritable, now near it", relayapi.LatestWritable.Add(time.Nanosecond), nearLatest, false},
-			{"the earliest instant, time.Unix(MinInt64, 0)", time.Unix(math.MinInt64, 0), now, false},
-			{"the latest instant", latestInstant, now, false},
 			{"the latest instant, now near LatestWritable", latestInstant, nearLatest, false},
 		} {
 			if got := stampAt(tc.t, tc.now); got != tc.taken {
@@ -80,7 +88,7 @@ func TestLimitARelaysStampsAreHeldToTheSkew(t *testing.T) {
 	// 0 at +23:59 and year 9999 at -12:00, stand in for them through the
 	// answer path below.
 	t.Run("the encoder refuses the instants past the wire", func(t *testing.T) {
-		for _, v := range []time.Time{time.Unix(math.MinInt64, 0), latestInstant} {
+		for _, v := range []time.Time{testutil.EarliestInstant(), testutil.PastYear9999(), latestInstant} {
 			if b, err := json.Marshal(v); err == nil {
 				t.Errorf("json.Marshal(%v) = %s; want it refused", v, b)
 			}

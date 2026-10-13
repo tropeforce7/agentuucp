@@ -125,32 +125,79 @@
 #                  and one past year 9999, through the code that uses it
 #                  where the wire can carry them, and shows no panic and
 #                  no overflow
-#   display        shown and never compared or ordered: the test refuses
-#                  the row when the field, or a time derived from it by a
-#                  method of time.Time, a dereference or an index, is an
-#                  operand of Before, After, Equal, Sub or Compare, of
-#                  time.Since or time.Until, or a side of a comparison (a
-#                  pointer, slice or map held against nil excepted), or
-#                  is read in a comparator written in the call that sorts
-#                  or in a Less method, anywhere in the tree. That is not
-#                  every way to compare a time, and the row is read
-#                  against its field for the rest: among them a copy into
-#                  a local, or into a struct with no row; a comparison
-#                  through Unix or UnixNano; a defined type converted back;
-#                  a method promoted from an embedded time; a helper of the
-#                  tree's own that compares what it is handed; a whole
-#                  struct compared; a comparator held in a variable; a file
-#                  the build leaves out. Names no test
+#   display        shown and never compared or ordered: the field, or a
+#                  time derived from it by a method of time.Time that
+#                  answers a time, a dereference, an index or its
+#                  address, reaches a format, a print, a marshal (fmt,
+#                  log, slog, json, or its own Format, String, IsZero or
+#                  Marshal method), a field whose own row is display or
+#                  output, or a helper of the tree whose body uses the
+#                  parameter it is handed in those ways alone, and
+#                  nothing else, anywhere in the tree. Compared or
+#                  ordered (an operand of Before, After, Equal, Sub or
+#                  Compare, of time.Since or time.Until, a side of a
+#                  comparison, a pointer, slice or map held against nil
+#                  excepted, or read in a comparator written in the call
+#                  that sorts or in a Less method), assigned to a local,
+#                  passed to any other function, turned into a number by
+#                  Unix or its kin, or copied into a field whose row is
+#                  another or that has none, the row is refused naming
+#                  the use. A time field of a struct that is no site of
+#                  its own becomes one when a display field is copied
+#                  into it, and needs its own row. What the walk still
+#                  does not see, and the row is read against its field
+#                  for: a defined type converted back; a method promoted
+#                  from an embedded time; a whole struct compared or
+#                  passed; a comparator held in a variable; a file the
+#                  build leaves out. Names no test
 #   output         a struct this program writes and never decodes
 #   local: <why>   this program's own clock or its user's own input read
 #                  back, or a value a check already held, the why saying
 #                  which; needs no test, and one it names is held to
-#                  being a TestLimit test
+#                  being a TestLimit test. On a field the walk finds
+#                  decoded it is
+#   local: held by <Rule> at <point> shown by <TestLimit...>
+#                  the function that holds what the decode filled and the
+#                  point it runs, as a string row's local: names its
+#                  rule: the writer that puts this machine's clock there,
+#                  whose test round-trips the file and shows the field is
+#                  that clock at the write, or the check a value from
+#                  outside passed before it was written. The rule is held
+#                  to the tree and the test to being declared once and a
+#                  TestLimit test, and the row names, in its point, every
+#                  function of the tree that writes the field (assigns it,
+#                  sets it in a composite literal or takes its address),
+#                  a method by its receiver's type, Store.Load, and a
+#                  function of another package than the field's by its
+#                  package, auu.deliverStream, since a bare name is not
+#                  unique in the tree, so that no path the row does not
+#                  name puts a value there. That is what the walk holds:
+#                  that the decode reads this home's own file, and not a
+#                  wire, is the row's claim, held by review, since a
+#                  writer named does not show where the decoded bytes
+#                  came from. What a writer the row names puts there
+#                  that the rule does not hold, a record an earlier
+#                  release kept or a file's time lent, is said in the
+#                  point, before shown by, since nothing follows the
+#                  test's name. The file a
+#                  decode reads holds the provenance of its path and not
+#                  of what is in it, so a reason alone on a decoded field
+#                  is refused
+#
+# A bound row, <= now + 5m, <= now + 42m, [lo, hi] or deadline:, names a
+# test the walk opens: it calls testutil.TimeEdges, which gives the values
+# the grammar lists above around the edge it is handed, or, for a
+# deadline, each of testutil.EarliestInstant and testutil.PastYear9999,
+# the two its grammar names; a test that calls neither is refused, so the
+# values are fed by construction and not by habit. TimeEdges's own test
+# holds it to this header's sentences.
 #
 # The sweep that wrote this file found 285 sites, and the cap kind added
 # twelve. The walk had found 454 by the time the time kind added 88; 542
 # was the floor in the test. Seeing every decoded time and every
-# time.Unix brought the walk to 572, the floor now.
+# time.Unix brought the walk to 572. A field a display field is copied
+# into is a site of its own, which added two, HTTPError.At and
+# Loaded.Issued: 574, the floor now.
 
 cmd/auu-admin/commands.go blockAdd string fp[:16] #2 = local: ValidFingerprint at oneFingerprint shown by TestLimitFingerprintAndSerialArgsOneShort
 cmd/auu-admin/commands.go blockAdd string fp[:16] = local: ValidFingerprint at oneFingerprint shown by TestLimitFingerprintAndSerialArgsOneShort
@@ -641,8 +688,8 @@ internal/auu/inbox.go messageJSON time Arrived = output
 internal/auu/inbox.go messageJSON time Received = output
 internal/auu/inbox.go messageJSON time Time = output
 internal/auu/lookup.go lookupJSON time Registered = output
-internal/auu/outbox.go pending time Started = local: this machine's clock when the stream began, read back from the outbox's own file
-internal/auu/outbox.go pending time Time = local: this machine's clock at the seal, read back from the outbox's own file
+internal/auu/outbox.go pending time Started = local: held by sendStream at the record's making, and by sealStreams and writeCopies at each copy's, this machine's clock to the second before the first byte goes up shown by TestLimitTheOutboxStampsAreThisMachinesClock
+internal/auu/outbox.go pending time Time = local: held by sendStream at the record's making, and by sealStreams and writeCopies at each copy's, the stamp the seal just made, this machine's clock to the second shown by TestLimitTheOutboxStampsAreThisMachinesClock
 internal/auu/outboxcopy.go outboxJSON time Started = output
 internal/auu/queue.go queuedJSON time GivesUp = output
 internal/auu/queue.go queuedJSON time LastTry = output
@@ -651,9 +698,9 @@ internal/auu/relay.go relayJSON time Added = output
 internal/auu/relay.go relayJSON time AnchorExpires = output
 internal/auu/relay.go relayJSON time CertExpires = output
 internal/auu/relay.go relayJSON time ServerIntermediateIssued = output
-internal/auu/serveledger.go ledgerEntry time Arrived = local: the record's Arrived, this machine's clock at its first Save, or for a record an earlier release kept, the relay's received Load lends it when it can be written back and otherwise the file's time or this machine's clock (D80); an entry an earlier release wrote holds the relay's received, read as it is
-internal/auu/serveledger.go ledgerEntry time Handled = local: this machine's clock at the answer, read back from the ledger
-internal/auu/serveledger.go ledgerEntry time Tried = local: this machine's clock at the attempt, read back from the ledger
+internal/auu/serveledger.go ledgerEntry time Arrived = local: held by setSender at the entry's making, the message record's Arrived, which Store.Save wrote from this machine's clock or Store.Load lent a record an earlier release kept; fillSenders and fromSentCopy give an entry carried over from v0.17.0 its own Handled or Tried shown by TestLimitTheServeLedgerTimesAreThisMachinesClock
+internal/auu/serveledger.go ledgerEntry time Handled = local: held by serveRun.settle at the answer, this machine's clock to the second shown by TestLimitTheServeLedgerTimesAreThisMachinesClock
+internal/auu/serveledger.go ledgerEntry time Tried = local: held by serveRun.failed at a failed attempt and by serveRun.settle at the answer, this machine's clock to the second shown by TestLimitTheServeLedgerTimesAreThisMachinesClock
 internal/auu/servels.go servedThreadJSON time Last = output
 internal/auu/vouch.go vouchJSON time Issued = output
 internal/auu/watch.go directoryEvent time Issued = output
@@ -662,9 +709,11 @@ internal/card/card.go Document time Issued = <= now + 5m shown by TestLimitACard
 internal/channels/channels.go Channel time NotAfter = deadline: the channel's close, compared with now, with its opening and with the directory before shown by TestLimitAChannelWindowAtTheExtremes
 internal/channels/channels.go Channel time NotBefore = deadline: the channel's opening, compared with now, with its close and with the directory before shown by TestLimitAChannelWindowAtTheExtremes
 internal/channels/channels.go Directory time Issued = <= now + 5m shown by TestLimitADirectoryIssuedIsHeldToTheSkew
+internal/client/client.go HTTPError time At = display
 internal/envelope/envelope.go Inner time Time = <= now + 42m shown by TestLimitAnInnerTimeIsHeldToTheSkew
-internal/pki/bundle.go Bundle time Issued = local: auu-ca's own clock, read back from its own bundle
-internal/pki/store.go RelayRecord time Updated = local: auu-ca's own clock, read back from its own record
+internal/pki/bundle.go Bundle time Issued = display
+internal/pki/bundle.go Loaded time Issued = display
+internal/pki/store.go RelayRecord time Updated = display
 internal/relay/adminstore.go (*Store).Blocks time time.Parse(created) = local: the relay's own clock, read back from its own database
 internal/relay/adminstore.go scanMailboxes time time.Parse(created) = local: the relay's own clock, read back from its own database
 internal/relay/adminstore.go scanTokens time time.Parse(created) = local: the relay's own clock, read back from its own database
@@ -698,13 +747,13 @@ internal/store/allowpushed.go (*Store).AllowPushed time time.Parse(text) = local
 internal/store/cardpushed.go (*Store).CardPushed time time.Parse(text) = local: this machine's clock at the push, read back from its own file
 internal/store/cert.go CertRecord time NotAfter = deadline: the certificate's expiry, compared with now to decide renewal shown by TestLimitRenewalAtTheExtremes
 internal/store/cert.go CertRecord time NotBefore = display
-internal/store/damagedbox.go DamagedRecord time Received = local: the listing's received, which checkListing holds to the skew and to what can be written, or this machine's clock or a file's time; a record kept before is read as it is
+internal/store/damagedbox.go DamagedRecord time Received = local: held by Client.checkListing at the fetch, written by auu.keepDamaged, auu.keepNewer, auu.keepMiskinded, auu.keepMisfiled and auu.keepCollided from the listing or a kept record; Store.damagedEntries lends a stray the file's time and Store.KeepDamaged this machine's clock when the relay said none, and a record an earlier release kept is read as it is shown by TestLimitARelaysStampsAreHeldToTheSkew
 internal/store/leftbehind.go (*Store).SetLeftBehind time time.Parse(received) = local: this program's own formatting, read back as its reader will before it is written
 internal/store/leftbehind.go parseLeftEntry time time.Parse(fields[2]) = local: this program's own line, which SetLeftBehind refuses to write unless this parse reads it back; a file written before is read as it is
-internal/store/relay.go Relay time Added = local: this machine's clock when the relay was added, read back from its own file
-internal/store/relay.go Relay time ServerIntNotBefore = local: the verified intermediate's NotBefore, which certificate verification held before now
-internal/store/store.go Stored time Arrived = local: this machine's clock at the record's first Save, read back from its own file; absent read as received at Load when relayapi.Writable holds it and it is not after this machine's clock plus relayapi.MaxSkew, otherwise as the file's modification time held to both bounds, otherwise this machine's clock, D80, G9
-internal/store/store.go Stored time Received = local: the listing's received, which checkListing holds to the skew and to what can be written, or this machine's clock for a sent copy or a reopened damaged record kept with none; a record kept before is read as it is
+internal/store/relay.go Relay time Added = display
+internal/store/relay.go Relay time ServerIntNotBefore = local: held by Store.SeenIntermediateFor at the client's OnSeen, the NotBefore of the server intermediate the client verified against the pinned anchor; Store.SaveAnchorFor and Store.RemoveAnchorFor clear it shown by TestLimitTheSeenIntermediatesNotBeforeRoundTrips
+internal/store/store.go Stored time Arrived = local: held by Store.Save at the record's first save, this machine's clock when it has none; auu.deliverStream saves a held record's own earlier Arrived again, and Store.Load lends a record an earlier release kept the relay's received when relayapi.Writable holds it and it is not after this machine's clock plus relayapi.MaxSkew, otherwise the file's time held to both, otherwise this machine's clock (D80, G9) shown by TestLimitAStoredArrivalIsThisMachinesClock
+internal/store/store.go Stored time Received = local: held by Client.checkListing at the fetch, written by auu.openOne, auu.deliverStream, auu.waitingStream and meeter.meet from the listing; auu.cmdKnock, auu.sendSealed, auu.sendToSeveral and auu.finishStream write this machine's clock for a sent copy, and a record an earlier release kept is read as it is shown by TestLimitARelaysStampsAreHeldToTheSkew
 internal/stream/stream.go Manifest time Time = <= now + 42m shown by TestLimitAManifestTimeIsHeldToTheSkew
 internal/vouch/vouch.go Document time Issued = <= now + 42m shown by TestLimitAVouchIssuedIsHeldToTheSkew
 
