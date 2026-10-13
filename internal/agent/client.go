@@ -54,6 +54,21 @@ func (c *Client) call(req *request) (*response, error) {
 		return nil, err
 	}
 	defer conn.Close()
+	// The socket is asked who answers before a byte is sent, as the agent
+	// asks who called: a socket another user bound in the runtime
+	// directory would otherwise be handed the passphrase. Where the
+	// platform gives no peer credentials, peerCred says so once and the
+	// runtime directory, the user's own, is what is relied on.
+	if uc, ok := conn.(*net.UnixConn); ok {
+		uid, err := peerUID(uc)
+		if err != nil {
+			return nil, fmt.Errorf("agent: who answers on %s could not be asked: %w; nothing was sent", c.socket, err)
+		}
+		if uid != os.Getuid() {
+			return nil, fmt.Errorf("agent: %s is answered by uid %d, not by you (uid %d); nothing was sent. "+
+				"Remove it, or set XDG_RUNTIME_DIR to a directory of your own", c.socket, uid, os.Getuid())
+		}
+	}
 	conn.SetDeadline(time.Now().Add(dialTimeout))
 	body, err := json.Marshal(req)
 	if err != nil {

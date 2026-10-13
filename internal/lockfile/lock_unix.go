@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"syscall"
+
+	"github.com/tropeforce7/agentuucp/internal/regular"
 )
 
 // Lock is a held lock: flock on the file, released by Release or by the
@@ -15,7 +17,9 @@ type Lock struct{ f *os.File }
 
 // Try takes the lock or reports ErrHeld at once.
 func Try(path string) (*Lock, error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	// Never through a link: a lock file another user linked to a file of
+	// this user's would be opened, and created, where they chose.
+	f, err := regular.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}

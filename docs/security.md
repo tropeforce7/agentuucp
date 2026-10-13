@@ -870,15 +870,36 @@ refused by name, a dangling one included; a Windows junction, which Go
 reports as an irregular directory, is not, and needs none, since
 `%LOCALAPPDATA%` is the user's own. A link another user planted at `/tmp/auu`
 pointing at a directory this user owns would pass an owner check that
-followed it, and the agent would write its socket, lock and log there and
-make that directory 0700; on Linux that needs only `fs.protected_symlinks`
-off. Off Windows the directory is then opened without following a link,
-and its owner and mode are judged, and a loose mode made 0700, through
-that handle, so what is checked is what is changed and a link put at the
-path after the look is refused by the open. A directory another user owns
-is refused too. Each of these refusals names the path and says to set
-`XDG_RUNTIME_DIR` to a directory of the user's own, since every command
-that reaches the agent makes the same check.
+followed it, and the agent would write its socket, lock and log there;
+on Linux that needs only `fs.protected_symlinks` off. Off Windows the
+directory is then opened without following a link, and its owner and mode
+are judged through that handle, so a link put at the path after the look
+is refused by the open. A directory another user owns is refused, and so
+is one of this user's with any group or other permission bit. Such a
+directory used to be made 0700 and adopted, which kept whatever another
+user had put there while it was open, a socket bound to take the
+passphrase among them, since a chmod removes nothing. The refusal
+names the mode and says to look at what is in the directory and make it
+0700, or to set `XDG_RUNTIME_DIR` to a directory of the user's own. Each
+of the other refusals names the path and gives the second remedy, since
+every command that reaches the agent makes the same check. The lock file
+and the agent's log there are opened never through a link and must be
+regular files, so a link another user put in the directory does not have
+them created or written where it points; on Windows, which has no such
+open, the directory under `%LOCALAPPDATA%` being the user's own is what
+keeps a link out.
+
+**Each end asks who is at the other.** The agent admits a caller by uid,
+from the kernel's peer credentials (`SO_PEERCRED` on Linux,
+`LOCAL_PEERCRED` on macOS), before reading a byte. The client asks the
+same of the agent before sending one: the uid that answers the socket must
+be this user's, and another is refused by name with nothing sent, so a
+socket another user bound at the path is never handed a passphrase or a
+request. A uid is the whole of the check at both ends; a process of the
+same user is the same user. Windows gives an `AF_UNIX` socket no peer
+credentials, so on Windows neither end asks, and what stands between
+another user and the socket is `%LOCALAPPDATA%\auu`, which is the user's
+own; each says once that it relies on it.
 
 ## 2. The wire, in detail
 

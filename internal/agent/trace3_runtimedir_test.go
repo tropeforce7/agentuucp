@@ -8,6 +8,7 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,52 +134,41 @@ func TestARuntimeDirectoryThatIsALinkIsRefused(t *testing.T) {
 	})
 }
 
-// TestARuntimeDirectoryOfThisUsersIsTakenAndMade0700: a directory at the
-// path this user owns with a loose mode is taken and made 0700 through the
-// handle, one already 0700 is left so, and one that is not there is made
-// 0700.
-func TestARuntimeDirectoryOfThisUsersIsTakenAndMade0700(t *testing.T) {
-	t.Run("loose", func(t *testing.T) {
-		base := shortBase(t)
-		want := filepath.Join(base, runtimeSubdir)
-		if err := os.Mkdir(want, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(want, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		dir, err := runtimeDir()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if dir != want {
-			t.Fatalf("runtimeDir = %q, want %q", dir, want)
-		}
-		if got := permOf(t, dir); got != 0o700 {
-			t.Fatalf("a 0755 runtime directory is mode %04o after runtimeDir, want 0700", got)
-		}
-	})
-	t.Run("group loose", func(t *testing.T) {
-		base := shortBase(t)
-		want := filepath.Join(base, runtimeSubdir)
-		if err := os.Mkdir(want, 0o750); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Chmod(want, 0o750); err != nil {
-			t.Fatal(err)
-		}
-		dir, err := runtimeDir()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if dir != want {
-			t.Fatalf("runtimeDir = %q, want %q", dir, want)
-		}
-		if got := permOf(t, dir); got != 0o700 {
-			t.Fatalf("a 0750 runtime directory is mode %04o after runtimeDir, want 0700", got)
-		}
-	})
-	t.Run("already 0700", func(t *testing.T) {
+// TestARuntimeDirectoryOfThisUsersWithALooseModeIsRefused (R18): a
+// directory at the path this user owns with any group or other bit set is
+// refused with the sentence naming its mode and both remedies, and left at
+// that mode, not made 0700: what another user put in it while it was open
+// would outlast the chmod. The rows are the two modes this test took before
+// the ruling, 0755 and 0750, every group and other bit alone, and 0777; a
+// directory already 0700 is taken and left so, and one that is not there
+// is made 0700.
+func TestARuntimeDirectoryOfThisUsersWithALooseModeIsRefused(t *testing.T) {
+	for _, mode := range []os.FileMode{0o755, 0o750, 0o777, 0o740, 0o720, 0o710, 0o704, 0o702, 0o701} {
+		t.Run(fmt.Sprintf("%04o", mode), func(t *testing.T) {
+			base := shortBase(t)
+			dir := filepath.Join(base, runtimeSubdir)
+			if err := os.Mkdir(dir, mode); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(dir, mode); err != nil { // past the umask
+				t.Fatal(err)
+			}
+			got, err := runtimeDir()
+			if err == nil {
+				t.Fatalf("a runtime directory of mode %04o was taken as %q; it is now mode %04o", mode, got, permOf(t, dir))
+			}
+			want := fmt.Sprintf("agent: %s is mode %04o: the agent's directory is yours alone, and one "+
+				"other users can reach may hold what they put there; look at what is in it and make "+
+				"it 0700 (chmod 0700 %s), or set XDG_RUNTIME_DIR to a directory of your own", dir, mode, dir)
+			if err.Error() != want {
+				t.Fatalf("refusal = %q,\nwant %q", err, want)
+			}
+			if p := permOf(t, dir); p != mode {
+				t.Fatalf("the refused runtime directory is mode %04o, want %04o left as it was", p, mode)
+			}
+		})
+	}
+	t.Run("0700", func(t *testing.T) {
 		base := shortBase(t)
 		want := filepath.Join(base, runtimeSubdir)
 		if err := os.Mkdir(want, 0o700); err != nil {

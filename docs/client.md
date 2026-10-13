@@ -1519,7 +1519,10 @@ this feature. An older `auu` sees an identity file with no keys in it.
 
 On Linux and macOS the agent refuses connections from any other user by the
 kernel's word (`SO_PEERCRED`, `LOCAL_PEERCRED`) and refuses debugger
-attachment. Its socket, lock and log live in `$XDG_RUNTIME_DIR/auu`, or,
+attachment. The client asks the same of the agent: before `auu unlock`, or
+any command that reaches the agent, sends a byte, it asks the kernel who
+answers the socket, and a socket another user answers is refused by name,
+its uid and yours given, with nothing sent. Its socket, lock and log live in `$XDG_RUNTIME_DIR/auu`, or,
 when `XDG_RUNTIME_DIR` is unset, in `auu` under the temporary directory,
 which on Linux is `/tmp/auu`, where every user of the machine can make a
 name. That directory must be a directory of your own and never a symbolic
@@ -1528,15 +1531,24 @@ agent looks at what stands at the path without following a link. A link
 is refused by name, even one that points nowhere, since a link another
 user planted at `/tmp/auu` could point at a directory of yours and have
 the agent write there. The directory is then opened without following a
-link, its owner and mode are judged on what was opened, and a loose mode
-is made 0700 through that handle. A directory another user owns is
-refused too:
+link, and its owner and mode are judged on what was opened. A directory
+another user owns is refused, and so is one of yours with any group or
+other permission bit, since what another user put there while it was
+open, a socket bound to take the passphrase, would outlast a chmod:
 
 *Listing 1.9d*
 ```
 auu: agent: /tmp/auu is a symbolic link, not a directory; remove it, or set XDG_RUNTIME_DIR to a directory of your own
 auu: agent: /tmp/auu belongs to another user; set XDG_RUNTIME_DIR to a directory of your own
+auu: agent: /tmp/auu is mode 0755: the agent's directory is yours alone, and one other users can reach may hold what they put there; look at what is in it and make it 0700 (chmod 0700 /tmp/auu), or set XDG_RUNTIME_DIR to a directory of your own
+auu: agent: /tmp/auu/3f9a1c2e7b04d815.sock is answered by uid 1002, not by you (uid 1001); nothing was sent. Remove it, or set XDG_RUNTIME_DIR to a directory of your own
 ```
+
+A loose directory used to be made 0700 without a word. Look at what is in
+it before you make it 0700: a socket or a file you did not make there is
+another user's. The lock file and the agent's log in it are opened never
+through a link and must be regular files, on Linux and macOS; on Windows
+the directory under `%LOCALAPPDATA%` is your own and is what is relied on.
 
 A link you made yourself you can remove. One another user put in `/tmp`
 you cannot, any more than their directory, and `XDG_RUNTIME_DIR` set to a
@@ -1544,7 +1556,8 @@ directory of your own is the way past both.
 
 On Windows the socket is an `AF_UNIX` socket under
 `%LOCALAPPDATA%\auu`, which is yours by construction. That directory is
-the whole of the same-user check. Windows gives a socket no peer
+the whole of the same-user check, for the agent asking who called and for
+the client asking who answers. Windows gives a socket no peer
 credentials, and there is no attachment guard. CI runs the agent's tests on
 Windows. Nobody has used it there by hand.
 

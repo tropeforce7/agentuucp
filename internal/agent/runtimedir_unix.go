@@ -9,10 +9,12 @@ import (
 )
 
 // holdRuntimeDir opens the runtime directory itself, never through a link,
-// and judges and changes what it opened: the owner and the mode from the
-// handle, and a loose mode made 0700 through the handle, so a link put at
-// the path after notALink looked is refused by the open rather than
-// followed. darwin answers ENOTDIR rather than ELOOP for a link opened so,
+// and judges what it opened: the owner and the mode from the handle, so a
+// link put at the path after notALink looked is refused by the open rather
+// than followed. A mode open to anyone else is refused, not mended: what
+// another user put there while it was open, a socket bound to take the
+// passphrase, would outlast a chmod, so the person looks before it is
+// used. darwin answers ENOTDIR rather than ELOOP for a link opened so,
 // which is why notALink names a link from Lstat first.
 func holdRuntimeDir(dir string) error {
 	f, err := os.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
@@ -31,9 +33,9 @@ func holdRuntimeDir(dir string) error {
 		return notOwned(dir)
 	}
 	if perm := info.Mode().Perm(); perm&0o077 != 0 {
-		if err := f.Chmod(0o700); err != nil {
-			return fmt.Errorf("agent: %s is mode %04o and could not be made 0700: %w", dir, perm, err)
-		}
+		return fmt.Errorf("agent: %s is mode %04o: the agent's directory is yours alone, and one "+
+			"other users can reach may hold what they put there; look at what is in it and make "+
+			"it 0700 (chmod 0700 %s), or set XDG_RUNTIME_DIR to a directory of your own", dir, perm, dir)
 	}
 	return nil
 }

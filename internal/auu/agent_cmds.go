@@ -11,6 +11,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/agent"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/keyfile"
+	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/term"
 )
@@ -663,7 +664,9 @@ func startAgent(home string) error {
 	if err != nil {
 		return err
 	}
-	logFile, err := os.OpenFile(paths.Log, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	// Never through a link, so the log is written where the runtime
+	// directory says and nowhere a link there points.
+	logFile, err := regular.OpenFile(paths.Log, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
