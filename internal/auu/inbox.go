@@ -1450,25 +1450,69 @@ func cmdExtract(args []string) error {
 // nothing is overwritten. Every file's digest is checked again as it is
 // written rather than only when the message was opened, and a streamed
 // one is copied without ever being held in memory.
+//
+// It is all or nothing: when any file fails, the files this call wrote
+// are removed again, newest first, and nothing else is. A file is removed
+// only while what stands under its name is still the file this call
+// wrote, compared as files, so an entry somebody put there meanwhile, and
+// every entry that stood before, is left as it is; one that could not be
+// removed, or was replaced, is named in the error. A retry then writes
+// the plain names again rather than numbered ones beside a half.
 func extractInto(s *store.Store, box store.Box, m *store.Stored, dir string) ([]string, error) {
 	var written []string
+	var made []os.FileInfo
 	for i, a := range m.Inner.Body.Attachments {
 		// A streamed attachment's bytes are checked against the digest as
 		// they are copied; an envelope's are in the record and are checked
 		// here. Everything but the bytes, Load has held the record to.
+		var err error
 		if !m.Streamed {
 			check := message.Attachment{Name: a.Name, Media: a.Media, Size: a.Size, SHA256: a.SHA256, Data: a.Data}
-			if err := check.Validate(); err != nil {
-				return written, fmt.Errorf("refusing to write %q: %w", a.Name, err)
+			if verr := check.Validate(); verr != nil {
+				err = fmt.Errorf("refusing to write %q: %w", a.Name, verr)
 			}
 		}
-		target, err := writeUnique(s, box, m, i, a, dir, message.SafeName(a.Name))
-		if err != nil {
-			return written, err
+		if err == nil {
+			var target string
+			var info os.FileInfo
+			target, info, err = writeUnique(s, box, m, i, a, dir, message.SafeName(a.Name))
+			if err == nil {
+				written = append(written, target)
+				made = append(made, info)
+				continue
+			}
 		}
-		written = append(written, target)
+		return nil, rollBack(written, made, err)
 	}
 	return written, nil
+}
+
+// rollBack removes what an extract wrote before err, newest first, each
+// only while its name still stands for the file that was written, and
+// returns err with any it left named.
+func rollBack(written []string, made []os.FileInfo, err error) error {
+	var left []string
+	for k := len(written) - 1; k >= 0; k-- {
+		now, lerr := os.Lstat(written[k])
+		if errors.Is(lerr, os.ErrNotExist) {
+			continue
+		}
+		if lerr != nil {
+			left = append(left, fmt.Sprintf("%s (%v)", written[k], lerr))
+			continue
+		}
+		if !os.SameFile(now, made[k]) {
+			left = append(left, written[k]+" (replaced meanwhile, left as it is)")
+			continue
+		}
+		if rerr := os.Remove(written[k]); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
+			left = append(left, fmt.Sprintf("%s (%v)", written[k], rerr))
+		}
+	}
+	if len(left) > 0 {
+		return fmt.Errorf("%w; of the files written before it, these could not be removed: %s", err, strings.Join(left, ", "))
+	}
+	return err
 }
 
 // maxNameTries is how many numbered names writeUnique tries before it
@@ -1515,16 +1559,16 @@ var beforeLink func(tmp string)
 // extract took before the link; on such a filesystem a kill mid-copy can
 // leave a partial file under the name, and the next extract writes
 // beside it.
-func writeUnique(s *store.Store, box store.Box, m *store.Stored, i int, a message.Attachment, dir, safe string) (string, error) {
+func writeUnique(s *store.Store, box store.Box, m *store.Stored, i int, a message.Attachment, dir, safe string) (string, os.FileInfo, error) {
 	f, tmp, err := writeTemp(s, box, m, i, a, dir)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer os.Remove(tmp)
 	defer f.Close()
 	written, err := f.Stat()
 	if err != nil {
-		return "", fmt.Errorf("writing %q: %w", a.Name, err)
+		return "", nil, fmt.Errorf("writing %q: %w", a.Name, err)
 	}
 	if beforeLink != nil {
 		beforeLink(tmp)
@@ -1542,9 +1586,9 @@ func writeUnique(s *store.Store, box store.Box, m *store.Stored, i int, a messag
 			now, err := os.Lstat(target)
 			if err != nil || !os.SameFile(now, written) {
 				os.Remove(target)
-				return target, fmt.Errorf("refusing to write %q: the directory changed under the extract; nothing was written", a.Name)
+				return target, nil, fmt.Errorf("refusing to write %q: the directory changed under the extract; nothing was written", a.Name)
 			}
-			return target, nil
+			return target, written, nil
 		}
 		if stands(err) {
 			continue
@@ -1553,7 +1597,7 @@ func writeUnique(s *store.Store, box store.Box, m *store.Stored, i int, a messag
 		// link itself: the exclusive create and the copy from here on.
 		return copyFromTemp(f, dir, safe, n)
 	}
-	return "", fmt.Errorf("%s holds %d files named like %q already; choose another --out directory", dir, maxNameTries, safe)
+	return "", nil, fmt.Errorf("%s holds %d files named like %q already; choose another --out directory", dir, maxNameTries, safe)
 }
 
 // tempPrefix is what an extract's temporary file is called, a hidden name
@@ -1608,8 +1652,9 @@ func writeTemp(s *store.Store, box store.Box, m *store.Stored, i int, a message.
 // under by the exclusive create and copies the verified temporary into
 // it, read back through the handle it was written by: the path for a
 // filesystem that refuses hard links. On any error after the create,
-// what this call made is removed.
-func copyFromTemp(f *os.File, dir, safe string, n int) (string, error) {
+// what this call made is removed. It answers with the made file's
+// identity, from its own handle, for the rollback to compare against.
+func copyFromTemp(f *os.File, dir, safe string, n int) (string, os.FileInfo, error) {
 	for ; n <= maxNameTries; n++ {
 		target := filepath.Join(dir, message.Numbered(safe, n))
 		out, err := regular.Create(target, 0o600)
@@ -1617,21 +1662,24 @@ func copyFromTemp(f *os.File, dir, safe string, n int) (string, error) {
 			continue
 		}
 		if err != nil {
-			return target, err
+			return target, nil, err
 		}
-		if _, err = f.Seek(0, io.SeekStart); err == nil {
-			_, err = io.Copy(out, f)
+		info, err := out.Stat()
+		if err == nil {
+			if _, err = f.Seek(0, io.SeekStart); err == nil {
+				_, err = io.Copy(out, f)
+			}
 		}
 		if closeErr := out.Close(); err == nil {
 			err = closeErr
 		}
 		if err != nil {
 			os.Remove(target)
-			return target, err
+			return target, nil, err
 		}
-		return target, nil
+		return target, info, nil
 	}
-	return "", fmt.Errorf("%s holds %d files named like %q already; choose another --out directory", dir, maxNameTries, safe)
+	return "", nil, fmt.Errorf("%s holds %d files named like %q already; choose another --out directory", dir, maxNameTries, safe)
 }
 
 // stands says an exclusive create or a link found an entry under the

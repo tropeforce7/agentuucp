@@ -692,7 +692,11 @@ the name. On a filesystem that refuses hard links, such as FAT or exFAT on
 a stick or some network shares, the name is taken by an exclusive create
 and the verified temporary is copied into it. There a kill mid-copy can
 leave a partial file under the name, and the next extract writes beside it
-as `x-2.txt`.
+as `x-2.txt`. An extract is all or nothing. When one attachment fails, the
+files this extract already wrote are removed and nothing else is, so a
+retry writes the plain names. A file somebody replaced meanwhile under one
+of those names, or one that could not be removed, is left and named in the
+error.
 
 A message to several says so. The inbox listing marks it `(to N)`, and
 `auu read` prints a `to:` line naming everybody it went to: the name your
