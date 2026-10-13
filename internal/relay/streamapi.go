@@ -710,10 +710,10 @@ func (s *Server) callerAuthed(fn func(w http.ResponseWriter, r *http.Request, ca
 // signature like everything else this relay acts on.
 //
 // The order is the one order, authedWithCert's: the certificate, the header
-// parsed, the identity it names looked up, the body under this route's cap,
-// then the signature over it. Everything that can be judged without the body
-// is judged before it, so a caller the relay would refuse anyway never gets
-// to send one.
+// parsed, the body's declared length judged, the identity it names looked
+// up, the body under this route's cap, then the signature over it.
+// Everything that can be judged without the body is judged before it, so a
+// caller the relay would refuse anyway never gets to send one.
 func (s *Server) callerAuthedBody(limit int64, hint string, fn func(w http.ResponseWriter, r *http.Request, body []byte, callerFP string)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		// Every refusal from here to the body closes the connection behind

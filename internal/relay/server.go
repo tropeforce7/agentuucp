@@ -937,19 +937,23 @@ func (s *Server) authedBody(limit int64, hint string, fn func(w http.ResponseWri
 // authedWithCert is authed for the handlers that need to know which
 // certificate the request arrived on.
 //
-// The order is one order on every authenticated route but the admin
-// routes, which read the body before the administrator (adminAuthed): the
-// certificate, the auth header parsed, the identity it names looked up,
-// then the body under the route's cap, then the signature over it. Everything that can
-// be judged without the body is judged before it, so a caller the relay
-// would refuse anyway — no honoured certificate, a header that will not
-// parse, a fingerprint no mailbox has — is refused without the relay
-// accepting what they wanted to send, which is most of what the cap and
-// the credential buy. The signature cannot come first: it is over the
-// body, so the body must be read to check it. A stranger with a valid
-// certificate therefore costs one mailbox lookup before the body rather
-// than after it, the same read earlier, bounded by the in-flight cap as
-// it was.
+// The order is one order on every authenticated route that reads a body
+// before its signature, this wrapper's and callerAuthedBody's, but the
+// admin routes, which read the body before the administrator (adminAuthed);
+// callerAuthed's routes sign an empty body and check it before any body is
+// read. It is: the certificate, the auth header parsed, the body's declared
+// length judged, the identity it names looked up, then the body under the
+// route's cap, then the signature over it. The length is judged before the
+// lookup so that its 411 or 413 is the same answer for every fingerprint
+// (G12). Everything that can be judged without the body is judged before
+// it, so a caller the relay would refuse anyway — no honoured certificate,
+// a header that will not parse, a body declared over the cap, a fingerprint
+// no mailbox has — is refused without the relay accepting what they wanted
+// to send, which is most of what the cap and the credential buy. The
+// signature cannot come first: it is over the body, so the body must be
+// read to check it. A stranger with a valid certificate therefore costs one
+// mailbox lookup before the body rather than after it, the same read
+// earlier, bounded by the in-flight cap as it was.
 func (s *Server) authedWithCert(limit int64, hint string, fn func(w http.ResponseWriter, r *http.Request, body []byte, callerFP string, cert *CertRow)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		fp := r.PathValue("fp")

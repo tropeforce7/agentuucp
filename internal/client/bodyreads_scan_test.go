@@ -14,17 +14,19 @@ import (
 
 // TestEveryBodyReadIsCapped is the source scan for the rule that a read of
 // a network body in this package is held: it goes through readCapped, or
-// it reads an io.LimitReader. A call that reads a body whole with no hold
-// (io.ReadAll on the body itself, io.Copy to io.Discard from it, a raw
-// Read on it) is a hole in the hold and fails this test by name, so a
-// drain or a retry path written later cannot bypass what the answer's
-// hold promises. At 30f93dd the one such site is Blob's retry drain
-// (G16); the test fails there until it is held.
+// it reads an io.LimitReader. It matches three calls, io.ReadAll(x),
+// io.Copy(io.Discard, x) and io.ReadFull(x, ...), and fails by name on one
+// whose reader x is not a call to io.LimitReader and that does not sit in
+// readCapped, so a drain or a retry path written later cannot bypass what
+// the answer's hold promises. At 30f93dd the one such site is Blob's retry
+// drain (G16); the test fails there until it is held. A raw Read method
+// called on a body is not matched, and is held by review.
 //
-// The scan is syntactic: the first argument of io.ReadAll and the second
-// of io.Copy must be a call to io.LimitReader, or the call must sit in
-// readCapped, whose declared-length branch is the one place that reads a
-// body to a length the relay named, held to the hold before a byte.
+// The scan is syntactic and reads every reader alike, a body or not:
+// readCapped is exempt because its declared-length branch is the one place
+// that reads a body to a length the relay named, held to the hold before a
+// byte. Fewer than five matched calls fails, so a parse that stops
+// reaching the package cannot pass by finding nothing.
 func TestEveryBodyReadIsCapped(t *testing.T) {
 	fset := token.NewFileSet()
 	entries, err := os.ReadDir(".")

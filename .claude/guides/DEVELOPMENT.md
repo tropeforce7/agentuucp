@@ -171,25 +171,40 @@ cannot have come from a working client, so it is the cheapest possible
 rejection. There is a test that closes the store and then sends such a
 request; any database read would surface as a 500.
 
-**Everything that can be judged without the body is judged before it,
-and the signature after it.** On every authenticated route the order is
-the certificate, the auth header parsed, the identity it names looked up,
-then the body under the route's cap, then the signature over it. Until
-PLAN-HTTP the body was read before the header was parsed, so a stranger
-with a valid certificate and a fingerprint no mailbox had could have
-sixteen megabytes accepted and buffered before the relay found nothing to
-check them against. The signature cannot come first: it is over the body,
-so the body must be read to check it; that is the one check that belongs
-after the body, and the reason the body is read at all before the caller is
-known to be who they say. The cost of the new order is a mailbox lookup for
-a stranger before the body instead of after it — the same read, earlier,
-bounded by the in-flight cap as it was. The test declares sixteen megabytes
-under an unknown fingerprint, sends none of them, and is answered. The
-admin routes are the one exception to the order: they read the body before
-the identity is looked up, under `FramingAllowance`, a body of no declared
-length refused `411` and one declared over the cap `413`, since the third
-trace found that a body judged after the lookup, or waited for only under
-an administrator's fingerprint, told an outsider who administers the relay.
+**Everything that can be judged without the body is judged before it, and
+the signature after it.** On every authenticated route that reads a body
+before its signature, the mailbox routes through `authedWithCert` and the
+two forward routes through `callerAuthedBody`, the order is the
+certificate, the auth header parsed, the body's declared length judged,
+the identity it names looked up, then the body under the route's cap, then
+the signature over it. The routes through `callerAuthed`, the upload
+routes, `/v1/listed` and `/v1/couriers`, and the stream PUT among them,
+sign an empty body and check that signature before any body is read, the
+PUT's payload being read only after it. The length comes before the lookup
+because the answer to it must not depend on who is named: until the second
+review, the mailbox routes and the two forward routes looked the
+fingerprint up first, so a body declared over the cap was answered `413`
+for a registered fingerprint and `401` for anybody else's, and a stranger
+learned at one token which fingerprints have a mailbox here (G12). Now a
+body of no declared length is refused `411` and one declared over the cap
+`413` before the lookup, every caller charged alike, and
+`TestAnOverCapBodyIsRefusedAlikeForAKnownAndAnUnknownFingerprint` holds
+both wrappers to one answer for both. Until PLAN-HTTP the body was read
+before the header was parsed, so a stranger with a valid certificate and a
+fingerprint no mailbox had could have sixteen megabytes accepted and
+buffered before the relay found nothing to check them against. The
+signature cannot come first: it is over the body, so the body must be read
+to check it; that is the one check that belongs after the body, and the
+reason the body is read at all before the caller is known to be who they
+say. The cost of the new order is a mailbox lookup for a stranger before
+the body instead of after it — the same read, earlier, bounded by the
+in-flight cap as it was. The test declares sixteen megabytes under an
+unknown fingerprint, sends none of them, and is answered. The admin routes
+are the one exception to the order: they read the body before the identity
+is looked up, under `FramingAllowance`, a body of no declared length
+refused `411` and one declared over the cap `413`, since the third trace
+found that a body judged after the lookup, or waited for only under an
+administrator's fingerprint, told an outsider who administers the relay.
 On all three wrappers that read a body before its signature,
 `authedWithCert`, `callerAuthedBody` and `adminAuthed`, a body refused
 before the signature, for its length or a read that failed, is charged to
@@ -197,14 +212,15 @@ the address's unauthenticated budget as a refused signature is, so the
 refusal is not a free question about which fingerprints the relay knows.
 And a refusal before the body closes the connection behind its answer,
 every one of them — the `413`, the `401`, the in-flight `503` — because
-`net/http`, before it writes a response on a connection it will keep, reads
-up to 256 KiB of a body the handler did not, and waits for one that never
-comes: the first cut of this order left the in-flight cap's test flaking, a
-stalled request that lost the race for the slot getting its `503` only when
-the test closed the connection, since the server was waiting for the 3990
-bytes it would never send before writing it. `unread` is the mark, set at
-the top of every authenticated route and taken off once the body is read; a
-request that declares no body keeps its connection.
+`net/http`, before it writes a response on a connection it will keep,
+reads up to 256 KiB of a body the handler did not, and waits for one that
+never comes: the first cut of this order left the in-flight cap's test
+flaking, a stalled request that lost the race for the slot getting its
+`503` only when the test closed the connection, since the server was
+waiting for the 3990 bytes it would never send before writing it. `unread`
+is the mark, set at the top of every authenticated route and taken off
+once the body is read; a request that declares no body keeps its
+connection.
 
 **Reveal nothing about the token table until the token's signature has
 passed.** At enrolment the order is: parse, issuer in the admin set, signature,
@@ -260,7 +276,26 @@ no worktree and no directory. Only while nothing on the thread has been
 tried or answered may a message that arrived before the recorded opener's
 take the thread, so no later stamp moves a thread with a conversation in
 it. A v0.17.0 ledger kept no senders: its entries take theirs from their
-messages still in the inbox at the run's start (`fillSenders`). A thread
+messages still in the inbox at the run's start (`fillSenders`). A sender
+is filled from the entry's own message and from nothing that merely
+carries its id, since a message id is the sender's to choose: the first
+cut gave a sender-less entry the sender of whatever inbox record had its
+id, so a co-recipient who planted a note under the id of a message the
+owner had removed became the opener of that thread after one restart, and
+was answered in the asker's worktree and sent the asker's work (G2). Now
+an entry serve answered takes its sender from the copy of the reply this
+home sent, whose recipient serve wrote itself, the message's verified
+sender; one with no reply, or whose sent copy is gone, takes it only from
+a record on the entry's own thread, and, on a thread anything was tried
+on, only from one an earlier release fetched, lent its relay's `received`
+no later than the thread's last attempt and the skew
+(`ownMessage`); a record refused is said once a run and fills nothing.
+A carried thread is opened in tiers, the entries serve tried first in the
+order serve dealt with them, so no comparison crosses two clocks, and one
+whose order the old ledger cannot say, two senders with a failed attempt
+or two answered in one second, is nobody's. The tests are
+`TestAPlantedIDDoesNotAdoptANobodysThread` and
+`TestAPlantFetchedBeforeTheUpgradeDoesNotTakeAnAnsweredThread`. A thread
 with none of its messages left once took the sender of the first message
 serve took up on it after the upgrade, so any peer who knew its id could
 take it over; now, once anything on it was tried or answered, it is
@@ -699,10 +734,30 @@ and says so, and a git that cannot be run still ends the run. That means
 git not there or a checkout it cannot answer for, never a worktree a
 handler locked or took the permissions off, which serve unlocks and gives
 back; and a path a handler left that can be neither removed nor moved
-aside is the message's failure in the ledger, not the run's. And a limit
-keyed on a string the sender chose is not a limit: `max_turns` counted
-answers by the thread id in the follow-up, so a peer renaming the thread on
-each reply was on turn one every time; a reply is answered on the thread
+aside is the message's failure in the ledger, not the run's. The mending
+runs in one order. The registration is unlocked before the prune. A tree
+that will not be removed is opened up (`openUp`): each directory in it is
+given back 0700 by a walk that follows no link, and the removal is tried
+again. Only a tree its owner still cannot remove, a user-immutable file
+or one root owns, is moved aside, under the serve root as the worktree's
+own name with `.damaged-N`, the first N free, outside `threads/` and
+`worktrees/`, and said on the console for a person to remove. And only a
+tree that can be neither removed nor moved aside is the message's
+failure, counted, retried and given up on as any failure while the round
+goes on. The order is the finding's: three one-line handler actions,
+`chmod 000 .`, `git worktree lock . && rm -f .git`, and a directory left
+inside at mode 000, still ended the run with nothing in the ledger, so a
+supervisor restarted serve into the same message for good (G10); and the
+plan's first answer, moving such a tree aside, could not have worked
+alone, since a rename of a directory into another parent needs write
+permission on the directory itself, which a mode-000 tree does not give.
+The tests are the three `TestAHandlerThat…DoesNotStopTheExpert` in
+`internal/auu/serve_worktree_mend_test.go`, with
+`TestAWorktreeThatCannotBeRemovedIsMovedAsideAndTheExpertGoesOn` and
+`TestAnUnmendableWorktreeIsTheMessagesFailureNotTheRuns` beside them.
+And a limit keyed on a string the sender chose is not a limit:
+`max_turns` counted answers by the thread id in the follow-up, so a peer
+renaming the thread on each reply was on turn one every time; a reply is answered on the thread
 the ledger sent its reply on, and a reply that names another is nobody's
 here.
 
@@ -844,7 +899,22 @@ meets them next time; and the routes themselves refuse an expired upload
 with 410 and abort it, so nothing waits on the purge to end a reservation
 that a sender keeps touching. Since the purge passes over a held upload,
 the attempt holding it must end on its own: a reservation lives only as
-long as it is fed.
+long as it is fed, and the budget that pays for it counts its starts.
+The second review found an attempt whose stall deadline every byte
+moved: one identity opened a quarter of a mailbox each hour, trickled a
+byte inside each window, and after 184 bytes held the whole mailbox full
+past every expiry, out of reach of the purge, for one open's charge each
+(G1). Now an opened upload nobody feeds goes after
+`relayapi.StartWindow`, ten seconds; an attempt's deadline moves by
+`relayapi.HunkWindow`, ten seconds, only when a whole
+`relayapi.HunkBytes`, 64 KiB, has arrived since it last moved, so the
+least a reservation is fed at is 6.4 KiB a second; and a sender may open
+`max_upload_opens_per_hour` uploads, 64 by default, in the hour its
+byte budget is counted over. A reservation of S bytes lives about as long
+as S takes at that pace and holds nothing unfed, so holding a mailbox's
+room costs the bytes that fill it. `TestATrickledAttemptIsCutAtTheHunkWindow`
+is the review's case, with the start window's edge and the opens cap
+beside it.
 
 **Counters, not aggregates, and adjust them in the same transaction as the
 row.** Per-mailbox and relay-wide queued totals are columns updated inside
@@ -1245,6 +1315,30 @@ issuer's fingerprint against the key, then the signature over the raw bytes,
 then decodes those same bytes again and returns that. Claims a caller acts on
 have only ever come from a verified payload.
 
+A check that lets one error through to a caller who may act on it hands
+back what it verified with that error. `(*token.Unverified).Verify`
+returned nil claims with `ErrNotYetValid`, as with every other error,
+while the relay's `handleAdminAddToken` takes a token that starts later,
+as its comment promised, and read the claims it had not been given: the
+handler panicked, `net/http` recovered it, and the administrator
+registering such a token saw EOF (G27). Now the claims come back with that
+error alone, the signature and the issuer verified and only the window not
+yet open, and every other caller refuses on the error;
+`TestATokenThatStartsLaterIsRegisteredAndListed` registers one through the
+relay an hour ahead and lists it. And a date a token carries is held to
+what this program can write, not only to what makes a window: `NotBefore`
+and `NotAfter` were held to `> 0` and to their order, so an
+administrator's token dated past the year 9999 was stored and then failed
+the issue answer and every `token ls` with a 500, since `json.Marshal`
+writes no year past 9999 (G26). `Claims.Validate` now refuses either past
+`relayapi.LatestWritable` naming the field, the value and the bound,
+before anything is signed or stored, and the dates are given in UTC so the
+edge does not move with the zone;
+`TestATokenDatedPastTheYear9999IsRefusedAtIssueAndOneAtTheEdgeIsListed`
+and `TestLimitATokensDatesAreHeldToTheLastWritableSecond` hold the edge
+and one past. A bound is the smaller of what the rule allows and what
+every writer downstream can carry.
+
 **Sign the bytes you send; do not canonicalise.** The token signature covers
 the payload exactly as it appears in the token. There is no canonical JSON
 step for two implementations to disagree about.
@@ -1436,24 +1530,38 @@ thread. Order by arrival here, by this machine's clock, then the
 relay's counter; the relay's `received` is the relay's word and only
 breaks a tie after the counter, and the stamp breaks one after that and
 is displayed, labelled as the sender's. The one bound on the stamp is
-the future, the same skew a request is held to, so a message may be old
-but not from a clock no relay would have accepted.
+the future, and it is the chain's skew, not a request's:
+`relayapi.MaxStampAhead`, `2*MaxSkew + MaxHops*CourierSkew`, forty-two
+minutes, compared in whole seconds. A stamp crosses a chain of clocks,
+the sender's to its relay within `MaxSkew` on the post, each relay's to
+the next within `CourierSkew`, a minute, on a courier's request, and the
+last relay's to this machine within `MaxSkew` on the listing. The bound
+was the request's five minutes, and the relay holds each party to its own
+clock within that, so two honest peers on one relay could differ by ten:
+one four minutes ahead and one four behind were both taken, and the
+first's message was kept under damaged by the second with nothing said to
+anyone (G5). So relays keep to the minute, a courier further out refused
+`503` `courier-clock` once its signature has verified, and the stamp's
+bound is what that chain enforces; `TestTwoPeersOneRelayAcceptsReadEachOther`
+is the review's case.
 
 **Every time from outside has a row in the limits ledger's time kind,
-saying its bound or why it has none.** Compare times as times, two
-bounds and no subtraction, and the one bound on a stamp is the future.
-The third trace found that bound written by hand where someone had
-thought of it: a message, a manifest and a vouch refused a stamp from
-the future, and the allow list, the card and the channel directory,
-documents an owner signs and every peer reads, took one from any year.
-`internal/limits/ledger.txt` now holds to a row every field of a
-`json`-tagged struct of a type that holds a time: `time.Time`, a struct
-embedding one, a type defined over it, or a pointer, slice, array or map
-of these, a map by its key too; and every `time.Parse` and
-`time.ParseInLocation`: `<= now + 5m` with its test, a window, a
-deadline, a field only displayed, an output, the program's own clock or
-its user's input, or a value a check already held. A new time field
-from outside lands with its row.
+saying its bound or why it has none.** Compare times as times, two bounds
+and no subtraction, and the one bound on a stamp is the future. The third
+trace found that bound written by hand where someone had thought of it: a
+message, a manifest and a vouch refused a stamp from the future, and the
+allow list, the card and the channel directory, documents an owner signs
+and every peer reads, took one from any year. `internal/limits/ledger.txt`
+now holds to a row every time a decode reaches, in any struct, tagged or
+not, embedded or named, and through a generic field, a decode straight
+into a time, an `Unmarshal*` called on a time and a `time.Unix*` of an
+integer, as well as every `time.Parse` and `time.ParseInLocation`: `<= now
++ 5m` or `<= now + 42m` with its test, a window, a deadline, a field only
+displayed, an output, `local: <why>`, this program's own clock or its
+user's input or a value a check already held, or, on a field a decode
+fills, `local: held by <Rule> at <point> shown by <TestLimit…>`, naming
+the function that holds it. The walk holds each claim, as the testing
+guide's limit tests say. A new time field from outside lands with its row.
 
 **Retry-After is an integer number of seconds, never a date, never zero.**
 Rounded up; a zero would invite the client straight back into a refusal.
@@ -1551,6 +1659,26 @@ holder's: the proxy is put in that group by its unit's
 away with `chown`, and it refuses to start, naming that line, when it
 cannot. Two lines admit a caller, the file mode and the kernel's account of
 its uid and groups, and neither touches the key.
+
+**A loose runtime directory is refused, never adopted, and the client
+asks who answers the socket before it sends anything.** The agent's
+runtime directory, `$XDG_RUNTIME_DIR/auu`, or `auu` under the temporary
+directory (`/tmp/auu` on Linux), was taken when
+it was this user's own with a group or other bit set, and made 0700:
+whatever another user had put there while it was open stayed, a socket
+bound to take the passphrase among it, and the client dialled the socket
+by path and sent its request, `Unlock`'s passphrase included, to whoever
+listened there (G11). A chmod mends the mode and not what the mode let
+in. Now such a directory is refused naming its mode and the two remedies,
+looking at what is in it and making it 0700, or a runtime directory of
+one's own; the client asks the kernel for the peer's uid on the
+connection (`SO_PEERCRED` on Linux, `LOCAL_PEERCRED` on darwin), as the
+agent asks who called, and sends nothing to another user, rather than trusting an `Lstat` of a
+path that can change after the look; and the lock file and the agent's
+log are opened never through a link and only as regular files.
+`TestALooseRuntimeDirectoryIsRefusedAndAPlantedSocketIsNeverDialled` is
+the review's case, and trace-3's test of the old adoption was rewritten
+to the refusal, every group and other bit on its own.
 
 ## The command line
 

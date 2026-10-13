@@ -1122,14 +1122,16 @@ document, so a row that does not verify is no bar to replacing it.
 
 The stream `PUT` is bounded by the size its open declared. On every
 authenticated route the order is the certificate, the auth header parsed,
-the identity it names looked up, then the body, then the signature, the
-stream PUT excepted, whose signature is over an empty body and comes
-before it, and the admin routes excepted, which read the body before the
-administrator is looked up. Everything that can be judged without the body
-is judged before it, so a stranger's sixteen megabytes are refused unread.
-The signature comes after the body because it is over the body. Every
-refusal before the body closes the connection behind its answer, the
-`413`, the admin routes' `411`, the `401`, the in-flight `503` and a `429`
+the body's declared length judged, the identity it names looked up, then
+the body, then the signature, the routes that sign an empty body
+excepted, the stream PUT, the other upload routes, `/v1/listed` and
+`/v1/couriers`, whose signature comes before any body, and the admin
+routes excepted, which read the body before the administrator is looked
+up. Everything that can be judged without the body is judged before it,
+so a stranger's sixteen megabytes are refused unread. The signature comes
+after the body because it is over the body. Every refusal before the body
+closes the connection behind its answer, the `413`, the `411`, the
+`401`, the in-flight `503` and a `429`
 once the address's budget is spent alike. The standard library would
 otherwise read up to 256 KiB of the body the handler declined before
 writing the answer on a connection it meant to keep, and wait for a body

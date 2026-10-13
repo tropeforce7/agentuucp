@@ -373,6 +373,28 @@ quarter of a million inserts in one transaction, bounded only by the
 per-identity request rate. That is what `relayapi.MaxAllowlist` is for. If you add an array to the wire, add a length
 cap to it, and test `cap`, `cap+1`, and `math.MaxInt` for the count.
 
+**A fetch is bounded in pages, and `damaged/` in bytes and in messages.**
+A loop that asks the network until the network says stop is a loop the
+network bounds. The fetch ended only on an empty page, and the order
+check refused a page whose ids did not rise, so a relay answering every
+listing with one junk row numbered one higher kept it asking: the
+review's stand-in gave up after 301 listings, 300 rows acknowledged and
+600 files under `damaged/` (G3). Now a fetch takes rows up to the relay's
+`last` as its first listing gave it, leaves the rest for the next fetch
+with the cursor saved, and asks one relay for at most `maxPagesPerFetch`,
+64 pages, 12,800 rows, the backstop for a relay whose `last` lies, said
+once at the cap; the check of the cursor before a reset is held to the
+same 64. `damaged/` holds at most `store.DamagedBudget`, 64 MiB, and
+`store.DamagedMaxMessages`, 1,024 messages, the oldest evicted first,
+since the review's junk was small files well under the bytes and the
+count is what bounds both the directory and the work of each keep. The
+tests are `TestAListingNumberingUpwardEndsAtThePageCap`, the page cap at
+64 and one past in `TestLimitAFetchIsHeldTo64Pages`, the honest relay in
+`TestAFetchTakesWhatTheRelayHeldWhenItBegan`, and the count in
+`TestLimitDamagedKeepsAtMostItsCount` beside the budget's
+`TestDamagedMessagesAreKeptWithinTheBudget`. A store the network fills
+has a cap on each thing the network can make many of.
+
 **Measure it.** For a unit test, assert the specific error and the order the
 checks fired in, as above. For anything that reads from the network, read
 `runtime.MemStats.HeapAlloc` before and after handling a blown-out request
@@ -388,6 +410,30 @@ were allocated, refused and garbage before the reply was read. Where the
 thing under test would allocate and drop, measure `TotalAlloc`, which is
 cumulative and sees every byte; with the check moved it reported 8,552,512
 bytes for eight refusals.
+
+Measure what is taken as well as what is refused, and keep both figures.
+The listing hold's first test measured a page refused over the hold, at
+under three times the hold, and said nothing of a page at the hold, which
+the second review measured taken at 10.1 times the hold allocated and
+8.0 times live, 1,292 and 1,023 MiB: `io.ReadAll`'s doublings, then a
+`json.Decoder` for the key walk and another for the decode, each with its
+own copy (G4). Now an answer that declares its length is read into a
+buffer of that length, its keys checked by a scan that steps over every
+value in place, and decoded once, and the relay declares the length of
+every JSON answer. The figures each test asserts, as measured here: a
+page of padding at the hold, declared, 1.00 times the hold allocated and
+live, held under 1.25 so a return to growing the buffer fails; the same
+page chunked under 3 times allocated and 2.25 live, 2.10 measured
+(`TestAPageAtTheHoldIsTakenUnderThreeTimesTheHold`); a page of envelopes
+through a real relay in a process of its own, under 2.25 times live read
+either way, under 3 times allocated declared and 4 chunked, since the
+decoded values hold a copy of each envelope beside the buffer
+(`TestARealRelaysPageIsTakenWithinR13asBounds`); and a relay over the
+hold on every ask costs one listing eight asks, 200 rows halved to one,
+each read to the hold and a byte before it is refused
+(`TestTheHalvingCostsEightReadsOfTheHold`). Live heap is what pins
+memory; allocation is churn; a figure for one is not a figure for the
+other.
 
 **Nothing on the wire is compressed, and that is deliberate.** If compression
 is ever added, the cap goes on the decompressed size and the reader stops at
@@ -808,10 +854,16 @@ message, its opener and the completion list were ordered by the sender's
 timestamp first, so a peer stamping year 9999 was "latest" for as long as
 the message was kept. Order by arrival here, then the relay's id; use the
 sender's time to break a tie and to display. A timestamp ahead of the
-receiver's clock by more than the freshness skew is malformed at open. The
-test sends the earlier-arriving message with the later stamp and asserts
-the later-arriving one is picked, and seals an inner a day ahead and
-asserts malformed.
+receiver's clock by more than `relayapi.MaxStampAhead` is malformed at
+open: the chain of clocks the stamp crossed, forty-two minutes, never the
+five-minute freshness skew of one request, since two honest peers each
+within the skew of their relay may differ by twice it, and the first
+bound kept such a peer's message under damaged with nothing said (G5).
+The test sends the earlier-arriving message with the later stamp and
+asserts the later-arriving one is picked; seals an inner a day ahead and
+asserts malformed; and, in `TestTwoPeersOneRelayAcceptsReadEachOther`,
+puts one peer four minutes ahead of their relay and the other four
+behind and asserts the one behind opens what the one ahead sealed.
 
 ### The ways a string goes wrong, and the value that shows each
 
@@ -955,7 +1007,21 @@ in a listing is "not present" in one answer type and malformed in
 another. Every rule says what empty means, and the test feeds it. The
 same for whitespace: a name of spaces, a leading or trailing space, and
 `TrimSpace` before the rule where the rule allows it (a passphrase is
-never trimmed).
+never trimmed). And `null` is a third value beside absent and empty. A
+file decoded into a map of pointers gets a test with a value of `null`:
+`serve.json`'s `{"v":1,"channels":{"codex":null}}` decoded strictly into
+a nil pointer, and the loader assigned the channel's name through it, so
+`serve start` and `serve check` turned a hand edit into a stack trace
+(G24); now it is refused naming the file and the channel
+(`TestANullServeChannelIsAConfigErrorNamingTheFileAndTheChannel`). A
+presence probe that guards a rule is tested with the key present and
+empty, present and `null`, and the setting given by flag alone: the
+relay refused courier numbers without a peering by whether `home` or
+`authorized_file` was present, so either given as `""` or `null` passed,
+and the relay started with forwarding off and the numbers doing nothing,
+saying nothing (G25). The rule is judged now on the settings after the
+flags are merged (`TestEmptyPeeringPathsCannotActivateCourierNumbers`,
+`TestCourierNumbersAreJudgedOnTheMergedSettings`).
 
 **It is a prefix.** A short id matches a fingerprint by prefix, and a
 thread by the first characters of its id. Two matches are ambiguous and
@@ -978,6 +1044,134 @@ lands, each becomes the regression for its commit, renamed for what it now
 proves (the refusal, the sentence, the absence of the file), with the
 assertion changed only from "this happens" to "this is refused". A test
 made to pass by asserting less proves the fix was not made.
+
+## What a decision is relied on for later
+
+The second review's later findings, Codex's and the outside session's,
+were not checks missing at the point of decision. Each was a decision
+made correctly once and relied on later by something that did not ask
+again: an upload admitted at its open and placed hours later, a page
+asked for in rows and taken in bytes, a report answered before the row it
+named was written. The six rules here come from them (D95), each named
+for the finding that shows the gap, and one rule sits behind all six:
+**a commit's record says, for each decision the commit makes, where that
+decision is relied on later and which test shows the reliance survives a
+change in between.** A decision with no such line is one the next change
+can break without a test noticing.
+
+**Every admission decision has a withdrawal test.** For every object that
+lives past the call that admitted it, the table below lists the later
+acts that rely on the admission, and each act has a test that withdraws
+the admission between the decision and the act and asserts the act
+refuses. An upload was judged against the allow list and the channel at
+its open, and its attempts re-checked only whether the mailbox was a
+courier's, so a sender removed from the list after the open landed the
+upload for its life, which commit 1 had made hours (G14). A new
+long-lived object is a new row, in the same commit as the object.
+
+Relay side:
+
+| object | admitted by | later acts that rely on it | withdrawal test today |
+|---|---|---|---|
+| upload (stream open) | allow list, channel rule, courier check, budgets at the open | each PUT attempt; the placement | allow list and channel at every attempt and at placement: `TestARevokedSendersAttemptIsRefusedBeforeItsBodyIsRead`, `TestARevokedSenderCannotFinishPreviouslyOpenedUpload`, `TestARevocationDuringAnAttemptRefusesThePlacement`, `TestAChannelClosedUnderAnUploadRefusesIt`; a recipient blocked after the open: none |
+| reservation (upload bytes charged at open) | postBytes at the open | the refund at abort, expiry, placement | the refused attempt's cost: `TestARefusedAttemptSpendsWhatARefusedPostSpends`; expiry after the owner is deregistered: none |
+| held listing (watch hold) | the identity's registration and the per-identity share at the list | the wake and the answer | registration revoked while held: none |
+| outbound row (forward queued) | path, courier admission, allow list, carried share at the forward | the worker's post to the neighbour; the handover; the report | neighbour removed from peers while queued: none; courier revoked downstream between queue and post: none |
+| handed row | the neighbour's 201 | handleFailed matching a report; the purge | report before the row is written: `TestAnEarlyFailureReportSurvivesTheHandOver`; report after the purge with a longer neighbour TTL: G19, S43, after v0.18.0 |
+| report row | a failure at this hop | reportTo upstream, asked again on a 404 until the row's own gives_up; the 409 ending | upstream not yet recorded: `TestAnEarlyFailureReportSurvivesTheHandOver`, `TestAnEarlyReportOutlivesARestartOfTheReporter`, `TestAnEarlyReportAndARestartOfTheUpstream` |
+| carried hash | charged at the forward | the duplicate refusal for the window | none needed (no admission withdrawn) |
+| knock | the knock budget at the post | the owner's read, answer, vouch | knocker deregistered before the answer: none |
+| mailbox registration | the token at register | every later signed request | a machine's certificate revoked: `TestARevokedCertificateStopsWorkingImmediately`; the identity blocked: `TestBlocks`, `TestBlockedMailboxIsNotAnOracle`, `TestABlockedIdentityMayNotForward`; token revoked after register: none |
+| courier admission (a neighbour's identity admitted as courier) | peers add | isCourierMailbox on the open, the PUT, the channels route, the watch | admission withdrawn between open and PUT: re-checked at every attempt; none as a test of its own |
+| owner documents (allow list, card, directory) | signature and issued time at the push | every post, open, forward against them | a push replaced under an open upload: `TestARevokedSendersAttemptIsRefusedBeforeItsBodyIsRead`, `TestAChannelClosedUnderAnUploadRefusesIt`; under a queued forward: none |
+
+Client and serve side:
+
+| object | admitted by | later acts that rely on it | withdrawal test today |
+|---|---|---|---|
+| peer trust (quarantine trust) | the owner's command | every later fetch from that sender; serve's answer | peer removed before serve's answer: `TestServeKeepsAReplyItCouldNotSend`, `TestServeSweepsNothingThatIsStillWork`; peer removed before a later fetch: none |
+| stream download | the manifest's size and hash at the start | each resumed range; the placement | at trust, the manifest's sender, id and channel held to the quarantine record: `TestTrustDeliversOnlyTheStreamThatWasQuarantined`; the payload changed between resumed ranges: none |
+| send resume (--resume) | the sent record written before the first post | each later post from the outbox | the recipient's admission withdrawn before a `--resume` post: `TestARefusedCopyStaysWithTheRelaysWords`, `TestAStreamCopyRefusedOnResumeIsKept`; the recipient's channel directory changed between posts: none |
+| serve thread opener | the ledger at the first turn | every later turn on the thread | survives a plant in between, not a withdrawal: `TestAPlantedIDDoesNotAdoptANobodysThread`, `TestAPlantFetchedBeforeTheUpgradeDoesNotTakeAnAnsweredThread`, `TestTheCarriedOverOpenerIsReadInTiers`; opener removed from the peer list within a first turn: `TestServeKeepsAReplyItCouldNotSend`; within a later turn of a multi-turn thread: none |
+| serve worktree | the handler's first run | each later turn | survives a handler's damage in between, not a withdrawal: `TestAHandlerThatLocksItsWorktreeDirDoesNotStopTheExpert`, `TestAHandlerThatLocksItsWorktreeInGitDoesNotStopTheExpert`, `TestAHandlerThatTakesThePermissionsOffInsideItsWorktreeDoesNotStopTheExpert` |
+| key agent lock state | unlock | every seal and sign until lock | a lock mid-fetch returns the message to the queue: `TestALockedAgentMidCommandDiscardsNothing` |
+| channel directory (a peer's) | fetched and verified at the send | later sends to that peer's channels | D92 drops a bad peer; a name the relay does not have refused at the post and the recipient's channels fetched again: `TestARefusedChannelIsSaidToBe`; a channel closed between a fetch and the post: none |
+
+The rows marked none are the withdrawal tests to write after v0.18.0
+(S44). None of them is a finding until a test fails. A cell that says
+"survives" names a test that the act holds through a change in between,
+not one that withdraws the admission.
+
+**Every bound the client asks for is asserted on the answer, at N and at
+N+1.** A parameter the client sends that the answer must honour, a page
+limit, a byte range, a declared length, is a promise the relay may break,
+and the test is a hostile relay that answers one more than was asked.
+`checkListing` held a page's shape and order and never its row count, so
+a relay answered more rows than the limit, one asked taking two and
+`MaxListLimit` taking 201: the listing hold bounded the bytes and nothing
+bounded the row work (G15). The client now refuses, before any row is
+taken, a page with more rows than the limit it last asked for, the
+effective one after the halving: `TestAListingCannotExceedTheRequestedRowLimit`,
+`TestAStubsListingCannotExceedTheRequestedRowLimit` and
+`TestAHalvedListingIsHeldToTheHalvedLimit`; a range is held by
+`TestBlobRangeEdges`, sixteen hostile `206` shapes, and a declared length
+by `TestADeclaredLengthOverTheHoldIsRefusedBeforeTheBody`. The limits
+ledger has no kind for a requested bound yet; until it does, the record
+names the test for each.
+
+**Every read of a network body goes through one capped helper, and a
+scan counts the reads.** `Blob`'s retry drained each retryable answer
+whole with `io.Copy` to `io.Discard` before each of up to three retries,
+the stream answer's hold applying only to the last (G16). The drain now
+reads at most the hold plus one byte, refusing a body over it, and
+`TestEveryBodyReadIsCapped` in `internal/client` parses the package and
+matches three calls, `io.ReadAll(x)`, `io.Copy(io.Discard, x)` and
+`io.ReadFull(x, …)`, failing by name on one whose `x` is not an
+`io.LimitReader` and that is not inside `readCapped`, with a floor of
+five matched calls so a scan that finds nothing fails. A raw `Read`
+method called on a body is not matched; it is held by review.
+
+**Every lenient decode is listed with its reason, and a scan counts the
+lenient calls.** The sweep for strict reads counted
+`DisallowUnknownFields` sites, so a plain `json.Unmarshal` of a file
+could not show up in it: `channel-settings.json` was read that way, and
+an entry with no `keep`, a null one or a misspelt key read as keep off,
+so mail meant for another machine was acknowledged on the relay (G17);
+serve's ledger and `relay.json` were read the same way (G20, G21).
+`TestEveryLenientDecodeHasItsReason` in `internal/wire` finds every call
+of `json.Unmarshal` and `json.NewDecoder` in non-test code outside the
+package and fails on one with no row in `lenientDecodeAllowed`, and on a
+row with no call. A reason names what is held and by which call, never
+who wrote the bytes (R24a): "this program wrote the file" is not one,
+since a home file is edited and restored by hand.
+
+**A handler wakes after it answers, and the order has an interleaving
+test and a scan.** `handleForward` woke the onward worker before it wrote
+its `201`, so a fast refusal downstream brought the failure report back
+before the upstream had recorded the hand-over; the report met a `404`,
+was taken as final, and the sender was told for ever its mail went on
+(G18). The fix is that a report answered `404` is asked again until the
+row's own lifetime ends, and the wake moved after the answer as a
+narrowing; the test is the interleaving forced through an injected
+suspension point, the worker's `post` hook running the downstream's
+report between the neighbour's `201` and the upstream's record
+(`TestAnEarlyFailureReportSurvivesTheHandOver`). `TestAWakeFollowsTheAnswer`
+in `internal/relay` scans every handler for a wake before its last
+answer and fails by name unless the handler is in
+`wakeBeforeAnswerAllowed` with its reason; the table is empty, every
+handler having been reordered, and a scan that finds fewer than six wakes
+fails. A handler that both wakes and writes state gets the same: a test
+that suspends the woken side at the moment the state is not yet written.
+
+**A cross-relay promise is run with its settings asymmetric.** Every
+setting a promise between relays depends on is run once with the floor on
+one relay and the ceiling on its neighbour. A handed row is purged at the
+upstream when its own `forward_ttl` ends, so a neighbour with a longer one
+reports to nobody, and the sender is never told (G19), which no test with
+both relays on the same settings could see. The harness and the fix are
+S43, after v0.18.0, a wire design; Codex's two tests for it are kept
+under `reviews/codex/` until then. This rule is to follow, and no test in
+the tree yet holds it.
 
 ## Limit tests
 
@@ -1198,38 +1392,93 @@ fields in wire and record structs, and their bounds written by hand,
 each differently: a message, a manifest and a vouch refused a stamp from
 the future, and the three owner documents, the allow list, the card and
 the channel directory, took one from any year. The ledger now has a
-fourth kind, `time`: a field of a json-tagged struct of a type that
-holds a time: `time.Time`, a struct embedding one, a type defined over
-it, or a pointer, slice, array or map of these, a map by its key too;
-and every `time.Parse` and `time.ParseInLocation`. A type defined over
-`time.Time` does not decode from a string; it is taken because it holds
-a time. Its row says `<= now + 5m`, the skew, with a test that feeds
-the edge, a second either side, a day and a year ahead, a year past, and
-the earliest and latest instants; `[lo, hi]`; `deadline: <use>`, with
-a test that feeds the earliest instant and one past year 9999 and shows
-no panic and no overflow; `display`; `output`; or `local: <why>`.
-Where the wire cannot carry those extremes, the test shows the encoder
-refuses them and feeds the wire's own ends through the reader instead.
-The latest instant is
-`time.Unix(math.MaxInt64-62135596800, 999999999)`, not
-`time.Unix(math.MaxInt64, 0)`, which wraps to before 1970. The ledger's
-header gives the grammar of each, and is the place to read it.
-`display` is held by the walk: it refuses the row when the field, or a
-time derived from it by a `time.Time` method, a dereference or an
-index, is an operand of `Before`, `After`, `Equal`, `Sub` or `Compare`,
-an argument of `time.Since` or `time.Until`, a side of a comparison (a
-pointer, slice or map held against nil excepted), or read in a
-comparator written in the call that sorts, `sort.Slice` and the like,
-or in a `Less` method, anywhere in the tree. That is not every way a
-time can be compared, and the row is read against its field for the
-rest; among them a copy into a local, or into a struct with no row, a
-comparison through `Unix` or `UnixNano`, a defined type converted back,
-a method promoted from an embedded time, a helper of the tree's own
-that compares, a whole struct compared, a comparator held in a variable,
-and a file the build leaves out. And the decoder walk now follows a
-helper across packages by its name, so a field decoded through
-`wire.Decode` from another package is reached as one decoded in place,
-and `output` on a wire answer means what it says. The floor is 542.
+fourth kind, `time`, and its rows say `<= now + 5m`, the skew a request
+and an owner's document are held to; `<= now + 42m`, a sealed stamp held
+to `relayapi.MaxStampAhead`, the chain of clocks it crossed; `[lo, hi]`;
+`deadline: <use>`; `display`; `output`; or `local:` in one of its two
+forms. The ledger's header gives the grammar of each, and is the place
+to read it.
+
+**The walk sees every time a decode reaches.** The first time kind took a
+field of a `json`-tagged struct and a `time.Parse`, and the second review
+planted a package for each shape it did not see (commit 14). A site is
+now a field of a type that holds a time (`time.Time`, a struct embedding
+one, a type defined over it, a pointer, slice, array or map of these, a
+map by its key too) in any struct a decode reaches, tagged or not,
+embedded or named, exported or not; a generic struct's field read with
+the type argument it is given, so `Box[time.Time]`'s `V` is a time; a
+`json.RawMessage` or `[]byte` followed to the decode that reads it later,
+and a decode straight into a time, a site of its own; an
+`UnmarshalText`, `UnmarshalJSON` or `UnmarshalBinary` called on a time;
+and a `time.Unix`, `time.UnixMilli` or `time.UnixMicro`, which makes a
+time of an integer, its row read off the int row of the field it is
+made from. A decode is `json.Unmarshal` or a `Decoder`'s `Decode` called,
+a helper whose interface parameter reaches one, followed to its callers,
+or a generic helper, followed by its type argument at each call; a
+decode, or a helper that reaches one, taken as a value rather than
+called is refused, since the walk cannot follow it. The walk found two
+faults the day it saw the token's `time.Unix` sites: a date past the year
+9999 was stored and then failed every listing (G26), and a token that
+starts later could not be registered (G27). `TestTheWalkSees…` holds one
+planted package per shape, with the control
+`TestTheWalkTakesAnAliasAndAPointerOfAnEmbedded`.
+
+**A row's claim is held by the walk, not by convention.** Three rules,
+each from a planted package the walk let through (commit 15, D86):
+
+- `local:` on a field a decode fills reads `local: held by <Rule> at
+  <point> shown by <TestLimit…>` (R7). The rule is a function of the tree
+  that holds what the decode filled: the writer that puts this machine's
+  clock there, whose test round-trips the file and shows the field is
+  that clock at the write, or the check a value from outside passed
+  before it was written. The point names every function of the tree that
+  writes the field, each by its qualified name (`Store.Load`,
+  `auu.deliverStream`), since a bare name took a same-named method on
+  another type as named (R41a). The walk holds the rule and every writer
+  to exist and the test to be a `TestLimit` declared once; that the
+  decode reads this home's own file and not a wire is the row's claim,
+  held by review, since the file-open ledger holds a path's provenance
+  and not its content's. A reason alone on a decoded field is refused:
+  before, a time the walk refused as `display` passed rewritten as
+  `local:` with any words. The nine times this program writes into its
+  own files and reads back (R41), the outbox's, the serve ledger's, the
+  spool record's, the damaged record's and `relay.json`'s, are rowed so,
+  held at their writer, not refused at the load, since a refusal there
+  would close a ledger or an outbox over a clock stepped back.
+- `display` is shown and nothing else (R8). The field, or a time derived
+  from it by a method that answers a time, a dereference, an index or its
+  address, may reach a format, a print or a marshal; a field whose own row
+  is `display` or `output` (`ErrorResponse.At` into `HTTPError.At`); or a
+  helper of the tree whose body the walk reads and finds uses the
+  parameter in those ways alone (`stampLocal`). Compared or ordered,
+  assigned to a local, passed to any other function, made a number by
+  `Unix` or its kin, or copied into a field with another row or none, it
+  is refused naming the use; and a field a display time is copied into
+  becomes a site needing its own row. The old paragraph here listed what
+  the walk then did not see, a copy into a local, a helper that compares,
+  a comparison through `Unix`, and the review planted each; what it still
+  does not see, a defined type converted back, a method promoted from an
+  embedded time, a whole struct compared, a comparator held in a
+  variable and a file the build leaves out, is in the ledger's header,
+  and the row is read against its field for those.
+- A bound row, `<= now + 5m`, `<= now + 42m`, `[lo, hi]` or `deadline:`,
+  names a test the walk opens and holds to calling `testutil.TimeEdges`,
+  which gives the edge, a second either side, a day and a year ahead, a
+  year past, and the earliest, the first past year 9999 and the latest
+  instants; a deadline's test calls `testutil.EarliestInstant` and
+  `testutil.PastYear9999`, the two its grammar names. The tests fed those
+  values by habit before, and a window the code did not enforce satisfied
+  the walk. Where the wire cannot carry the extremes, the test shows the
+  encoder refuses them and feeds the wire's own ends through the reader.
+  The latest instant is `time.Unix(math.MaxInt64-62135596800,
+  999999999)`, not `time.Unix(math.MaxInt64, 0)`, which wraps to before
+  1970. `TimeEdges`'s own test holds it to the header's sentences.
+
+The decoder walk follows a helper across packages by its name, so a field
+decoded through `wire.Decode` from another package is reached as one
+decoded in place, and `output` on a wire answer means what it says. The
+floor is the count, 574, raised with every row added, and the walk's own
+self-tests hold it.
 
 **Two bounds on the same value in two encodings are read against each other.**
 `MaxSaid` bounds a relay's refusal sentence at 512 bytes and `MaxReportBytes`
@@ -1797,6 +2046,13 @@ Encrypt run — say that it is outstanding and what it needs, and record it.
 - The README's and the `docs/` documents' tables agree with the code: flags,
   config keys, defaults, commands, response codes. Check mechanically, not
   from memory.
+- When a change alters a rule a user sees, grep the old rule's phrases
+  across `docs/`, `skill/` and both guides, not only the files the diff
+  touches. Commit 8a, which made a section known on its own path alone,
+  corrected the security model and the development guide and left
+  `docs/client.md` and `skill/reference.md` saying a critical name this
+  build reads on any path is passed over on a message; the review's own
+  sweep missed them too, and they were found a commit later (R32).
 - Departures from the specification are in `reviews/IMPLEMENTATION_NOTES.md`
   with reasons.
 - Nothing under `reviews/`, `bin/` or `.claude/settings.local.json` is
