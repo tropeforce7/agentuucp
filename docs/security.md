@@ -1142,10 +1142,18 @@ on every route under `/v1/mailbox/`, on `/v1/forward` and
 before its signature. A refusal that does not turn on the fingerprint,
 such as a `400` for a malformed fingerprint in the path, a storage `500`
 or the in-flight `503`, is not charged. On a route under `/v1/mailbox/`
-the identity is looked up before the body, so a registered fingerprint is
-told `413` where an unknown one is told `401`, at the same price; that
-says whether a mailbox exists, which a key lookup says on the same budget.
-The admin routes read the body before the administrator is looked up. A
+and on the two forward routes the declared length is judged before the
+identity is looked up: a body of no declared length is refused `411` `a
+request to this route declares its body's length` and one declared over
+the cap `413`, for every fingerprint alike, where a registered one used to
+be told `413` and an unknown one `401`. A body under the cap is still
+read after the lookup, so an unknown fingerprint is refused `401` before
+its body is read and a registered one's body is read before its
+signature fails. What is left to tell them apart is what that read
+shows: the time it takes, the connection kept once it is read, and a
+`400` for a body declared and never sent where an unknown fingerprint is
+told `401`. Each says whether a mailbox exists, which a key lookup says
+on the same budget (S23). The admin routes read the body before the administrator is looked up. A
 body that declares no length, a chunked one, is refused `411` `a request
 to an admin route declares its body's length`, one declared over the cap
 `413`, and the rest is read whole, at most 64 KiB. So every byte is

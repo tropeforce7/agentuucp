@@ -686,21 +686,24 @@ The HTTP layer has bounds of its own, none of them settings:
 
 A body that declares itself over its cap is refused `413` before a byte of
 it is read, the sentence naming the cap in bytes. One that arrives without
-a length is cut at the cap, except on the admin routes and the stream PUT,
-which refuse it `411`. On every authenticated route the relay checks what
-it can before the body. That is the client certificate, that the auth
-header parses, and that the identity it names has a mailbox. It reads the
-body only then, so a stranger's sixteen megabytes are refused unread. The
-admin routes read the body before they look up the administrator, as
-below. The signature, which is over the body, is checked after it, the
-stream PUT excepted, whose signature is over an empty body and comes
-before it. Every refusal before the body closes the connection behind its
-answer. Those refusals are that `413`, the `411`, a `401` for a header
-that will not parse or an identity no mailbox has, a `503` from the
-in-flight cap, and a `429` once the address's budget is spent. Go's
-`net/http` would otherwise read up to 256 KiB of the unread body before
-answering on a connection it meant to keep, and wait for a body that never
-came.
+a length is refused `411` on every authenticated route that reads a body,
+the mailbox routes, the two forward routes and the admin routes, and on
+the stream PUT; `auu` always declares one. `/v1/register`, which has no
+signature to check, still cuts such a body at its cap and refuses it
+`413`. On every authenticated route the relay checks what it can before
+the body. That is the client certificate, that the auth header parses, the
+declared length, and that the identity it names has a mailbox, in that
+order, so the length is judged alike for every caller. It reads the body
+only then, so a stranger's sixteen megabytes are refused unread. The admin
+routes read the body before they look up the administrator, as below. The
+signature, which is over the body, is checked after it, the stream PUT
+excepted, whose signature is over an empty body and comes before it. Every
+refusal before the body closes the connection behind its answer. Those
+refusals are that `413`, the `411`, a `401` for a header that will not
+parse or an identity no mailbox has, a `503` from the in-flight cap, and a
+`429` once the address's budget is spent. Go's `net/http` would otherwise
+read up to 256 KiB of the unread body before answering on a connection it
+meant to keep, and wait for a body that never came.
 
 A body refused before its signature is checked, for its declared length,
 for a read over the cap or for a read that failed, is charged to the

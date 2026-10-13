@@ -118,23 +118,28 @@ func wireProbe(t *testing.T, h *harness, method, path, claimed string, declared 
 // refusal of the body before the signature is charged as a refused
 // signature is, on the mailbox wrapper, the forward wrapper (the forward
 // and its report) and the admin wrapper: each fingerprint, from an
-// address of its own, is answered 413 or 401 the burst's worth of times
-// and then 429 at the same count. On the admin route the body is read
+// address of its own, is answered the burst's worth of times and then 429
+// at the same count. On the mailbox and forward wrappers the declared
+// length is judged before the identity is looked up (G12), so a
+// registered fingerprint and an unregistered one are both answered 413
+// for a body declared over the cap and both 411 for a body of no declared
+// length: every caller is answered alike. On the admin route the body is read
 // before the administrator is looked up (T11, R12), so an
 // administrator's fingerprint and anyone else's are both answered 413
 // for a body declared over the cap, both 411 for a body of no declared
 // length (R11), both 400 with the connection closed for a body declared
 // and not delivered, and both 401 with the connection kept for a body
 // sent whole under a signature that does not verify; and a relay with no
-// administrators answers 403 charged (R12). A chunked body over a
-// mailbox route's cap, refused by the read and not the declaration, and
-// a mailbox route's body declared and not delivered, are charged the
-// same. No request leaves a nonce behind.
+// administrators answers 403 charged (R12). A mailbox route's body
+// declared under the cap and not delivered is read after the lookup, so
+// there a registered fingerprint is 400 and an unregistered one 401, the
+// difference S23 leaves, and both are charged the same. No request leaves
+// a nonce behind.
 //
 // After each in-process row the store is closed and one more request
-// sent: on the mailbox and forward rows the lookup then fails into
-// authFailed, so the 429 shows the answer does not depend on the store,
-// not that the store is untouched; the admin rows never use the store.
+// sent, and it is 429 whatever the store says; since G12 none of the rows
+// reaches the lookup, the length being judged first, and the admin rows
+// never use the store.
 func TestARefusalBeforeTheSignatureCostsTheSameWhoeverIsNamed(t *testing.T) {
 	type caller struct {
 		who   string
@@ -164,6 +169,10 @@ func TestARefusalBeforeTheSignatureCostsTheSameWhoeverIsNamed(t *testing.T) {
 	}
 	over := func(n int64) []byte { return bytes.Repeat([]byte("x"), int(n)+1) }
 
+	// G12: the declared length is judged before the identity, so on the
+	// mailbox and forward wrappers every caller is answered alike, 413
+	// for a body declared over the cap and 411 for one of no declared
+	// length, where the lookup made it 401 for an unregistered one.
 	var rows []row
 	{
 		h := mailbox()
@@ -171,15 +180,15 @@ func TestARefusalBeforeTheSignatureCostsTheSameWhoeverIsNamed(t *testing.T) {
 		rows = append(rows, row{"a post declared over the cap", h, "POST",
 			func(fp string) string { return "/v1/mailbox/" + fp }, h.server.postCap() + 1, nil,
 			[]caller{{"registered", alice.Fingerprint(), http.StatusRequestEntityTooLarge},
-				{"unregistered", h.fpOf(t, "nobody"), http.StatusUnauthorized}}})
+				{"unregistered", h.fpOf(t, "nobody"), http.StatusRequestEntityTooLarge}}})
 	}
 	{
 		h := mailbox()
 		alice := h.user(t, "alice")
 		rows = append(rows, row{"a stream open of no declared length over the cap", h, "POST",
 			func(fp string) string { return "/v1/mailbox/" + fp + "/streams" }, 0, over(relayapi.FramingAllowance),
-			[]caller{{"registered", alice.Fingerprint(), http.StatusRequestEntityTooLarge},
-				{"unregistered", h.fpOf(t, "nobody"), http.StatusUnauthorized}}})
+			[]caller{{"registered", alice.Fingerprint(), http.StatusLengthRequired},
+				{"unregistered", h.fpOf(t, "nobody"), http.StatusLengthRequired}}})
 	}
 	{
 		h := mailbox()
@@ -187,7 +196,7 @@ func TestARefusalBeforeTheSignatureCostsTheSameWhoeverIsNamed(t *testing.T) {
 		rows = append(rows, row{"a forward declared over the cap", h, "POST",
 			func(string) string { return "/v1/forward" }, h.server.forwardCap() + 1, nil,
 			[]caller{{"registered", alice.Fingerprint(), http.StatusRequestEntityTooLarge},
-				{"unregistered", h.fpOf(t, "nobody"), http.StatusUnauthorized}}})
+				{"unregistered", h.fpOf(t, "nobody"), http.StatusRequestEntityTooLarge}}})
 	}
 	{
 		h := mailbox()
@@ -195,7 +204,7 @@ func TestARefusalBeforeTheSignatureCostsTheSameWhoeverIsNamed(t *testing.T) {
 		rows = append(rows, row{"a forward's report declared over the cap", h, "POST",
 			func(string) string { return "/v1/forward/failed" }, relayapi.MaxReportBytes + 1, nil,
 			[]caller{{"registered", alice.Fingerprint(), http.StatusRequestEntityTooLarge},
-				{"unregistered", h.fpOf(t, "nobody"), http.StatusUnauthorized}}})
+				{"unregistered", h.fpOf(t, "nobody"), http.StatusRequestEntityTooLarge}}})
 	}
 	{
 		h := admins()

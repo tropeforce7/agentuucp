@@ -751,6 +751,33 @@ func (s *Server) readBodyCharged(w http.ResponseWriter, r *http.Request, limit i
 	return body, true
 }
 
+// declaredLength refuses, before the caller is looked up, a body that
+// declares no length (411) or declares one over the cap (413), each
+// charged as a refused signature is. Judged after the lookup, an over-cap
+// body was 413 for a registered fingerprint and 401 for anybody else's,
+// which told a stranger at one token which fingerprints have a mailbox
+// here; judged first, every caller is answered alike. A body under the
+// cap is still read after the lookup, so what is left to tell them apart
+// is what reading it shows: the time it takes, the connection kept once
+// it is read, and a 400 for a body declared and never sent where a
+// stranger is told 401, each on the budget a key lookup spends to say the
+// same (docs/security.md, S23).
+func (s *Server) declaredLength(w http.ResponseWriter, r *http.Request, limit int64, hint string) bool {
+	if r.ContentLength < 0 {
+		if s.chargeUnauthenticated(w, r) {
+			s.refuseUnread(w, http.StatusLengthRequired, "a request to this route declares its body's length")
+		}
+		return false
+	}
+	if r.ContentLength > limit {
+		if s.chargeUnauthenticated(w, r) {
+			s.refuseUnread(w, http.StatusRequestEntityTooLarge, tooLarge(limit, hint))
+		}
+		return false
+	}
+	return true
+}
+
 // unread marks the answer to a request whose body the handler has not
 // read and will not: the connection closes behind it. Without this net/http,
 // keeping the connection for the next request, reads up to 256 KiB of the
@@ -945,6 +972,9 @@ func (s *Server) authedWithCert(limit int64, hint string, fn func(w http.Respons
 			// A header that will not parse cannot have come from a working
 			// client, so it is refused without touching the database at all.
 			s.authFailed(w, r, errUnauthorized)
+			return
+		}
+		if !s.declaredLength(w, r, limit, hint) {
 			return
 		}
 		caller, err := s.store.Mailbox(auth.FP)

@@ -254,8 +254,9 @@ func TestLimitBodyCapsPerRoute(t *testing.T) {
 		{"the stream open", "POST", "/v1/mailbox/" + bob.Fingerprint() + "/streams", alice, relayapi.FramingAllowance, ""},
 		{"the forward", "POST", "/v1/forward", alice, 1<<20 + relayapi.FramingAllowance, ""},
 		// The report route's cap is reached before the handler's check that
-		// the caller is a courier, readBody running inside callerAuthedBody,
-		// so a user shows the cap as well as a neighbour would.
+		// the caller is a courier, declaredLength running inside
+		// callerAuthedBody, so a user shows the cap as well as a neighbour
+		// would.
 		{"the report", "POST", "/v1/forward/failed", alice, relayapi.MaxReportBytes, ""},
 		{"the registration", "POST", "/v1/register", alice, relayapi.FramingAllowance, ""},
 		{"the certificate request", "POST", "/v1/mailbox/" + me + "/certs", alice, relayapi.FramingAllowance, ""},
@@ -289,25 +290,42 @@ func TestLimitBodyCapsPerRoute(t *testing.T) {
 	if status != http.StatusRequestEntityTooLarge || errorText(t, body) != fmt.Sprintf("%s: at most %d bytes", relayapi.MsgBodyTooLarge, relayapi.FramingAllowance) {
 		t.Errorf("an admin token one byte over FramingAllowance: %d %.200s; want 413 naming the cap", status, body)
 	}
-	// A body without a length that runs past the cap is cut at the cap
-	// by MaxBytesReader and answered 413 too, after the cap's worth was
-	// read and no more.
+	// A body without a length that runs past the cap. On a route under a
+	// signature it is refused 411 before a byte of it is read and before
+	// the caller is looked up (G12: the declared length is judged before
+	// the identity, so every caller is answered alike, and a body that
+	// declares none cannot be judged then); on the registration, which
+	// reads the body under no signature of anybody known, it is cut at
+	// the cap by MaxBytesReader and answered 413, after the cap's worth
+	// was read and no more.
 	chunked := append(bytes.Repeat([]byte("x"), relayapi.FramingAllowance+1), []byte("\r\n0\r\n\r\n")...)
 	size := fmt.Sprintf("%x\r\n", relayapi.FramingAllowance+1)
-	status, body, _ = h.rawRequest(alice, "POST", "/v1/mailbox/"+bob.Fingerprint()+"/streams",
+	status, body, hdr := h.rawRequest(alice, "POST", "/v1/mailbox/"+bob.Fingerprint()+"/streams",
 		map[string]string{"Transfer-Encoding": "chunked"}, -1, append([]byte(size), chunked...))
-	if status != http.StatusRequestEntityTooLarge {
-		t.Errorf("a chunked body over the cap: %d %.200s; want 413", status, body)
+	if status != http.StatusLengthRequired || errorText(t, body) != "a request to this route declares its body's length" {
+		t.Errorf("a chunked body over the cap on the stream open: %d %.200s; want 411 asking for the length", status, body)
+	}
+	if hdr.Get("Connection") != "close" {
+		t.Errorf("Connection is %q after the 411, want close: the unread body is not waited for", hdr.Get("Connection"))
+	}
+	status, body, _ = h.rawRequest(alice, "POST", "/v1/register",
+		map[string]string{"Transfer-Encoding": "chunked"}, -1, append([]byte(size), chunked...))
+	if status != http.StatusRequestEntityTooLarge || errorText(t, body) != fmt.Sprintf("%s: at most %d bytes", relayapi.MsgBodyTooLarge, relayapi.FramingAllowance) {
+		t.Errorf("a chunked registration over the cap: %d %.200s; want 413 naming the cap", status, body)
 	}
 }
 
 // TestTheAuthHeaderIsReadBeforeTheBody: on every authenticated route the
-// order is the certificate, the auth header parsed, the identity looked
-// up, then the body, then the signature. A request under a fingerprint no
-// mailbox has, declaring sixteen megabytes and sending none of them, is
-// answered 401 before the body is read; one whose header will not parse
-// the same; and the registration, whose signer is not yet anybody, parses
-// the header before the body too. The signature is checked after the body,
+// order is the certificate, the auth header parsed, the declared length
+// judged, the identity looked up, then the body, then the signature. A
+// request under a fingerprint no mailbox has, declaring a body up to the
+// route's cap and sending none of it, is answered 401 before the body is
+// read; one whose header will not parse the same, even declaring a body
+// over the cap, since the header is parsed before the length is judged;
+// and the registration, whose signer is not yet anybody, parses the header
+// before the body too. A stranger's body declared over the route's cap is
+// 413, as a registered caller's is (G12: the declared length is judged
+// before the identity, so every caller is answered alike). The signature is checked after the body,
 // as it must be, since it is over the body: a registered identity's
 // well-formed request over a declared body that never comes is waited
 // for, which is the signature's read of the body, and a wrong signature
@@ -319,17 +337,24 @@ func TestTheAuthHeaderIsReadBeforeTheBody(t *testing.T) {
 	alice, stranger := people[0], people[1]
 	h.register(alice)
 	const sixteen = 16 << 20
+	// The directory's cap is MaxDocumentBytes, under sixteen megabytes:
+	// a stranger's directory declares the cap itself, the most the length
+	// check lets through to the lookup.
+	notParsing := map[string]string{relayapi.AuthHeader: "v1 not a header"}
 	for _, tc := range []struct {
-		name string
-		from *identity.Identity
-		hdr  map[string]string
-		path string
+		name     string
+		from     *identity.Identity
+		hdr      map[string]string
+		path     string
+		declared int64
 	}{
-		{"a stranger's post", stranger, nil, "/v1/mailbox/" + alice.Fingerprint()},
-		{"a stranger's directory", stranger, nil, "/v1/mailbox/" + alice.Fingerprint() + "/channels"},
-		{"a header that will not parse", nil, map[string]string{relayapi.AuthHeader: "v1 not a header"}, "/v1/mailbox/" + alice.Fingerprint()},
-		{"no header at all", nil, nil, "/v1/mailbox/" + alice.Fingerprint()},
-		{"a registration with no header", nil, nil, "/v1/register"},
+		{"a stranger's post", stranger, nil, "/v1/mailbox/" + alice.Fingerprint(), sixteen},
+		{"a stranger's directory", stranger, nil, "/v1/mailbox/" + alice.Fingerprint() + "/channels", relayapi.MaxDocumentBytes},
+		{"a header that will not parse", nil, notParsing, "/v1/mailbox/" + alice.Fingerprint(), sixteen},
+		{"a header that will not parse, over the directory's cap", nil, notParsing, "/v1/mailbox/" + alice.Fingerprint() + "/channels", sixteen},
+		{"no header at all", nil, nil, "/v1/mailbox/" + alice.Fingerprint(), sixteen},
+		{"no header at all, over the directory's cap", nil, nil, "/v1/mailbox/" + alice.Fingerprint() + "/channels", sixteen},
+		{"a registration with no header", nil, nil, "/v1/register", sixteen},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			method := "POST"
@@ -337,9 +362,9 @@ func TestTheAuthHeaderIsReadBeforeTheBody(t *testing.T) {
 				method = "PUT"
 			}
 			start := time.Now()
-			status, body, hdr := h.rawRequest(tc.from, method, tc.path, tc.hdr, sixteen, nil)
+			status, body, hdr := h.rawRequest(tc.from, method, tc.path, tc.hdr, tc.declared, nil)
 			if status != http.StatusUnauthorized {
-				t.Fatalf("%d %.200s in %s; want 401 with the sixteen megabytes unsent", status, body, time.Since(start))
+				t.Fatalf("%d %.200s in %s; want 401 with the %d bytes unsent", status, body, time.Since(start), tc.declared)
 			}
 			if hdr.Get("Connection") != "close" {
 				t.Errorf("the connection is kept after a refusal before the body; want it closed, the body unread")
@@ -352,6 +377,18 @@ func TestTheAuthHeaderIsReadBeforeTheBody(t *testing.T) {
 				t.Errorf("4000 bytes declared and unsent: %d close=%q in %s; want 401 with the connection closed", status, hdr.Get("Connection"), time.Since(start))
 			}
 		})
+	}
+	// A stranger's directory declared over its cap is 413 naming the cap,
+	// as alice's own is (TestLimitBodyCapsPerRoute): the length is judged
+	// before the identity is looked up (G12), so the answer does not say
+	// whether the fingerprint has a mailbox.
+	wantCap := fmt.Sprintf("%s: at most %d bytes; %s", relayapi.MsgBodyTooLarge, relayapi.MaxDocumentBytes, hintCompact)
+	for _, from := range []*identity.Identity{stranger, alice} {
+		status, body, hdr := h.rawRequest(from, "PUT", "/v1/mailbox/"+alice.Fingerprint()+"/channels", nil, sixteen, nil)
+		if status != http.StatusRequestEntityTooLarge || errorText(t, body) != wantCap || hdr.Get("Connection") != "close" {
+			t.Errorf("%s's directory declaring sixteen megabytes: %d %.200s close=%q; want 413 %q with the connection closed",
+				from.Name, status, body, hdr.Get("Connection"), wantCap)
+		}
 	}
 	// A registered identity's well-formed request over a declared body
 	// that never comes is waited for: the signature is over the body, so

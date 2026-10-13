@@ -728,6 +728,9 @@ func (s *Server) callerAuthedBody(limit int64, hint string, fn func(w http.Respo
 			s.authFailed(w, r, errUnauthorized)
 			return
 		}
+		if !s.declaredLength(w, r, limit, hint) {
+			return
+		}
 		caller, err := s.store.Mailbox(auth.FP)
 		if err != nil {
 			s.authFailed(w, r, errUnauthorized)
