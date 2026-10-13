@@ -210,6 +210,18 @@ given no worktree and no directory. In each run of serve, the first time
 it meets such a message, it says on stderr that the message is on a
 thread another peer opened and was left alone.
 
+The opener is the peer whose message on the thread arrived here first, and
+an expert on more than one relay fetches its relays one after another in
+each round, so it answers a thread for the ask it fetches first. A
+co-recipient of a message to several knows its thread, and one who asks on
+that thread through another of the expert's relays before the opener's copy
+is fetched is answered as the opener; the opener's own messages on the
+thread are then left alone. Nothing of the opener's reaches them: the
+handler is given their message alone, and the opener's text, files and
+replies stay where they were. This is a stated residual. Binding a thread
+to its opening message on the wire is what closes it, and that is a change
+to the wire for a later release.
+
 A thread carried over from a v0.17.0 ledger, which kept no senders, takes
 its opener from what this home wrote first: a message serve answered with
 a reply names its asker in the copy of that reply, in the sent box. A

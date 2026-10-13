@@ -1018,11 +1018,19 @@ message first, but the relays' order of delivery, and when each fetch runs,
 still decide who opens a new thread. So can a large message to several,
 which goes as one stream to each recipient: a co-recipient has the thread
 id while the expert's copy is still uploading, and a small ask from them on
-it can arrive first and open the thread. A thread that has been answered or
-tried is not moved by any later arrival. A ledger entry an earlier release
-wrote keeps the relay's stamp under the same key and is not rewritten, so a
-thread opened before the upgrade is ordered by that stamp until something
-on it is tried. A thread carried over from a v0.17.0 ledger, which kept no
+it can arrive first and open the thread. So can an ask from a co-recipient
+through another of the expert's relays: an expert on more than one relay
+fetches them in turn and answers a thread for the ask it fetches first, so
+one sent on the thread after the opener's but fetched before it is
+answered as the opener, and the opener is denied their thread. Nothing of
+the opener's reaches that sender: the handler is given their message
+alone. This is a stated residual. Binding a thread to its opening message
+on the wire closes it, and is a wire change for a later release. A thread
+that has been answered or tried is not moved by any later arrival. A
+ledger entry an earlier release wrote keeps the relay's stamp under the
+same key and is not rewritten, so a thread opened before the upgrade is
+ordered by that stamp until something on it is tried.
+A thread carried over from a v0.17.0 ledger, which kept no
 senders, takes its opener from what this home wrote: an answered message's
 asker is the recipient of the copy of the reply serve sent, which serve
 addressed to the message's verified sender alone, so nothing a peer posts
