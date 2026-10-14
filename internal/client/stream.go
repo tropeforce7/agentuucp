@@ -82,6 +82,13 @@ func (c *Client) PutStream(ctx context.Context, upload string, offset int64, bod
 	req.ContentLength = length
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set(relayapi.UploadOffsetHeader, strconv.FormatInt(offset, 10))
+	// The relay judges an attempt before it reads a byte of its body, and
+	// answers a refusal, the 409 that says where its copy ends among them,
+	// with the body unread. The connection is not kept (boundTransport),
+	// so a body already on the wire meets a reset and the answer is lost;
+	// asking first means a refusal arrives before the body is sent, and an
+	// attempt the relay takes is sent the moment it starts to read.
+	req.Header.Set("Expect", "100-continue")
 
 	resp, err := c.stream.Do(req)
 	if err != nil {

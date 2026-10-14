@@ -234,6 +234,9 @@ func transportFor(cert *tls.Certificate, anchor *Anchor) *http.Transport {
 // which the caller sees and signs afresh if it asks again.
 func boundTransport(t *http.Transport) {
 	t.DisableKeepAlives = true
+	// An upload asks before it sends its body (PutStream); a relay that
+	// never answers the ask is sent the body after this wait.
+	t.ExpectContinueTimeout = time.Second
 	t.ForceAttemptHTTP2 = false
 	t.TLSClientConfig.NextProtos = []string{"http/1.1"}
 	t.MaxResponseHeaderBytes = relayapi.MaxHeaderBytes
