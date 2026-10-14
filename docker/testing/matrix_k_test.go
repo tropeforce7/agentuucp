@@ -121,7 +121,7 @@ func k08(t *testing.T) {
 	defer alice.truncate(t, aliceRelayDir+"/cert.json", 200)()
 	r := alice.auu("inbox")
 	expectCode(t, r, 5)
-	stderrIs(t, r, "auu: "+aliceRelayDir+"/cert.json is not valid JSON (unexpected end of JSON input): "+
+	stderrIs(t, r, "auu: "+aliceRelayDir+"/cert.json will not read (unexpected EOF): "+
 		"run 'auu register --relay relay.example.com --token TOKEN' to replace it")
 	verdict(t, "ok", "The file, the fact, Go's reason in brackets, the command that replaces it — on every path that "+
 		"meets the file, not only the dial — and exit 5.")
@@ -188,7 +188,7 @@ func k14(t *testing.T) {
 	defer alice.edit(t, aliceRelayDir+"/relay.json", `"url": "https://relay.example.com:9443",`, `"url": "https://relay.example.com:9443",,`)()
 	r := alice.auu("inbox")
 	expectCode(t, r, 5)
-	stderrIs(t, r, "auu: "+aliceRelayDir+"/relay.json is not valid JSON (invalid character ',' looking for beginning of "+
+	stderrIs(t, r, "auu: "+aliceRelayDir+"/relay.json will not read (invalid character ',' looking for beginning of "+
 		"object key string): enrol again with a token, or remove the relay with 'auu relay rm relay.example.com' and add it again")
 	verdict(t, "ok", "The file, the fact, Go's reason in brackets, two ways out, and exit 5.")
 }

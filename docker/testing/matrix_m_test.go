@@ -347,11 +347,12 @@ func m09(t *testing.T) {
 	r := bob.auu("inbox", "--no-fetch")
 	expectCode(t, r, 0)
 	expectNot(t, r, "cut short")
-	stderrIs(t, r, "warning: "+file+" could not be read (unexpected end of JSON input) and is not listed")
+	stderrIs(t, r, "warning: "+file+" will not read (unexpected EOF): fix it, or move it out of the box; "+
+		"the rest of the box reads without it; it is not listed")
 	r = bob.auu("read", s.ID)
 	expectCode(t, r, 1)
 	verdict(t, "ok", "The listing says which file could not be read, why, and that it is left out, once; "+
-		"read on it still prints Go's JSON error with the usage exit code, which B9 did not touch.")
+		"read on it finds no message of that id, since the listing left the record out, and exits 1.")
 }
 
 func m10(t *testing.T) {
