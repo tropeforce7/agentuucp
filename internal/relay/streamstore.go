@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/regular"
+	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
 // Uploads in progress. A stream arrives in pieces, so the relay holds a
@@ -64,10 +65,9 @@ func (e *OpenUploadsError) Unwrap() error { return ErrOpenUploads }
 const uploadsName = "uploads"
 
 // MaxStreamSize is the largest stream any relay takes, whatever its
-// settings: 2^62 bytes, four exbibytes, which nothing needs and which
-// leaves the arithmetic over what a mailbox and the relay hold room to
-// spare below MaxInt64.
-const MaxStreamSize int64 = 1 << 62
+// settings: relayapi.MaxStreamSize, 2^62 bytes, the protocol's ceiling,
+// named here for the relay's own arithmetic.
+const MaxStreamSize = relayapi.MaxStreamSize
 
 // Upload is an upload in progress. Channel is the name the stream was
 // opened for, checked at open and copied to the message at completion.

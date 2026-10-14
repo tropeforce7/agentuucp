@@ -525,7 +525,15 @@ A channel directory may hold at most 64 channels, each with a name of at
 most 64 bytes and a description of at most 1024. They are properties of the
 protocol rather than of one relay, since the body limit alone would let a
 single request queue a quarter of a million inserts. Both sides of a
-directory check the same bounds.
+directory check the same bounds. A directory is `v`, `owner`, `issued` and
+`channels`, and each channel `name`, `description` and, when set,
+`not_before` and `not_after`. Version 2 adds a rule a channel may carry:
+`max_bytes`, the largest message it takes in wire bytes, an envelope's or
+a sealed stream's with its manifest, from 1 to 2^62, absent for the
+relay's own cap; `no_streams`, true to take no stream; and `no_forwards`,
+true to take no courier's delivery. A directory with no rule is version
+1, byte for byte as before; one with any is version 2, and a version 1
+directory carrying a rule is refused naming the channel and the field.
 
 *Listing 1.4a*
 ```json
@@ -563,8 +571,12 @@ it can do as `wire_level`. v0.14.0 and before are not supported. The
 release note, [`docs/releases/v0.15.0.md`](releases/v0.15.0.md), gives the
 order. A v0.15.0 relay and v0.16.0, v0.17.0 or v0.18.0 clients mix in
 any order, and so do a v0.16.0, v0.17.0 or v0.18.0 relay and v0.15.0
-clients. A v0.17.0 or v0.18.0 relay is a v0.16.0 relay on the wire, and
-v0.17.0 and v0.18.0 clients send what v0.16.0 clients send. A v0.18.0
+clients. A v0.17.0 relay is a v0.16.0 relay on the wire, and v0.17.0
+and v0.18.0 clients send what v0.16.0 clients send, but for a channel
+directory that carries a rule. A v0.18.0 relay is at wire level 2: it
+holds a version 2 channel directory, whose channels may carry
+`max_bytes`, `no_streams` and `no_forwards`; a v0.17.0 or earlier relay
+refuses one at the push, `400` naming the field it does not know. A v0.18.0
 relay refuses more than an earlier one, each with a status and a
 sentence any of them shows, among them an inline envelope over 64 MiB,
 a forward with a path still to go over `max_bytes`, an owner document
@@ -586,7 +598,8 @@ and the last takes a v0.14.0 relay straight to v0.18.0.
 the relay is under attack. Its answer says the relay's `max_bytes`,
 `knock_max_bytes`, registration mode and `wire_level`: a whole number that
 rises when a release gives the relay something a client may depend on. It
-is 1 from v0.15.0. `auu` refuses a relay's health answer without it. The
+is 1 from v0.15.0 and 2 from v0.18.0, which holds a version 2 channel
+directory. `auu` refuses a relay's health answer without it. The
 most recipients a message to several may name, `max_recipients` as it is in
 force, comes in a section of the answer, `max-recipients`, rather than a
 field, so that an `auu` from before it reads the answer still.
@@ -678,9 +691,9 @@ The HTTP layer has bounds of its own, none of them settings:
 | request line and headers | 32 KiB | over it the answer is `431`, written by Go's `net/http` before the relay sees the request (it reads the block through a 4 KiB buffer, so the cut lands at 36 KiB); the largest header the protocol carries, the request signature, is about 200 bytes, and the relay refuses an auth header longer than its five fields can be before it reads one |
 | body of a post | `max_bytes`, never above 64 MiB, + 64 KiB | the envelope with its JSON framing; a forward and a courier's delivery are read the same way |
 | body of a knock | `knock_max_bytes` + 64 KiB | the same framing over a knock envelope, which the handler then holds to `knock_max_bytes`, never above 64 MiB, itself, refusing one over it `413` naming the setting |
-| body of an allow list or a channel directory | 1 MiB | the envelope the document travels in, base64 and all: sized so that either document at its own cap below fits inside it — a full directory of 64 channels at every cap is 568,030 bytes as the client sends it, and one padded to its own cap below 699,170. Over it the answer is `413` naming the bytes and saying to send the document compact |
+| body of an allow list or a channel directory | 1 MiB | the envelope the document travels in, base64 and all: sized so that either document at its own cap below fits inside it — a full directory of 64 channels at every cap, every rule set, is 573,918 bytes as the client sends it, and one padded to its own cap below 699,170. Over it the answer is `413` naming the bytes and saying to send the document compact |
 | body of every other request | 64 KiB | a registration, a certificate request, an admin token, a stream's open, and a card, whose document has its own cap below; none reaches a tenth of it |
-| the signed document inside, per kind | 512 KiB directory, 128 KiB allow list, 512 B card | the bytes the owner signed, which is a different thing from the body that carries them and is checked before the signature rather than after: over it the answer is `400` naming the bytes, the cap and to send it compact. Each is the document at every maximum as a client marshals it compact — 425,934 bytes for a directory, 67,141 for an allow list, 199 for a card, measured — with room above for a signer whose encoder indents |
+| the signed document inside, per kind | 512 KiB directory, 128 KiB allow list, 512 B card | the bytes the owner signed, which is a different thing from the body that carries them and is checked before the signature rather than after: over it the answer is `400` naming the bytes, the cap and to send it compact. Each is the document at every maximum as a client marshals it compact — 430,350 bytes for a directory, 67,141 for an allow list, 199 for a card, measured — with room above for a signer whose encoder indents |
 | the stream `PUT` | the size the open declared | its `Content-Length` must equal what is left of that size, judged before a byte is read |
 | timeouts | headers 15 s, body 5 min, response 5 min, idle 2 min | the stream routes move their own deadlines as above |
 

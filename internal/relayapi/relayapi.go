@@ -492,8 +492,12 @@ func (s *Sections) SectionList() []wire.Section { return s.Sections }
 
 // WireLevel is what this build of the relay can do that a client may
 // depend on (D40): it rises by one in the change that gives a relay
-// something new, and never otherwise. 1 is v0.15.0, the floor (P5).
-const WireLevel = 1
+// something new, and never otherwise. 1 is v0.15.0, the floor (P5). 2 is
+// v0.18.0: the relay takes a channel directory of version 2, whose
+// channels may carry max_bytes, no_streams and no_forwards, and holds
+// them; the routes that enforce them come with the rules' refusal codes.
+// A relay at 1 refuses such a directory at the push.
+const WireLevel = 2
 
 // CodeNeedsNewer is the error code of a refusal of a body that carries a
 // critical section the relay does not know (D37), and MsgNeedsNewer its one
@@ -1045,21 +1049,24 @@ const MaxListingHold = 2*MaxPageBytes + FramingAllowance
 // MaxDirectoryBytes caps a channel directory's document, the bytes the
 // owner signed. A directory at every maximum — MaxChannels channels, each
 // name MaxChannelNameBytes and each description MaxChannelDescriptionBytes,
-// both bounds set on every channel, and issued and both bounds carried to
-// the nanosecond — measured on a document that passed Validate and as this
-// client marshals it:
+// both bounds set on every channel, every rule of version 2 on every
+// channel (max_bytes at MaxStreamSize's nineteen digits, no_streams and
+// no_forwards true), and issued and both bounds carried to the nanosecond
+// — measured on a document that passed Validate and as this client
+// marshals it, by TestTheDirectoryCapsCommentIsTheMeasurement in
+// internal/channels, which asserts each figure:
 //
-//	compact, times on UTC:        425,289 bytes
-//	compact, times at +10:00:     425,934   <- the larger: a signer need not be on UTC
-//	the same, tab-indented:       427,613
-//	the same, four spaces:        430,700
+//	compact, times on UTC:        429,705 bytes
+//	compact, times at +10:00:     430,350   <- the larger: a signer need not be on UTC
+//	the same, tab-indented:       432,989
+//	the same, four spaces:        437,804
 //
 // The names in that document are 63 "&" and one byte to tell them apart,
 // "&" being the only byte a channel name may hold that encoding/json
 // writes as a six-byte escape — a name refuses "<" and ">", which the
 // Windows file-name rule forbids, while a description admits them.
 //
-// The cap leaves about 91 KiB above the widest of those, which is the room
+// The cap leaves about 84 KiB above the widest of those, which is the room
 // for a signer whose encoder indents further than this one: the bytes are
 // whatever that encoder produced and the signature covers them, so another
 // client may indent, and one that indents past the cap is told to send it
@@ -1094,7 +1101,7 @@ const MaxAllowlistBytes = 128 << 10
 // What the documents themselves may be is MaxDirectoryBytes and
 // MaxAllowlistBytes above, which carry the measurements; this cap sits
 // above the larger of them with room for the base64 the request carries it
-// in, 4/3 of the document plus the envelope — 568,030 bytes measured for a
+// in, 4/3 of the document plus the envelope — 573,918 bytes measured for a
 // directory at every maximum and 89,642 for an allow list, and 699,170 and
 // 174,882 for one padded to its own cap — so that a document at its own cap
 // always fits in a request this cap admits.
@@ -1107,6 +1114,13 @@ const MaxDocumentBytes = 1 << 20
 // for whatever a proxy in front of a client adds; net/http answers 431
 // before any handler for a request over it.
 const MaxHeaderBytes = 32 << 10
+
+// MaxStreamSize is the largest stream any relay takes, whatever its
+// settings: 2^62 bytes, four exbibytes, which nothing needs and which
+// leaves the arithmetic over what a mailbox and the relay hold room to
+// spare below MaxInt64. It is the protocol's ceiling on any message, so a
+// channel's max_bytes is held under it too.
+const MaxStreamSize int64 = 1 << 62
 
 // MsgBodyTooLarge begins the 413 for a body over its route's cap; the
 // sentence names the cap in bytes.

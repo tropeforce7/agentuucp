@@ -52,8 +52,15 @@ import (
 )
 
 const (
-	// Version is the one directory format this build writes and reads.
-	Version = 1
+	// Version1 is a directory whose channels carry a name, a description
+	// and a period and nothing else. Version2 is one whose channels may
+	// also carry a rule, max_bytes, no_streams or no_forwards, which a
+	// version 1 reader refuses by name. This build reads both and writes
+	// the oldest that says what the document means: Sign chooses.
+	Version1 = 1
+	Version2 = 2
+	// Version is the newest directory format this build reads.
+	Version = Version2
 
 	// Default is the channel a message that names none goes to. It is a
 	// name like any other in a directory, and a directory may leave it out.
@@ -68,12 +75,27 @@ const (
 )
 
 // Failures a caller tells apart. The relay answers 401 for ErrSignature and
-// 400, with the sentence, for everything else.
+// 400, with the sentence, for everything else. ErrVersion is a document,
+// under a good signature, of a version this build does not read, as the
+// owner's newer auu may write; a caller that tells it apart can say to
+// update auu rather than that the document is not to be trusted.
 var (
 	ErrSignature = errors.New("directory signature does not verify")
 	ErrForm      = errors.New("directory is malformed")
 	ErrOwner     = errors.New("directory owner is not the key that signed it")
+	ErrVersion   = errors.New("directory is a version this build cannot read")
 )
+
+// versionError is Validate's refusal of a v this build does not read: the
+// sentence names the value and the versions read, and errors.Is finds
+// ErrVersion in it.
+type versionError struct{ v int }
+
+func (e versionError) Error() string {
+	return fmt.Sprintf("v is %d; this build reads %d and %d", e.v, Version1, Version2)
+}
+
+func (e versionError) Is(target error) bool { return target == ErrVersion }
 
 // Directory is the signed document: every channel of one mailbox.
 type Directory struct {
@@ -88,13 +110,42 @@ type Directory struct {
 	Channels []Channel `json:"channels"`
 }
 
-// Channel is one named sub-mailbox and the period in which it takes mail.
-// A bound that is absent is unbounded on that side.
+// Channel is one named sub-mailbox, the period in which it takes mail and
+// its rule. A bound that is absent is unbounded on that side. The rule is
+// version 2's: MaxBytes is the largest message the channel takes, in wire
+// bytes, an envelope's or a sealed stream's with its manifest, inline or
+// stream, 0 or absent for the relay's own cap; NoStreams true refuses
+// every stream to the channel; NoForwards true refuses every courier's
+// delivery to it. Each is left out at its zero value, so a channel with
+// no rule marshals as a version 1 channel does, byte for byte, and a field
+// spelt out at its zero value is absence once decoded.
 type Channel struct {
 	Name        string     `json:"name"`
 	Description string     `json:"description"`
 	NotBefore   *time.Time `json:"not_before,omitempty"`
 	NotAfter    *time.Time `json:"not_after,omitempty"`
+	MaxBytes    int64      `json:"max_bytes,omitempty"`
+	NoStreams   bool       `json:"no_streams,omitempty"`
+	NoForwards  bool       `json:"no_forwards,omitempty"`
+}
+
+// hasRule says whether the channel carries any of version 2's rules: a
+// max_bytes above 0, no_streams true or no_forwards true.
+func (ch *Channel) hasRule() bool {
+	return ch.MaxBytes > 0 || ch.NoStreams || ch.NoForwards
+}
+
+// OldestVersion is the oldest format that says what d means, the one a
+// writer uses: Version2 when any channel carries a rule, Version1
+// otherwise. Sign writes it, and the owner's command validates an edit
+// under it.
+func OldestVersion(d *Directory) int {
+	for i := range d.Channels {
+		if d.Channels[i].hasRule() {
+			return Version2
+		}
+	}
+	return Version1
 }
 
 // ValidName applies the rules for a channel name: valid UTF-8, 1 to
@@ -270,8 +321,8 @@ func Forbidden(r rune) string {
 //
 //	channel "bug reports": description is 1031 bytes; at most 1024
 func (d *Directory) Validate() error {
-	if d.V != Version {
-		return fmt.Errorf("v is %d; this build reads %d", d.V, Version)
+	if d.V != Version1 && d.V != Version2 {
+		return versionError{d.V}
 	}
 	if !identity.ValidFingerprint(d.Owner) {
 		return errors.New("owner is not a fingerprint")
@@ -297,6 +348,25 @@ func (d *Directory) Validate() error {
 		if ch.NotBefore != nil && ch.NotAfter != nil && ch.NotBefore.After(*ch.NotAfter) {
 			return fmt.Errorf("channel %q: not_before %s is after not_after %s",
 				ch.Name, stamp(*ch.NotBefore), stamp(*ch.NotAfter))
+		}
+		// The protocol's ceiling, which no relay exceeds; a relay's own
+		// numbers are its push's business.
+		if ch.MaxBytes < 0 || ch.MaxBytes > relayapi.MaxStreamSize {
+			return fmt.Errorf("channel %q: max_bytes is %d; 0 for the relay's own, or 1 to %d",
+				ch.Name, ch.MaxBytes, relayapi.MaxStreamSize)
+		}
+		// A version 1 reader never meets a rule under a version it
+		// reads.
+		if d.V == Version1 {
+			for _, r := range []struct {
+				field string
+				set   bool
+			}{{"max_bytes", ch.MaxBytes > 0}, {"no_streams", ch.NoStreams}, {"no_forwards", ch.NoForwards}} {
+				if r.set {
+					return fmt.Errorf("channel %q: %s needs v %d; this directory is v %d",
+						ch.Name, r.field, Version2, Version1)
+				}
+			}
 		}
 	}
 	return nil
@@ -327,14 +397,37 @@ func (ch *Channel) OpenAt(now time.Time) (open bool, why string) {
 	return true, ""
 }
 
+// Takes says whether the channel takes a message of size wire bytes, an
+// envelope's or a sealed stream's with its manifest, which is a stream or
+// not and came by way of another relay or not, and when not, why: "takes
+// no streams", "takes no mail by way of another relay" or "takes at most
+// N bytes on the wire; this message is M", judged in that order. The
+// sentence is the one both sides print.
+func (ch *Channel) Takes(size int64, stream, forwarded bool) (ok bool, why string) {
+	if ch.NoStreams && stream {
+		return false, "takes no streams"
+	}
+	if ch.NoForwards && forwarded {
+		return false, "takes no mail by way of another relay"
+	}
+	if ch.MaxBytes > 0 && size > ch.MaxBytes {
+		return false, fmt.Sprintf("takes at most %d bytes on the wire; this message is %d", ch.MaxBytes, size)
+	}
+	return true, ""
+}
+
 // stamp renders a bound the way the sentences show it.
 func stamp(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
-// Sign fills in the owner from the identity, checks every rule, encodes the
-// directory once and signs the encoding under the directory domain. The
-// document bytes returned are what the signature covers, and what travels;
-// nothing re-encodes them. The caller sets Issued, since it is the caller's
-// clock that orders the owner's directories.
+// Sign fills in the owner from the identity and the version from the
+// channels, checks every rule, encodes the directory once and signs the
+// encoding under the directory domain. The version is the oldest that says
+// what the directory means, 2 when any channel carries a rule and 1
+// otherwise, whatever the caller set; it is written back to d, as the
+// owner is, so the local copy says what was signed. The document bytes
+// returned are what the signature covers, and what travels; nothing
+// re-encodes them. The caller sets Issued, since it is the caller's clock
+// that orders the owner's directories.
 //
 // Validation comes before signing for the same reason an enrolment token is
 // checked before it is issued: an invalid directory should not exist, rather
@@ -343,9 +436,7 @@ func Sign(id *identity.Identity, d *Directory) (doc, sig []byte, err error) {
 	if id == nil {
 		return nil, nil, errors.New("channels: no signing identity")
 	}
-	if d.V == 0 {
-		d.V = Version
-	}
+	d.V = OldestVersion(d)
 	d.Owner = id.Fingerprint()
 	if err := d.Validate(); err != nil {
 		return nil, nil, err
@@ -439,6 +530,18 @@ func signingBytes(doc []byte) []byte {
 func decode(doc []byte) (*Directory, error) {
 	if err := CheckLength(doc); err != nil {
 		return nil, err
+	}
+	// The version before the strict decode: a document of a version this
+	// build does not read is ErrVersion whatever fields it carries, since
+	// a newer version's fields are what the strict decode would refuse
+	// first. A v that is not a whole number, or bytes that are not an
+	// object, fall through to the strict decode and are ErrForm as
+	// before; an absent v is v 0, which Validate refuses as ErrVersion.
+	var probe struct {
+		V *int `json:"v"`
+	}
+	if json.Unmarshal(doc, &probe) == nil && probe.V != nil && *probe.V != Version1 && *probe.V != Version2 {
+		return nil, versionError{*probe.V}
 	}
 	var d Directory
 	err := wire.Decode(doc, &d)

@@ -80,9 +80,11 @@ func existing(d *channels.Directory, name string) (*channels.Channel, error) {
 }
 
 // checked validates an edited directory as the relays will, and turns a
-// broken rule into the usage error it is here.
+// broken rule into the usage error it is here. It validates under the
+// version channels.Sign will write, the oldest that says what the
+// directory means.
 func checked(d *channels.Directory, self *identity.Identity) error {
-	d.V = channels.Version
+	d.V = channels.OldestVersion(d)
 	d.Owner = self.Fingerprint()
 	if d.Issued.IsZero() {
 		// Validate wants one; the push sets the real one.

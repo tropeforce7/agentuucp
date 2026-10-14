@@ -794,7 +794,7 @@ A refused send names what to change, and nothing was queued:
   user waits or uses another relay. A message forwarded through a relay
   that refuses this way comes back as undeliverable in the same words.
   N is the relay's `wire_level`, which its health answer carries: 1 from
-  v0.15.0 and still 1 in v0.16.0, v0.17.0 and v0.18.0, rising when a
+  v0.15.0, still 1 in v0.16.0 and v0.17.0, and 2 from v0.18.0, rising when a
   relay can do something new, and required, so a health answer without
   it is refused as malformed. A relay on v0.15.0 serves a v0.16.0 or
   later `auu` in full; its health answer has no `max-recipients`

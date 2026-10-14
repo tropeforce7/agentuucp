@@ -367,9 +367,10 @@ func TestLimitAStreamAnswerIsHeldTo64KiB(t *testing.T) {
 // owner-signed documents to two caps before a byte goes on the wire: the
 // document's own — MaxDirectoryBytes, MaxAllowlistBytes, MaxCardBytes —
 // and then its route's, MaxDocumentBytes for the two large ones and
-// FramingAllowance for the card. A directory and an allow list at every
-// maximum, marshalled as the client marshals them, and a card at its own
-// are sent, and each is measured against its own cap here so that a
+// FramingAllowance for the card. A directory at every maximum at
+// version 1 and at version 2, every rule on every channel, an allow list
+// at every maximum, marshalled as the client marshals them, and a card at
+// its own are sent, and each is measured against its own cap here so that a
 // remeasurement is due the moment one of them grows; a document one byte
 // over its cap is refused with the bytes and the cap in the sentence and
 // the relay sees nothing of it. The two caps' order is pinned as well: a
@@ -423,6 +424,30 @@ func TestLimitADocumentIsHeldToTheCapBeforeThePut(t *testing.T) {
 	if err := c.SetDirectory(context.Background(), doc, sig); err != nil {
 		t.Fatalf("a directory at every maximum: %v; want it sent", err)
 	}
+	// The same at version 2, every rule on every channel at its widest:
+	// the largest directory there is, measured the same two ways.
+	for i := range chs {
+		chs[i].MaxBytes, chs[i].NoStreams, chs[i].NoForwards = relayapi.MaxStreamSize, true, true
+	}
+	ruled := &channels.Directory{Issued: at, Channels: chs}
+	rdoc, rsig, err := channels.Sign(owner, ruled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ruled.V != channels.Version2 || len(rdoc) <= len(doc) {
+		t.Fatalf("the ruled directory signed as v %d, %d bytes against %d; want v 2 and larger", ruled.V, len(rdoc), len(doc))
+	}
+	if wire, _ := json.Marshal(relayapi.ChannelsRequest{Document: rdoc, Signature: rsig}); len(wire) > relayapi.MaxDocumentBytes {
+		t.Fatalf("the full version 2 directory is %d bytes on the wire; want it under the cap", len(wire))
+	}
+	rIndented, _ := json.MarshalIndent(ruled, "", "    ")
+	if len(rdoc) >= relayapi.MaxDirectoryBytes || len(rIndented) >= relayapi.MaxDirectoryBytes {
+		t.Fatalf("a version 2 directory at every maximum is %d bytes compact and %d indented, against a cap of %d: remeasure",
+			len(rdoc), len(rIndented), relayapi.MaxDirectoryBytes)
+	}
+	if err := c.SetDirectory(context.Background(), rdoc, rsig); err != nil {
+		t.Fatalf("a version 2 directory at every maximum: %v; want it sent", err)
+	}
 	senders := make([]string, 0, relayapi.MaxAllowlist)
 	for i := 0; i < relayapi.MaxAllowlist; i++ {
 		senders = append(senders, fmt.Sprintf("%064x", i+1))
@@ -450,8 +475,8 @@ func TestLimitADocumentIsHeldToTheCapBeforeThePut(t *testing.T) {
 	if err := c.SetCard(context.Background(), cdoc, csig); err != nil {
 		t.Fatalf("a card at its maximum: %v; want it sent", err)
 	}
-	if n := puts.Load(); n != 3 {
-		t.Fatalf("the relay saw %d PUTs, want 3", n)
+	if n := puts.Load(); n != 4 {
+		t.Fatalf("the relay saw %d PUTs, want 4", n)
 	}
 
 	// One byte over the document's own cap: the bytes are the signer's,

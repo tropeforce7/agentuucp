@@ -1099,7 +1099,7 @@ naming the cap.
 The signed documents have caps of their own, which are not the bodies':
 512 KiB for a channel directory, 128 KiB for an allow list, 512 bytes for
 a card. Each is the document at every maximum as a client marshals it
-compact — 425,934, 67,141 and 199 bytes, measured — with room above for a
+compact — 430,350, 67,141 and 199 bytes, measured — with room above for a
 signer whose encoder indents, since the bytes are whatever that encoder
 produced and the signature covers them. Each is checked **before the
 signature**, at the push, at every reading of a stored document, and by
@@ -1385,7 +1385,9 @@ anything under `damaged/` is ever opened again. The outer envelope a relay
 reads is four fields for good, and a relay carries an envelope whose
 version it does not know, since what the version means is between the
 sender and the recipient. The relay's
-`wire_level` on its health answer says what it can do. And a refusal is
+`wire_level` on its health answer says what it can do: 2 from v0.18.0,
+which holds a version 2 channel directory, whose channels may carry a
+rule an older relay refuses at the push. And a refusal is
 told apart by its `code`, never by its words, so a relay may change its
 words and add codes without a client misreading either.
 [`docs/client.md`](client.md) says what this means for a person upgrading,
@@ -1415,7 +1417,7 @@ Two routes carry a mailbox's channel directory, the signed list of named
 sub-mailboxes an owner defines. The owner pushes it with `PUT
 /v1/mailbox/{fp}/channels` as the document bytes and the signature over them
 (`document`, `signature`). The document is at most 512 KiB — a directory
-at every maximum is 425,934 bytes as `auu` writes it — a rule both ends
+at every maximum, every rule set, is 430,350 bytes as `auu` writes it — a rule both ends
 run before the signature is checked, since a directory padded to the
 route's cap would otherwise be verified whole on every post to the
 mailbox and on every administrator's page. The relay verifies the

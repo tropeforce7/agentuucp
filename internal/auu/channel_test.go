@@ -486,3 +486,44 @@ func TestInboxSaysWhenTheDirectoryDoesNotVerify(t *testing.T) {
 		t.Fatalf("the relay says %q %v after the repair", state, err)
 	}
 }
+
+// TestAnEditIsCheckedUnderTheVersionSignWillWrite: checked() validates an
+// edited directory under the version channels.Sign will write, so an edit
+// with no rule is checked as version 1 whatever the directory held before,
+// and one carrying a rule, on any channel and of any of the three kinds,
+// is checked as version 2 and taken, where checking it as version 1 would
+// refuse the rule.
+func TestAnEditIsCheckedUnderTheVersionSignWillWrite(t *testing.T) {
+	id, err := identity.Generate("owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	edit := func(v int, set func(*channels.Channel)) *channels.Directory {
+		d := &channels.Directory{V: v, Channels: []channels.Channel{{Name: "default"}, {Name: "bugs"}}}
+		if set != nil {
+			set(&d.Channels[1])
+		}
+		return d
+	}
+	for _, v := range []int{0, channels.Version1, channels.Version2} {
+		d := edit(v, nil)
+		if err := checked(d, id); err != nil || d.V != channels.Version1 {
+			t.Errorf("no rule, held as v %d: %v, checked as v %d; want v 1", v, err, d.V)
+		}
+	}
+	for _, rule := range []struct {
+		name string
+		set  func(*channels.Channel)
+	}{
+		{"max_bytes", func(ch *channels.Channel) { ch.MaxBytes = 65536 }},
+		{"no_streams", func(ch *channels.Channel) { ch.NoStreams = true }},
+		{"no_forwards", func(ch *channels.Channel) { ch.NoForwards = true }},
+	} {
+		for _, v := range []int{0, channels.Version1, channels.Version2} {
+			d := edit(v, rule.set)
+			if err := checked(d, id); err != nil || d.V != channels.Version2 {
+				t.Errorf("%s, held as v %d: %v, checked as v %d; want it taken as v 2", rule.name, v, err, d.V)
+			}
+		}
+	}
+}

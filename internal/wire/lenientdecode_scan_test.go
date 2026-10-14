@@ -125,6 +125,7 @@ var lenientDecodeAllowed = map[string]string{
 	"internal/kit/kit.go renderSettings json.NewDecoder":                   "the compiled-in relay.json template",
 	"internal/agent/client.go Client.call json.Unmarshal":                  "a reply frame from the local key agent over the same user's socket; the agent decodes requests strictly (proto.go) and a missing ok reads as a refusal",
 	"internal/relay/server.go hasOldKey json.Unmarshal":                    "probe of the old allow key before wire.Decode of the same bytes",
+	"internal/channels/channels.go decode json.Unmarshal":                  "probe of v before wire.Decode of the same bytes",
 	"internal/relay/channelapi.go Server.handleGetChannels json.Unmarshal": "reads the relay's own SQLite row, not a home file, for the channel names alone; channels.Verify held the document at push, and this read does not verify it again",
 	"internal/client/client.go httpError json.Unmarshal":                   "probe of the code key after wire.Decode of the same error body",
 	"internal/client/client.go Client.ListWait json.Unmarshal":             "the envelope bytes are a json.RawMessage out of a listing wire.Decode read; envelope.Open re-holds its outer fields v, to, ct and ch; the envelope's own keys are never read strictly",

@@ -479,7 +479,11 @@ internal/auu/watch.go messageEvent int Size int64 = output
 internal/auu/watch_cmds.go cmdWatch int fs.Duration("interval") = >= 5s shown by TestLimitWaitAndWatchFlags
 internal/auu/watch_cmds.go cmdWatch int fs.Duration("timeout") = >= 0s shown by TestLimitWaitAndWatchFlags
 internal/card/card.go Document int V int = [1, 1] shown by TestLimitCardV
-internal/channels/channels.go Directory int V int = [1, 1] shown by TestLimitDirectoryV
+# A channel's max_bytes sizes the wire bytes of an envelope, or of a sealed
+# stream with its manifest, whichever way the message comes.
+internal/channels/channels.go Channel int MaxBytes int64 = 0 or [1, 4611686018427387904] shown by TestLimitChannelMaxBytes
+internal/channels/channels.go Directory int V int = one of 1, 2 shown by TestLimitDirectoryV
+internal/channels/channels.go decode.struct int V *int = one of 1, 2 shown by TestLimitDirectoryV
 internal/channels/channels.go listedDevice string stem[3:] = local: len(stem) >= 4 by the check before
 internal/channels/channels.go listedDevice string stem[:3] #2 = local: len(stem) >= 4 by the check before
 internal/channels/channels.go listedDevice string stem[:3] = local: len(stem) >= 4 by the check before

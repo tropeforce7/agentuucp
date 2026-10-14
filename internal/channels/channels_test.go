@@ -30,9 +30,10 @@ func at(s string) *time.Time {
 }
 
 // base is a directory that passes every rule, for a test to spoil one way.
+// It carries no rule, so it is version 1.
 func base(id *identity.Identity) *Directory {
 	return &Directory{
-		V:      Version,
+		V:      Version1,
 		Owner:  id.Fingerprint(),
 		Issued: time.Date(2026, 9, 13, 1, 19, 29, 0, time.UTC),
 		Channels: []Channel{
@@ -42,6 +43,24 @@ func base(id *identity.Identity) *Directory {
 		},
 	}
 }
+
+// ruled is base with a rule on each channel, every field of version 2
+// among them: so it is version 2.
+func ruled(id *identity.Identity) *Directory {
+	d := base(id)
+	d.V = Version2
+	d.Channels[0].MaxBytes = 65536
+	d.Channels[1].NoStreams = true
+	d.Channels[1].NoForwards = true
+	return d
+}
+
+// versions is base and ruled by name, for a test of the document's form
+// that holds for both versions.
+var versions = []struct {
+	name  string
+	build func(*identity.Identity) *Directory
+}{{"v 1", base}, {"v 2", ruled}}
 
 func mustSign(t *testing.T, id *identity.Identity, msg []byte) []byte {
 	t.Helper()
@@ -99,7 +118,7 @@ func TestSignFillsTheOwnerAndRefusesAnInvalidDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Owner != id.Fingerprint() || d.V != Version {
+	if d.Owner != id.Fingerprint() || d.V != Version1 {
 		t.Fatalf("Sign left owner %q v %d", d.Owner, d.V)
 	}
 	if !strings.Contains(string(doc), `"owner":"`+id.Fingerprint()+`"`) {
@@ -240,8 +259,28 @@ func TestADirectoryIsCheckedAtEveryEdge(t *testing.T) {
 		want  string
 	}{
 		{"as built", func(d *Directory) {}, ""},
-		{"v 2", func(d *Directory) { d.V = 2 }, "v is 2; this build reads 1"},
-		{"v 0", func(d *Directory) { d.V = 0 }, "v is 0; this build reads 1"},
+		{"v 2", func(d *Directory) { d.V = 2 }, ""},
+		{"v 3", func(d *Directory) { d.V = 3 }, "v is 3; this build reads 1 and 2"},
+		{"v 0", func(d *Directory) { d.V = 0 }, "v is 0; this build reads 1 and 2"},
+		{"max_bytes 1 under v 2", func(d *Directory) { d.V = 2; d.Channels[1].MaxBytes = 1 }, ""},
+		{"max_bytes at the ceiling under v 2", func(d *Directory) { d.V = 2; d.Channels[1].MaxBytes = relayapi.MaxStreamSize }, ""},
+		{"max_bytes one over the ceiling under v 2", func(d *Directory) { d.V = 2; d.Channels[1].MaxBytes = relayapi.MaxStreamSize + 1 },
+			`channel "bug reports": max_bytes is 4611686018427387905; 0 for the relay's own, or 1 to 4611686018427387904`},
+		{"max_bytes -1 under v 2", func(d *Directory) { d.V = 2; d.Channels[1].MaxBytes = -1 },
+			`channel "bug reports": max_bytes is -1; 0 for the relay's own, or 1 to 4611686018427387904`},
+		{"no_streams under v 2", func(d *Directory) { d.V = 2; d.Channels[1].NoStreams = true }, ""},
+		{"no_forwards under v 2", func(d *Directory) { d.V = 2; d.Channels[1].NoForwards = true }, ""},
+		{"max_bytes under v 1", func(d *Directory) { d.Channels[1].MaxBytes = 1 },
+			`channel "bug reports": max_bytes needs v 2; this directory is v 1`},
+		{"no_streams under v 1", func(d *Directory) { d.Channels[1].NoStreams = true },
+			`channel "bug reports": no_streams needs v 2; this directory is v 1`},
+		{"no_forwards under v 1", func(d *Directory) { d.Channels[0].NoForwards = true },
+			`channel "default": no_forwards needs v 2; this directory is v 1`},
+		{"max_bytes -1 under v 1 is out of range, not a rule", func(d *Directory) { d.Channels[1].MaxBytes = -1 },
+			`channel "bug reports": max_bytes is -1; 0 for the relay's own, or 1 to 4611686018427387904`},
+		{"every field at its zero value under v 1", func(d *Directory) {
+			d.Channels[1].MaxBytes, d.Channels[1].NoStreams, d.Channels[1].NoForwards = 0, false, false
+		}, ""},
 		{"owner not a fingerprint", func(d *Directory) { d.Owner = "alice" }, "owner is not a fingerprint"},
 		{"owner upper case", func(d *Directory) { d.Owner = strings.ToUpper(d.Owner) }, "owner is not a fingerprint"},
 		{"issued missing", func(d *Directory) { d.Issued = time.Time{} }, "issued is missing"},
@@ -508,21 +547,30 @@ func TestADirectoryIsHeldToItsBytesBeforeTheSignature(t *testing.T) {
 // message content and the API alone; here a sections field is an unknown
 // field like any other, refused under a good signature, so it is never
 // opened by habit. A change to a channel directory is a new format version instead.
+// Both versions: version 2 is a new format beside the old, not a door.
 func TestADirectoryCarriesNoSections(t *testing.T) {
-	id := owner(t)
-	doc, sig, err := Sign(id, base(id))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Verify(id.Public(), doc, sig); err != nil {
-		t.Fatalf("the document whole: %v; want it taken", err)
-	}
-	for _, sections := range []string{`[]`, `[{"name":"later","critical":false,"data":0}]`} {
-		with := append([]byte(`{"sections":`+sections+`,`), doc[1:]...)
-		_, err := Verify(id.Public(), with, mustSign(t, id, signingBytes(with)))
-		if !errors.Is(err, ErrForm) || !strings.Contains(err.Error(), `unknown field "sections"`) {
-			t.Errorf("sections %s: %v; want ErrForm naming the field", sections, err)
-		}
+	for _, version := range versions {
+		t.Run(version.name, func(t *testing.T) {
+			id := owner(t)
+			d := version.build(id)
+			doc, sig, err := Sign(id, d)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := fmt.Sprintf(`{"v":%d,`, d.V); !strings.HasPrefix(string(doc), want) {
+				t.Fatalf("the document begins %.12s; want %s", doc, want)
+			}
+			if _, err := Verify(id.Public(), doc, sig); err != nil {
+				t.Fatalf("the document whole: %v; want it taken", err)
+			}
+			for _, sections := range []string{`[]`, `[{"name":"later","critical":false,"data":0}]`} {
+				with := append([]byte(`{"sections":`+sections+`,`), doc[1:]...)
+				_, err := Verify(id.Public(), with, mustSign(t, id, signingBytes(with)))
+				if !errors.Is(err, ErrForm) || !strings.Contains(err.Error(), `unknown field "sections"`) {
+					t.Errorf("sections %s: %v; want ErrForm naming the field", sections, err)
+				}
+			}
+		})
 	}
 }
 
@@ -531,25 +579,33 @@ func TestADirectoryCarriesNoSections(t *testing.T) {
 // (ruling 56). The document is taken whole; with each of those after it,
 // and with a plain stray byte, it is refused in this reader's own words.
 func TestADirectoryRefusesEveryTrailingByte(t *testing.T) {
-	id := owner(t)
-	doc, sig, err := Sign(id, base(id))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Verify(id.Public(), doc, sig); err != nil {
-		t.Fatalf("the document whole: %v", err)
-	}
-	for _, tail := range []string{"}", "]", "x"} {
-		with := append(append([]byte{}, doc...), tail...)
-		_, err := Verify(id.Public(), with, mustSign(t, id, signingBytes(with)))
-		if tail == "x" {
-			if !errors.Is(err, ErrForm) {
-				t.Errorf("%q after the document: %v; want ErrForm", tail, err)
+	for _, version := range versions {
+		t.Run(version.name, func(t *testing.T) {
+			id := owner(t)
+			d := version.build(id)
+			doc, sig, err := Sign(id, d)
+			if err != nil {
+				t.Fatal(err)
 			}
-			continue
-		}
-		if !errors.Is(err, ErrForm) || err.Error() != "directory is malformed: trailing data after the document" {
-			t.Errorf("%q after the document: %v; want the trailing-data sentence", tail, err)
-		}
+			if want := fmt.Sprintf(`{"v":%d,`, d.V); !strings.HasPrefix(string(doc), want) {
+				t.Fatalf("the document begins %.12s; want %s", doc, want)
+			}
+			if _, err := Verify(id.Public(), doc, sig); err != nil {
+				t.Fatalf("the document whole: %v", err)
+			}
+			for _, tail := range []string{"}", "]", "x"} {
+				with := append(append([]byte{}, doc...), tail...)
+				_, err := Verify(id.Public(), with, mustSign(t, id, signingBytes(with)))
+				if tail == "x" {
+					if !errors.Is(err, ErrForm) {
+						t.Errorf("%q after the document: %v; want ErrForm", tail, err)
+					}
+					continue
+				}
+				if !errors.Is(err, ErrForm) || err.Error() != "directory is malformed: trailing data after the document" {
+					t.Errorf("%q after the document: %v; want the trailing-data sentence", tail, err)
+				}
+			}
+		})
 	}
 }
