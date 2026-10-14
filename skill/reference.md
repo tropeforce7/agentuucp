@@ -612,6 +612,10 @@ A refused send names what to change, and nothing was queued:
 - `channel "y" takes no mail by way of another relay` — comes back in
   `auu queue` as refused, not as an answer: the channel takes no
   forwarded mail.
+- `FILE changed while it was being sent; send it again` — an attachment
+  sent as a stream changed between its hashing and its sealing; nothing was
+  uploaded and nothing is left in the outbox. Send it again once it is
+  settled.
 - `sender is not on the recipient's allow list` — they have not admitted
   you; ask them to add you and run `auu allow push`.
 - `X's mailbox on the relay is full; they need to run 'auu rm' to make

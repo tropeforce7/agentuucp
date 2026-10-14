@@ -640,6 +640,7 @@ internal/stream/open.go ManifestLength string header[EncSize:HeaderSize] = local
 internal/stream/open.go OpenManifest string header[:EncSize] = local: len(header) >= HeaderSize by ManifestLength before
 internal/stream/open.go OpenManifest string plaintext[:SigSize] = local: len(plaintext) >= SigSize by the check before
 internal/stream/open.go OpenManifest string plaintext[SigSize:] = local: len(plaintext) >= SigSize by the check before
+internal/stream/seal.go (*sourceReader).Read string p[:n] = local: n from a Read into p, at most len(p)
 internal/stream/seal.go sealPayload string buf[:n] #2 = local: n from a Read into buf, at most len(buf)
 internal/stream/seal.go sealPayload string buf[:n] = local: n from a Read into buf, at most len(buf)
 internal/stream/stream.go Attachment int Size int64 = [0, 4611686018427387904] shown by TestLimitManifestIntegers

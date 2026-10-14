@@ -573,7 +573,17 @@ func TestDigestMismatchIsCaught(t *testing.T) {
 	other := sha256.Sum256([]byte("different bytes"))
 	m.Attachments[0].SHA256 = hex.EncodeToString(other[:])
 
+	// The sender refuses to seal it (G34): the bytes are not the ones
+	// the manifest was made from.
 	var buf bytes.Buffer
+	if err := Seal(&buf, from, to.Public(), m, sources); !errors.Is(err, ErrChanged) {
+		t.Fatalf("Seal of bytes its manifest's digest does not match: %v; want ErrChanged", err)
+	}
+	// The receiver's check, on such a stream sealed with the sender's
+	// check off, as a sender that is not this program could make it.
+	holdSources = false
+	t.Cleanup(func() { holdSources = true })
+	buf.Reset()
 	if err := Seal(&buf, from, to.Public(), m, sources); err != nil {
 		t.Fatal(err)
 	}
@@ -1052,6 +1062,54 @@ func TestAManifestRefusesEveryTrailingByte(t *testing.T) {
 		}
 		if !errors.Is(err, ErrForm) || !strings.HasSuffix(err.Error(), ": trailing data after the manifest") {
 			t.Errorf("%q after the manifest: %v; want the trailing-data sentence", tail, err)
+		}
+	}
+}
+
+// A message to several is sealed afresh for each copy from the same
+// sources against the one manifest, and every pass is held to it (G34,
+// R49): the first copy seals, and a source changed before the second
+// refuses the second, naming it, with nothing claimed for it.
+func TestEverySealingPassIsHeldToTheManifest(t *testing.T) {
+	from, to := pair(t)
+	data := []byte("the real bytes")
+	sources := []Source{{
+		Name: "f.bin", Media: "text/plain", Size: int64(len(data)),
+		Open: func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil },
+	}}
+	m, err := BuildManifest(from, to.Public(), strings.Repeat("c", 32), body(), sources, MinChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first bytes.Buffer
+	if err := Seal(&first, from, to.Public(), m, sources); err != nil {
+		t.Fatalf("the first copy: %v", err)
+	}
+	data = []byte("other bytes, s")
+	var second bytes.Buffer
+	if err := Seal(&second, from, to.Public(), m, sources); !errors.Is(err, ErrChanged) || !strings.Contains(err.Error(), "f.bin") {
+		t.Fatalf("the second copy after the source changed: %v; want ErrChanged naming f.bin", err)
+	}
+}
+
+// Seal is given as many sources as the manifest has attachments, or it
+// refuses: one more would be read with no entry to hold it to.
+func TestSealRefusesSourcesThatAreNotTheManifests(t *testing.T) {
+	from, to := pair(t)
+	data := []byte("the real bytes")
+	src := Source{
+		Name: "f.bin", Media: "text/plain", Size: int64(len(data)),
+		Open: func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil },
+	}
+	m, err := BuildManifest(from, to.Public(), strings.Repeat("d", 32), body(), []Source{src}, MinChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sources := range [][]Source{{src, src}, {}} {
+		var buf bytes.Buffer
+		if err := Seal(&buf, from, to.Public(), m, sources); !errors.Is(err, ErrForm) ||
+			!strings.Contains(err.Error(), "sources for a manifest of 1 attachments") {
+			t.Fatalf("%d sources for one attachment: %v; want ErrForm naming both", len(sources), err)
 		}
 	}
 }

@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"time"
 
@@ -221,7 +223,10 @@ func Seal(w io.Writer, from *identity.Identity, to *identity.Public,
 // sealPayload writes the body chunks. The last one carries the final marker,
 // and there is always at least one even when there is nothing to send.
 func sealPayload(w io.Writer, sender *hpke.Sender, m *Manifest, sources []Source) error {
-	payload := &sourceReader{sources: sources}
+	if len(sources) != len(m.Attachments) {
+		return fmt.Errorf("%w: %d sources for a manifest of %d attachments", ErrForm, len(sources), len(m.Attachments))
+	}
+	payload := &sourceReader{sources: sources, attachments: m.Attachments}
 	defer payload.Close()
 
 	buf := make([]byte, m.ChunkSize)
@@ -254,18 +259,41 @@ func sealPayload(w io.Writer, sender *hpke.Sender, m *Manifest, sources []Source
 	}
 	// Anything left over means a source grew while it was being read, which
 	// would have produced a stream that does not match its own manifest.
+	// The read past the end is also what ends the last attachment and
+	// holds it to its manifest entry.
 	var extra [1]byte
-	if n, _ := payload.Read(extra[:]); n != 0 {
+	n, err := payload.Read(extra[:])
+	if n != 0 {
 		return fmt.Errorf("%w: the attachments produced more bytes than the manifest declares", ErrForm)
+	}
+	if err != nil && err != io.EOF {
+		return err
 	}
 	return nil
 }
 
-// sourceReader concatenates the sources, opening each as it is reached.
+// ErrChanged is an attachment whose bytes, as sealed, are not the ones its
+// manifest entry was made from: the file changed between its hashing and
+// its sealing (G34, R49). The stream would be refused by its recipient as
+// damaged after the send had said it went, so it is refused here, before
+// anything is uploaded.
+var ErrChanged = errors.New("changed while it was being sent; send it again")
+
+// holdSources is the check above; a test of the receiver's own digest
+// check turns it off to seal the stream it needs, which this package
+// would otherwise refuse to make.
+var holdSources = true
+
+// sourceReader concatenates the sources, opening each as it is reached,
+// and holds each, as it ends, to its manifest entry's size and digest, so
+// what is sealed is what the manifest signs.
 type sourceReader struct {
-	sources []Source
-	current io.ReadCloser
-	index   int
+	sources     []Source
+	attachments []Attachment
+	current     io.ReadCloser
+	index       int
+	hash        hash.Hash
+	read        int64
 }
 
 func (s *sourceReader) Read(p []byte) (int, error) {
@@ -280,14 +308,21 @@ func (s *sourceReader) Read(p []byte) (int, error) {
 			}
 			s.current = r
 			s.index++
+			s.hash, s.read = sha256.New(), 0
 		}
 		n, err := s.current.Read(p)
 		if n > 0 {
+			s.hash.Write(p[:n])
+			s.read += int64(n)
 			return n, nil
 		}
 		if err == io.EOF {
 			s.current.Close()
 			s.current = nil
+			a := s.attachments[s.index-1]
+			if holdSources && (s.read != a.Size || hex.EncodeToString(s.hash.Sum(nil)) != a.SHA256) {
+				return 0, fmt.Errorf("%w: %s %w", ErrForm, a.Name, ErrChanged)
+			}
 			continue
 		}
 		if err != nil {
