@@ -778,7 +778,11 @@ does not, the second copy is met as any message the relay serves again is,
 and nothing is said. A copy that arrives again after you removed the first
 with `auu rm`, from the relay and from here, is new mail to this machine,
 since nothing here remembers mail removed that way, and it is delivered
-again.
+again. A stream that comes again through another of your relays is
+fetched whole beside the files you have, and only once it has verified
+does it take their place; a fetch that fails part way leaves the files
+and the record you had, and the copy on that relay is fetched again next
+time while the relay keeps it.
 
 A thread id works there too. `auu reply THREAD-ID` answers whatever is
 latest on the thread, including your own last message. In that case it is a

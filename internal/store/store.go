@@ -7,6 +7,7 @@ package store
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/envelope"
 	"github.com/tropeforce7/agentuucp/internal/identity"
+	"github.com/tropeforce7/agentuucp/internal/lockfile"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/regular"
@@ -792,6 +794,19 @@ type Stored struct {
 	// stays there until somebody removes it with 'auu rm'. False, the
 	// zero the key is left out for, is a message acknowledged away.
 	OnRelay bool `json:"on_relay,omitempty"`
+	// AckOwed says, beside OnRelay, that the relay holds this message only
+	// because its acknowledgement has not yet been made: it was fetched
+	// whole from a channel that does not keep, and the record was saved
+	// before the acknowledgement, saying what the relay still held, so
+	// that an acknowledgement refused or cut off leaves a record that is
+	// counted as on the relay and is acknowledged at the next fetch
+	// without a byte downloaded again (G32, R47). The acknowledgement's
+	// success, or the relay saying the row is gone, clears both in one
+	// save. It means nothing without OnRelay: a record that a cursor reset
+	// or a keep setting let go from the relay is not acknowledged. False,
+	// the zero the key is left out for, is every other record, among them
+	// mail kept on the relay on purpose.
+	AckOwed bool `json:"ack_owed,omitempty"`
 	// Channel is the channel the message was sent to, or filed under on
 	// receipt; empty is default.
 	Channel string `json:"channel,omitempty"`
@@ -1218,26 +1233,55 @@ func (s *Store) LeftOn(relay string) (int64, error) {
 // Move relocates a message between boxes, taking its attachment directory with
 // it when it has one. A streamed message's files live beside its record, so
 // moving the record alone would strand them.
+//
+// The files are placed first, the record published second and the old
+// record retired last (G31, R46): a record in the new box is never there
+// before its files are, so a move that fails part way leaves the message
+// whole where it was. A failure saving the new record puts the files back;
+// a failure removing the old record after the save is said, and the new
+// box, which Find searches first, answers with the record whose files are
+// beside it. A record or files in the new box left by an earlier attempt
+// are taken over: the old box's files, while they are there, are the ones
+// that were verified, and once they have gone they are the new box's.
+//
+// It holds the spool lock, which a stream's delivery holds to swap its
+// files in, so a move and a delivery of the one message never act on its
+// files at once.
 func (s *Store) Move(from, to Box, id string) error {
 	m, err := s.Load(from, id)
 	if err != nil {
 		return err
 	}
-	if err := s.Save(to, m); err != nil {
+	lock, _, err := lockfile.Take(context.Background(), s.SpoolLockPath(), spoolLockWait, nil)
+	if err != nil {
 		return err
 	}
+	defer lock.Release()
+	placed := false
+	src, dst := s.AttachmentDir(from, id), s.AttachmentDir(to, id)
 	if m.Streamed {
-		src, dst := s.AttachmentDir(from, id), s.AttachmentDir(to, id)
-		if _, err := os.Stat(src); err == nil {
+		if _, err := os.Lstat(src); err == nil {
 			if err := os.RemoveAll(dst); err != nil {
 				return err
 			}
 			if err := os.Rename(src, dst); err != nil {
 				return err
 			}
+			placed = true
 		}
 	}
-	return os.Remove(s.msgPath(from, id))
+	if err := s.Save(to, m); err != nil {
+		if placed {
+			if rerr := os.Rename(dst, src); rerr != nil {
+				return fmt.Errorf("%w; and its files could not be put back from %s: %v", err, dst, rerr)
+			}
+		}
+		return err
+	}
+	if err := os.Remove(s.msgPath(from, id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("message %s is in %s, but its old record in %s could not be removed: %w", id, to, from, err)
+	}
+	return nil
 }
 
 // Remove deletes a stored message and its attachment directory, if it has
@@ -1259,16 +1303,21 @@ func (s *Store) Remove(box Box, id string) error {
 	return err
 }
 
-// RemoveByID removes a message by its id alone, without loading the
-// record: the way out for a record Load refuses, which List does not
-// show and Find cannot name. The boxes are searched for the id's file
-// and the first found is removed with its attachments; the box is
-// returned, with the relay name and the relay's number the raw record
-// carried, each held to its own rule (ValidRelayName; a positive int64)
-// and empty or zero when it did not carry one that passes, so the caller
-// can leave the relay's copy accounted for. Nothing else in the record is
-// read. ErrNotExist when no box holds the id.
-func (s *Store) RemoveByID(id string) (box Box, relay string, relayID int64, from string, err error) {
+// PeekByID reads what a record Load refuses still says of the relay's
+// copy, without loading it: the way out for such a record, which List does
+// not show and Find cannot name. The boxes are searched for the id's file
+// and the first found is read; the box is returned, with the relay name and
+// the relay's number the raw record carried, each held to its own rule
+// (ValidRelayName; a positive int64) and empty or zero when it did not
+// carry one that passes, and the sender when it is a fingerprint. Nothing
+// else in the record is read and nothing is changed. ErrNotExist when no
+// box holds the id.
+//
+// It is the first of the two steps of removing such a record, and
+// Remove(box, id) the second: a caller that leaves the relay's copy
+// accounted for saves that account between them, so that a save which
+// fails leaves the record, and the removal can be asked again (G33, R48).
+func (s *Store) PeekByID(id string) (box Box, relay string, relayID int64, from string, err error) {
 	if err := message.ValidID(id); err != nil {
 		return "", "", 0, "", fmt.Errorf("message id %q is %w", id, err)
 	}
@@ -1298,12 +1347,24 @@ func (s *Store) RemoveByID(id string) (box Box, relay string, relayID int64, fro
 				from = raw.Inner.From
 			}
 		}
-		if err := s.Remove(box, id); err != nil {
-			return "", "", 0, "", err
-		}
 		return box, relay, relayID, from, nil
 	}
 	return "", "", 0, "", os.ErrNotExist
+}
+
+// RemoveByID is PeekByID and then Remove: a record Load refuses, removed
+// by its id alone with its attachments, and what it said of the relay's
+// copy returned. A caller that must leave that copy accounted for calls
+// the two itself and saves the account between them.
+func (s *Store) RemoveByID(id string) (box Box, relay string, relayID int64, from string, err error) {
+	box, relay, relayID, from, err = s.PeekByID(id)
+	if err != nil {
+		return "", "", 0, "", err
+	}
+	if err := s.Remove(box, id); err != nil {
+		return "", "", 0, "", err
+	}
+	return box, relay, relayID, from, nil
 }
 
 // AttachmentDir is where a streamed message's files live: beside its record,
@@ -1311,6 +1372,15 @@ func (s *Store) RemoveByID(id string) (box Box, relay string, relayID int64, fro
 func (s *Store) AttachmentDir(box Box, id string) string {
 	return filepath.Join(s.root, string(box), id+".d")
 }
+
+// spoolLockWait is how long a move waits for the spool lock: a swap holds
+// it for two renames and a record's save.
+const spoolLockWait = 30 * time.Second
+
+// SpoolLockPath is the lock a streamed message's files are swapped under,
+// one for the home: the swap and the record's save are short, and two
+// fetches through two relays can deliver the one message at once.
+func (s *Store) SpoolLockPath() string { return s.path("spool.lock") }
 
 // ServeDir is where 'auu serve' keeps its state: its lock, its ledger, and a
 // directory apiece for each channel, thread and worktree. It is the store's

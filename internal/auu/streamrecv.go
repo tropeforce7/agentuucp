@@ -172,6 +172,13 @@ func (r *resumingReader) Close() error {
 }
 
 // deliverStream fetches a stream's payload and delivers it, atomically.
+//
+// The record it saves says what the relay holds once it is saved, which is
+// the message, whatever the channel: one that keeps it says so with
+// OnRelay alone, and one that does not with AckOwed beside it, until the
+// caller's acknowledgement succeeds and settleOwed saves the record without
+// either (G32, R47). An acknowledgement refused or cut off leaves a record
+// LeftOn counts and the next fetch acknowledges without downloading again.
 func deliverStream(ctx context.Context, s *store.Store, id *identity.Identity, c *client.Client,
 	r *store.Relay, listed relayCopy, opened *stream.Opened, box store.Box, keep bool, arrived time.Time) error {
 
@@ -192,25 +199,25 @@ func deliverStream(ctx context.Context, s *store.Store, id *identity.Identity, c
 	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
 		return err
 	}
-	os.RemoveAll(dir)
-	if err := opened.ToDirectory(body, dir); err != nil {
-		return err
-	}
-
-	// The local record mirrors an envelope's.
+	// The files a delivery before this one placed stay until this copy is
+	// whole and its record saved (replaceSpool).
 	inner, dropped := innerFromManifest(m)
-	return s.Save(box, &store.Stored{
-		RelayID:         relayID,
-		Relay:           r.Name,
-		Received:        listed.Received,
-		Arrived:         arrived,
-		RelaySize:       listed.Size,
-		Inner:           inner,
-		SenderName:      s.PeerName(m.From),
-		Streamed:        true,
-		Channel:         storedChannel(m.Channel),
-		OnRelay:         keep,
-		DroppedSections: dropped,
+	fill := func(target string) error { return opened.ToDirectory(body, target) }
+	return replaceSpool(ctx, s, dir, fill, func() error {
+		return s.Save(box, &store.Stored{
+			RelayID:         relayID,
+			Relay:           r.Name,
+			Received:        listed.Received,
+			Arrived:         arrived,
+			RelaySize:       listed.Size,
+			Inner:           inner,
+			SenderName:      s.PeerName(m.From),
+			Streamed:        true,
+			Channel:         storedChannel(m.Channel),
+			OnRelay:         true,
+			AckOwed:         !keep,
+			DroppedSections: dropped,
+		})
 	})
 }
 
@@ -393,10 +400,9 @@ func fetchOneStream(ctx context.Context, s *store.Store, id *identity.Identity, 
 	}
 	res.Delivered++
 	res.noteGone(directory, channel)
-	if keep {
-		return nil
-	}
-	return c.Ack(ctx, relayID)
+	// Kept, the record already says so; not kept, it owes the relay its
+	// acknowledgement, and says so until the acknowledgement is made.
+	return settleOwedByID(ctx, s, c, store.Inbox, opened.Manifest.ID)
 }
 
 // droppedOnRelay is the answer to a 410: the relay found the stored file

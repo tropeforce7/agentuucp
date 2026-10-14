@@ -231,6 +231,11 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 	if err != nil {
 		return res, said, err
 	}
+	// What a fetch before this one delivered and could not acknowledge,
+	// acknowledged before anything else is fetched (G32, R47).
+	if err := acknowledgeOwed(ctx, s, c, r); err != nil {
+		return res, said, err
+	}
 	// A stream that waited on this relay for the build this now is.
 	if err := fetchKnownNow(ctx, s, id, c, r, settings, &res); err != nil {
 		return res, said, err
@@ -1920,6 +1925,41 @@ func holdFor(interval time.Duration, deadline time.Time) time.Duration {
 	return hold
 }
 
+// quarantined is the quarantined message an id or a prefix of one names:
+// the one whose id it is, or the one quarantined message it begins. One
+// in another box is said to be not in quarantine.
+func quarantined(s *store.Store, idOrPrefix string) (*store.Stored, error) {
+	if len(idOrPrefix) < 4 {
+		return nil, usageErrf("message id prefix must be at least 4 characters")
+	}
+	msgs, err := s.List(store.Quarantine)
+	if err != nil {
+		return nil, err
+	}
+	lower := strings.ToLower(idOrPrefix)
+	var hits []*store.Stored
+	for _, m := range msgs {
+		if m.Inner.ID == lower {
+			return m, nil
+		}
+		if strings.HasPrefix(m.Inner.ID, lower) {
+			hits = append(hits, m)
+		}
+	}
+	switch len(hits) {
+	case 1:
+		return hits[0], nil
+	case 0:
+		_, _, err := s.Find(idOrPrefix)
+		if err == nil {
+			return nil, usageErrf("message %s is not in quarantine", idOrPrefix)
+		}
+		return nil, usageErrf("%v", err)
+	default:
+		return nil, usageErrf("%s begins %d quarantined messages; give more of the id", idOrPrefix, len(hits))
+	}
+}
+
 // fetchLockName is the file under a relay's directory that a fetch holds.
 const fetchLockName = "fetch.lock"
 
@@ -2072,12 +2112,13 @@ func cmdQuarantine(args []string) error {
 		if len(rest) != 1 {
 			return usageErrf("usage: %s quarantine trust MESSAGE-ID", prog)
 		}
-		box, m, err := s.Find(rest[0])
+		// Asked of the quarantine by name, not of Find, which searches the
+		// inbox first: a trust whose move was cut short after a record
+		// reached the inbox must still find the quarantined one to try
+		// again (G31, R46).
+		m, err := quarantined(s, rest[0])
 		if err != nil {
-			return usageErrf("%v", err)
-		}
-		if box != store.Quarantine {
-			return usageErrf("message %s is not in quarantine", rest[0])
+			return err
 		}
 		if m.Newer != "" {
 			return usageErrf("%s", waitsForNewer(m))
@@ -2140,16 +2181,15 @@ func cmdQuarantine(args []string) error {
 		// A quarantined stream has only its manifest: the payload is still on
 		// the relay, deliberately, so that a stranger cannot make anybody
 		// download two gigabytes. Trusting them is what fetches it.
-		if box == store.Sent && m.Streamed {
-			return usageErrf("message %s was sent as a stream: its files were read from your own disk "+
-				"and never copied into the store, so there is nothing here to extract",
-				m.Inner.ID[:12])
-		}
 		if m.PayloadGone {
 			// Its relay id names other mail now, or nothing: the relay
 			// is not asked under it.
 			return bodyGone(m)
 		}
+		// The client the fetch of the payload dialled, which the owed
+		// acknowledgement below uses too, and dials when the payload was
+		// fetched by an earlier trust.
+		var c *client.Client
 		if m.PayloadOnRelay {
 			_, id, err := loadIdentity()
 			if err != nil {
@@ -2161,7 +2201,7 @@ func cmdQuarantine(args []string) error {
 			if err != nil {
 				return err
 			}
-			c, err := dial(s, id, r)
+			c, err = dial(s, id, r)
 			if err != nil {
 				return err
 			}
@@ -2216,7 +2256,8 @@ func cmdQuarantine(args []string) error {
 			}
 			// The body is here now, so the payload is no longer on the
 			// relay; whether the message is depends on the channel, as
-			// it does for any other fetch.
+			// it does for any other fetch, and the record says the relay
+			// holds it until the acknowledgement below is made.
 			keep, err := s.KeepOnRelay(m.Channel)
 			if err != nil {
 				return err
@@ -2261,16 +2302,34 @@ func cmdQuarantine(args []string) error {
 				}
 				return transportErr(err)
 			}
-			if !keep {
-				if err := c.Ack(ctx(), m.RelayID); err != nil {
-					return transportErr(err)
-				}
-			}
 			trusted, err := s.Load(store.Quarantine, m.Inner.ID)
 			if err != nil {
 				return err
 			}
 			m = trusted
+		}
+		// The acknowledgement the delivered stream owes, made before
+		// anything else changes (G32, R47): whether the payload was
+		// fetched just now or by a trust whose acknowledgement was
+		// refused, the record says the relay holds the message until the
+		// acknowledgement is made, and a trust asked again makes it.
+		if m.OnRelay && m.AckOwed {
+			if c == nil {
+				_, id, err := loadIdentity()
+				if err != nil {
+					return err
+				}
+				r, err := relayOf(s, m, "")
+				if err != nil {
+					return err
+				}
+				if c, err = dial(s, id, r); err != nil {
+					return err
+				}
+			}
+			if err := settleOwed(ctx(), s, c, store.Quarantine, m, true); err != nil {
+				return err
+			}
 		}
 		m.SenderName = pub.Name
 		if err := s.Save(store.Quarantine, m); err != nil {

@@ -189,7 +189,7 @@ func rmUnreadable(s *store.Store, id string, localOnly, remoteOnly, asJSON bool)
 	if remoteOnly {
 		return rmResult{}, false, usageErrf("%s: the record cannot be read, so the relay's copy cannot be named; remove the local copy with '%s rm %s'", id[:12], prog, id)
 	}
-	box, relay, relayID, from, err := s.RemoveByID(id)
+	box, relay, relayID, from, err := s.PeekByID(id)
 	if errors.Is(err, os.ErrNotExist) {
 		return rmResult{}, false, nil
 	}
@@ -204,6 +204,12 @@ func rmUnreadable(s *store.Store, id string, localOnly, remoteOnly, asJSON bool)
 		// cannot match and the re-fetch matches by the message's own id.
 		// The signer is read from the raw record under its rule, and is
 		// empty when even that fails.
+		//
+		// Saved before the record goes, as the readable path saves it
+		// (G33, R48): an entry that cannot be saved leaves the record,
+		// and the removal asked again finds it; an entry saved and a
+		// record that then will not go is the same entry the second
+		// time, since AddLeftBehind keeps one per relay id.
 		if err := s.AddLeftBehind(relay, store.LeftEntry{RelayID: relayID, ID: id, From: from}); err != nil {
 			return rmResult{}, false, err
 		}
@@ -211,6 +217,9 @@ func rmUnreadable(s *store.Store, id string, localOnly, remoteOnly, asJSON bool)
 		line += fmt.Sprintf("; its copy on %s, if there is one, is left there", relay)
 	} else if box != store.Sent {
 		line += "; the relay's copy, if there is one, was not told"
+	}
+	if err := s.Remove(box, id); err != nil {
+		return rmResult{}, false, err
 	}
 	if !asJSON {
 		fmt.Println(line)
