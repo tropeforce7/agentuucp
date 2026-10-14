@@ -309,13 +309,16 @@ An upload is held to what admitted it for as long as it lives, not at its
 open alone. At the start of every attempt, before a byte of its body is
 read, the relay judges again what the open judged: that the sender is on
 the recipient's allow list, that the recipient is not a courier's
-mailbox, and that the upload's channel exists and is open. It judges them
+mailbox, and that the upload's channel exists, is open and takes the
+stream under its rules. It judges them
 once more after the last byte and before the stream is placed, under the
 upload's lock. A refusal is the answer the open would give, `403` with
 the allow list's sentence, or the channel's `404`, or `403`
-`channel-closed` with its sentence. The upload goes with it, its partial
+`channel-closed`, `403` `channel-streams` or `413` `channel-size` with
+its sentence. The upload goes with it, its partial
 and its reservation, and the open's charge stands, as a refused post's
-does. So removing a sender from the allow list, or closing a channel,
+does. So removing a sender from the allow list, closing a channel, or
+setting a rule the stream breaks,
 takes effect at the sender's next attempt on an upload already open and
 at any placement after it, never only at its next open. A large stream
 runs for hours at the pace, and one whose sender is removed partway
@@ -535,6 +538,31 @@ true to take no courier's delivery. A directory with no rule is version
 1, byte for byte as before; one with any is version 2, and a version 1
 directory carrying a rule is refused naming the channel and the field.
 
+The relay judges a channel's rules where it judges the channel's period,
+out of the directory it verifies at that moment and never out of the rows
+it unpacked at the push, on the three routes that store into a channel:
+the post, a stream's open and a courier's delivery. After the name, its
+presence and its period, in this order: a stream to a channel with
+`no_streams` is refused `403` with the code `channel-streams`, `channel
+"x" takes no streams`; a courier's delivery to one with `no_forwards` is
+refused `403` with `channel-forwards`, `channel "x" takes no mail by way
+of another relay`; and a message over the channel's `max_bytes` is
+refused `413` with `channel-size`, `channel "x" takes at most N bytes on
+the wire; this message is M`. A stream's size is the one its open
+declares, judged before the upload is charged; a post's is its envelope,
+read and charged before the allow list as for any refused post. Each
+route judges its own cap first, `max_bytes` (never above 64 MiB in force)
+on the post and the delivery and `max_stream_bytes` on the open, so a channel's number only ever
+tightens the relay's. A courier's delivery refused by a rule is reported
+back to its sender as any refused delivery is, under the report's code
+`refused`, with the relay's sentence. A knock is not a post to a channel
+and no rule applies to it: it goes to `default`'s quarantine under
+`knock_max_bytes`. The relay holds a channel to itself at the push: a
+`max_bytes` over the most it takes of any kind, the larger of `max_bytes`
+and `max_stream_bytes` (with `max_stream_bytes` 0, unlimited, meaning
+2^62), is refused `400`, `channel "x": max_bytes N is over the M this
+relay takes`, and nothing is stored.
+
 *Listing 1.4a*
 ```json
 {
@@ -574,8 +602,8 @@ any order, and so do a v0.16.0, v0.17.0 or v0.18.0 relay and v0.15.0
 clients. A v0.17.0 relay is a v0.16.0 relay on the wire, and v0.17.0
 and v0.18.0 clients send what v0.16.0 clients send, but for a channel
 directory that carries a rule. A v0.18.0 relay is at wire level 2: it
-holds a version 2 channel directory, whose channels may carry
-`max_bytes`, `no_streams` and `no_forwards`; a v0.17.0 or earlier relay
+takes a version 2 channel directory, whose channels may carry
+`max_bytes`, `no_streams` and `no_forwards`, and enforces them; a v0.17.0 or earlier relay
 refuses one at the push, `400` naming the field it does not know. A v0.18.0
 relay refuses more than an earlier one, each with a status and a
 sentence any of them shows, among them an inline envelope over 64 MiB,
@@ -598,8 +626,8 @@ and the last takes a v0.14.0 relay straight to v0.18.0.
 the relay is under attack. Its answer says the relay's `max_bytes`,
 `knock_max_bytes`, registration mode and `wire_level`: a whole number that
 rises when a release gives the relay something a client may depend on. It
-is 1 from v0.15.0 and 2 from v0.18.0, which holds a version 2 channel
-directory. `auu` refuses a relay's health answer without it. The
+is 1 from v0.15.0 and 2 from v0.18.0, which takes a version 2 channel
+directory and enforces its rules. `auu` refuses a relay's health answer without it. The
 most recipients a message to several may name, `max_recipients` as it is in
 force, comes in a section of the answer, `max-recipients`, rather than a
 field, so that an `auu` from before it reads the answer still.
@@ -647,6 +675,9 @@ status and the request. The codes this release writes:
 | `no-knocks` | 403 | the recipient takes no knocks |
 | `no-such-channel` | 404 | no channel of that name |
 | `channel-closed` | 403 | the channel is outside its period; `at` is when it opens or closed |
+| `channel-streams` | 403 | a stream to a channel that takes no streams |
+| `channel-forwards` | 403 | a courier's delivery to a channel that takes no mail by way of another relay |
+| `channel-size` | 413 | a message over the channel's `max_bytes`, naming both numbers |
 | `no-neighbour` | 404 | the forward route names a neighbour this relay does not have |
 | `relay-full` | 507 | the relay's storage is full |
 | `mailbox-full` | 507 | the recipient's mailbox is full |

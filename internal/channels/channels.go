@@ -404,16 +404,39 @@ func (ch *Channel) OpenAt(now time.Time) (open bool, why string) {
 // N bytes on the wire; this message is M", judged in that order. The
 // sentence is the one both sides print.
 func (ch *Channel) Takes(size int64, stream, forwarded bool) (ok bool, why string) {
+	rule, why := ch.Refuses(size, stream, forwarded)
+	return rule == RuleNone, why
+}
+
+// Rule names which of a channel's rules refuses a message, so that a
+// caller answers each by its own code without reading the sentence.
+type Rule int
+
+const (
+	// RuleNone is a message the channel takes.
+	RuleNone Rule = iota
+	// RuleNoStreams is a stream to a channel that takes none.
+	RuleNoStreams
+	// RuleNoForwards is a courier's delivery to a channel that takes none.
+	RuleNoForwards
+	// RuleMaxBytes is a message over the channel's max_bytes.
+	RuleMaxBytes
+)
+
+// Refuses is Takes' judgement with the rule that refused: RuleNone and an
+// empty sentence when the channel takes the message, and otherwise the
+// first rule broken, in Takes' order, with Takes' sentence.
+func (ch *Channel) Refuses(size int64, stream, forwarded bool) (Rule, string) {
 	if ch.NoStreams && stream {
-		return false, "takes no streams"
+		return RuleNoStreams, "takes no streams"
 	}
 	if ch.NoForwards && forwarded {
-		return false, "takes no mail by way of another relay"
+		return RuleNoForwards, "takes no mail by way of another relay"
 	}
 	if ch.MaxBytes > 0 && size > ch.MaxBytes {
-		return false, fmt.Sprintf("takes at most %d bytes on the wire; this message is %d", ch.MaxBytes, size)
+		return RuleMaxBytes, fmt.Sprintf("takes at most %d bytes on the wire; this message is %d", ch.MaxBytes, size)
 	}
-	return true, ""
+	return RuleNone, ""
 }
 
 // stamp renders a bound the way the sentences show it.

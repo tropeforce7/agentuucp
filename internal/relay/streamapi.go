@@ -102,7 +102,7 @@ func (s *Server) handleOpenStream(w http.ResponseWriter, r *http.Request, body [
 	}
 	// The same place as a post's check: after the allow list, and before
 	// the stream is charged, so a refused channel costs no budget.
-	channel, ok := s.channelForPost(w, fp, req.Channel)
+	channel, ok := s.channelForPost(w, fp, req.Channel, req.Size, true, false)
 	if !ok {
 		return
 	}
@@ -326,7 +326,7 @@ func (s *Server) stillAdmitted(u *Upload) *judged {
 	if !allowed {
 		return &judged{status: http.StatusForbidden, msg: msgNotAllowed}
 	}
-	_, refused := s.judgeChannel(u.To, u.Channel)
+	_, refused := s.judgeChannel(u.To, u.Channel, u.Size, true, false)
 	return refused
 }
 

@@ -70,6 +70,21 @@ func (s *Server) handleSetChannels(w http.ResponseWriter, r *http.Request, body 
 		s.fail(w, http.StatusBadRequest, issuedRefusal(err))
 		return
 	}
+	// A channel may be tighter than this relay and never looser (D90):
+	// a max_bytes over the most this relay takes of any kind is refused
+	// here, where the owner can act on it. The ceiling is the larger of
+	// the two caps whether or not this relay takes streams now, so a
+	// relay with streams off still takes a channel's number up to its
+	// stream cap; each route judges its own cap before the channel's, so
+	// a stored directory loosens nothing either way.
+	ceiling := s.channelCeiling()
+	for _, ch := range d.Channels {
+		if ch.MaxBytes > ceiling {
+			s.fail(w, http.StatusBadRequest, fmt.Sprintf(
+				"channel %q: max_bytes %d is over the %d this relay takes", ch.Name, ch.MaxBytes, ceiling))
+			return
+		}
+	}
 	// Belt and braces: Verify has required the owner to be the key's
 	// fingerprint, and the key is this mailbox's bundle, so this cannot
 	// differ unless the two are looked up differently one day.
@@ -180,17 +195,30 @@ func (s *Server) handleGetChannels(w http.ResponseWriter, r *http.Request, body 
 	s.writeJSON(w, http.StatusOK, resp)
 }
 
-// channelForPost settles which channel a post, or a stream being opened,
-// goes to: the name on the wire, or default when there is none. It runs
-// after the allow list has admitted the sender, so a sender the owner has
-// not admitted learns nothing about which channels exist, and before
-// anything is stored or charged. The name must be one a directory could
-// hold, must be in the mailbox's directory (default alone, for a mailbox
-// with none), and must be open at the relay's clock, both edges inclusive.
-// It reports whether the caller may go on; when not, the refusal has been
-// written.
-func (s *Server) channelForPost(w http.ResponseWriter, fp, name string) (string, bool) {
-	name, refused := s.judgeChannel(fp, name)
+// channelCeiling is the most this relay takes of any kind, which a
+// channel's max_bytes may not exceed: the larger of max_bytes and
+// max_stream_bytes, with max_stream_bytes 0, unlimited, meaning the
+// protocol's MaxStreamSize.
+func (s *Server) channelCeiling() int64 {
+	streams := s.cfg.MaxStreamBytes
+	if streams <= 0 {
+		streams = relayapi.MaxStreamSize
+	}
+	return max(s.cfg.MaxBytes, streams)
+}
+
+// channelForPost settles which channel a post, a stream being opened or a
+// courier's delivery goes to: the name on the wire, or default when there
+// is none. It runs after the allow list has admitted the sender, so a
+// sender the owner has not admitted learns nothing about which channels
+// exist, and before anything is stored or charged. The name must be one a
+// directory could hold, must be in the mailbox's directory (default alone,
+// for a mailbox with none), must be open at the relay's clock, both edges
+// inclusive, and the channel must take a message of size wire bytes that
+// is a stream or not and came by way of another relay or not. It reports
+// whether the caller may go on; when not, the refusal has been written.
+func (s *Server) channelForPost(w http.ResponseWriter, fp, name string, size int64, stream, forwarded bool) (string, bool) {
+	name, refused := s.judgeChannel(fp, name, size, stream, forwarded)
 	if refused != nil {
 		s.writeRefusal(w, refused)
 		return "", false
@@ -227,7 +255,7 @@ func (s *Server) writeRefusal(w http.ResponseWriter, r *judged) {
 // judgeChannel is channelForPost's judgement, the refusal answered rather
 // than written, for the stream routes to judge an upload's channel again
 // after its open (R22).
-func (s *Server) judgeChannel(fp, name string) (string, *judged) {
+func (s *Server) judgeChannel(fp, name string, size int64, stream, forwarded bool) (string, *judged) {
 	if name == "" {
 		name = channels.Default
 	}
@@ -256,6 +284,18 @@ func (s *Server) judgeChannel(fp, name string) (string, *judged) {
 		}
 		return "", &judged{status: http.StatusForbidden, code: relayapi.CodeChannelClosed,
 			msg: fmt.Sprintf("channel %q %s: %s", name, relayapi.MsgChannelClosed, why), at: at}
+	}
+	// The channel's own rules, after its period and in Refuses' order. The
+	// route's own cap for this kind was judged before the channel was
+	// looked up, so these only ever tighten it.
+	rule, why := ch.Refuses(size, stream, forwarded)
+	switch rule {
+	case channels.RuleNoStreams:
+		return "", &judged{status: http.StatusForbidden, code: relayapi.CodeChannelStreams, msg: fmt.Sprintf("channel %q %s", name, why)}
+	case channels.RuleNoForwards:
+		return "", &judged{status: http.StatusForbidden, code: relayapi.CodeChannelForwards, msg: fmt.Sprintf("channel %q %s", name, why)}
+	case channels.RuleMaxBytes:
+		return "", &judged{status: http.StatusRequestEntityTooLarge, code: relayapi.CodeChannelSize, msg: fmt.Sprintf("channel %q %s", name, why)}
 	}
 	return name, nil
 }

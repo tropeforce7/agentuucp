@@ -1432,7 +1432,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 	// After the allow list, deliberately: which channels exist is the
 	// owner's to publish to the senders they admit, and nobody else.
-	channel, ok := s.channelForPost(w, fp, env.Ch)
+	channel, ok := s.channelForPost(w, fp, env.Ch, int64(len(body)), false, false)
 	if !ok {
 		return
 	}

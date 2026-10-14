@@ -9,8 +9,9 @@ message, when it arrived, the channel it was posted to, and its kind. That
 is all. The sender's identity is inside the ciphertext, so the stored rows
 do not say who wrote anything. The channel is one label per message, from
 a list the owner wrote and published to every sender they admit. It is
-there because the relay routes by it. The name and the period it is
-checked against come out of the directory the owner signed, verified
+there because the relay routes by it. The name, the period and the rules
+it is checked against (a size, whether streams, whether a courier's
+deliveries) come out of the directory the owner signed, verified
 against their registered key at the post itself and not read from the
 rows the relay parsed at the push: a post to a channel that does not
 exist, or is not open, is refused before the message is stored. A
@@ -1386,8 +1387,8 @@ reads is four fields for good, and a relay carries an envelope whose
 version it does not know, since what the version means is between the
 sender and the recipient. The relay's
 `wire_level` on its health answer says what it can do: 2 from v0.18.0,
-which holds a version 2 channel directory, whose channels may carry a
-rule an older relay refuses at the push. And a refusal is
+which takes a version 2 channel directory, whose channels may carry a
+rule an older relay refuses at the push, and enforces its rules. And a refusal is
 told apart by its `code`, never by its words, so a relay may change its
 words and add codes without a client misreading either.
 [`docs/client.md`](client.md) says what this means for a person upgrading,
@@ -1568,9 +1569,18 @@ learns nothing about channels. The relay refuses `404 no such channel "x"`
 for a name the directory does not hold (`default`, for a mailbox with no
 directory). It refuses `403 channel "x" is not open: opens T` or `closed T`
 for one outside its period, judged by the relay's clock with both edges
-inclusive. A stream's channel, and its sender's place on the allow list,
+inclusive. Then the channel's own rules, out of the same verified
+document: `403 channel "x" takes no streams` for a stream's open,
+`403 channel "x" takes no mail by way of another relay` for a courier's
+delivery, and `413 channel "x" takes at most N bytes on the wire` for a
+message over its `max_bytes`, each after the route's own cap, so an
+owner can make a channel tighter than the relay and never looser; a
+directory naming a `max_bytes` over what the relay takes is refused at
+the push. A row edited to loosen a rule changes nothing, since the rows
+are not read; a document edited to loosen one does not verify and closes
+the mailbox. A stream's channel, and its sender's place on the allow list,
 are judged again at every attempt and before the placement, so a channel
-that closes while an upload is open ends the upload at its next attempt
+that closes or sets a rule the stream breaks while an upload is open ends the upload at its next attempt
 with the same refusal, and one that closes mid-attempt places nothing.
 The sealed record and the signed manifest carry the same name,
 so a message the relay filed elsewhere is found out on opening. Absent

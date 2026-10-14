@@ -279,7 +279,7 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, env *relayapi.C
 		s.fail(w, http.StatusForbidden, msgNotAllowed)
 		return
 	}
-	channel, ok := s.channelForPost(w, fp, env.Ch)
+	channel, ok := s.channelForPost(w, fp, env.Ch, int64(len(raw)), false, isCourier)
 	if !ok {
 		return
 	}

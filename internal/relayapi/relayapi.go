@@ -494,8 +494,8 @@ func (s *Sections) SectionList() []wire.Section { return s.Sections }
 // depend on (D40): it rises by one in the change that gives a relay
 // something new, and never otherwise. 1 is v0.15.0, the floor (P5). 2 is
 // v0.18.0: the relay takes a channel directory of version 2, whose
-// channels may carry max_bytes, no_streams and no_forwards, and holds
-// them; the routes that enforce them come with the rules' refusal codes.
+// channels may carry max_bytes, no_streams and no_forwards, and enforces
+// them with CodeChannelSize, CodeChannelStreams and CodeChannelForwards.
 // A relay at 1 refuses such a directory at the push.
 const WireLevel = 2
 
@@ -536,6 +536,15 @@ const (
 	// MsgTooManyRecipients, a sentence that carries the count and the
 	// setting and so is written with its code at its one site.
 	CodeTooManyRecipients = "too-many-recipients"
+	// CodeChannelStreams, CodeChannelForwards and CodeChannelSize are a
+	// post, a stream's open or a courier's delivery refused by a rule of
+	// the channel's own, in its owner's directory: the channel takes no
+	// streams (403), no mail by way of another relay (403), or nothing
+	// over its max_bytes in wire bytes (413). Each sentence is "channel
+	// %q " and the rule's words (channels.Channel.Refuses).
+	CodeChannelStreams  = "channel-streams"
+	CodeChannelForwards = "channel-forwards"
+	CodeChannelSize     = "channel-size"
 )
 
 // MsgTooManyRecipients is the sentence of CodeTooManyRecipients: the count
