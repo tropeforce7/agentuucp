@@ -149,6 +149,12 @@ func (s *swallowed) WriteHeader(int)             {}
 func (s *swallowed) Write(p []byte) (int, error) { return len(p), nil }
 func (s *swallowed) Unwrap() http.ResponseWriter { return s.w }
 
+// FlushError keeps a flush of the swallowed answer swallowed: without it a
+// ResponseController reaches the connection through Unwrap, as it must for
+// the relay's deadlines, and a flush there commits a header the gate means
+// to write itself (the relay flushes a refusal before it drains, R42b).
+func (s *swallowed) FlushError() error { return nil }
+
 // statusSeen records the status an answer carried.
 type statusSeen struct {
 	http.ResponseWriter
