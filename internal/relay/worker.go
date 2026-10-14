@@ -274,14 +274,15 @@ func (w *workers) drain(r *store.Relay) time.Duration {
 	// soonest is when the earliest row this turn put off on its own comes
 	// due, an empty queue's hour when none was.
 	soonest := maxRetry
-	// One connection for the turn, not one for each row. A dial is a
-	// post-quantum handshake with this courier's client certificate and a
-	// read of the certificate store, and a neighbour that has been down
-	// decides how many rows are waiting when it comes back: one dial per
-	// row would put the cost of an outage's backlog on this relay's CPU,
-	// where what is wanted is one connection carrying the backlog. It is
-	// dialled on the first row rather than before the loop, so a turn that
-	// finds nothing waiting — which is most turns — dials nothing.
+	// One client for the turn, not one for each row: a dial reads the
+	// certificate store and builds the client's transport. Each request
+	// still makes a connection of its own, a post-quantum handshake with
+	// this courier's client certificate, since the client keeps none for a
+	// second request (G28): a signed request the transport sent again on a
+	// reused connection would be a replay the neighbour refuses. So an
+	// outage's backlog costs one handshake a row. It is dialled on the
+	// first row rather than before the loop, so a turn that finds nothing
+	// waiting — which is most turns — dials nothing.
 	var c *client.Client
 	var dialled bool
 	defer func() {

@@ -220,7 +220,20 @@ func transportFor(cert *tls.Certificate, anchor *Anchor) *http.Transport {
 // for a watcher plus room for the answer — the plan's thirty seconds
 // alone would have cut every held listing. The stream routes' bodies are
 // bounded by the stall rule, not by this.
+//
+// And no connection is kept for a second request (G28, R42). net/http's
+// transport sends again, as it was, an idempotent request that got no
+// answer on a reused connection, and a signed request sent again carries
+// its spent nonce and its old stamp: the relay refuses the replay 401, as
+// it must, and a 401 for a replay cannot be told from any other, so a
+// watch whose held listing lost its connection ended on "unauthorized".
+// A request cannot be signed again inside the transport's retry, and an
+// idle connection left by an unsigned call (health, keys) would be reused
+// by the next signed one, so the transport keeps none: each request has a
+// connection of its own, and one that dies is the request's failure,
+// which the caller sees and signs afresh if it asks again.
 func boundTransport(t *http.Transport) {
+	t.DisableKeepAlives = true
 	t.ForceAttemptHTTP2 = false
 	t.TLSClientConfig.NextProtos = []string{"http/1.1"}
 	t.MaxResponseHeaderBytes = relayapi.MaxHeaderBytes
@@ -281,6 +294,8 @@ func pinnedHandshakeRefused(err error) bool {
 
 // CloseIdle drops pooled connections, so the next request makes a fresh
 // handshake. A renewal must not go on using the certificate it replaced.
+// The transports keep no connection for a second request (G28), so there
+// is none to drop today; it is kept so that holds if that ever changes.
 func (c *Client) CloseIdle() {
 	if c.transport != nil {
 		c.transport.CloseIdleConnections()
