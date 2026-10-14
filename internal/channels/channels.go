@@ -76,9 +76,11 @@ const (
 
 // Failures a caller tells apart. The relay answers 401 for ErrSignature and
 // 400, with the sentence, for everything else. ErrVersion is a document,
-// under a good signature, of a version this build does not read, as the
+// under a good signature, of a version above any this build reads, as the
 // owner's newer auu may write; a caller that tells it apart can say to
-// update auu rather than that the document is not to be trusted.
+// update auu rather than that the document is not to be trusted. A v below
+// 1, absent and null among them, is no version anyone wrote and is a
+// malformed document, never ErrVersion.
 var (
 	ErrSignature = errors.New("directory signature does not verify")
 	ErrForm      = errors.New("directory is malformed")
@@ -86,7 +88,7 @@ var (
 	ErrVersion   = errors.New("directory is a version this build cannot read")
 )
 
-// versionError is Validate's refusal of a v this build does not read: the
+// versionError is the refusal of a v above any this build reads: the
 // sentence names the value and the versions read, and errors.Is finds
 // ErrVersion in it.
 type versionError struct{ v int }
@@ -321,8 +323,11 @@ func Forbidden(r rune) string {
 //
 //	channel "bug reports": description is 1031 bytes; at most 1024
 func (d *Directory) Validate() error {
-	if d.V != Version1 && d.V != Version2 {
+	if d.V > Version2 {
 		return versionError{d.V}
+	}
+	if d.V < Version1 {
+		return fmt.Errorf("%w: v is %d; a directory's v is %d or %d", ErrForm, d.V, Version1, Version2)
 	}
 	if !identity.ValidFingerprint(d.Owner) {
 		return errors.New("owner is not a fingerprint")
@@ -554,27 +559,43 @@ func decode(doc []byte) (*Directory, error) {
 	if err := CheckLength(doc); err != nil {
 		return nil, err
 	}
-	// The version before the strict decode: a document of a version this
-	// build does not read is ErrVersion whatever fields it carries, since
-	// a newer version's fields are what the strict decode would refuse
-	// first. A v that is not a whole number, or bytes that are not an
-	// object, fall through to the strict decode and are ErrForm as
-	// before; an absent v is v 0, which Validate refuses as ErrVersion.
-	var probe struct {
-		V *int `json:"v"`
-	}
-	if json.Unmarshal(doc, &probe) == nil && probe.V != nil && *probe.V != Version1 && *probe.V != Version2 {
-		return nil, versionError{*probe.V}
-	}
 	var d Directory
 	err := wire.Decode(doc, &d)
 	if errors.Is(err, wire.ErrTrailing) {
 		return nil, fmt.Errorf("%w: trailing data after the document", ErrForm)
 	}
 	if err != nil {
+		// A newer version's fields are what the strict decode refuses
+		// first, so a document it refuses is asked its version before it
+		// is called malformed: one whose v is above any this build reads
+		// is ErrVersion whatever else it carries.
+		if v, newer := newerVersion(doc); newer {
+			return nil, versionError{v}
+		}
 		return nil, fmt.Errorf("%w: %v", ErrForm, err)
 	}
 	return &d, nil
+}
+
+// newerVersion reads the v of a document the strict decode refused, and
+// says whether it is above any this build reads. The object is read under
+// the same strict rules, keys taken whole, so a document with a key twice
+// or two keys the same under case folding, a "V" among them, is not asked
+// and stays the decode's ErrForm; and v must be a whole number.
+func newerVersion(doc []byte) (int, bool) {
+	var top map[string]json.RawMessage
+	if wire.Decode(doc, &top) != nil {
+		return 0, false
+	}
+	raw, ok := top["v"]
+	if !ok {
+		return 0, false
+	}
+	var v int
+	if wire.Decode(raw, &v) != nil {
+		return 0, false
+	}
+	return v, v > Version2
 }
 
 // ErrBound is what CheckIssued wraps when a channel's not_before or

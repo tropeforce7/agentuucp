@@ -482,8 +482,11 @@ internal/card/card.go Document int V int = [1, 1] shown by TestLimitCardV
 # A channel's max_bytes sizes the wire bytes of an envelope, or of a sealed
 # stream with its manifest, whichever way the message comes.
 internal/channels/channels.go Channel int MaxBytes int64 = 0 or [1, 4611686018427387904] shown by TestLimitChannelMaxBytes
+# A directory's v is also read out of a document the strict decode
+# refused, by newerVersion, as a whole number through wire.Decode: one
+# above 2 is ErrVersion, any other is the decode's ErrForm; and Validate
+# answers ErrVersion above 2 and ErrForm below 1 (R18, R18a).
 internal/channels/channels.go Directory int V int = one of 1, 2 shown by TestLimitDirectoryV
-internal/channels/channels.go decode.struct int V *int = one of 1, 2 shown by TestLimitDirectoryV
 internal/channels/channels.go listedDevice string stem[3:] = local: len(stem) >= 4 by the check before
 internal/channels/channels.go listedDevice string stem[:3] #2 = local: len(stem) >= 4 by the check before
 internal/channels/channels.go listedDevice string stem[:3] = local: len(stem) >= 4 by the check before

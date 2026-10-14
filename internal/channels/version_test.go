@@ -3,6 +3,7 @@ package channels
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -220,5 +221,70 @@ func TestTheDirectoryCapsCommentIsTheMeasurement(t *testing.T) {
 	}
 	if _, err := Verify(id.Public(), compact, sig); err != nil {
 		t.Fatalf("the full directory does not verify: %v", err)
+	}
+}
+
+// TestOnlyAVersionAboveTwoIsErrVersion: the version read out of a
+// document the strict decode refused, itself a strict decode of the
+// object's keys, asked of every shape of v (R18). Absent, null, 0 and -1 are no version anyone wrote; a
+// key twice and a key the same as v under case folding are what the
+// strict decode says they are, whichever v they carry; each is ErrForm
+// and never ErrVersion. A v of 3 with no field this build does not know,
+// and with one, is ErrVersion, as is a v of 3 whose known field has a
+// type this build does not read.
+func TestOnlyAVersionAboveTwoIsErrVersion(t *testing.T) {
+	id := owner(t)
+	doc, err := json.Marshal(base(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(string(doc), `{"v":1,`) {
+		t.Fatalf("the document does not start with v: %s", doc)
+	}
+	rest := strings.TrimPrefix(string(doc), `{"v":1,`)
+	for _, c := range []struct {
+		label, head string
+		version     bool
+		says        string
+	}{
+		{"absent", `{`, false, "v is 0"},
+		{"null", `{"v":null,`, false, "v is 0"},
+		{"0", `{"v":0,`, false, "v is 0"},
+		{"-1", `{"v":-1,`, false, "v is -1"},
+		{"a key twice, 1 then 3", `{"v":1,"v":3,`, false, `key "v" appears twice`},
+		{"a key twice, 3 then 1", `{"v":3,"v":1,`, false, `key "v" appears twice`},
+		{"V alone, 3", `{"V":3,`, false, `key "V" matches the field "v" only by case`},
+		{"v 1 and V 3", `{"v":1,"V":3,`, false, `the same under case folding`},
+		{"v 3 and V 1", `{"v":3,"V":1,`, false, `the same under case folding`},
+		{"V 3 with an unknown field", `{"V":3,"colour":"blue",`, false, `key "V" matches the field "v" only by case`},
+		{"3.5 with an unknown field", `{"v":3.5,"colour":"blue",`, false, `unknown field "colour"`},
+		{"a string 3 with an unknown field", `{"v":"3","colour":"blue",`, false, `unknown field "colour"`},
+		{"3 with no new field", `{"v":3,`, true, "v is 3; this build reads 1 and 2"},
+		{"3 with an unknown field", `{"v":3,"colour":"blue",`, true, "v is 3; this build reads 1 and 2"},
+		{"3 with a known field of a new type", `{"v":3,"issued":7,`, true, "v is 3; this build reads 1 and 2"},
+	} {
+		t.Run(c.label, func(t *testing.T) {
+			with := c.head + rest
+			if c.label == "3 with a known field of a new type" {
+				// issued appears once: drop the original so the new one is
+				// the only issued key.
+				var m map[string]json.RawMessage
+				if err := json.Unmarshal([]byte("{"+rest), &m); err != nil {
+					t.Fatal(err)
+				}
+				delete(m, "issued")
+				m["v"] = json.RawMessage("3")
+				m["issued"] = json.RawMessage("7")
+				b, err := json.Marshal(m)
+				if err != nil {
+					t.Fatal(err)
+				}
+				with = string(b)
+			}
+			_, err := Verify(id.Public(), []byte(with), mustSign(t, id, signingBytes([]byte(with))))
+			if errors.Is(err, ErrVersion) != c.version || errors.Is(err, ErrForm) == c.version || err == nil || !strings.Contains(err.Error(), c.says) {
+				t.Fatalf("%s: %v; want ErrVersion %v saying %q", with[:min(len(with), 40)], err, c.version, c.says)
+			}
+		})
 	}
 }

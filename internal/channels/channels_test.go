@@ -261,7 +261,7 @@ func TestADirectoryIsCheckedAtEveryEdge(t *testing.T) {
 		{"as built", func(d *Directory) {}, ""},
 		{"v 2", func(d *Directory) { d.V = 2 }, ""},
 		{"v 3", func(d *Directory) { d.V = 3 }, "v is 3; this build reads 1 and 2"},
-		{"v 0", func(d *Directory) { d.V = 0 }, "v is 0; this build reads 1 and 2"},
+		{"v 0", func(d *Directory) { d.V = 0 }, "directory is malformed: v is 0; a directory's v is 1 or 2"},
 		{"max_bytes 1 under v 2", func(d *Directory) { d.V = 2; d.Channels[1].MaxBytes = 1 }, ""},
 		{"max_bytes at the ceiling under v 2", func(d *Directory) { d.V = 2; d.Channels[1].MaxBytes = relayapi.MaxStreamSize }, ""},
 		{"max_bytes one over the ceiling under v 2", func(d *Directory) { d.V = 2; d.Channels[1].MaxBytes = relayapi.MaxStreamSize + 1 },
