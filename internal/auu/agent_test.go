@@ -54,6 +54,16 @@ const parentPoll = 500 * time.Millisecond
 const helperWatchInterval = 100 * time.Millisecond
 
 func TestMain(m *testing.M) {
+	// Run with arguments that are not a test's flags and without the
+	// helper switch, this binary was started as auu by something that
+	// forgot the switch: running the suite there would start the same
+	// thing again, and each of those again (G35, R50a). It says so and
+	// stops.
+	if os.Getenv(helperEnv) != "1" && strayRun(os.Args) {
+		fmt.Fprintf(os.Stderr, "%s: started as %q without %s=1; a test binary run as auu runs no tests\n",
+			os.Args[0], strings.Join(os.Args[1:], " "), helperEnv)
+		os.Exit(2)
+	}
 	if os.Getenv(helperEnv) == "1" && !isHandlerRun(os.Args) {
 		watchTestParent()
 		// An agent this binary runs checks its socket often, so that a
@@ -98,6 +108,12 @@ func TestTheTestParentIsAPidOrNothing(t *testing.T) {
 			t.Errorf("%s=%q: got %d, %v; want %d", parentEnv, value, pid, ok, want)
 		}
 	}
+}
+
+// strayRun is a run of this binary with an argument that is not one of the
+// testing package's flags, as 'agent run' is.
+func strayRun(args []string) bool {
+	return len(args) > 1 && !strings.HasPrefix(args[1], "-test.")
 }
 
 // isHandlerRun says whether these arguments are helperLine's: the test

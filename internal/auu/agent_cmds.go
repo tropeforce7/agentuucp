@@ -653,9 +653,28 @@ func agentRun(args []string) error {
 	return nil
 }
 
+// agentChildEnv marks the environment of an agent startAgent runs (G35,
+// R50a). An agent never starts another: a process that finds the mark is
+// itself an agent, or something an agent ran, and the path that would
+// start one refuses rather than spawn a chain.
+const agentChildEnv = "AUU_AGENT_CHILD"
+
+// agentEnviron is the environment an agent is started with: this
+// process's own, AUU_HOME naming the home the parent opened, whichever way
+// the parent found it, and agentChildEnv, so that it never starts another.
+func agentEnviron(home string) []string {
+	return append(os.Environ(), "AUU_HOME="+home, agentChildEnv+"=1")
+}
+
+// errAgentStartsAgent is that refusal.
+var errAgentStartsAgent = errors.New("this process is an agent, and an agent never starts another")
+
 // startAgent runs 'auu agent run' detached for a home, and returns once it
 // answers. Its output goes to a log file beside the socket.
 func startAgent(home string) error {
+	if os.Getenv(agentChildEnv) != "" {
+		return errAgentStartsAgent
+	}
 	paths, err := agent.PathsFor(home)
 	if err != nil {
 		return err

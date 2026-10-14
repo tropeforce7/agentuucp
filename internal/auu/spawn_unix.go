@@ -11,10 +11,11 @@ import (
 // spawnDetached runs exe with args as a daemon for a home: its own session,
 // so a closed terminal does not take it with it; standard input from
 // /dev/null; output to the log. AUU_HOME is set so the child serves the
-// home the parent opened, whichever way the parent found it.
+// home the parent opened, whichever way the parent found it, and
+// agentChildEnv so that it never starts another.
 func spawnDetached(exe string, args []string, home string, logFile *os.File) error {
 	cmd := exec.Command(exe, args...)
-	cmd.Env = append(os.Environ(), "AUU_HOME="+home)
+	cmd.Env = agentEnviron(home)
 	cmd.Stdin = nil
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile

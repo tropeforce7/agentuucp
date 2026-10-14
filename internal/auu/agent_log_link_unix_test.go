@@ -19,6 +19,11 @@ import (
 // user's own it points at keeps its bytes, not truncated, and the agent is
 // not started, so no socket is made.
 func TestTheAgentLogIsNeverOpenedThroughALink(t *testing.T) {
+	// The helper switch and the parent watch, as every test that can
+	// start an agent has: should the link check ever let the open
+	// through, the agent it starts is this binary as a helper that ends
+	// with this test, not a run of the suite (G35).
+	agentEnv(t)
 	base, err := os.MkdirTemp("", "auu")
 	if err != nil {
 		t.Fatal(err)

@@ -10,7 +10,7 @@ import (
 // is not tested on Windows; see IMPLEMENTATION_NOTES.md.
 func spawnDetached(exe string, args []string, home string, logFile *os.File) error {
 	cmd := exec.Command(exe, args...)
-	cmd.Env = append(os.Environ(), "AUU_HOME="+home)
+	cmd.Env = agentEnviron(home)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	const createNewProcessGroup, detachedProcess = 0x00000200, 0x00000008
