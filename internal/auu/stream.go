@@ -396,17 +396,43 @@ func resumePending(s *store.Store, id *identity.Identity, asJSON bool, relay str
 }
 
 // resumeRelay is the relay an interrupted upload has to be finished on.
-// Every record names it; listPending refused one that does not.
+// Every record names it; listPending refused one that does not. The upload
+// it names was opened there and holds a prefix of these bytes there alone,
+// so a --relay that names another is refused before anything is opened
+// (G30, R45): finishing it elsewhere would open a second upload under a
+// record that still names the first relay. Only when this home no longer
+// has the relay it was opened on may --relay move it, and the move writes
+// the record's relay and an empty upload in one save, before the open, so
+// the two never part.
 func resumeRelay(s *store.Store, p *pending, flag string) (*store.Relay, error) {
-	if strings.TrimSpace(flag) != "" {
-		return selectRelay(s, flag)
+	held, err := s.Relay(p.Relay)
+	gone := errors.Is(err, store.ErrNoSuchRelay)
+	if err != nil && !gone {
+		return nil, err
 	}
-	r, err := s.Relay(p.Relay)
-	if errors.Is(err, store.ErrNoSuchRelay) {
-		return nil, fmt.Errorf("it was opened on %s, which this home no longer has; "+
-			"add it again or send the message afresh", p.Relay)
+	if strings.TrimSpace(flag) == "" {
+		if gone {
+			return nil, fmt.Errorf("it was opened on %s, which this home no longer has; "+
+				"add it again, finish it on another with --relay, or send the message afresh", p.Relay)
+		}
+		return held, nil
 	}
-	return r, err
+	r, err := selectRelay(s, flag)
+	if err != nil {
+		return nil, err
+	}
+	if !gone {
+		if r.Name != held.Name {
+			return nil, usageErrf("it was opened on %s; finish it there with --relay %s, "+
+				"or abandon it and send the message afresh", p.Relay, p.Relay)
+		}
+		return r, nil
+	}
+	p.Relay, p.Upload = r.Name, ""
+	if err := p.save(s); err != nil {
+		return nil, err
+	}
+	return r, nil
 }
 
 // startWindow is how long the relay holds an upload nobody has started an

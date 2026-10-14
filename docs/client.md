@@ -352,8 +352,13 @@ tried again on the spot. `auu send --resume` finishes what a failed command
 left. It asks the relay by an attempt from zero. It resumes once from the
 partial the relay kept when it kept one, which it does for an attempt past
 its threshold, within sixty seconds. Otherwise it opens anew for the same
-sealed bytes. Nothing about the command changes. An attempt has no clock
-over the whole exchange, but the relay holds it to a pace. An opened upload
+sealed bytes. Nothing about the command changes. It finishes each upload
+on the relay it was opened on, which the outbox record names: `--relay`
+naming another is refused before anything is opened, `it was opened on
+work; finish it there with --relay work, or abandon it and send the
+message afresh`. Only when this home no longer has that relay does
+`--relay` move the upload to another, opened there anew. An attempt has no
+clock over the whole exchange, but the relay holds it to a pace. An opened upload
 waits ten seconds for its first attempt, and an attempt must bring the relay
 a hunk of 64 KiB within ten seconds of its start and of each hunk before,
 about 6.4 KiB a second, which is the least a link must sustain. A slower one

@@ -74,7 +74,7 @@ auu send --to ROOM TEXT                            # a message to everyone in a 
 auu send --to ROOM,carol TEXT                      # a room and names mix, in one value or several --to
 auu send --to 'bar!bob' TEXT                       # somebody on a relay yours peers with
 auu send --to bob --via bar TEXT                   # the same address, no bang to quote
-auu send --resume                                  # finish what the outbox holds: from the relay's partial, or anew
+auu send --resume [--relay R]                      # finish what the outbox holds, on the relay each was opened on: from the relay's partial, or anew; --relay only moves one whose relay this home no longer has
 auu outbox [--json]                                # what waits in the outbox to be sent
 auu outbox drop ID [PEER] [--json]                 # give one up; PEER says whose, when one id has several waiting
 auu reply MESSAGE-ID|THREAD-ID [--all] [--subject S] [--channel NAME] [--attach FILE]... TEXT
