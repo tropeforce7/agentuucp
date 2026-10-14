@@ -1234,7 +1234,7 @@ own size, and what the page carries is copied out of it once into the
 values it decodes to, so a page of envelopes is held at about twice its
 size while it is taken. A relay that withholds the length has its page
 read as it comes, the buffer grown as the bytes arrive, at up to about
-four times a page in allocation and two and a quarter at once, bounded by
+four times a page in allocation and two and a half at once, bounded by
 the hold, the one cost a relay can add by not saying its length.
 
 ### 2.1 The round trip

@@ -34,7 +34,7 @@ import (
 // envelopes, unlike the review's page of padding, is decoded into values
 // that hold a copy of each envelope beside the buffer they came from, so it
 // costs about twice itself live however it is read. The client holds it
-// under two and a quarter times the page at once, read either way, and
+// under two and a half times the page at once, read either way, and
 // under three times in all when the length is declared and four when it is
 // not, io.ReadAll's growth on top of the copies (R13b). The
 // relay runs in a process of its own, this test binary in helper mode, so
@@ -234,8 +234,20 @@ func TestARealRelaysPageIsTakenWithinR13asBounds(t *testing.T) {
 				t.Errorf("a page of %d bytes (%s) allocated %d KiB, %.2f times the page; want under %d times",
 					page, tc.name, total>>10, float64(total)/float64(page), tc.total)
 			}
-			if peak*4 >= 9*page {
-				t.Errorf("a page of %d bytes (%s) held %d KiB live at its peak, %.2f times the page; want under two and a quarter",
+			// Under two and a half (R43). The live peak is 2.00 times the
+			// page at the end of the decode, the buffer and the envelopes'
+			// copies out of it together, either way; read chunked,
+			// io.ReadAll's final copy holds its chunks beside the exact
+			// slice it copies them into, about 2.15. Samples taken before
+			// the peak read 1.76 to 1.88. Samples above it, 2.29 in the
+			// declared case one run in ten, are garbage dropped while the
+			// sampler's own collection was marking, counted live until the
+			// next: an artefact of measuring with a collection forced, which
+			// no sampler here can leave out. Two and a quarter sat inside
+			// that and failed; two and a half sits above it, and a second
+			// copy of the page, about 2.75, still fails it.
+			if peak*2 >= 5*page {
+				t.Errorf("a page of %d bytes (%s) held %d KiB live at its peak, %.2f times the page; want under two and a half",
 					page, tc.name, peak>>10, float64(peak)/float64(page))
 			}
 		})
