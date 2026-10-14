@@ -466,6 +466,11 @@ func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerF
 	// kept is said to anyone still listening.
 	rc.SetWriteDeadline(time.Now().Add(stall))
 	if err != nil {
+		// Whatever the refusal, once it is written: one judged after the
+		// body began is answered while the body is still arriving, and
+		// the close that follows could reset the connection before the
+		// sender reads the answer (R42b).
+		defer s.lingerAfterRefusal(rc, body)
 		switch {
 		case badShape != nil:
 			s.refuseUnread(w, http.StatusBadRequest, badShape.Error())
@@ -512,6 +517,30 @@ func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerF
 	s.notify.Wake(mailKey(u.To))
 }
 
+// lingerWait and lingerBytes bound what the relay reads of a refused
+// attempt's body after its answer (R42b): two seconds, or sixteen hunks.
+const (
+	lingerWait  = 2 * time.Second
+	lingerBytes = 16 * relayapi.HunkBytes
+)
+
+// lingerAfterRefusal is the close of an attempt refused after its body
+// began (R42b). The connection is not kept, and closing it with the body
+// still arriving resets it, which can reach the sender before the answer
+// does; so the answer is flushed and the body read on and thrown away, for
+// at most lingerWait or lingerBytes, giving the sender the time to read
+// it. An attempt refused before a byte of its body was read is left
+// alone: a sender that asked first (Expect) sends nothing once refused,
+// and reading would wait out the whole bound for bytes that never come.
+func (s *Server) lingerAfterRefusal(rc *http.ResponseController, body *deadlineReader) {
+	if body.read == 0 {
+		return
+	}
+	rc.Flush()
+	rc.SetReadDeadline(time.Now().Add(lingerWait))
+	io.CopyN(io.Discard, body.r, lingerBytes)
+}
+
 // deadlineReader is a request body that moves the hunk deadline on each
 // time a whole hunk has been read since it last moved. What a read
 // brought past a hunk's edge counts toward the next, so a sender at the
@@ -522,10 +551,12 @@ type deadlineReader struct {
 	extend func()
 	hunk   int64
 	since  int64
+	read   int64
 }
 
 func (d *deadlineReader) Read(p []byte) (int, error) {
 	n, err := d.r.Read(p)
+	d.read += int64(n)
 	if d.since += int64(n); d.since >= d.hunk {
 		d.since -= d.hunk
 		d.extend()
