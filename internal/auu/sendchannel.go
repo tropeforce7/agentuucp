@@ -42,12 +42,16 @@ func channelSuffix(channel string) string {
 	return fmt.Sprintf(" to channel %q", channel)
 }
 
-// channelHint rewrites the relay's two channel refusals, known by their
-// codes. A no-such-channel 404 becomes the recipient's channels, fetched
-// from the relay and verified against the key held for them, so the sender
-// can pick one; a channel-closed 403 becomes the relay's own sentence with
-// the time it carries said in local form beside it, where that reads
-// otherwise than the UTC the sentence names. Anything else passes through.
+// channelHint rewrites the relay's channel refusals, known by their codes.
+// A no-such-channel 404 becomes the recipient's channels, fetched from the
+// relay and verified against the key held for them, so the sender can pick
+// one; a channel-closed 403 becomes the relay's own sentence with the time
+// it carries said in local form beside it, where that reads otherwise than
+// the UTC the sentence names; a refusal by one of the channel's own rules,
+// channel-streams 403 or channel-size 413, is the relay's sentence alone,
+// which names the channel and the rule. channel-forwards reaches a sender
+// only in a forward's report, never as an answer here. Anything else
+// passes through, a code this build does not know among it.
 func channelHint(err error, s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay, recipient peerish, channel string) error {
 	var httpErr *client.HTTPError
 	if !errors.As(err, &httpErr) {
@@ -58,6 +62,9 @@ func channelHint(err error, s *store.Store, id *identity.Identity, c *client.Cli
 		return noSuchChannel(s, id, c, r, recipient, channel)
 	case httpErr.Status == http.StatusForbidden && httpErr.Code == relayapi.CodeChannelClosed && !httpErr.At.IsZero():
 		return errors.New(closedSentence(httpErr, time.Local))
+	case httpErr.Status == http.StatusForbidden && httpErr.Code == relayapi.CodeChannelStreams,
+		httpErr.Status == http.StatusRequestEntityTooLarge && httpErr.Code == relayapi.CodeChannelSize:
+		return errors.New(httpErr.Message)
 	}
 	return err
 }
@@ -75,7 +82,7 @@ type peerish interface {
 // somebody else.
 func noSuchChannel(s *store.Store, id *identity.Identity, c *client.Client, r *store.Relay, recipient peerish, channel string) error {
 	var who *identity.Public
-	var has, whose, mailbox, served, key string
+	var has, whose, mailbox, served, key, label string
 	// The name to show: a person who passed no --channel posted to
 	// default, and the relay refused "default", so that is the name in
 	// the sentence rather than an empty pair of quotes. The branches
@@ -98,7 +105,7 @@ func noSuchChannel(s *store.Store, id *identity.Identity, c *client.Client, r *s
 				recipient.Fingerprint()[:16], shown, r.Name, err)
 		}
 		who = peer
-		label := peerLabel(peer)
+		label = peerLabel(peer)
 		has, whose, mailbox, served, key = label+" has", "their", label+"'s mailbox", "served for "+label, "the key you hold"
 	}
 	res, err := c.Directory(ctx(), who.Fingerprint())
@@ -115,6 +122,10 @@ func noSuchChannel(s *store.Store, id *identity.Identity, c *client.Client, r *s
 		return fmt.Errorf("%s has the one channel, default; drop --channel", mailbox)
 	}
 	d, err := channels.Verify(who, res.Document, res.Signature)
+	if err != nil && label != "" {
+		return fmt.Errorf("%s no channel %q on %s, and %s", has, shown, r.Name,
+			peerDirectoryWords(r.Name, label, res.Document, err))
+	}
 	if err != nil {
 		return fmt.Errorf("%s no channel %q on %s, and the directory %s %s does not verify "+
 			"against %s; do not trust it", has, shown, r.Name, r.Name, served, key)
@@ -139,6 +150,10 @@ func noSuchChannel(s *store.Store, id *identity.Identity, c *client.Client, r *s
 			} else if ch.NotAfter != nil {
 				state = "closed " + stampLocal(*ch.NotAfter)
 			}
+		}
+		// The channel's own rules after its state, where it has any.
+		if rule := ruleText(channelJSON{MaxBytes: ch.MaxBytes, NoStreams: ch.NoStreams, NoForwards: ch.NoForwards}); rule != "-" {
+			state += "; " + rule
 		}
 		if ch.Description == "" {
 			fmt.Fprintf(&b, "\n  %s (%s)", ch.Name, state)

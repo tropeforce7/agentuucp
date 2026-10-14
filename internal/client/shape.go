@@ -45,23 +45,24 @@ func (c *Client) malformed(answer, field, want string) error {
 }
 
 const (
-	wantMaxBytes      = "the relay's max_bytes (from 1 to 1073741824; a health answer without it is refused)"
-	wantWireLevel     = "the relay's wire level (1 or more; a health answer without it is refused)"
-	wantMaxRecipients = "the relay's max_recipients (from 1 to 32, in a section of {\"max\": N} alone; an answer without the section holds no setting)"
-	wantKnockMax      = "the relay's knock cap (from 1 to 1073741824; a health answer without it is refused)"
-	wantFingerprint   = "a fingerprint (64 lowercase hex characters)"
-	wantSerial        = "a certificate serial"
-	wantTokenID       = "a token id (32 lowercase hex characters)"
-	wantSeconds       = "a number of seconds within a hundred years"
-	wantCount         = "a count (zero or more)"
-	wantID            = "a message id (one or more)"
-	wantRising        = "above the id asked after and above the row before it, in the order the relay promised"
-	wantMLDSA         = "an ML-DSA parameter set (44, 65 or 87, or 0 for none)"
-	wantKind          = "a message kind (envelope, stream or knock)"
-	wantChannelName   = "a channel name"
-	wantTime          = "a time"
-	wantStamp         = "a time no further ahead of this machine's clock than a request may be, and within the years 0000 to 9999"
-	wantSpan          = "the lowest message id held, from 0 to last, and 0 only with last 0"
+	wantMaxBytes       = "the relay's max_bytes (from 1 to 1073741824; a health answer without it is refused)"
+	wantWireLevel      = "the relay's wire level (1 or more; a health answer without it is refused)"
+	wantChannelCeiling = "the largest max_bytes a channel may name (from 1 to 4611686018427387904, in a section of {\"max\": N} alone)"
+	wantMaxRecipients  = "the relay's max_recipients (from 1 to 32, in a section of {\"max\": N} alone; an answer without the section holds no setting)"
+	wantKnockMax       = "the relay's knock cap (from 1 to 1073741824; a health answer without it is refused)"
+	wantFingerprint    = "a fingerprint (64 lowercase hex characters)"
+	wantSerial         = "a certificate serial"
+	wantTokenID        = "a token id (32 lowercase hex characters)"
+	wantSeconds        = "a number of seconds within a hundred years"
+	wantCount          = "a count (zero or more)"
+	wantID             = "a message id (one or more)"
+	wantRising         = "above the id asked after and above the row before it, in the order the relay promised"
+	wantMLDSA          = "an ML-DSA parameter set (44, 65 or 87, or 0 for none)"
+	wantKind           = "a message kind (envelope, stream or knock)"
+	wantChannelName    = "a channel name"
+	wantTime           = "a time"
+	wantStamp          = "a time no further ahead of this machine's clock than a request may be, and within the years 0000 to 9999"
+	wantSpan           = "the lowest message id held, from 0 to last, and 0 only with last 0"
 )
 
 // The enumerated fields of an answer, each held to the set the protocol
@@ -214,6 +215,18 @@ func (c *Client) checkHealth(h *relayapi.HealthResponse) error {
 		return c.malformed("the health answer", "the max-recipients section", wantMaxRecipients)
 	}
 	c.maxRecipients.Store(int64(n))
+	// The largest max_bytes a channel may name (R19), from a relay at
+	// wire level 2: one this rule refuses is the answer's fault by name.
+	// An answer without it says nothing, and is held as zero, which the
+	// owner's command refuses to set a rule against; nothing else reads
+	// it.
+	var ceiling int64
+	if data, ok := recipients.Find(h.Sections.Sections, channels.CeilingName); ok {
+		if ceiling, err = channels.CheckCeiling(data); err != nil {
+			return c.malformed("the health answer", "the channel-max-bytes section", wantChannelCeiling)
+		}
+	}
+	c.channelCeiling.Store(ceiling)
 	return nil
 }
 

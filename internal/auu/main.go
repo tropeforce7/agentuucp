@@ -85,7 +85,9 @@ Usage:
 
   auu channel ls [PEER] [--json]      # your channels and what each relay holds, or a peer's
   auu channel create NAME [--description TEXT] [--not-before T] [--not-after T]
+                      [--max-bytes N|none] [--no-streams|--streams] [--no-forwards|--forwards]
   auu channel update NAME [--description TEXT] [--not-before T|none] [--not-after T|none]
+                      [--max-bytes N|none] [--no-streams|--streams] [--no-forwards|--forwards]
   auu channel close NAME [--at T]
   auu channel delete NAME
   auu channel keep NAME on|off        # whether a fetch leaves that channel's mail on the relay

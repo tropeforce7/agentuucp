@@ -348,16 +348,17 @@ func e12Channel(t *testing.T) {
 		relayName+": directory pushed (2 channels)")
 	// The owner's view: the table with counts, and what the relay holds.
 	r := bob.auu("channel", "ls")
-	expectSays(t, r, 0, "NAME", "DESCRIPTION", "PERIOD", "STATE", "QUEUED", "KEEP", "issued ", " by this machine",
+	expectSays(t, r, 0, "NAME", "DESCRIPTION", "PERIOD", "STATE", "RULE", "QUEUED", "KEEP", "issued ", " by this machine",
 		relayName+": holds this directory")
 	// KEEP is the owner's own setting for what a fetch leaves on the
 	// relay, on for every channel until they say otherwise.
-	tableHas(t, r, "default - open 0 on", bugChannel+" "+bugDescription+" - open 0 on")
+	// RULE is "-" for a channel with none of its own.
+	tableHas(t, r, "default - open - 0 on", bugChannel+" "+bugDescription+" - open - 0 on")
 	// The sender's view: the same lines, no counts, verified against the
 	// key alice holds for bob.
 	r = alice.auu("channel", "ls", "bob")
 	expectSays(t, r, 0, "issued ", " by bob")
-	tableHas(t, r, "default - open", bugChannel+" "+bugDescription+" - open")
+	tableHas(t, r, "default - open -", bugChannel+" "+bugDescription+" - open -")
 	expectNot(t, r, "QUEUED", "holds")
 	var ls channelsJSON
 	jsonOf(t, alice.auu("channel", "ls", "bob", "--json"), &ls)

@@ -23,6 +23,10 @@ var olderRows = []matrixRow{
 	{"O03", "old_relay", "alice writes to several through a relay running the previous release, by bang path and as a stream, which bob's fetch takes by range", o03},
 	{"O04", "old_sender_and_tools", "olive writes to alice and to bob on this relay, and the previous release's auu-admin reads its status", o04},
 	{"O05", "room_to_old_recipient", "alice saves a room of bob and olive and sends to it, and both read it, olive on the previous release", o05},
+	{"O06", "old_reader_of_a_rule", "bob sets a channel rule, and olive's previous release lists and watches his directory, for the three rules and for no_forwards alone", o06},
+	{"O07", "old_sender_to_a_rule", "olive's previous release sends a stream to bob's channel that takes none, on this relay", o07},
+	{"O08", "rule_to_old_relay", "bob sets a channel rule against a relay running the previous release", o08},
+	{"O09", "no_rule_to_old_relay", "bob adds a channel with no rule against a relay running the previous release", o09},
 }
 
 const (
@@ -233,30 +237,7 @@ func o02(t *testing.T) {
 
 func o03(t *testing.T) {
 	olive := oliveMeets(t)
-	// The relay's own program swapped for the previous release's, and put
-	// back after, checked as this tree's again before the next row. The old
-	// one is copied beside it and renamed over it, since a running program
-	// cannot be written to.
-	relay.mustRoot(t, "cp -p /usr/local/bin/auu-relay /usr/local/bin/auu-relay.this && "+
-		"cp -p "+prevBin+"/auu-relay /usr/local/bin/auu-relay.prev && "+
-		"mv /usr/local/bin/auu-relay.prev /usr/local/bin/auu-relay")
-	t.Cleanup(func() {
-		if r := relay.root("mv /usr/local/bin/auu-relay.this /usr/local/bin/auu-relay"); r.code != 0 {
-			t.Errorf("putting this tree's relay back: exit %d\n%s%s", r.code, r.stdout, r.stderr)
-		}
-		if r := relayAuu.exec("", "/usr/local/bin/auu-relay", "--version"); strings.HasPrefix(r.stdout, "auu-relay "+prevVersion) {
-			t.Errorf("the relay's program is still %s after it was put back", prevVersion)
-		}
-		m := relayRestart(t)
-		if strings.Contains(relayLogSince(m), "version="+prevVersion) {
-			t.Errorf("the relay is still %s after it was put back", prevVersion)
-		}
-	})
-	m := relayRestart(t)
-	isPrev(t, relayAuu.exec("", "/usr/local/bin/auu-relay", "--version"), "auu-relay")
-	if !strings.Contains(relayLogSince(m), "version="+prevVersion+" schema=13") {
-		t.Fatalf("the relay did not start as %s at schema 13:\n%s", prevVersion, relayLogSince(m))
-	}
+	m := previousRelay(t)
 
 	// An envelope to bob and, by bang path through relay-b and relay-c, to
 	// dave: the copy for dave is a user's forward carrying the count, which
@@ -321,6 +302,36 @@ func o03(t *testing.T) {
 	verdict(t, "ok", "A relay on the previous release takes every copy of a message to several, by bang path and as "+
 		"a stream: the count on a stream's open and on a user's forward is one it knows and holds within its own limit, "+
 		"and it answers each range this release's fetch asks of the stream 206 with the span this release holds it to.")
+}
+
+// previousRelay swaps the relay's own program for the previous release's
+// for the row, and puts it back after, checked as this tree's again before
+// the next row. The old one is copied beside it and renamed over it, since
+// a running program cannot be written to. It returns the mark of the old
+// relay's start.
+func previousRelay(t *testing.T) mark {
+	t.Helper()
+	relay.mustRoot(t, "cp -p /usr/local/bin/auu-relay /usr/local/bin/auu-relay.this && "+
+		"cp -p "+prevBin+"/auu-relay /usr/local/bin/auu-relay.prev && "+
+		"mv /usr/local/bin/auu-relay.prev /usr/local/bin/auu-relay")
+	t.Cleanup(func() {
+		if r := relay.root("mv /usr/local/bin/auu-relay.this /usr/local/bin/auu-relay"); r.code != 0 {
+			t.Errorf("putting this tree's relay back: exit %d\n%s%s", r.code, r.stdout, r.stderr)
+		}
+		if r := relayAuu.exec("", "/usr/local/bin/auu-relay", "--version"); strings.HasPrefix(r.stdout, "auu-relay "+prevVersion) {
+			t.Errorf("the relay's program is still %s after it was put back", prevVersion)
+		}
+		m := relayRestart(t)
+		if strings.Contains(relayLogSince(m), "version="+prevVersion) {
+			t.Errorf("the relay is still %s after it was put back", prevVersion)
+		}
+	})
+	m := relayRestart(t)
+	isPrev(t, relayAuu.exec("", "/usr/local/bin/auu-relay", "--version"), "auu-relay")
+	if !strings.Contains(relayLogSince(m), "version="+prevVersion+" schema=13") {
+		t.Fatalf("the relay did not start as %s at schema 13:\n%s", prevVersion, relayLogSince(m))
+	}
+	return m
 }
 
 // blobLinesSince waits for at least n of the relay's access lines for a
@@ -406,4 +417,81 @@ func o05(t *testing.T) {
 	nothingDamaged(t, alice, bob, olive)
 	verdict(t, "ok", "A room is a message to several on the wire: the previous release reads it whole with everyone it "+
 		"went to, the room's name travels nowhere, so neither olive's read nor bob's names one, and alice's own read names it.")
+}
+
+// ruleChannel creates a channel on bob's directory for the row and deletes
+// it after, which leaves his directory as the cycle left it, version 1.
+func ruleChannel(t *testing.T, name string, flags ...string) {
+	t.Helper()
+	expectCode(t, bob.auu(append([]string{"channel", "create", name}, flags...)...), 0)
+	t.Cleanup(func() { expectCode(t, bob.auu("channel", "delete", name), 0) })
+}
+
+// O06: a version 2 directory is one the previous release refuses by its
+// strict decode, and its callers say so in its own words, which read as a
+// key problem: channel ls of bob exits 2 listing nothing, and a directory
+// watch on him exits 2, for the three rules and for no_forwards alone.
+func o06(t *testing.T) {
+	olive := oliveMeets(t)
+	const old = "does not verify against the key you hold; do not trust it"
+	check := func(label string) {
+		t.Helper()
+		r := olive.auu("channel", "ls", "bob")
+		expectSays(t, r, 2, old)
+		expectNot(t, r, "o06", "bug reports")
+		expectSays(t, olive.auu("watch", "--event", "directory", "--peer", "bob", "--timeout", "30s"), 2, old)
+		t.Logf("%s: channel ls and watch both refused in the previous release's words", label)
+	}
+	ruleChannel(t, "o06", "--max-bytes", "100000", "--no-streams", "--no-forwards")
+	check("every rule")
+	expectCode(t, bob.auu("channel", "update", "o06", "--max-bytes", "none", "--streams"), 0)
+	check("no_forwards alone")
+	nothingDamaged(t, bob, olive)
+	verdict(t, "ok", "The previous release meets a version 2 directory as its strict decode meets an unknown field: "+
+		"channel ls and the directory watch exit 2 with 'does not verify against the key you hold; do not trust it', "+
+		"nothing of the directory shown, for no_forwards alone as for every rule, which is the sentence the owner's "+
+		"once-said warning quotes.")
+}
+
+// O07: the previous release sends a stream to a channel that takes none;
+// this relay refuses the open with a code that release does not know, so
+// it shows the relay's sentence as it came and acts on nothing.
+func o07(t *testing.T) {
+	olive := oliveMeets(t)
+	ruleChannel(t, "o07", "--no-streams")
+	expectCode(t, bob.exec("", "sh", "-c", "head -c 102400 /dev/urandom > /home/bob/o07.bin"), 0)
+	t.Cleanup(func() { bob.exec("", "rm", "-f", "/home/bob/o07.bin") })
+	r := olive.auu("send", "--to", "bob", "--channel", "o07", "--subject", "o07", "--attach", "/home/bob/o07.bin", "large")
+	expectSays(t, r, 2, `channel "o07" takes no streams`)
+	outbox := bob.exec("", "sh", "-c", "ls "+oliveHome+"/outbox 2>/dev/null | wc -l")
+	nothingDamaged(t, bob, olive)
+	verdict(t, "observed", "The previous release's stream to a channel that takes none is refused at the open with "+
+		"this relay's sentence, shown under a code that release does not know, exit 2; files left in its outbox: "+
+		strings.TrimSpace(outbox.stdout)+", as that release leaves a stream refused at its open.")
+}
+
+// O08: a rule is refused before any push against a relay on the previous
+// release, naming the relay's level, and nothing reaches the relay's
+// channels route.
+func o08(t *testing.T) {
+	m := previousRelay(t)
+	r := bob.auu("channel", "create", "o08", "--no-streams")
+	expectSays(t, r, 1, "is at wire level 1 and cannot hold a channel rule")
+	for _, line := range strings.Split(relayLogSince(m), "\n") {
+		if strings.Contains(line, "PUT") && strings.Contains(line, "/channels") {
+			t.Errorf("a directory was pushed to the previous relay: %s", line)
+		}
+	}
+	expectNot(t, bob.auu("channel", "ls"), "o08")
+	verdict(t, "ok", "Setting a channel rule against a relay on the previous release is refused before any push, "+
+		"naming the relay at wire level 1, and the local directory is left as it was.")
+}
+
+// O09: a directory with no rule is version 1, which the previous release's
+// relay takes as it always has.
+func o09(t *testing.T) {
+	previousRelay(t)
+	ruleChannel(t, "o09")
+	expectSays(t, bob.auu("channel", "ls"), 0, "o09", "holds this directory")
+	verdict(t, "ok", "A channel with no rule leaves the directory version 1, which a relay on the previous release takes.")
 }

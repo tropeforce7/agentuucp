@@ -10,6 +10,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // The channel directory routes. An owner pushes a signed directory and any
@@ -198,13 +199,28 @@ func (s *Server) handleGetChannels(w http.ResponseWriter, r *http.Request, body 
 // channelCeiling is the most this relay takes of any kind, which a
 // channel's max_bytes may not exceed: the larger of max_bytes and
 // max_stream_bytes, with max_stream_bytes 0, unlimited, meaning the
-// protocol's MaxStreamSize.
+// protocol's MaxStreamSize, and never above MaxStreamSize, which no
+// setting lifts: a max_stream_bytes set above it takes no stream larger.
 func (s *Server) channelCeiling() int64 {
 	streams := s.cfg.MaxStreamBytes
 	if streams <= 0 {
 		streams = relayapi.MaxStreamSize
 	}
-	return max(s.cfg.MaxBytes, streams)
+	return min(max(s.cfg.MaxBytes, streams), relayapi.MaxStreamSize)
+}
+
+// channelCeilingSection is the health answer's channel-max-bytes section:
+// channelCeiling, the number the push holds a channel to, so that the
+// owner's command holds it to the same before any push (R19).
+func (s *Server) channelCeilingSection() []wire.Section {
+	sections, err := channels.CeilingSection(s.channelCeiling())
+	if err != nil {
+		// channelCeiling is 1 to MaxStreamSize by construction: the
+		// larger of a positive max_bytes and a stream cap that is
+		// MaxStreamSize when unset.
+		panic(err)
+	}
+	return sections
 }
 
 // channelForPost settles which channel a post, a stream being opened or a

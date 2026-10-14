@@ -308,7 +308,9 @@ internal/auu/cert.go certList string cert.Serial[:16] = local: ValidSerial at ch
 internal/auu/cert.go certRenew string rec.Serial[:16] = local: FormatSerial writes 32 hex characters, in dial.SaveIssued
 internal/auu/cert.go certStatus string fp[:16] = local: caFingerprint writes a fingerprint or nothing, checked != ""
 internal/auu/cert.go certStatusOutput int MLDSA int = output
+internal/auu/channel_cmds.go channelJSON int MaxBytes int64 = output
 internal/auu/channel_cmds.go relayChannelsJSON int Queued map[string]int64 = output
+internal/auu/channelrules.go parseMaxBytes int strconv.ParseInt(v) = >= 1 shown by TestLimitChannelMaxBytesFlag
 internal/auu/completion.go messages string m.Inner.From[:12] = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
 internal/auu/completion.go shorten string all[i].value[:12] = local: len(all[i].value) == 32 by the check before
 internal/auu/compose.go composeTemplate string original.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
@@ -481,6 +483,7 @@ internal/auu/watch_cmds.go cmdWatch int fs.Duration("timeout") = >= 0s shown by 
 internal/card/card.go Document int V int = [1, 1] shown by TestLimitCardV
 # A channel's max_bytes sizes the wire bytes of an envelope, or of a sealed
 # stream with its manifest, whichever way the message comes.
+internal/channels/ceiling.go Ceiling int Max int64 = [1, 4611686018427387904] shown by TestLimitChannelCeiling
 internal/channels/channels.go Channel int MaxBytes int64 = 0 or [1, 4611686018427387904] shown by TestLimitChannelMaxBytes
 # A directory's v is also read out of a document the strict decode
 # refused, by newerVersion, as a whole number through wire.Decode: one

@@ -110,16 +110,23 @@ func channelCreate(args []string) error {
 	desc := fs.String("description", "", "what the channel is for, one line; line breaks are folded")
 	notBefore := fs.String("not-before", "", "when the channel opens: RFC 3339, or a day as local midnight")
 	notAfter := fs.String("not-after", "", "when the channel closes: RFC 3339, or a day as local midnight")
+	rules := addRuleFlags(fs)
 	relay := relayFlag(fs)
 	positional, err := parseArgs(fs, args)
 	if err != nil {
 		return err
 	}
-	name, err := oneName(positional, prog+" channel create NAME [--description TEXT] [--not-before T] [--not-after T]")
+	name, err := oneName(positional, prog+" channel create NAME [--description TEXT] [--not-before T] [--not-after T] "+
+		"[--max-bytes N|none] [--no-streams|--streams] [--no-forwards|--forwards]")
 	if err != nil {
 		return err
 	}
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 	ch := channels.Channel{Name: name}
+	if err := rules.apply(&ch, given); err != nil {
+		return err
+	}
 	if ch.Description, err = description(*desc); err != nil {
 		return err
 	}
@@ -160,19 +167,22 @@ func channelUpdate(args []string) error {
 	desc := fs.String("description", "", "what the channel is for, one line; line breaks are folded")
 	notBefore := fs.String("not-before", "", "when the channel opens, or none")
 	notAfter := fs.String("not-after", "", "when the channel closes, or none")
+	rules := addRuleFlags(fs)
 	relay := relayFlag(fs)
 	positional, err := parseArgs(fs, args)
 	if err != nil {
 		return err
 	}
-	name, err := oneName(positional, prog+" channel update NAME [--description TEXT] [--not-before T|none] [--not-after T|none]")
+	name, err := oneName(positional, prog+" channel update NAME [--description TEXT] [--not-before T|none] [--not-after T|none] "+
+		"[--max-bytes N|none] [--no-streams|--streams] [--no-forwards|--forwards]")
 	if err != nil {
 		return err
 	}
 	given := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
-	if !given["description"] && !given["not-before"] && !given["not-after"] {
-		return usageErrf("nothing to change: give --description, --not-before or --not-after")
+	if !given["description"] && !given["not-before"] && !given["not-after"] && !rules.anyGiven(given) {
+		return usageErrf("nothing to change: give --description, --not-before, --not-after, " +
+			"--max-bytes, --no-streams, --streams, --no-forwards or --forwards")
 	}
 	s, id, err := loadIdentity()
 	if err != nil {
@@ -216,6 +226,9 @@ func channelUpdate(args []string) error {
 		} else {
 			ch.NotAfter = at
 		}
+	}
+	if err := rules.apply(ch, given); err != nil {
+		return err
 	}
 	if err := checked(d, id); err != nil {
 		return err
@@ -342,6 +355,9 @@ func channelPush(args []string) error {
 	if !found {
 		return usageErrf("no directory: your mailbox has the one channel, default; nothing to push")
 	}
+	if err := relaysCanHold(s, id, relays, d); err != nil {
+		return err
+	}
 	// Under the stored issue, deliberately: a relay holding a newer one
 	// from another machine must refuse this, not be written over.
 	out, err := pushDirectory(s, id, relays, d)
@@ -406,6 +422,11 @@ type channelJSON struct {
 	NotAfter    *time.Time `json:"not_after,omitempty"`
 	Open        bool       `json:"open"`
 	Why         string     `json:"why,omitempty"`
+	// The channel's own rules, as the document carries them: absent for
+	// none.
+	MaxBytes   int64 `json:"max_bytes,omitempty"`
+	NoStreams  bool  `json:"no_streams,omitempty"`
+	NoForwards bool  `json:"no_forwards,omitempty"`
 	// Keep says mail fetched from this channel is left on the relay
 	// afterwards. It is this machine's own setting, so it is there in the
 	// owner's listing and absent from a peer's, which is why it is a
@@ -439,19 +460,21 @@ func channelRows(d *channels.Directory, now time.Time) []channelJSON {
 	for _, ch := range d.Channels {
 		open, why := ch.OpenAt(now)
 		out = append(out, channelJSON{Name: ch.Name, Description: ch.Description,
-			NotBefore: ch.NotBefore, NotAfter: ch.NotAfter, Open: open, Why: why})
+			NotBefore: ch.NotBefore, NotAfter: ch.NotAfter, Open: open, Why: why,
+			MaxBytes: ch.MaxBytes, NoStreams: ch.NoStreams, NoForwards: ch.NoForwards})
 	}
 	return out
 }
 
-// printChannels is the table: name, description, period and state, with a
+// printChannels is the table: name, description, period, state and the
+// channel's own rules, with a
 // queued count per channel when the caller is the owner and has one, and
 // what this machine does with mail it fetches from each when the caller is
 // the owner at all.
 func printChannels(rows []channelJSON, queued map[string]int64) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	keep := len(rows) > 0 && rows[0].Keep != nil
-	header := "NAME\tDESCRIPTION\tPERIOD\tSTATE"
+	header := "NAME\tDESCRIPTION\tPERIOD\tSTATE\tRULE"
 	if queued != nil {
 		header += "\tQUEUED"
 	}
@@ -464,7 +487,7 @@ func printChannels(rows []channelJSON, queued map[string]int64) {
 		if !r.Open {
 			state = localState(r)
 		}
-		line := fmt.Sprintf("%s\t%s\t%s\t%s", r.Name, r.Description, period(r.NotBefore, r.NotAfter), state)
+		line := fmt.Sprintf("%s\t%s\t%s\t%s\t%s", r.Name, r.Description, period(r.NotBefore, r.NotAfter), state, ruleText(r))
 		if queued != nil {
 			line += fmt.Sprintf("\t%d", queued[r.Name])
 		}
@@ -739,8 +762,7 @@ func channelLsPeer(peer, relayName string, asJSON bool) error {
 	}
 	d, err := channels.Verify(who, res.Document, res.Signature)
 	if err != nil {
-		return &exitError{code: exitTransport, err: fmt.Errorf(
-			"the directory %s served for %s does not verify against the key you hold; do not trust it", r.Name, label)}
+		return &exitError{code: exitTransport, err: errors.New(peerDirectoryWords(r.Name, label, res.Document, err))}
 	}
 	out.Directory = true
 	issued := d.Issued

@@ -158,3 +158,50 @@ func TestLimitADirectoryDocumentIsCapped(t *testing.T) {
 		t.Errorf("an empty document: %v; want the signature's refusal", err)
 	}
 }
+
+// TestLimitChannelCeiling: the health answer's channel-max-bytes section
+// says 1 to relayapi.MaxStreamSize, the most a channel's max_bytes can be,
+// and is held to its bytes before it is decoded. Each edge, one past it,
+// the type's extremes, a number that is not a whole number or not a
+// number, a key the section does not have and the key absent are refused
+// naming the section; the writer refuses what the reader would.
+func TestLimitChannelCeiling(t *testing.T) {
+	doc := func(v string) []byte { return []byte(`{"max":` + v + `}`) }
+	for _, v := range []int64{1, relayapi.MaxStreamSize} {
+		got, err := CheckCeiling(doc(fmt.Sprint(v)))
+		if err != nil || got != v {
+			t.Errorf("%d: %d, %v; want it taken", v, got, err)
+		}
+		sections, err := CeilingSection(v)
+		if err != nil || len(sections) != 1 || sections[0].Name != CeilingName || sections[0].Critical {
+			t.Errorf("the section for %d: %+v, %v", v, sections, err)
+		}
+	}
+	for _, v := range []int64{0, -1, relayapi.MaxStreamSize + 1, math.MinInt64, math.MaxInt64} {
+		want := fmt.Sprintf("the channel-max-bytes section says %d, which is not 1 to %d", v, relayapi.MaxStreamSize)
+		if _, err := CheckCeiling(doc(fmt.Sprint(v))); err == nil || err.Error() != want {
+			t.Errorf("%d: %v; want %q", v, err, want)
+		}
+		if _, err := CeilingSection(v); err == nil {
+			t.Errorf("the writer made a section for %d", v)
+		}
+	}
+	for _, v := range []string{"9223372036854775808", "1.0", "1e1", `"1"`, "null", "true"} {
+		if _, err := CheckCeiling(doc(v)); err == nil || !strings.HasPrefix(err.Error(), "the channel-max-bytes section") {
+			t.Errorf("%s: %v; want the decode's refusal naming the section", v, err)
+		}
+	}
+	if _, err := CheckCeiling([]byte(`{"max":1,"more":2}`)); err == nil {
+		t.Error("a key the section does not have was taken")
+	}
+	if _, err := CheckCeiling([]byte(`{}`)); err == nil || !strings.Contains(err.Error(), "says 0") {
+		t.Errorf("the number absent: %v; want it refused as zero", err)
+	}
+	at := []byte(strings.Repeat(" ", CeilingBytes-len(doc("1"))) + string(doc("1")))
+	if _, err := CheckCeiling(at); err != nil {
+		t.Errorf("at %d bytes: %v", CeilingBytes, err)
+	}
+	if _, err := CheckCeiling(append([]byte{' '}, at...)); err == nil || !strings.Contains(err.Error(), "over the 64 it may be") {
+		t.Errorf("one byte over: %v; want the size refusal", err)
+	}
+}

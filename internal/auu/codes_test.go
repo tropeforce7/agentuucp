@@ -75,6 +75,28 @@ func TestTheChannelCodesAreRead(t *testing.T) {
 	}
 }
 
+// The channel's own rules, a row pair each: present, the relay's sentence
+// alone; under a code nobody knows, the refusal as it came.
+func TestTheChannelRuleCodesAreRead(t *testing.T) {
+	for _, c := range []struct {
+		code     string
+		status   int
+		sentence string
+	}{
+		{relayapi.CodeChannelStreams, http.StatusForbidden, `channel "logs" takes no streams`},
+		{relayapi.CodeChannelSize, http.StatusRequestEntityTooLarge, `channel "logs" takes at most 100 bytes on the wire; this message is 101`},
+	} {
+		present := refusal(c.status, c.code, c.sentence)
+		if got := channelHint(present, nil, nil, nil, nil, nil, "logs"); got == nil || got.Error() != c.sentence {
+			t.Errorf("%s: %v; want the relay's sentence alone", c.code, got)
+		}
+		later := refusal(c.status, laterKind, c.sentence)
+		if got := channelHint(later, nil, nil, nil, nil, nil, "logs"); got != error(later) {
+			t.Errorf("another code with the %s sentence: %v; want it as it came", c.code, got)
+		}
+	}
+}
+
 func TestTheNoNeighbourCodeIsExplainedForAReply(t *testing.T) {
 	mode := sendMode{reply: true, path: []string{"bar"}}
 	sentence := relayapi.MsgNoNeighbour + ` "bar" on this relay`

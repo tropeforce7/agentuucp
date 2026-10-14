@@ -72,7 +72,12 @@ type Client struct {
 	// protocol's ceiling when the answer carries none; zero until a health
 	// answer has been read. Atomic for the reason wireLevel is.
 	maxRecipients atomic.Int64
-	mu            sync.Mutex
+	// channelCeiling is the largest max_bytes a channel on the relay may
+	// name, from its last health answer's channel-max-bytes section, or
+	// zero when that answer carried none, as a relay below wire level 2
+	// never does. Atomic for the reason wireLevel is.
+	channelCeiling atomic.Int64
+	mu             sync.Mutex
 	// transport is the one carrying the client certificate, kept so a
 	// renewal can drop the connections using the old one.
 	transport *http.Transport
@@ -781,6 +786,11 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 // (D40), zero before one has been read. A feature that depends on what a
 // relay can do reads it; nothing in this release does.
 func (c *Client) WireLevel() int { return int(c.wireLevel.Load()) }
+
+// ChannelCeiling is the largest max_bytes a channel on the relay may name,
+// as its last health answer said, or zero when that answer carried no
+// channel-max-bytes section: the caller asks HealthInfo first.
+func (c *Client) ChannelCeiling() int64 { return c.channelCeiling.Load() }
 
 // RecipientCap is the most recipients the relay takes on a message to
 // several: the number its health answer's max-recipients section gives, or

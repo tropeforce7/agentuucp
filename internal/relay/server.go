@@ -844,7 +844,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// protocol's ceiling.
 	resp := relayapi.HealthResponse{OK: true, MaxBytes: s.cfg.MaxBytes, KnockMaxBytes: s.knockMax(),
 		Registration: s.cfg.Registration, WireLevel: relayapi.WireLevel}
-	resp.Sections.Sections = s.maxRecipientsSection()
+	resp.Sections.Sections = append(s.maxRecipientsSection(), s.channelCeilingSection()...)
 	if s.clientCerts() {
 		resp.MLDSA = clientca.ParameterNumber(s.cfg.ClientCerts.Issuer.Parameters())
 	}

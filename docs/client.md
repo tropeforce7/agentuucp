@@ -496,7 +496,9 @@ changes.
 ```
 auu channel ls [PEER] [--json]
 auu channel create NAME [--description TEXT] [--not-before T] [--not-after T]
+                    [--max-bytes N|none] [--no-streams|--streams] [--no-forwards|--forwards]
 auu channel update NAME [--description TEXT] [--not-before T|none] [--not-after T|none]
+                    [--max-bytes N|none] [--no-streams|--streams] [--no-forwards|--forwards]
 auu channel close NAME [--at T]
 auu channel delete NAME
 auu channel keep NAME on|off
@@ -551,8 +553,8 @@ local file, and the edit goes through after. A directory is held to 512
 KiB and an allow list to 128 KiB — the bytes the owner signed, checked
 before either is sent and again by the relay before the signature — and
 the request that carries one to 1 MiB, the relay's cap on the two routes.
-A full directory of 64 channels at every limit is about 426 KB signed and
-568 KB on the wire, and a full allow list 67 KB and 90 KB, so what `auu`
+A full directory of 64 channels at every limit, every rule set, is about
+430 KB signed and 574 KB on the wire, and a full allow list 67 KB and 90 KB, so what `auu`
 signs always fits with room to spare. A document that does not fit (`the
 directory is N bytes; at most 524288, so send it compact; nothing was
 sent`) is one another tool indented, and the answer is in the sentence.
@@ -572,6 +574,51 @@ T` with T in UTC, followed by the same time in your zone, `(T here)`,
 when your zone reads it otherwise. Each is exit 2, as a refused allow list is,
 and nothing was queued.
 
+A channel may also say what it takes, under the relay's own caps and never
+looser than them. `--max-bytes N` is the largest message it takes, in
+bytes on the wire: an envelope, or a sealed stream with its manifest,
+whichever way the message comes. It is a whole number from 1, written in
+digits, and `none` clears it, leaving the relay's own cap. `--no-streams`
+refuses every stream to the channel and `--streams` takes them again;
+`--no-forwards` refuses every message that comes by way of another relay
+and `--forwards` takes them again. A channel with any of the three is a
+rule the relay enforces at every post, stream and delivery, out of the
+directory it verifies then. A directory with a rule is version 2, which
+only a v0.18.0 relay or later takes, so before any push of one `auu` asks
+each selected relay's health: a relay at wire level 1 refuses the edit
+with `relay work is at wire level 1 and cannot hold a channel rule;
+update it, or drop --max-bytes, --no-streams and --no-forwards` and exit
+1, a relay at level 2 or later that does not say the largest
+`max_bytes` a channel on it may name refuses it with exit 1 and the
+advice to update it, a relay that cannot be asked refuses it with exit
+2, naming the relay each time, and a `--max-bytes` over the most a relay
+takes is refused naming the relay and its number, all before anything is
+pushed. That
+promises only that no push starts on a relay known not to take it: the
+pushes go relay by relay, so one relay can still take the directory and
+the next fail, which the per-relay lines say and `auu channel ls` shows.
+`auu channel push` mends a relay that failed; one that answered with a
+newer directory is mended by `auu channel pull --relay` from it and the
+edit made again. The first rule you set says once that peers on v0.17.0
+or earlier will say your directory `does not verify against the key you
+hold; do not trust it` until they update `auu`: that is their old build
+meeting a newer document, not a key problem, and updating is the remedy
+on their side. Their `auu watch` on you stops, `auu channel ls` refuses
+it, and when a send of theirs is refused the hint says the same instead
+of naming your channels, though they still send to your channels. It
+also says that this home cannot go back below v0.18.0 without dropping
+the rule first. A directory with no rule stays version 1,
+exactly as before.
+
+A sender refused by a channel's rule sees the relay's sentence, `channel
+"logs" takes no streams` or `channel "logs" takes at most N bytes on the
+wire; this message is M`, with exit 2, and the outbox keeps or drops the
+sealed copy as it does for a closed channel. A message sent by way of
+another relay to a channel that takes none of them comes back in `auu
+queue` as refused, with `channel "x" takes no mail by way of another
+relay` at the end of the sentence. The list `auu send` prints for an
+unknown channel gives each channel's rules after its state.
+
 `auu channel keep NAME off` says that mail fetched from that channel is
 acknowledged away on the relay at the fetch. `on`, which is the
 default for every channel, leaves it queued there until you remove it with
@@ -585,16 +632,24 @@ gives a channel no `keep` or that names a channel twice is refused by name
 with exit 5, and nothing is fetched under a guess.
 
 `auu channel ls` prints your channels: name, description, period,
-`open`, `opens T` or `closed T`, how many messages wait under each, and
-`KEEP`, `on` or `off`. Then, per relay, it says whether it holds this
+`open`, `opens T` or `closed T`, `RULE`, which is `-` or the channel's
+rules joined with `, ` (`≤ 64 KiB, no streams, no forwards`), how many
+messages wait under each, and `KEEP`, `on` or `off`. Then, per relay, it says whether it holds this
 directory, an older one (`run 'auu channel push'`), a newer one from
 another machine, or none. `auu channel ls PEER` prints a peer's channels
 the same way, without counts, fetched from the relay and verified against
 the key you hold for them. Somebody not on your peer list is a usage error,
 since the relay is not a trust anchor. A directory that does not verify is
-refused with `the directory work served for alice does not verify against
-the key you hold; do not trust it` and exit 2. `--json` gives the
-structure, with `open` as a boolean and `why` as the sentence.
+refused with exit 2 and one of three sentences, by where it failed: `the
+directory work served for alice does not verify against the key you hold;
+do not trust it` for a signature or an owner that is not theirs, `the
+directory work served for alice is one this build cannot read; update
+auu` for a version newer than this build reads, and `the directory alice
+signed is malformed; tell them` for anything else they signed. The hint
+`auu send` prints and `auu watch` say the same three; a watch drops that
+peer, says so once, and runs on for the others. `--json` gives the
+structure, with `open` as a boolean, `why` as the sentence, and
+`max_bytes`, `no_streams` and `no_forwards` on a channel that has them.
 
 The relay verifies your directory against your registered key every time
 anybody posts to you, not only when you push it. So a directory edited on
@@ -985,8 +1040,8 @@ section is kept with the message as it came, up to 16 KiB, so a later `auu`
 on this machine can read it, and `--json` names it in `ignored_sections`. A
 larger one is not kept, and `dropped_sections` counts it. A section is
 known only where this build reads it, so `recipient-count`, which it
-reads on a request alone, and `max-recipients`, which it reads on an
-answer alone, are each held on a message as an unknown one is: kept up to
+reads on a request alone, and `max-recipients` and `channel-max-bytes`,
+which it reads on an answer alone, are each held on a message as an unknown one is: kept up to
 16 KiB, named in `ignored_sections`, and counted in `dropped_sections`
 over it. A message an earlier release kept with such a section over 16
 KiB still loads; the cap holds what is fetched from now on. A section the
@@ -1187,7 +1242,11 @@ default. `--event directory` asks for the other, both flags for both.
 narrows a directory watch to that peer, or `self` for your own directory
 changed from another machine. Without it every peer on your list is
 watched, and a peer who has not admitted you is named once on stderr and
-left alone.
+left alone. So is a peer whose directory this build cannot use, at the
+start or on a later change, with one of the three sentences `auu channel
+ls PEER` gives and `; their channels are not watched`; the watch runs on
+for the others. Your own directory served wrong still ends the watch,
+exit 2, since it is this home's own document.
 
 The baseline is your cursor. Anything a relay holds that this machine has
 not fetched is an event, reported at once, so `auu inbox; auu watch` has no

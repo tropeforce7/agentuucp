@@ -97,8 +97,8 @@ func c01(t *testing.T) {
 	defer bobChannel(t, "cfp", "--description", "talks, until the deadline", "--not-before", cfpOpens, "--not-after", cfpCloses)()
 	r := alice.auu("channel", "ls", "bob")
 	expectSays(t, r, 0, "NAME", "DESCRIPTION", "PERIOD", "STATE", "issued ", " by bob")
-	tableHas(t, r, "default - open", bugChannel+" "+bugDescription+" - open",
-		"cfp talks, until the deadline "+cfpOpens+" to "+cfpCloses+" opens "+cfpOpens)
+	tableHas(t, r, "default - open -", bugChannel+" "+bugDescription+" - open -",
+		"cfp talks, until the deadline "+cfpOpens+" to "+cfpCloses+" opens "+cfpOpens+" -")
 	expectNot(t, r, "QUEUED", "queued", "holds")
 	var ls channelsJSON
 	jsonOf(t, alice.auu("channel", "ls", "bob", "--json"), &ls)
@@ -189,7 +189,7 @@ func c06(t *testing.T) {
 	if closedAt == "" {
 		t.Fatalf("bob's directory after close: %+v", ls)
 	}
-	tableHas(t, bob.auu("channel", "ls"), bugChannel+" "+bugDescription+" until "+closedAt+" closed "+closedAt+" 0 on")
+	tableHas(t, bob.auu("channel", "ls"), bugChannel+" "+bugDescription+" until "+closedAt+" closed "+closedAt+" - 0 on")
 	refusedSend(t, fmt.Sprintf(`auu: channel %q is not open: closed %s`, bugChannel, closedAt), "--channel", bugChannel)
 	if !strings.HasSuffix(closedAt, "Z") {
 		t.Errorf("the close time is not UTC on this machine: %s", closedAt)

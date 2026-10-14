@@ -132,9 +132,13 @@ var afterPreflight = func() {}
 // is reported and the command exits 2 with the file written, for 'auu
 // channel push' to repair.
 func editAndPush(s *store.Store, id *identity.Identity, relays []*store.Relay, d *channels.Directory, localIssued time.Time) error {
+	if err := relaysCanHold(s, id, relays, d); err != nil {
+		return err
+	}
 	if err := preflight(s, id, relays, localIssued); err != nil {
 		return err
 	}
+	firstRule(s, d)
 	afterPreflight()
 	d.Issued = time.Now().UTC()
 	out, err := pushDirectory(s, id, relays, d)
@@ -152,6 +156,72 @@ func editAndPush(s *store.Store, id *identity.Identity, relays []*store.Relay, d
 			"%s is written; run '%s channel push' once the relay above can be reached", s.ChannelsPath(), prog)}
 	}
 	return nil
+}
+
+// relaysCanHold is asked before any push of a directory that carries a
+// rule, a version 2 document: every selected relay's health answer must
+// say wire level 2 or more, and one that says less refuses the whole edit
+// naming it; and every channel's max_bytes must be within each relay's
+// ceiling, its health answer's channel-max-bytes, the relay named
+// otherwise, before any relay is pushed to, since a directory is one
+// document for all of an identity's relays. A relay that cannot be reached
+// is one that cannot confirm, and refuses the edit too, naming it (R7). A
+// version 1 directory asks nothing: any relay takes it, and one that
+// cannot be reached is the push's failure as before. This promises only
+// that no push starts when a selected relay is known not to take the
+// document or cannot be asked; the pushes after go relay by relay (R11).
+func relaysCanHold(s *store.Store, id *identity.Identity, relays []*store.Relay, d *channels.Directory) error {
+	if channels.OldestVersion(d) < channels.Version2 {
+		return nil
+	}
+	for _, r := range relays {
+		c, err := dial(s, id, r)
+		if err == nil {
+			_, err = c.HealthInfo(ctx())
+		}
+		if err != nil {
+			return &exitError{code: exitTransport, err: fmt.Errorf(
+				"relay %s could not be asked whether it can hold a channel rule (%v); nothing was pushed, "+
+					"so try again when it answers, or leave it out with --relay", r.Name, err)}
+		}
+		if c.WireLevel() < 2 {
+			return usageErrf("relay %s is at wire level %d and cannot hold a channel rule; "+
+				"update it, or drop --max-bytes, --no-streams and --no-forwards", r.Name, c.WireLevel())
+		}
+		// The relay's own number, as its push will hold the channel to it
+		// (R19): a channel may be tighter than every selected relay, never
+		// looser than one.
+		ceiling := c.ChannelCeiling()
+		if ceiling == 0 {
+			return usageErrf("relay %s did not say the largest max_bytes a channel on it may name, "+
+				"so it cannot be asked to hold a channel rule; update it", r.Name)
+		}
+		for _, ch := range d.Channels {
+			if ch.MaxBytes > ceiling {
+				return usageErrf("channel %q: --max-bytes %d is over the %d relay %s takes", ch.Name, ch.MaxBytes, ceiling, r.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// firstRule says once, on standard error, what setting the first rule on a
+// directory that carried none means for peers on older builds (D91), in
+// the words their build will use, and that this home cannot go back.
+func firstRule(s *store.Store, d *channels.Directory) {
+	if channels.OldestVersion(d) < channels.Version2 {
+		return
+	}
+	if before, found, err := s.Directory(); err == nil && found && channels.OldestVersion(before) >= channels.Version2 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "%s: a channel rule makes your directory version 2. Peers on v0.17.0 or earlier "+
+		"will say it 'does not verify against the key you hold; do not trust it' until they update auu: "+
+		"that is their old build meeting a newer document, not a key problem. Their 'auu watch' on you "+
+		"stops and 'auu channel ls' refuses it; they still send to your channels, but when a send is "+
+		"refused their hint says the same instead of naming the channels. So set a rule once the peers "+
+		"who watch you or list your channels are on v0.18.0; and this home cannot go back below v0.18.0 "+
+		"without dropping the rule first\n", prog)
 }
 
 // relayDirectory fetches the directory a relay holds for the caller's own

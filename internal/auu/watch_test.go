@@ -747,14 +747,19 @@ func TestAWatchSkipsPeersItMayNotWatch(t *testing.T) {
 	if _, err := st.SetDirectory(bob.fingerprint(), forged, doc, sig); err != nil {
 		t.Fatal(err)
 	}
-	// Refused during the setup, at once: the timeout is the usual minute,
-	// so a slow fetch under the race detector cannot turn the refusal
-	// into a timeout.
-	_, err = alice.tryRun("watch", "--event", "directory", "--peer", "bob", "--timeout", "1m")
+	// Dropped during the setup with a word, and the watch runs on for the
+	// others, here none, until its timeout (D92):
+	// TestAWatchDropsAPeerWhoseDirectoryItCannotRead has the rest.
+	var stderr string
+	stderr = captureStderr(t, func() {
+		_, err = alice.tryRun("watch", "--event", "directory", "--peer", "bob", "--timeout", "1s")
+	})
 	var e *exitError
-	if !asExit(err, &e) || e.code != exitTransport ||
-		err.Error() != "the directory "+relayName+" served for bob does not verify against the key you hold; do not trust it" {
-		t.Fatalf("a watch of a directory that does not verify: %v", err)
+	if !asExit(err, &e) || e.code != exitTimeout {
+		t.Fatalf("a watch of a directory that does not verify: %v; want it to run on to its timeout", err)
+	}
+	if want := relayName + ": the directory " + relayName + " served for bob does not verify against the key you hold; do not trust it; their channels are not watched\n"; stderr != want {
+		t.Fatalf("the word for a dropped peer: %q, want %q", stderr, want)
 	}
 	// And your own, served wrong: preflight's sentence.
 	forged.Owner = alice.fingerprint()

@@ -171,7 +171,9 @@ Channels, which are the named sub-mailboxes a sender chooses between:
 ```
 auu channel ls [PEER] [--json]                     # yours, with what each relay holds, or a peer's
 auu channel create NAME [--description TEXT] [--not-before T] [--not-after T]
+                    [--max-bytes N|none] [--no-streams|--streams] [--no-forwards|--forwards]
 auu channel update NAME [--description TEXT] [--not-before T|none] [--not-after T|none]
+                    [--max-bytes N|none] [--no-streams|--streams] [--no-forwards|--forwards]
 auu channel close NAME [--at T]
 auu channel delete NAME
 auu channel keep NAME on|off                       # whether a fetch leaves that channel's mail on the relay
@@ -449,9 +451,10 @@ with nothing of what it carries beside it), `ignored_sections` (when set:
 the sections this build does not read on a message, or on a stream's
 manifest, kept with the message up to 16 KiB each: one it does not know, and
 one it knows only on another path, as `recipient-count`, which it
-reads on a request alone, and `max-recipients`, which it reads on an answer
-alone; a section name is known on the paths that read it and held as an
-unknown one elsewhere, so one of those two marked critical on a message
+reads on a request alone, and `max-recipients` and `channel-max-bytes`,
+which it reads on an answer alone; a section name is known on the paths
+that read it and held as an unknown one elsewhere, so one of those marked
+critical on a message
 needs a newer auu as an unknown critical one does; a message an earlier
 release kept with such a section over 16 KiB still loads, and the cap holds
 what is fetched from now on) and `dropped_sections` (when set: how many
@@ -514,8 +517,9 @@ counts). A directory event is `type` (`directory`), `relay`, `peer`,
 
 `auu channel ls --json`: `peer` and `fingerprint` (a peer's listing),
 `directory`, `issued` (when set), `channels` of `name`, `description`,
-`not_before` and `not_after` (when set), `open`, `why` (when set) and
-`keep` (your own listing only), and `relays` of `name`, `state` (`same`,
+`not_before` and `not_after` (when set), `open`, `why` (when set),
+`max_bytes`, `no_streams` and `no_forwards` (when the channel has the
+rule) and `keep` (your own listing only), and `relays` of `name`, `state` (`same`,
 `older`, `newer`, `none`, `unreachable`, `untrusted`), `issued` (when
 set), `queued` (a map of channel to count) and `error` (when set).
 
@@ -599,6 +603,15 @@ A refused send names what to change, and nothing was queued:
 - `X has removed their default channel; choose one with --channel:`.
 - `channel "y" is not open: opens T` or `closed T` — outside its period;
   T is UTC, followed by `(T here)` in the user's zone when that differs.
+- `channel "y" takes no streams` — the channel's owner refuses streams to
+  it; send the content inline, or to another channel.
+- `channel "y" takes at most N bytes on the wire; this message is M` —
+  the channel's owner caps its size; send less, or to another channel.
+  Both are exit 2, and the list of a recipient's channels shows each
+  channel's rules after its state.
+- `channel "y" takes no mail by way of another relay` — comes back in
+  `auu queue` as refused, not as an answer: the channel takes no
+  forwarded mail.
 - `sender is not on the recipient's allow list` — they have not admitted
   you; ask them to add you and run `auu allow push`.
 - `X's mailbox on the relay is full; they need to run 'auu rm' to make

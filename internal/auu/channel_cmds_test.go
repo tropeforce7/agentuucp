@@ -140,12 +140,14 @@ func TestEveryChannelUsageErrorNamesTheChannel(t *testing.T) {
 	usageError(t, alice, `channel " bugs": name begins with white space`, "channel", "create", " bugs")
 	usageError(t, alice, `channel "`+strings.Repeat("b", 65)+`": name is 65 bytes; at most 64`, "channel", "create", strings.Repeat("b", 65))
 	usageError(t, alice, "description is 1025 bytes; at most 1024", "channel", "create", "cfp", "--description", strings.Repeat("d", 1025))
-	usageError(t, alice, "nothing to change: give --description, --not-before or --not-after", "channel", "update", "bug reports")
+	usageError(t, alice, "nothing to change: give --description, --not-before, --not-after, --max-bytes, --no-streams, --streams, --no-forwards or --forwards",
+		"channel", "update", "bug reports")
 	usageError(t, alice, `--not-before wants a time as 2026-10-01T09:00:00+10:00 or a day as 2026-10-01, not "soon"`,
 		"channel", "create", "cfp", "--not-before", "soon")
 	usageError(t, alice, `channel "bug reports": not_before 2026-12-31T00:00:00Z is after not_after 2026-10-01T00:00:00Z`,
 		"channel", "update", "bug reports", "--not-before", "2026-12-31T00:00:00Z", "--not-after", "2026-10-01T00:00:00Z")
-	usageError(t, alice, "usage: auu channel create NAME [--description TEXT] [--not-before T] [--not-after T]", "channel", "create")
+	usageError(t, alice, "usage: auu channel create NAME [--description TEXT] [--not-before T] [--not-after T] "+
+		"[--max-bytes N|none] [--no-streams|--streams] [--no-forwards|--forwards]", "channel", "create")
 	usageError(t, alice, "usage: auu channel ls|create|update|close|delete|keep|push|pull", "channel")
 	usageError(t, alice, `unknown channel subcommand "list-all"`, "channel", "list-all")
 	usageError(t, alice, `--at wants a time; to reopen a channel run 'auu channel update bug reports --not-after none'`,
@@ -316,7 +318,7 @@ func TestLsOfAPeerIsReadAgainstTheKeyHeld(t *testing.T) {
 	alice.run("channel", "create", "bug reports", "--description", "One bug per message", "--not-before", at.Format(time.RFC3339))
 	out := bob.run("channel", "ls", "alice")
 	opens := at.Local().Format(time.RFC3339)
-	for _, want := range []string{"bug reports  One bug per message  from " + opens + "  opens " + opens + "\n", "issued ", " by alice\n"} {
+	for _, want := range []string{"bug reports  One bug per message  from " + opens + "  opens " + opens + "  -\n", "issued ", " by alice\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the sender's view lacks %q:\n%s", want, out)
 		}

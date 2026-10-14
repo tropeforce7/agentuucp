@@ -559,8 +559,8 @@ back to its sender as any refused delivery is, under the report's code
 and no rule applies to it: it goes to `default`'s quarantine under
 `knock_max_bytes`. The relay holds a channel to itself at the push: a
 `max_bytes` over the most it takes of any kind, the larger of `max_bytes`
-and `max_stream_bytes` (with `max_stream_bytes` 0, unlimited, meaning
-2^62), is refused `400`, `channel "x": max_bytes N is over the M this
+and `max_stream_bytes` (with `max_stream_bytes` 0, unlimited, or set
+above 2^62, meaning 2^62), is refused `400`, `channel "x": max_bytes N is over the M this
 relay takes`, and nothing is stored.
 
 *Listing 1.4a*
@@ -630,12 +630,19 @@ is 1 from v0.15.0 and 2 from v0.18.0, which takes a version 2 channel
 directory and enforces its rules. `auu` refuses a relay's health answer without it. The
 most recipients a message to several may name, `max_recipients` as it is in
 force, comes in a section of the answer, `max-recipients`, rather than a
-field, so that an `auu` from before it reads the answer still.
+field, so that an `auu` from before it reads the answer still. So does,
+from v0.18.0, the largest `max_bytes` a channel on this relay may name,
+`channel-max-bytes`: the larger of `max_bytes` and `max_stream_bytes`,
+with `max_stream_bytes` 0 or above 2^62 meaning 2^62, the number the push
+holds a channel to. `auu` holds a channel's `--max-bytes` to it before
+any push, and refuses to set any rule on a relay whose answer does not
+say it.
 
 Every answer the relay sends may carry a `sections` key at its top: the one
 place a newer relay may say something an older `auu` does not know. This
-release sends one, `max-recipients`, not critical, on the health answer and
-on the administrator's status answer. `auu` reads every answer strictly, ignores a section it
+release sends two, not critical: `max-recipients`, on the health answer
+and on the administrator's status answer, and `channel-max-bytes`, on the
+health answer. `auu` reads every answer strictly, ignores a section it
 does not know, and refuses an answer with a section marked critical,
 naming it and saying to update `auu`. A refusal whose words it cannot
 read is said with its status and the request. All of a body's sections

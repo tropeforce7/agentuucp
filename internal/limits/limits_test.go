@@ -66,9 +66,11 @@ import (
 // field is copied into became a site of its own (HTTPError.At and
 // Loaded.Issued), 576 when a channel gained max_bytes and a directory's
 // decode a probe of v, 575 when that probe became a strict decode of the
-// object's keys asked only after the document was refused (R18). A walk
-// that finds fewer is not reaching the tree.
-const floor = 575
+// object's keys asked only after the document was refused (R18), 578
+// when the owner's --max-bytes, its listing and the health answer's
+// channel ceiling were added. A walk that finds fewer is not reaching the
+// tree.
+const floor = 578
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.

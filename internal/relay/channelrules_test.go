@@ -3,6 +3,7 @@ package relay
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -524,6 +525,49 @@ func TestARulesRefusalIsNotLoggedAsALimit(t *testing.T) {
 			}
 			if strings.Contains(logs, "limit=") {
 				t.Errorf("the log calls a channel's rule a limit:\n%s", logs)
+			}
+		})
+	}
+}
+
+// The health answer says this relay's channel ceiling (R19), the number
+// the push holds a channel's max_bytes to, in its channel-max-bytes
+// section, under each shape of the two caps and with max_stream_bytes set
+// above the protocol's ceiling, which takes no stream larger and is held
+// to MaxStreamSize; the push holds a channel to the same number.
+func TestTheHealthAnswerSaysTheChannelCeiling(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		cfg     Config
+		ceiling int64
+	}{
+		{"max_stream_bytes the larger", Config{MaxBytes: 2048, MaxStreamBytes: 100000}, 100000},
+		{"max_bytes the larger", Config{MaxBytes: 60000, MaxStreamBytes: 10000}, 60000},
+		{"max_stream_bytes unlimited", Config{MaxBytes: 2048}, relayapi.MaxStreamSize},
+		{"max_stream_bytes over the protocol's ceiling", Config{MaxBytes: 2048, MaxStreamBytes: math.MaxInt64}, relayapi.MaxStreamSize},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, tc.cfg)
+			status, body := h.do(nil, "GET", "/v1/health", nil, nil)
+			if status != http.StatusOK {
+				t.Fatalf("health: %d %s", status, body)
+			}
+			var resp relayapi.HealthResponse
+			if err := json.Unmarshal(body, &resp); err != nil {
+				t.Fatal(err)
+			}
+			var data []byte
+			for _, s := range resp.Sections.Sections {
+				if s.Name == channels.CeilingName {
+					data = s.Data
+				}
+			}
+			got, err := channels.CheckCeiling(data)
+			if err != nil || got != tc.ceiling {
+				t.Fatalf("the section says %d, %v; want %d", got, err, tc.ceiling)
+			}
+			if h.server.channelCeiling() != tc.ceiling {
+				t.Fatalf("the push's ceiling is %d; the health answer says %d", h.server.channelCeiling(), tc.ceiling)
 			}
 		})
 	}

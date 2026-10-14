@@ -136,11 +136,15 @@ func watchRelay(ctx context.Context, s *store.Store, id *identity.Identity, r *s
 		// have been listed and dismissed by the channel filter, and then
 		// past them, so the relay can hold again rather than answer at
 		// once with the same unwanted rows every poll.
-		after  int64
-		peers  []*watchedPeer
-		ready  bool
-		warned bool
-		floor  time.Duration
+		after int64
+		peers []*watchedPeer
+		// dropped is the peers whose directory did not verify, by
+		// fingerprint: said once, and not watched again this run, a
+		// setup tried again included.
+		dropped = map[string]bool{}
+		ready   bool
+		warned  bool
+		floor   time.Duration
 	)
 	// fail ends this relay's watch for good, unless the context has ended,
 	// in which case nobody is listening.
@@ -175,7 +179,7 @@ func watchRelay(ctx context.Context, s *store.Store, id *identity.Identity, r *s
 		began := time.Now()
 		if !ready {
 			var err error
-			c, cursor, peers, err = watchSetup(ctx, s, id, r, opts)
+			c, cursor, peers, err = watchSetup(ctx, s, id, r, opts, dropped)
 			var judged *exitError
 			if errors.As(err, &judged) {
 				// Already judged, with its code and its sentence: a usage
@@ -244,10 +248,17 @@ func watchRelay(ctx context.Context, s *store.Store, id *identity.Identity, r *s
 			}
 		}
 		for _, fp := range listing.DirectoriesChanged {
-			ev, err := directoryChanged(ctx, c, r, peers, fp)
+			ev, drop, err := directoryChanged(ctx, c, r, peers, fp)
 			if err != nil {
 				fail(err)
 				return
+			}
+			if drop {
+				// Said, and out of the next request's map, so the relay
+				// never names them again this run.
+				dropped[fp] = true
+				peers = withoutPeer(peers, fp)
+				continue
 			}
 			if ev != nil {
 				events = append(events, ev)
@@ -290,8 +301,10 @@ func watchRelay(ctx context.Context, s *store.Store, id *identity.Identity, r *s
 // watchSetup is everything a relay watch does before its first hold: the
 // dial, the cursor, and for a directory watch each watched peer's directory
 // fetched and verified under the key held for them, so that a later
-// change can be said as what changed.
-func watchSetup(ctx context.Context, s *store.Store, id *identity.Identity, r *store.Relay, opts watchOptions) (*client.Client, int64, []*watchedPeer, error) {
+// change can be said as what changed. A peer whose directory does not
+// verify is dropped with a word, as one who has not admitted this identity
+// is skipped, and named in dropped; one already there is not asked again.
+func watchSetup(ctx context.Context, s *store.Store, id *identity.Identity, r *store.Relay, opts watchOptions, dropped map[string]bool) (*client.Client, int64, []*watchedPeer, error) {
 	c, err := dial(s, id, r)
 	if err != nil {
 		return nil, 0, nil, err
@@ -309,6 +322,9 @@ func watchSetup(ctx context.Context, s *store.Store, id *identity.Identity, r *s
 	}
 	var peers []*watchedPeer
 	for _, pub := range pubs {
+		if dropped[pub.Fingerprint()] {
+			continue
+		}
 		p := &watchedPeer{pub: pub, label: peerLabel(pub), self: pub.Fingerprint() == id.Fingerprint()}
 		if p.self {
 			p.label = "you"
@@ -331,8 +347,13 @@ func watchSetup(ctx context.Context, s *store.Store, id *identity.Identity, r *s
 			p.held = &channels.Directory{Channels: []channels.Channel{{Name: channels.Default}}}
 		default:
 			d, err := channels.Verify(pub, res.Document, res.Signature)
+			if err != nil && p.self {
+				return nil, 0, nil, untrustedDirectory(r)
+			}
 			if err != nil {
-				return nil, 0, nil, untrustedDirectory(r, p)
+				dropPeer(r, p, res.Document, err)
+				dropped[pub.Fingerprint()] = true
+				continue
 			}
 			p.held, p.issued = d, d.Issued
 		}
@@ -344,16 +365,33 @@ func watchSetup(ctx context.Context, s *store.Store, id *identity.Identity, r *s
 	return c, cursor, peers, nil
 }
 
-// untrustedDirectory is the refusal for a relay serving a directory that
-// does not verify: preflight's sentence for your own, channel ls's for a
-// peer's. A relay that lies is not one to hold a request open with.
-func untrustedDirectory(r *store.Relay, p *watchedPeer) error {
-	if p.self {
-		return &exitError{code: exitTransport, err: fmt.Errorf(
-			"the directory %s serves for you does not verify against your key; do not trust it", r.Name)}
-	}
+// untrustedDirectory is the refusal for a relay serving your own directory
+// so that it does not verify, in preflight's sentence: it ends the watch,
+// since a relay that lies about you is not one to hold a request open
+// with. A peer's is dropped instead (dropPeer).
+func untrustedDirectory(r *store.Relay) error {
 	return &exitError{code: exitTransport, err: fmt.Errorf(
-		"the directory %s served for %s does not verify against the key you hold; do not trust it", r.Name, p.label)}
+		"the directory %s serves for you does not verify against your key; do not trust it", r.Name)}
+}
+
+// dropPeer says once, on standard error, that a peer's directory did not
+// verify and why, in the shape of the line for a peer who has not admitted
+// this identity, and the watch runs on for the others (D92): one peer's
+// directory, forged by the relay or newer than this build, does not stop
+// the watch of every other.
+func dropPeer(r *store.Relay, p *watchedPeer, doc []byte, err error) {
+	fmt.Fprintf(os.Stderr, "%s: %s; their channels are not watched\n", r.Name, peerDirectoryWords(r.Name, p.label, doc, err))
+}
+
+// withoutPeer is peers less the one with this fingerprint.
+func withoutPeer(peers []*watchedPeer, fp string) []*watchedPeer {
+	var out []*watchedPeer
+	for _, p := range peers {
+		if p.pub.Fingerprint() != fp {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // watchedPublics is whose directories a directory watch follows: the
@@ -409,8 +447,10 @@ func messageEvents(r *store.Relay, listing client.Listing, opts watchOptions) ([
 // diffed by name against the one held. A peer the watch does not hold —
 // named by a relay that has lost its mind — is nothing. A re-issue that
 // diffs to nothing is still an event, with three empty lists: the relay
-// said something changed, and the issue time did.
-func directoryChanged(ctx context.Context, c *client.Client, r *store.Relay, peers []*watchedPeer, fp string) (*directoryEvent, error) {
+// said something changed, and the issue time did. A peer's directory that
+// does not verify is said once and reported as dropped, for the caller to
+// stop watching; your own ends the watch.
+func directoryChanged(ctx context.Context, c *client.Client, r *store.Relay, peers []*watchedPeer, fp string) (*directoryEvent, bool, error) {
 	var p *watchedPeer
 	for _, w := range peers {
 		if w.pub.Fingerprint() == fp {
@@ -418,24 +458,28 @@ func directoryChanged(ctx context.Context, c *client.Client, r *store.Relay, pee
 		}
 	}
 	if p == nil {
-		return nil, nil
+		return nil, false, nil
 	}
 	res, err := c.Directory(ctx, fp)
 	var httpErr *client.HTTPError
 	if errors.As(err, &httpErr) && (httpErr.Status == http.StatusNotFound || httpErr.Status == http.StatusForbidden) {
 		// Gone, or no longer ours to see, between the relay's word and
 		// the fetch: nothing to say about it.
-		return nil, nil
+		return nil, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if res.None {
-		return nil, nil
+		return nil, false, nil
 	}
 	d, err := channels.Verify(p.pub, res.Document, res.Signature)
+	if err != nil && p.self {
+		return nil, false, untrustedDirectory(r)
+	}
 	if err != nil {
-		return nil, untrustedDirectory(r, p)
+		dropPeer(r, p, res.Document, err)
+		return nil, true, nil
 	}
 	now := time.Now()
 	ev := &directoryEvent{Type: eventDirectory, Relay: r.Name, Peer: p.label, Issued: d.Issued,
@@ -463,7 +507,7 @@ func directoryChanged(ctx context.Context, c *client.Client, r *store.Relay, pee
 		}
 	}
 	p.held, p.issued = d, d.Issued
-	return ev, nil
+	return ev, false, nil
 }
 
 func sameBound(a, b *time.Time) bool {
