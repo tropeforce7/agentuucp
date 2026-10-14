@@ -218,8 +218,8 @@ func firstRule(s *store.Store, d *channels.Directory) {
 	fmt.Fprintf(os.Stderr, "%s: a channel rule makes your directory version 2. Peers on v0.17.0 or earlier "+
 		"will say it 'does not verify against the key you hold; do not trust it' until they update auu: "+
 		"that is their old build meeting a newer document, not a key problem. Their 'auu watch' on you "+
-		"stops and 'auu channel ls' refuses it; they still send to your channels, but when a send is "+
-		"refused their hint says the same instead of naming the channels. So set a rule once the peers "+
+		"stops and 'auu channel ls' refuses it; they still send to your channels, but when a send names "+
+		"a channel you do not have their hint says the same instead of naming the channels. So set a rule once the peers "+
 		"who watch you or list your channels are on v0.18.0; and this home cannot go back below v0.18.0 "+
 		"without dropping the rule first\n", prog)
 }

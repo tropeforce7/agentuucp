@@ -604,7 +604,19 @@ and v0.18.0 clients send what v0.16.0 clients send, but for a channel
 directory that carries a rule. A v0.18.0 relay is at wire level 2: it
 takes a version 2 channel directory, whose channels may carry
 `max_bytes`, `no_streams` and `no_forwards`, and enforces them; a v0.17.0 or earlier relay
-refuses one at the push, `400` naming the field it does not know. A v0.18.0
+refuses one at the push, `400` naming the field it does not know. A
+v0.17.0 or earlier `auu` meets a version 2 directory as one its strict
+decode refuses: its `channel ls` and its directory watch on that owner
+exit 2 saying the directory `does not verify against the key you hold; do
+not trust it`, and when a send of its names a channel the owner does not
+have, its hint says the same instead of naming the channels; its sends
+still go through. That is the old build meeting a newer document, not a
+key problem, and updating `auu` is the remedy. The order of upgrades
+still does not matter; what waits is the first rule: the relays go
+first, then every peer who watches the owner or lists their channels,
+and only then does the owner set one. An owner who sets none changes
+nothing for anyone, and a home that has set a rule cannot go back below
+v0.18.0 without dropping it first. A v0.18.0
 relay refuses more than an earlier one, each with a status and a
 sentence any of them shows, among them an inline envelope over 64 MiB,
 a forward with a path still to go over `max_bytes`, an owner document

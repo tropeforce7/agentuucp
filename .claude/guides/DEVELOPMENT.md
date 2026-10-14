@@ -417,6 +417,19 @@ own document may have removed or closed, and since a broken allow list
 already refuses every sender to a mailbox — malformed authentication data
 has no state here that means "not yet". The owner is told by the word on
 their listing and by what auu inbox prints, and their push is the repair.
+The same document carries a channel's own rules, a size in wire bytes and
+two yes-or-nos (no streams, no forwards), read out of it where the period
+is, after the name and the period and after each route's own cap, so a
+channel only ever tightens the relay: `judgeChannel` is the one
+judgement, which `channelForPost` writes for the post, the stream's open
+and a courier's delivery and which an upload's every attempt and
+placement asks again (`stillAdmitted`), and each rule refuses by its own
+code. A
+channel may be tighter than the relay and never looser: the push refuses
+a `max_bytes` over the most the relay takes of any kind, so the owner
+hears it at the push, and since each route's own cap is judged first a
+stored directory loosens nothing; the health answer says that number so
+the owner's command holds the flag to it before any push.
 
 **Nothing on the wire is from before, and one door is for what comes
 after.** v0.15.0 is the floor: everything was upgraded to it once,
@@ -499,14 +512,24 @@ each has a test that says so (`TestATokenCarriesNoSections` and its four
 siblings). A change to one is a new format version read beside the old,
 and a writer uses the oldest that says what it means. A document whose
 meaning grants something is not a place for a reader to skip what it does
-not understand.
+not understand. The channel directory's version 2 is the worked case: a
+directory carrying a rule is version 2 and one carrying none stays
+version 1 byte for byte, `Sign` writes the oldest that says what the
+document means whatever the caller set, a version 1 reader refuses a
+version 2 document (its strict decode meets the new field), a reader of
+a peer's directory told a version above any it reads says to update auu
+and never that the document is not to be trusted, and the owner is told before the push,
+by the relay's wire level, that a relay cannot hold it.
 
 **The relay says what it can do as a wire level.** `wire_level` on the
 health answer is a whole number, 1 from v0.15.0, that rises when a release
-gives the relay something a client may depend on, and never falls. A
-client keeps it and refuses a health answer without it; nothing compares
-it yet, and the first feature that depends on a relay's ability reads it
-and says "this relay is too old for that" before it tries.
+gives the relay something a client may depend on, and never falls; it is
+2 from v0.18.0, which takes and enforces a channel's rules. A client
+keeps it and refuses a health answer without it. The first comparison is
+the owner's channel command: before any push of a directory that
+carries a rule it asks every selected relay, and one below 2 refuses the
+edit by name, "relay R is at wire level 1 and cannot hold a channel
+rule", before any relay is pushed to.
 
 **A known section's data is read strictly, and a change to it is a new
 section name, never a field added to the old.** The door is lenient about

@@ -604,8 +604,9 @@ or earlier will say your directory `does not verify against the key you
 hold; do not trust it` until they update `auu`: that is their old build
 meeting a newer document, not a key problem, and updating is the remedy
 on their side. Their `auu watch` on you stops, `auu channel ls` refuses
-it, and when a send of theirs is refused the hint says the same instead
-of naming your channels, though they still send to your channels. It
+it, and when a send of theirs names a channel you do not have, its hint
+says the same instead of naming your channels; their sends still go
+through. It
 also says that this home cannot go back below v0.18.0 without dropping
 the rule first. A directory with no rule stays version 1,
 exactly as before.

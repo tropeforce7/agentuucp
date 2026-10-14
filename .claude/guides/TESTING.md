@@ -1964,8 +1964,14 @@ repository at the release's tag, fetching nothing, so that Go stamps the
 binaries with their version as it stamps any tagged build, and the image
 builds them in a stage of its own beside this tree's. Its rows are an old
 recipient reading a new message to several, as an envelope and as a
-stream; a new sender posting through an old relay; and an old sender,
-with the old tools, on a new relay. Each row checks each old program's
+stream; a new sender posting through an old relay; an old sender, with
+the old tools, on a new relay; and a channel rule met by the old build
+on both sides: its `channel ls` and directory watch on a version 2
+directory exiting 2 in its own words, for every rule and for
+`no_forwards` alone; its stream to a channel that takes none shown the
+relay's sentence under a code it does not know; a rule refused before
+any push to an old relay, naming its wire level; and a directory with no
+rule taken by the old relay as it always was (O06 to O09). Each row checks each old program's
 version before it relies on it, so a row cannot pass against this
 tree's binary by mistake. A promise that an older build ignores or refuses by name what a
 newer one adds is tested by the older build itself, never by a fake of
@@ -2002,8 +2008,27 @@ charge on the forward route, where every decode is, with the cost shown
 not read it is shown not to (`TestACouriersRecipientCountIsNotRead`), and
 the log is shown not to carry it (`TestTheCountIsNotLogged`). An answer's
 section is read by the client absent, present, outside its rule and of
-another shape (`TestTheHealthAnswersMaxRecipients`). And the previous
+another shape (`TestTheHealthAnswersMaxRecipients`,
+`TestTheHealthAnswersChannelCeiling`). And the previous
 release reads it, in family O, since only the old binary can say what the old binary does.
+
+**A grant document's new version comes with the rows that say what each
+version means and what the older reader does.** The channel directory's
+version 2 is the worked case. The writer writes the oldest version that
+says what the document means, version 1 byte for byte when no rule is
+set (`TestSignWritesTheOldestVersionThatSaysWhatItMeans`); the owner's
+edit is checked under the version it will be signed as
+(`TestAnEditIsCheckedUnderTheVersionSignWillWrite`); the strict decode and
+the trailing-byte rows run under both versions; `v` is held to its set,
+a version above any this build reads told apart from a malformed one in
+every shape of `v` (`TestLimitDirectoryV`,
+`TestOnlyAVersionAboveTwoIsErrVersion`); each new field at its edges
+(`TestLimitChannelMaxBytes`); the relay takes and holds it
+(`TestARelayTakesAndHoldsAVersionTwoDirectory`) and judges each rule on
+every route that stores into a channel; the owner's command refuses it
+to a relay that cannot hold it, before any push
+(`TestAVersionTwoDirectoryIsNotPushedToARelayAtLevelOne`); and the older
+build itself meets it in family O.
 
 ## Manual verification
 
