@@ -522,6 +522,45 @@ func TestServeAnswersAFollowUpUntilTheTurnsRunOut(t *testing.T) {
 	}
 }
 
+// The turns are counted at the run and not only when the round is drawn up
+// (G36, R52): two asks on one thread with one turn left, both pending when
+// the round began, are one answer, and the other is left as pending leaves
+// one past its turns: not settled, not failed, not reported, and unread.
+func TestServeCountsTheTurnsAtEachRunOfARound(t *testing.T) {
+	alice, bob := newExpert(t, modeReadOnly)
+	bob.row.MaxTurns = 1
+	bob.write(t)
+	first := alice.ask(t, "jostle", "one thread", "first question")
+	second := alice.askOn(t, "jostle", first.Thread, "one thread", "second question")
+	report := bob.round(t)
+	if len(report.Answered) != 1 || len(report.Failed) != 0 || len(report.Skipped) != 0 {
+		t.Fatalf("one round on a thread of one turn: %+v; want one answer and nothing else", report)
+	}
+	led := bob.ledgerOf(t)
+	if n := led.answered(first.Thread); n != 1 {
+		t.Fatalf("the ledger counts %d turns on a thread of one", n)
+	}
+	if e, ok := led.Messages[second.ID]; ok {
+		t.Fatalf("the message past its turn has a ledger entry: %+v", e)
+	}
+	var in inboxJSON
+	if err := json.Unmarshal([]byte(bob.run("inbox", "--json")), &in); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range in.Messages {
+		if m.ID == second.ID {
+			found = true
+			if m.Read {
+				t.Fatal("the message past its turn was marked read")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the message past its turn is not in the inbox")
+	}
+}
+
 // A handler that fails leaves the message unread and unanswered, counts the
 // attempt, and gives up when the count runs out.
 func TestServeCountsFailuresAndGivesUp(t *testing.T) {

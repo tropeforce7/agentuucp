@@ -760,12 +760,18 @@ func (r *serveRun) recordBacklog(backlog bool) (int, error) {
 // nothing a peer can write in a message stops the expert for good.
 func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 	// pending decided the round's messages before any was answered, so a
-	// message it took may since have become another peer's thread: two
-	// asks on one new thread in one round. pending takes them in order of
-	// arrival, so the first to arrive is tried first and is now the
-	// opener. Asked again here, the other is left as channelFor leaves it.
+	// message it took may since have become another peer's thread, or
+	// lost its turn: two asks on one new thread in one round, or two asks
+	// on one thread with a turn left between them. pending takes them in
+	// order of arrival, so the first to arrive is tried first and is now
+	// the opener, or has had the last turn. Asked again here, the other
+	// is left as pending leaves it: not settled, not failed, not
+	// reported, and in the inbox.
 	ch := r.channelFor(m)
 	if ch == nil {
+		return nil
+	}
+	if !r.answerable(m) {
 		return nil
 	}
 	thread := m.Inner.Body.Thread
