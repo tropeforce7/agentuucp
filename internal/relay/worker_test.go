@@ -992,6 +992,85 @@ func TestABackoffSurvivesARestart(t *testing.T) {
 	}
 }
 
+// TestARestartWaitsOnlyUntilTheNextRetry: a restarted relay knows of a row
+// put off before it started only from the queue, and sleeps until that row
+// is due, not the empty queue's hour (G40, R56).
+func TestARestartWaitsOnlyUntilTheNextRetry(t *testing.T) {
+	h := peered(t, []string{"bar"}, nil, nil)
+	user := h.user(t, "alice")
+	id := h.queue(user, sealedFor(h.fpOf(t, "bob"), "ct"), "bar")
+	now := h.clock.Now()
+	if err := h.store.Retry(id, now, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	fresh := worker(t, h)
+	fresh.dial = func(*store.Relay) (*client.Client, error) {
+		t.Error("a restarted relay dialled a neighbour whose row was not due")
+		return nil, errors.New("connection refused")
+	}
+	r, ok := fresh.courier.Neighbour("bar")
+	if !ok {
+		t.Fatal("no neighbour bar")
+	}
+	if wait := fresh.drain(r); wait != time.Minute {
+		t.Errorf("a restarted relay sleeps %s for a row due in a minute", wait)
+	}
+	// A row due in the past second is not slept on for nothing: the floor
+	// is a second.
+	h.clock.advance(time.Minute - time.Second/2)
+	if wait := fresh.drain(r); wait != time.Second {
+		t.Errorf("with the row due in half a second the worker sleeps %s, want the second's floor", wait)
+	}
+	// And a row due beyond the hour is slept on for the hour, the cap.
+	now = h.clock.Now()
+	if err := h.store.Retry(id, now, now.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if wait := fresh.drain(r); wait != maxRetry {
+		t.Errorf("with the row due in two hours the worker sleeps %s, want the cap's %s", wait, maxRetry)
+	}
+}
+
+// NextDue is the earliest waiting row's next try for one neighbour: not
+// another neighbour's, not a row that is no longer waiting, and not one past
+// its gives_up, which is GiveUp's (G40, R56).
+func TestTheQueueSaysWhenItIsNextDue(t *testing.T) {
+	h := peered(t, []string{"bar", "baz"}, nil, nil)
+	user := h.user(t, "alice")
+	now := h.clock.Now()
+	if _, ok, err := h.store.NextDue("bar", now); err != nil || ok {
+		t.Fatalf("an empty queue is next due: %v, %v", ok, err)
+	}
+	later := h.queue(user, sealedFor(h.fpOf(t, "bob"), "ct"), "bar")
+	sooner := h.queue(user, sealedFor(h.fpOf(t, "bob"), "ct2"), "bar")
+	other := h.queue(user, sealedFor(h.fpOf(t, "bob"), "ct3"), "baz")
+	for id, d := range map[int64]time.Duration{later: 30 * time.Minute, sooner: 10 * time.Minute, other: time.Minute} {
+		if err := h.store.Retry(id, now, now.Add(d)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if next, ok, err := h.store.NextDue("bar", now); err != nil || !ok || !next.Equal(now.Add(10*time.Minute).Truncate(time.Second)) {
+		t.Fatalf("next due %s, %v, %v; want the sooner row's %s", next, ok, err, now.Add(10*time.Minute))
+	}
+	if err := h.store.Handed(sooner, 1, now); err != nil {
+		t.Fatal(err)
+	}
+	if next, ok, err := h.store.NextDue("bar", now); err != nil || !ok || !next.Equal(now.Add(30*time.Minute).Truncate(time.Second)) {
+		t.Fatalf("with the sooner row handed, next due %s, %v, %v; want the later row's", next, ok, err)
+	}
+	var until int64
+	if err := h.store.db.QueryRow(`SELECT gives_up FROM outbound WHERE id = ?`, later).Scan(&until); err != nil {
+		t.Fatal(err)
+	}
+	givesUp := time.Unix(until, 0)
+	if _, ok, err := h.store.NextDue("bar", givesUp.Add(-time.Second)); err != nil || !ok {
+		t.Fatalf("a second before its gives_up the row is not counted: %v, %v", ok, err)
+	}
+	if _, ok, err := h.store.NextDue("bar", givesUp); err != nil || ok {
+		t.Fatalf("a row at its gives_up is counted: %v, %v", ok, err)
+	}
+}
+
 // TestAWorkerWithNothingToDoSaysNothing: a worker turns on its own timer and
 // on every row that arrives, so a line per turn would be a log that says a
 // relay is idle, once a minute, for ever — and the lines an operator needs

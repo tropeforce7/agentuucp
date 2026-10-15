@@ -778,6 +778,7 @@ internal/relay/certstore.go (*Store).CertBySerial time time.Unix(notAfter, 0) = 
 internal/relay/certstore.go (*Store).CertBySerial time time.Unix(notBefore, 0) = local: the relay's own column, the not_before of a certificate its own client authority issued, written from the issue at insertCert
 internal/relay/certstore.go (*Store).certRows time time.Unix(notAfter, 0) = local: the relay's own column, the not_after of a certificate its own client authority issued, written from the issue at insertCert
 internal/relay/certstore.go (*Store).certRows time time.Unix(notBefore, 0) = local: the relay's own column, the not_before of a certificate its own client authority issued, written from the issue at insertCert
+internal/relay/outbound.go (*Store).NextDue time time.Unix(next.Int64, 0) = local: the relay's own column, the least of its clock at the receipt or at a failed attempt plus the backoff, written at the enqueue or a retry; the wait made of it is held to a second and the hour
 internal/relay/outbound.go (*Store).GiveUp time time.Unix(received, 0) = local: the relay's own column, its clock at the receipt, written at the enqueue
 internal/relay/outbound.go (*Store).PurgeOutbound time time.Unix(lastTry, 0) = local: the relay's own column, its clock at the last attempt, written at the hand-over or the final answer
 internal/relay/outbound.go outboundFrom time time.Unix(givesUp, 0) = local: the relay's own column, its clock at the receipt plus forward_ttl, written at the enqueue

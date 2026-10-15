@@ -71,9 +71,10 @@ import (
 // channel ceiling were added, 577 when quarantine trust's branch for a
 // sent message, which a quarantined one never is, went (G31), 578 when
 // the owed acknowledgement's refusal named its message (G32), 579 when a
-// stream's sources were hashed as they were sealed (G34). A walk that
-// finds fewer is not reaching the tree.
-const floor = 579
+// stream's sources were hashed as they were sealed (G34), 580 when the
+// courier's queue said when it is next due (G40). A walk that finds fewer
+// is not reaching the tree.
+const floor = 580
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.

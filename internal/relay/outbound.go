@@ -611,6 +611,20 @@ func (s *Store) NextOutbound(neighbour string, now time.Time) (*Outbound, error)
 	return o, err
 }
 
+// NextDue is when the earliest row waiting for a neighbour is next to be
+// tried, and false when none waits. A row past its gives_up is left out:
+// it is GiveUp's, which a turn runs before anything else, and not a row
+// to wake for (G40, R56).
+func (s *Store) NextDue(neighbour string, now time.Time) (time.Time, bool, error) {
+	var next sql.NullInt64
+	err := s.db.QueryRow(`SELECT MIN(next_try) FROM outbound
+		WHERE neighbour = ? AND state = ? AND gives_up > ?`, neighbour, OutWaiting, now.Unix()).Scan(&next)
+	if err != nil || !next.Valid {
+		return time.Time{}, false, err
+	}
+	return time.Unix(next.Int64, 0).UTC(), true, nil
+}
+
 // scanOutbound reads one row, and scanOutboundRows one of many. The two
 // exist because database/sql's Row and Rows share no interface for Scan and
 // the column list must be written once; whichever is passed, the same

@@ -272,7 +272,9 @@ func (w *workers) drain(r *store.Relay) time.Duration {
 	// turn and the operator is told.
 	var last int64
 	// soonest is when the earliest row this turn put off on its own comes
-	// due, an empty queue's hour when none was.
+	// due, an empty queue's hour when none was. A turn that finds nothing
+	// due asks the queue as well (untilDue), since a row put off before
+	// this process started is written down and not remembered.
 	soonest := maxRetry
 	// One client for the turn, not one for each row: a dial reads the
 	// certificate store and builds the client's transport. Each request
@@ -301,7 +303,7 @@ func (w *workers) drain(r *store.Relay) time.Duration {
 		}
 		if row == nil {
 			w.report(r.Name, handed, failed)
-			return soonest
+			return w.untilDue(r.Name, soonest)
 		}
 		if row.ID == last {
 			w.log.Error("courier: the queue is not moving; a message was attempted twice in one turn, "+
@@ -345,6 +347,25 @@ func (w *workers) drain(r *store.Relay) time.Duration {
 			return wait
 		}
 	}
+}
+
+// untilDue is how long a turn that found nothing due sleeps: until the
+// earliest waiting row comes due, no sooner than a second and no later
+// than soonest. A worker started after a row was put off knows of it only
+// from the queue, and slept the empty queue's hour past a row due in a
+// minute unless a new arrival woke it (G40, R56). A row past its gives_up
+// is not counted: GiveUp ends it at the next turn, and the hour's turn
+// reaches it then as it always has.
+func (w *workers) untilDue(neighbour string, soonest time.Duration) time.Duration {
+	next, ok, err := w.store.NextDue(neighbour, w.now())
+	if err != nil {
+		w.log.Error("courier: reading when the queue for a neighbour is next due failed", "neighbour", neighbour, "err", err)
+		return min(soonest, firstRetry)
+	}
+	if !ok {
+		return soonest
+	}
+	return min(soonest, max(next.Sub(w.now()), time.Second))
 }
 
 // What one attempt came to. A row is handed over, or it is this row's own
