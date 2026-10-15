@@ -180,14 +180,19 @@ func sealStreams(s *store.Store, id *identity.Identity, r *store.Relay, to []add
 
 	var written []*pending
 	fail := func(who string, err error) error {
-		for _, p := range written {
-			p.remove(s)
-		}
 		if errors.Is(err, stream.ErrForm) {
-			return usageErrf("%v", err)
+			_, err = withLeftovers(usageErrf("%v", err), written, s)
+			return err
 		}
-		return fmt.Errorf("sealing the copy for %s: %w; nothing was sent, and the outbox keeps none of this message",
-			identity.Printable(who), err)
+		// The sentence that the outbox keeps none of it is true only when
+		// everything written was taken back; what was not is said instead
+		// (G43, R59).
+		left, err := withLeftovers(fmt.Errorf("sealing the copy for %s: %w; nothing was sent",
+			identity.Printable(who), err), written, s)
+		if !left {
+			err = fmt.Errorf("%w, and the outbox keeps none of this message", err)
+		}
+		return err
 	}
 	started := time.Now().UTC().Truncate(time.Second)
 	for i, m := range manifests {
@@ -258,7 +263,7 @@ func finishStream(s *store.Store, id *identity.Identity, r *store.Relay, p *pend
 	c, err := dial(s, id, r)
 	if err != nil {
 		if fresh {
-			p.remove(s)
+			p.clear(s)
 		}
 		return sentJSON{}, err
 	}
@@ -271,7 +276,7 @@ func finishStream(s *store.Store, id *identity.Identity, r *store.Relay, p *pend
 			// to resume and the sealed copy would only save the sealing.
 			// Leaving gigabytes in the outbox for a message that was refused
 			// outright is the worse of the two.
-			p.remove(s)
+			p.clear(s)
 		case isStorageFull(err):
 			// The relay ran out of room part way. The sealed copy is here,
 			// and the relay keeps what its rule keeps for as long as it
@@ -286,7 +291,7 @@ func finishStream(s *store.Store, id *identity.Identity, r *store.Relay, p *pend
 		}
 		return sentJSON{}, transportErr(hint)
 	}
-	p.remove(s)
+	p.clear(s)
 
 	if err := s.Save(store.Sent, &store.Stored{
 		RelayID:  relayID,

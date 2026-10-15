@@ -45,10 +45,12 @@ func writeCopies(s *store.Store, r *store.Relay, channel string, copies []sealed
 		return nil, err
 	}
 	var written []*pending
-	undo := func() {
-		for _, p := range written {
-			p.remove(s)
-		}
+	// undo takes back what was written, and a half that will not go is
+	// said in the error with what it leaves, never beside a sentence that
+	// the outbox keeps none of the message (G43, R59).
+	undo := func(err error) error {
+		_, err = withLeftovers(err, written, s)
+		return err
 	}
 	started := time.Now().UTC().Truncate(time.Second)
 	for _, c := range copies {
@@ -56,8 +58,7 @@ func writeCopies(s *store.Store, r *store.Relay, channel string, copies []sealed
 		outer.Ch = channel
 		raw, err := json.Marshal(&outer)
 		if err != nil {
-			undo()
-			return nil, err
+			return nil, undo(err)
 		}
 		p := &pending{
 			MessageID:      c.inner.ID,
@@ -76,13 +77,11 @@ func writeCopies(s *store.Store, r *store.Relay, channel string, copies []sealed
 		}
 		f, err := os.OpenFile(envPath(s, p.stem), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 		if errors.Is(err, os.ErrExist) {
-			undo()
-			return nil, fmt.Errorf("two recipients' fingerprints begin with %s, which names a copy's file in the outbox; "+
-				"send to them in separate messages", p.To[:identity.ShortIDLen])
+			return nil, undo(fmt.Errorf("two recipients' fingerprints begin with %s, which names a copy's file in the outbox; "+
+				"send to them in separate messages", p.To[:identity.ShortIDLen]))
 		}
 		if err != nil {
-			undo()
-			return nil, err
+			return nil, undo(err)
 		}
 		_, werr := f.Write(raw)
 		if serr := f.Sync(); werr == nil {
@@ -93,16 +92,14 @@ func writeCopies(s *store.Store, r *store.Relay, channel string, copies []sealed
 		}
 		if werr != nil {
 			os.Remove(envPath(s, p.stem))
-			undo()
-			return nil, werr
+			return nil, undo(werr)
 		}
 		// The record goes down after the sealed copy, so a crash between
 		// the two leaves a file nothing lists, never a record with nothing
 		// to post.
 		if err := p.save(s); err != nil {
 			os.Remove(envPath(s, p.stem))
-			undo()
-			return nil, err
+			return nil, undo(err)
 		}
 		written = append(written, p)
 	}
@@ -189,7 +186,7 @@ func postCopy(c *client.Client, s *store.Store, p *pending) (int64, error) {
 // landCopy is a copy the relay has: its outbox record and file go, and the
 // sent record says where it is.
 func landCopy(s *store.Store, p *pending, relayID int64) {
-	p.remove(s)
+	p.clear(s)
 	updateSentCopy(s, p.MessageID, p.To, func(c *store.SentCopy) {
 		c.RelayID, c.RefusedCode, c.Refused, c.Dropped = relayID, "", "", false
 	})
@@ -420,7 +417,23 @@ func outboxDrop(args []string) error {
 			hits[0].MessageID[:12], len(hits), strings.Join(whom, ", "), prog, idArg)
 	}
 	p := hits[0]
-	p.remove(s)
+	// The drop is what was asked, so a half that will not go refuses it
+	// rather than being said beside a "dropped" that is not true: with the
+	// record left, the copy still waits and is not marked given up.
+	if err := p.remove(s); err != nil {
+		var re *removeError
+		if !errors.As(err, &re) || !re.orphan {
+			return fmt.Errorf("the %s of %s to %s was not dropped: %v", outboxKind(p), p.MessageID[:12], p.label(), err)
+		}
+		// The record is gone, so nothing lists or resumes the copy: it is
+		// given up in its sent record as a drop is, and the file left
+		// behind is the error rather than a "dropped" that says all went.
+		if p.RecipientCount != 0 {
+			updateSentCopy(s, p.MessageID, p.To, dropCopy)
+		}
+		return fmt.Errorf("the %s of %s to %s is no longer waiting, but %v",
+			outboxKind(p), p.MessageID[:12], p.label(), err)
+	}
 	// A copy of a message to several, an envelope or a stream, is given up
 	// in its sent record too,
 	// so that auu read does not go on saying it waits.

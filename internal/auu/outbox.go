@@ -166,10 +166,66 @@ func (p *pending) save(s *store.Store) error {
 
 // remove clears both halves. The record goes first: without it the sealed file
 // is unfinishable, so a crash between the two leaves nothing that looks
-// resumable.
-func (p *pending) remove(s *store.Store) {
-	os.Remove(pendingPath(s, p.name()))
-	os.Remove(p.sealedPath(s))
+// resumable. What will not go is the error, never discarded (G43, R59): a
+// record that will not go leaves its sealed file beside it, so the copy is
+// still whole and the next 'send --resume' sends it; a sealed file that will
+// not go, its record gone, is an orphan nothing lists or sends.
+func (p *pending) remove(s *store.Store) error {
+	record := pendingPath(s, p.name())
+	if err := os.Remove(record); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return &removeError{path: record, err: err}
+	}
+	sealed := p.sealedPath(s)
+	if err := os.Remove(sealed); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return &removeError{path: sealed, err: err, orphan: true}
+	}
+	return nil
+}
+
+// removeError is a half of an outbox entry that would not go, said for what
+// it leaves behind.
+type removeError struct {
+	path   string
+	err    error
+	orphan bool
+}
+
+func (e *removeError) Error() string {
+	if e.orphan {
+		return fmt.Sprintf("the outbox record is gone but the sealed file %s could not be removed: %v; "+
+			"nothing lists it now, and unless another %s is sending it at this moment it can be removed by hand",
+			e.path, e.err, prog)
+	}
+	return fmt.Sprintf("the outbox record %s could not be removed: %v; the next '%s send --resume' would send that copy",
+		e.path, e.err, prog)
+}
+
+func (e *removeError) Unwrap() error { return e.err }
+
+// withLeftovers is err with what of written would not be taken back, for a
+// caller that gives a message up before any of it went, and whether any
+// was left: the outbox keeps what is named there, and the next 'send
+// --resume' would send a record that stayed.
+func withLeftovers(err error, written []*pending, s *store.Store) (bool, error) {
+	var left []string
+	for _, p := range written {
+		if rerr := p.remove(s); rerr != nil {
+			left = append(left, rerr.Error())
+		}
+	}
+	if len(left) == 0 {
+		return false, err
+	}
+	return true, fmt.Errorf("%w; and what was written of it could not all be taken back: %s", err, strings.Join(left, "; "))
+}
+
+// clear is remove for a caller whose own work has ended, a send finished or
+// one given up before it went: a half that will not go is said on standard
+// error, with its path and what it leaves, and the caller's outcome stands.
+func (p *pending) clear(s *store.Store) {
+	if err := p.remove(s); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", prog, err)
+	}
 }
 
 // listPending returns every unfinished stream and copy, oldest first. A
