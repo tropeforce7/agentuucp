@@ -345,7 +345,9 @@ func TestStreamResumesAfterAnInterruptedUpload(t *testing.T) {
 
 // A record whose sealed stream has gone cannot be resumed, and says so rather
 // than uploading something else. The bytes cannot be made again: the nonce
-// counter that sealed them only goes forwards.
+// counter that sealed them only goes forwards. It is unfinished work the
+// resume could not finish, so the resume fails and names the record to
+// remove (G44, R60); it used to say there was nothing to resume.
 func TestResumeReportsASealedStreamThatHasGone(t *testing.T) {
 	relayURL, gate := startInterruptibleRelay(t, 1, 64<<10)
 	alice := newUser(t, "alice", relayURL)
@@ -368,9 +370,14 @@ func TestResumeReportsASealedStreamThatHasGone(t *testing.T) {
 	}
 
 	gate.open()
-	out := alice.run("send", "--resume")
-	if !strings.Contains(out, "nothing to resume") {
-		t.Fatalf("resume with no sealed stream said %q", strings.TrimSpace(out))
+	var out string
+	var err error
+	said := captureStderr(t, func() { out, err = alice.tryRun("send", "--resume") })
+	if err == nil || !strings.Contains(err.Error(), "1 of 1 unfinished messages did not finish") {
+		t.Fatalf("resume with no sealed stream: %v\nstdout: %s", err, out)
+	}
+	if !strings.Contains(said, p.MessageID+".json has no sealed file") || !strings.Contains(said, "remove it by hand") {
+		t.Fatalf("the warning said:\n%s", said)
 	}
 }
 

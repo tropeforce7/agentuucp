@@ -339,18 +339,25 @@ func resumePending(s *store.Store, id *identity.Identity, asJSON bool, relay str
 	if err != nil {
 		return err
 	}
+	// A broken record fails every resume until it goes, and auu outbox
+	// drop lists only what can be resumed, so the sentence names the file
+	// and says to remove it.
 	for _, b := range broken {
 		fmt.Fprintf(os.Stderr,
 			"warning: outbox record %s has no sealed file beside it, or not one this program wrote, "+
-				"and cannot be resumed; send the message again\n", b)
+				"and cannot be resumed; remove it by hand, and send the message again\n", pendingPath(s, b))
 	}
-	if len(waiting) == 0 {
+	// Nothing to resume is neither a copy waiting nor a record broken: a
+	// broken one is unfinished work this run was asked to finish and
+	// could not, so it is counted with the failures and the exit says so,
+	// the whole ones still resumed beside it (G44, R60).
+	if len(waiting) == 0 && len(broken) == 0 {
 		if !asJSON {
 			fmt.Println("nothing to resume")
 		}
 		return nil
 	}
-	var failed, worst int
+	failed, worst := len(broken), 0
 	fail := func(p *pending, err error) {
 		failed++
 		fmt.Fprintf(os.Stderr, "%s: %v\n", p.MessageID[:12], err)
@@ -391,7 +398,7 @@ func resumePending(s *store.Store, id *identity.Identity, asJSON bool, relay str
 	// or could not be reached is a transport failure to the skill, and a
 	// key that is locked asks for a person, whatever else failed beside it.
 	if failed > 0 {
-		err := fmt.Errorf("%d of %d unfinished messages did not finish", failed, len(waiting))
+		err := fmt.Errorf("%d of %d unfinished messages did not finish", failed, len(waiting)+len(broken))
 		if worst > exitUsage {
 			return &exitError{code: worst, err: err}
 		}
