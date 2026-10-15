@@ -297,8 +297,11 @@ func (r *serveRun) round(ctx context.Context, backlog, longRun bool) error {
 	if err != nil {
 		return err
 	}
-	if _, _, err := fetchEvery(r.s, r.id, relays, len(relays) == 1); err != nil {
-		if !longRun {
+	if _, _, err := fetchEvery(ctx, r.s, r.id, relays, len(relays) == 1); err != nil {
+		// A stop is the round's end in the long run too, as it is at the
+		// hold: the fetch takes the round's context, so a stop does not
+		// wait out a request in flight (G38, R54).
+		if !longRun || ctx.Err() != nil {
 			return err
 		}
 		if !r.unreachable {

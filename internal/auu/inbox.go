@@ -838,7 +838,11 @@ type inboxJSON struct {
 // is still mail, and one relay being down must not stop somebody reading it.
 // The exception is a run narrowed to one relay, where a failure is the
 // command's failure, because there is nothing else it could have been doing.
-func fetchEvery(s *store.Store, id *identity.Identity, relays []*store.Relay, narrowed bool) (fetchResult, []relayFetch, error) {
+//
+// ctx is the caller's, so that a stop reaches a fetch in flight: serve's
+// round passes its own, and a cancelled one ends the fetch with the
+// context's error and no relay said to be unreachable (G38, R54).
+func fetchEvery(ctx context.Context, s *store.Store, id *identity.Identity, relays []*store.Relay, narrowed bool) (fetchResult, []relayFetch, error) {
 	var (
 		total    fetchResult
 		reports  []relayFetch
@@ -850,7 +854,7 @@ func fetchEvery(s *store.Store, id *identity.Identity, relays []*store.Relay, na
 		c, err := dial(s, id, r)
 		if err == nil {
 			var said relaySaid
-			report.fetchResult, said, err = fetch(ctx(), s, id, c, r, 0)
+			report.fetchResult, said, err = fetch(ctx, s, id, c, r, 0)
 			report.Queued, report.Allow, report.Card = said.Queued, said.Allow, said.Card
 			report.First, report.Last = said.First, said.Last
 			report.Directory = said.Directory
@@ -867,9 +871,14 @@ func fetchEvery(s *store.Store, id *identity.Identity, relays []*store.Relay, na
 			// that forwards nothing refuses the route, and most relays
 			// forward nothing, so a failure here is silence and never a
 			// reason for the inbox to fail.
-			if queued, qerr := c.Queue(ctx()); qerr == nil {
+			if queued, qerr := c.Queue(ctx); qerr == nil {
 				report.Outbound = queued
 			}
+		}
+		if err != nil && ctx.Err() != nil {
+			// Stopped, not unreachable: the relays after this one are
+			// not asked.
+			return total, nil, ctx.Err()
 		}
 		if err != nil {
 			// A damaged file is not a relay that could not be reached: it
@@ -936,7 +945,7 @@ func cmdInbox(args []string) error {
 			return err
 		}
 		narrowed := len(relays) == 1
-		if res, reports, err = fetchEvery(s, id, relays, narrowed); err != nil {
+		if res, reports, err = fetchEvery(ctx(), s, id, relays, narrowed); err != nil {
 			return err
 		}
 		// A peer's question, answered here when the person has turned
