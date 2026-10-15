@@ -296,6 +296,10 @@ What the handler prints on standard output is the reply. Exit 0 having
 printed nothing means "nothing to say": the message is settled and no reply
 goes out. Any other exit is a failure. The message stays unread, the
 attempt is counted, and the next round tries again until `retries` runs out.
+Serve reads the reply back from the file it caught it in. A file that is
+gone or cannot be read, an after hook's `chmod` among the causes, is a
+failure in the same way, said as `what the handler printed could not be
+read` with the reason, and never "nothing to say".
 
 A reply is held to the same rule as a typed message — prose, with line
 breaks and tabs — and a Windows line ending is folded to a line break

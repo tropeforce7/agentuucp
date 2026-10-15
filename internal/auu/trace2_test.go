@@ -866,9 +866,9 @@ func TestServeFoldsAHandlersCRLFBeforeTheRule(t *testing.T) {
 	if err := os.WriteFile(path, []byte("The answer is yes.\r\nSee the attached patch.\r\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	text, has := output(path)
-	if !has {
-		t.Fatal("output() said the handler had nothing to say")
+	text, has, err := output(path)
+	if err != nil || !has {
+		t.Fatalf("output() said the handler had nothing to say: %v", err)
 	}
 	if text != "The answer is yes.\nSee the attached patch." {
 		t.Errorf("output() made %q of a CRLF reply", text)
@@ -879,7 +879,7 @@ func TestServeFoldsAHandlersCRLFBeforeTheRule(t *testing.T) {
 	if err := os.WriteFile(path, []byte("one\rtwo\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	text, _ = output(path)
+	text, _, _ = output(path)
 	if err := message.ValidText(text); err == nil || !strings.Contains(err.Error(), "U+000D") {
 		t.Errorf("a lone carriage return in a reply: %v, want the rule's refusal naming U+000D", err)
 	}

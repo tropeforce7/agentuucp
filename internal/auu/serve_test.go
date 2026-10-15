@@ -794,6 +794,78 @@ func TestServeKeepsAReplyItCouldNotSend(t *testing.T) {
 	}
 }
 
+// What the handler printed and the program cannot read back is the
+// message's failure, counted and tried again, not an answer of nothing
+// (G39, R55): it was settled as nothing to say and lost without a word.
+func TestServeFailsWhenItCannotReadWhatTheHandlerPrinted(t *testing.T) {
+	skipUnlessPermissionsHold(t)
+	alice, bob := newExpert(t, modeReadOnly)
+	bob.row.After = `chmod 000 "$AUU_THREAD_DIR/out-$AUU_MESSAGE_ID.txt"`
+	bob.write(t)
+	t.Setenv(handlerScript, "echo:an answer the program cannot read")
+	sent := alice.ask(t, "jostle", "output read failure", "question")
+	var out string
+	stderr := captureStderr(t, func() { out, _ = bob.tryRun("serve", "--once", "--json") })
+	outputPath := filepath.Join(bob.home, "serve", "threads", sent.Thread, "out-"+sent.ID+".txt")
+	if _, err := os.ReadFile(outputPath); !os.IsPermission(err) {
+		t.Fatalf("the fault did not make the output unreadable: %v", err)
+	}
+	var round roundJSON
+	if err := json.Unmarshal([]byte(out), &round); err != nil {
+		t.Fatal(err)
+	}
+	if len(round.Failed) != 1 || len(round.Answered) != 0 {
+		t.Fatalf("the round: %+v; want the message failed", round)
+	}
+	if !strings.Contains(stderr, "what the handler printed could not be read") {
+		t.Fatalf("the failure was said as:\n%s", stderr)
+	}
+	e := bob.ledgerOf(t).Messages[sent.ID]
+	if e == nil || e.Failures != 1 || e.GaveUp || !e.Handled.IsZero() {
+		t.Fatalf("the entry: %+v; want one failure and the message still to try", e)
+	}
+
+	// Put right, the retry answers it.
+	bob.row.After = ""
+	bob.write(t)
+	if r := bob.round(t); len(r.Answered) != 1 || r.Answered[0].ID != sent.ID {
+		t.Fatalf("the retry: %+v", r)
+	}
+	if reply := alice.replyOn(t, sent.Thread); reply.Text != "an answer the program cannot read" {
+		t.Fatalf("the reply is %q", reply.Text)
+	}
+}
+
+// A kept reply that is there and cannot be read is the message's failure,
+// not a reply never kept: the handler is not run again over an answer that
+// is on disk (G39, R55).
+func TestServeFailsWhenItCannotReadAKeptReply(t *testing.T) {
+	skipUnlessPermissionsHold(t)
+	alice, bob := newExpert(t, modeReadOnly)
+	marker := filepath.Join(t.TempDir(), "runs")
+	t.Setenv(handlerScript, "append:"+marker+";echo:an answer worth keeping")
+	sent := alice.ask(t, "jostle", "a question", "the first")
+	bob.run("inbox")
+	bob.run("peers", "rm", "alice")
+	captureStderr(t, func() { bob.tryRun("serve", "--once") })
+	kept := filepath.Join(bob.home, "serve", "threads", sent.Thread, "reply-"+sent.ID+".txt")
+	if err := os.Chmod(kept, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(kept, 0o600) })
+	bob.run("peers", "add", alice.exportLine())
+	stderr := captureStderr(t, func() { bob.tryRun("serve", "--once") })
+	if !strings.Contains(stderr, "the reply it was answered with could not be read") {
+		t.Fatalf("the failure was said as:\n%s", stderr)
+	}
+	if runs := strings.Count(readFile(t, marker), "\n"); runs != 1 {
+		t.Fatalf("the handler ran %d times; want the kept answer not made again", runs)
+	}
+	if e := bob.ledgerOf(t).Messages[sent.ID]; e == nil || e.Failures != 2 || !e.Handled.IsZero() {
+		t.Fatalf("the entry: %+v; want a second failure", e)
+	}
+}
+
 // Read-only: one worktree for the channel, shared by every thread, moved to
 // the checkout's HEAD when a new thread starts. Untracked scratch survives
 // the move; a tracked edit does not.

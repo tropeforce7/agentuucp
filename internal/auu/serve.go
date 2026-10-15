@@ -863,7 +863,12 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 	// answer, and neither are the hooks. A reply and its patch are kept
 	// together or not at all: one kept without its own patch, which an
 	// auu before the answer's own directory left, is answered again.
-	if text, ok := keptReply(replyPath); ok {
+	text, ok, err := keptReply(replyPath)
+	if err != nil {
+		r.failed(m, ch, fmt.Sprintf("the reply it was answered with could not be read: %v", err))
+		return nil
+	}
+	if ok {
 		if patch, ok := keptPatch(ch, patchDir, thread); ok {
 			return r.send(m, ch, text, patch, facts)
 		}
@@ -960,7 +965,14 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 		r.failed(m, ch, "after "+said(after, afterPath))
 		return nil
 	}
-	text, has := output(outPath)
+	// What the handler printed is read back from its file: one that is
+	// gone or cannot be read is the message's failure, tried again and
+	// given up on, never an answer of nothing.
+	text, has, err := output(outPath)
+	if err != nil {
+		r.failed(m, ch, fmt.Sprintf("what the handler printed could not be read: %v", err))
+		return nil
+	}
 	if !has {
 		// Nothing to say is an answer: the message is settled, and no
 		// reply goes out. In a side copy that means the change stays in
@@ -1125,19 +1137,29 @@ func said(run programRun, path string) string {
 // the reply for U+000D at every retry with the answer on disk the whole
 // time. A carriage return on its own is left for the rule, which fails
 // the round with its sentence, recorded as that message's failure.
-func output(path string) (string, bool) {
+//
+// A file that is there and says nothing is no answer, and is told apart
+// from one that is not there or cannot be read, which is the error (G39,
+// R55): an answer the program cannot read back was settled as nothing to
+// say, and lost without a word.
+func output(path string) (string, bool, error) {
 	data, err := regular.ReadFile(path)
 	if err != nil {
-		return "", false
+		return "", false, err
 	}
 	text := strings.TrimRight(foldCRLF(string(data)), " \t\r\n")
-	return text, strings.TrimSpace(text) != ""
+	return text, strings.TrimSpace(text) != "", nil
 }
 
 // keptReply is a reply written by an earlier round whose send did not get
-// through.
-func keptReply(path string) (string, bool) {
-	return output(path)
+// through. No file is no reply kept; one that is there and cannot be read
+// is the error.
+func keptReply(path string) (string, bool, error) {
+	text, ok, err := output(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	return text, ok, err
 }
 
 // channelOf is the channel a message is filed under, by name: the empty
