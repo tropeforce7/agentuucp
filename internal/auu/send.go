@@ -1,12 +1,14 @@
 package auu
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -17,9 +19,11 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/recipients"
+	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/term"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 type sentJSON struct {
@@ -555,6 +559,11 @@ func address(to, via string) (path []string, peer string, err error) {
 type sendMode struct {
 	stream, inline bool
 	channel        string
+	// sealed is where a caller that sends one answer again and again keeps
+	// the envelope it was sealed as, empty for every other send: serve,
+	// which retries a reply whose post may have reached the relay with its
+	// answer lost. See sealOnce.
+	sealed string
 	// path is the relays an address names before the recipient, nearest
 	// first, empty for a recipient on the relay being posted to — which is
 	// every message anybody sent before relays could forward, and still
@@ -684,9 +693,9 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 	}
 	body.Attachments = loaded
 
-	env, inner, err := envelope.SealFor(id, recipient, mode.channel, body)
+	env, inner, err := sealOnce(id, recipient, mode, body)
 	if err != nil {
-		return sentJSON{}, newThread, usageErrf("%v", err)
+		return sentJSON{}, newThread, err
 	}
 	// The estimate above is a fast path. This is the number that decides.
 	size, err := client.EnvelopeSize(env)
@@ -720,8 +729,12 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 		return sentJSON{}, newThread, transportErr(replyCannotGoBack(err, mode))
 	}
 
-	// Keep our own copy so threads can be reconstructed later.
-	if err := s.Save(store.Sent, &store.Stored{
+	// Keep our own copy so threads can be reconstructed later: once, on the
+	// first post that succeeded, since a kept envelope posted again is the
+	// same message under the same id.
+	if prior, err := s.Holding(store.Sent, inner.ID); err == nil && prior != nil {
+		// Already kept.
+	} else if err := s.Save(store.Sent, &store.Stored{
 		RelayID:    relayID,
 		Relay:      r.Name,
 		Received:   time.Now().UTC().Truncate(time.Second),
@@ -751,6 +764,119 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 	out.Kind = "envelope"
 	out.Path = store.JoinAddress(mode.path)
 	return out, newThread, nil
+}
+
+// keptSeal is the envelope a message was sealed as, with the inner record
+// the sent box keeps, as sealOnce writes it down.
+type keptSeal struct {
+	Envelope *envelope.Envelope `json:"envelope"`
+	Inner    *envelope.Inner    `json:"inner"`
+}
+
+// sealOnce is the envelope a message goes as. For a send with nowhere to
+// keep one that is a fresh seal, as it always was. Where the caller keeps
+// one (mode.sealed), the envelope sealed for an earlier attempt is posted
+// again unchanged, so that an attempt whose post reached the relay and
+// whose answer was lost, or after which the caller's own record could not
+// be written, is not a second message under a new id: the recipient's
+// store holds one message by its id and drops the other copy on its fetch
+// (G41, R57). The relay keeps no hash for a post to a mailbox, so the copy
+// posted again is a second row there until that fetch; a relay that
+// refuses it outright is S50, after this release.
+//
+// The file is written whole before the first post. One that is not there,
+// or that does not decode, as a write that stopped part way leaves it, is
+// an envelope no post was made from, and a fresh seal is the first; one
+// that is there and cannot be read is the caller's failure, never a seal
+// afresh, which would be the second message this is here to prevent. An
+// envelope kept for another recipient, a peer whose key changed between
+// attempts, or for other words or files than these, an answer an earlier
+// auu made again in between, is sealed again for this one.
+//
+// It is written to the disk before the post, the file and its directory
+// both, so that a post the relay took is never followed by a kept envelope
+// a lost power cut has emptied, which would read as no post at all.
+//
+// Envelopes only: a message that becomes a stream is sealed under a new
+// upload at every attempt, as before.
+func sealOnce(id *identity.Identity, recipient *identity.Public, mode sendMode, body message.Body) (*envelope.Envelope, *envelope.Inner, error) {
+	if mode.sealed != "" {
+		data, err := regular.ReadFile(mode.sealed)
+		switch {
+		case err == nil:
+			var k keptSeal
+			if wire.Decode(data, &k) == nil && k.Envelope != nil && k.Inner != nil &&
+				k.Envelope.To == recipient.Fingerprint() && k.Envelope.Ch == mode.channel &&
+				sameMessage(k.Inner.Body, body) {
+				return k.Envelope, k.Inner, nil
+			}
+		case !errors.Is(err, os.ErrNotExist):
+			return nil, nil, fmt.Errorf("the envelope kept for this message could not be read: %w", err)
+		}
+	}
+	env, inner, err := envelope.SealFor(id, recipient, mode.channel, body)
+	if err != nil {
+		return nil, nil, usageErrf("%v", err)
+	}
+	if mode.sealed != "" {
+		data, err := json.Marshal(keptSeal{Envelope: env, Inner: inner})
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := keepSealed(mode.sealed, data); err != nil {
+			return nil, nil, err
+		}
+	}
+	return env, inner, nil
+}
+
+// sameMessage says whether a kept envelope's inner body is the message
+// being sent: the same header, words and files, byte for byte.
+func sameMessage(kept, body message.Body) bool {
+	if kept.Type != body.Type || kept.Subject != body.Subject || kept.Thread != body.Thread ||
+		kept.InReplyTo != body.InReplyTo || kept.Text != body.Text || len(kept.Attachments) != len(body.Attachments) {
+		return false
+	}
+	for i, a := range kept.Attachments {
+		b := body.Attachments[i]
+		if a.Name != b.Name || a.SHA256 != b.SHA256 || !bytes.Equal(a.Data, b.Data) {
+			return false
+		}
+	}
+	return true
+}
+
+// keepSealed is writeNew with the file and its directory synced: what it
+// keeps has to be on the disk before the post it guards is made.
+func keepSealed(path string, data []byte) error {
+	f, err := createNew(path)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(path)
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		// No directory fsync there; NTFS journals the metadata itself.
+		return nil
+	}
+	d, err := regular.Dir(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	// A directory cannot be synced on every filesystem; the file's own
+	// sync above is the part that always holds.
+	d.Sync()
+	return nil
 }
 
 // replyCannotGoBack turns the first hop's refusal of an address nobody typed

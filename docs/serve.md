@@ -192,7 +192,12 @@ answer and its patch are kept together or not at all. An answer whose
 send to the relay failed goes out on its retry without the handler being
 run again, with the patch taken for it, measured against the old base and
 never a later turn's; that patch holds the work the console line calls
-gone from the worktree, so the asker still gets it. An answer whose patch
+gone from the worktree, so the asker still gets it. It goes as the same
+envelope, sealed once before its first post and kept beside the answer,
+so a retry after a post the relay took, its answer lost on the way back,
+is one reply under one id: the asker's inbox keeps one and drops the
+copy. A reply large enough to go as a stream is sealed afresh at each
+attempt, as before. An answer whose patch
 could not be taken is not kept: the message is tried again whole, as when
 the after hook refuses, so the first handler above is run again in the
 worktree made again. If that run answers and its patch can be taken, the

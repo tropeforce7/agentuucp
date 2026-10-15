@@ -880,6 +880,12 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 		}
 	}
 
+	// The handler runs for this message afresh, so an envelope kept for an
+	// earlier answer to it is not this one's.
+	if err := os.Remove(sealedFile(threadDir, m.Inner.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
 	afterPath := runFile(threadDir, "after", m.Inner.ID)
 	if ch.Before != "" {
 		beforePath := runFile(threadDir, "before", m.Inner.ID)
@@ -1040,7 +1046,11 @@ func (r *serveRun) send(m *store.Stored, ch *serveChannel, text, patch string, f
 		InReplyTo: m.Inner.ID,
 		Text:      text,
 	}
-	out, _, err := sendSealed(r.s, r.id, relay, recipient, body, attach, sendMode{})
+	// Sealed once and kept beside the reply until the message is settled,
+	// so that every retry posts the same envelope under the same id
+	// (sealOnce, G41, R57).
+	out, _, err := sendSealed(r.s, r.id, relay, recipient, body, attach,
+		sendMode{sealed: sealedFile(facts.threadDir, m.Inner.ID)})
 	if err != nil {
 		if isLocked(err) {
 			// The keys went away under a running service. Nothing is
@@ -1152,6 +1162,12 @@ func output(path string) (string, bool, error) {
 	}
 	text := strings.TrimRight(foldCRLF(string(data)), " \t\r\n")
 	return text, strings.TrimSpace(text) != "", nil
+}
+
+// sealedFile is where the envelope a message's reply was sealed as is kept
+// between attempts to post it.
+func sealedFile(threadDir, id string) string {
+	return filepath.Join(threadDir, "sealed-"+id+".json")
 }
 
 // keptReply is a reply written by an earlier round whose send did not get
