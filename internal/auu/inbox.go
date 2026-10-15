@@ -1183,6 +1183,9 @@ func cmdRead(args []string) error {
 	if err := s.MarkRead(box, m.Inner.ID); err != nil {
 		return err
 	}
+	// MarkRead saved a copy of its own; the one printed is this one, so it
+	// is told what was saved (G42, R58).
+	m.Read = true
 	if *asJSON {
 		return printJSON(wholeMessage(s, box, m))
 	}
@@ -1882,6 +1885,7 @@ func cmdWait(args []string) error {
 					if err := s.MarkRead(store.Inbox, m.Inner.ID); err != nil {
 						return err
 					}
+					m.Read = true
 					if *asJSON {
 						out := wholeMessage(s, store.Inbox, m)
 						return printJSON(waitJSON{Found: true, Message: &out, Waited: time.Since(start).Round(time.Second).String()})
