@@ -188,13 +188,17 @@ run again as any failed turn is. A side-copy handler that removed `.git`
 or ran `git init` and printed an answer fails when serve takes the patch;
 one that printed nothing has settled its message. The worktree is made
 again at the next message to reach it, which is usually the retry. An
-answer written and not sent goes out on its retry without the handler
-being run again, with the thread's latest patch, measured against the old
-base. For the first handler above, whose own patch could not be taken,
-that is an earlier turn's, if one took any; for an answer whose send to
-the relay failed, it is its own unless a later turn on the thread took
-one since. That patch holds the work the console line calls gone from the
-worktree, so the asker still gets it.
+answer and its patch are kept together or not at all. An answer whose
+send to the relay failed goes out on its retry without the handler being
+run again, with the patch taken for it, measured against the old base and
+never a later turn's; that patch holds the work the console line calls
+gone from the worktree, so the asker still gets it. An answer whose patch
+could not be taken is not kept: the message is tried again whole, as when
+the after hook refuses, so the first handler above is run again in the
+worktree made again. If that run answers and its patch can be taken, the
+answer goes with the patch of what that run changed, never the gone work;
+a handler that damages its worktree at every run fails at every retry and
+is given up on after `retries`.
 
 A worktree is not a container. Two threads cannot collide over files, but
 they can over anything else the project uses: a fixed port, a named

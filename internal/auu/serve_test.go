@@ -1474,7 +1474,8 @@ func TestServeSweepsAnIdleThread(t *testing.T) {
 	bob.serve(t)
 	threadDir := filepath.Join(bob.home, "serve", "threads", sent.Thread)
 	worktree := filepath.Join(bob.home, "serve", "worktrees", sent.Thread)
-	for _, path := range []string{threadDir, worktree} {
+	patchDir := filepath.Join(threadDir, "patch-"+sent.ID)
+	for _, path := range []string{threadDir, worktree, patchDir} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("%s is not there to sweep: %v", path, err)
 		}
@@ -1487,7 +1488,7 @@ func TestServeSweepsAnIdleThread(t *testing.T) {
 	if !strings.Contains(stderr, "thread "+shortID(sent.Thread)+" has been idle") {
 		t.Fatalf("the sweep said:\n%s", stderr)
 	}
-	for _, path := range []string{threadDir, worktree} {
+	for _, path := range []string{threadDir, worktree, patchDir} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("%s survived the sweep (%v)", path, err)
 		}
@@ -1973,7 +1974,7 @@ func TestServeKeepsThePatchWithTheReply(t *testing.T) {
 	bob.run("peers", "rm", "alice")
 	captureStderr(t, func() { bob.tryRun("serve", "--once") })
 
-	patch := filepath.Join(bob.home, "serve", "threads", sent.Thread, patchName(sent.Thread))
+	patch := filepath.Join(bob.home, "serve", "threads", sent.Thread, "patch-"+sent.ID, patchName(sent.Thread))
 	before := readFile(t, patch)
 	if !strings.Contains(before, "one.txt") {
 		t.Fatalf("the kept patch:\n%s", before)
@@ -1998,6 +1999,38 @@ func TestServeKeepsThePatchWithTheReply(t *testing.T) {
 	}
 }
 
+// A side copy's reply kept without a patch directory of its own, as an auu
+// before the answer had one left it, is not sent with whatever patch the
+// thread has: it is answered again, and goes with the patch taken for it.
+func TestServeAnswersAgainAReplyKeptWithoutItsOwnPatch(t *testing.T) {
+	alice, bob := newExpert(t, modeSideCopy)
+	marker := filepath.Join(t.TempDir(), "runs")
+	t.Setenv(handlerScript, "append:"+marker+";write:one.txt=the only change;echo:an answer worth keeping")
+	sent := alice.ask(t, "jostle", "a question", "the first")
+	bob.run("inbox")
+	bob.run("peers", "rm", "alice")
+	captureStderr(t, func() { bob.tryRun("serve", "--once") })
+
+	threadDir := filepath.Join(bob.home, "serve", "threads", sent.Thread)
+	if err := os.RemoveAll(filepath.Join(threadDir, "patch-"+sent.ID)); err != nil {
+		t.Fatal(err)
+	}
+	// The thread's patch where the older auu kept it, which is not this
+	// answer's.
+	if err := os.WriteFile(filepath.Join(threadDir, patchName(sent.Thread)), []byte("not this answer's\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bob.run("peers", "add", alice.exportLine())
+	bob.serve(t)
+	if runs := strings.Count(readFile(t, marker), "\n"); runs != 2 {
+		t.Fatalf("the handler ran %d times; want the answer made again", runs)
+	}
+	reply := alice.replyOn(t, sent.Thread)
+	if got := readFile(t, patchOf(t, alice, reply)); !strings.Contains(got, "one.txt") {
+		t.Fatalf("the reply went with:\n%s", got)
+	}
+}
+
 // A patch that cannot be taken is the message's failure, in git's own
 // words: an answer claiming changes the asker cannot see would be worse.
 func TestServeFailsWhenThePatchCannotBeBuilt(t *testing.T) {
@@ -2007,8 +2040,8 @@ func TestServeFailsWhenThePatchCannotBeBuilt(t *testing.T) {
 	bob.serve(t)
 	reply := alice.replyOn(t, sent.Thread)
 
-	// The base the worktree recorded is made nonsense of, as a rebase or a
-	// gc of the checkout would make it, and a follow-up arrives.
+	// The base the worktree recorded is made nonsense of, as a rebase of
+	// the checkout would make it, and a follow-up arrives.
 	threadDir := filepath.Join(bob.home, "serve", "threads", sent.Thread)
 	if err := os.WriteFile(filepath.Join(threadDir, baseFile),
 		[]byte(strings.Repeat("0", 40)+"\n"), 0o600); err != nil {
@@ -2035,6 +2068,76 @@ func TestServeFailsWhenThePatchCannotBeBuilt(t *testing.T) {
 	}
 	if e := bob.ledgerOf(t).Messages[followUp]; e == nil || e.Failures != 1 {
 		t.Fatalf("the entry: %+v", e)
+	}
+}
+
+// An answer whose patch could not be taken is not kept to be sent without
+// it (G37, R53): the retry takes the patch again, and never sends the
+// answer with the turn before's. Each attempt is the message's failure
+// until the patch can be taken or the retries run out.
+func TestServeTakesAFailedPatchAgainOnTheRetry(t *testing.T) {
+	alice, bob := newExpert(t, modeSideCopy)
+	t.Setenv(handlerScript, "write:one.txt=first change;echo:first answer")
+	first := alice.ask(t, "jostle", "patch retry", "first question")
+	bob.serve(t)
+	reply := alice.replyOn(t, first.Thread)
+
+	// The recorded base is made unavailable, as a rewrite of the checkout
+	// would make it, and a follow-up with a change of its own arrives.
+	threadDir := filepath.Join(bob.home, "serve", "threads", first.Thread)
+	basePath := filepath.Join(threadDir, baseFile)
+	base := readBase(t, basePath)
+	if err := os.WriteFile(basePath, []byte(strings.Repeat("0", 40)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(handlerScript, "write:two.txt=second change;echo:second answer with another change")
+	alice.run("reply", reply.ID, "please make the second change")
+	for attempt := 1; attempt <= 2; attempt++ {
+		out, err := bob.tryRun("serve", "--once", "--json")
+		if err == nil {
+			t.Fatalf("attempt %d: the patch was taken against a base that is gone", attempt)
+		}
+		var round roundJSON
+		if err := json.Unmarshal([]byte(out), &round); err != nil {
+			t.Fatal(err)
+		}
+		if len(round.Failed) != 1 || len(round.Answered) != 0 {
+			t.Fatalf("attempt %d: %+v; want the message failed and nothing answered", attempt, round)
+		}
+	}
+	var in inboxJSON
+	if err := json.Unmarshal([]byte(alice.run("inbox", "--json")), &in); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range in.Messages {
+		if m.Thread == first.Thread && m.Type == "reply" && m.ID != reply.ID {
+			t.Fatalf("an answer went out without its own patch: %+v", m)
+		}
+	}
+	var followUp string
+	for id, e := range bob.ledgerOf(t).Messages {
+		if id != first.ID {
+			followUp = id
+			if e.Failures != 2 {
+				t.Fatalf("the follow-up's entry: %+v; want two failures", e)
+			}
+		}
+	}
+
+	// The base back, the next retry answers with this answer's own patch,
+	// which holds the second change.
+	if err := os.WriteFile(basePath, []byte(base+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := bob.round(t); len(r.Answered) != 1 || len(r.Failed) != 0 {
+		t.Fatalf("the retry with the base back: %+v", r)
+	}
+	got := replyToMessage(t, alice, first.Thread, followUp)
+	if len(got.Attachments) != 1 {
+		t.Fatalf("the retry's reply carries %+v", got.Attachments)
+	}
+	if patch := readFile(t, patchOf(t, alice, got)); !strings.Contains(patch, "two.txt") {
+		t.Fatalf("the retry's reply went with a patch without the second change:\n%s", patch)
 	}
 }
 

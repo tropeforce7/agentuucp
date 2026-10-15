@@ -373,14 +373,23 @@ func patchName(thread string) string { return shortID(thread) + ".patch" }
 // is a worktree that was not a git worktree of the checkout's and was made
 // again (ensureWorktree): the thread's work went with it and the base is
 // recorded afresh. An answer already written and not sent still goes with
-// the thread's latest patch (keptPatch), taken against the base before;
-// every patch made after is measured from the new one.
+// the patch taken for it (keptPatch), against the base before; every patch
+// made after is measured from the new one.
+//
+// It is written in the answer's own directory, dir, under the thread's
+// name: a later turn's patch never stands in for this one, and the asker
+// still sees the thread's name. The directory is made when the patch has
+// been taken, whether or not there was a change, and not before, so that
+// it is there exactly when the answer's patch is. A run that stopped
+// between taking the patch and keeping the reply leaves a patch the retry
+// takes again over, since writeNew removes what stood under the name
+// before its exclusive create.
 //
 // 'git add -A' is what makes an untracked file part of it, and what makes
 // an ignored one not: a handler that writes its answer where .gitignore
 // says nothing lives will find it does not travel.
-func patchFor(ch *serveChannel, worktree, base, threadDir, thread string) (string, error) {
-	path := filepath.Join(threadDir, patchName(thread))
+func patchFor(ch *serveChannel, worktree, base, dir, thread string) (string, error) {
+	path := filepath.Join(dir, patchName(thread))
 	if ch.Mode != modeSideCopy {
 		return "", nil
 	}
@@ -393,10 +402,16 @@ func patchFor(ch *serveChannel, worktree, base, threadDir, thread string) (strin
 	if err != nil {
 		return "", err
 	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
 	if len(diff) == 0 {
-		// Nothing changed this turn or any turn before it. An older
-		// patch, if there is one, is not this answer's.
-		os.Remove(path)
+		// Nothing changed this turn or any turn before it. A patch an
+		// earlier attempt at this answer left, if there is one, is not
+		// this one's, and is not left beside the reply to be sent with it.
+		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
 		return "", nil
 	}
 	if err := writeNew(path, diff); err != nil {
@@ -407,16 +422,23 @@ func patchFor(ch *serveChannel, worktree, base, threadDir, thread string) (strin
 
 // keptPatch is the patch of an answer that was written and not sent, for
 // the round that sends it: it is re-attached rather than made again, since
-// nothing has run in the worktree since and one answer is one answer. It
-// is the thread's latest patch, which is that answer's unless a later turn
-// on the thread took one first or its own could not be taken; a worktree
-// made again in between holds none of the work, and the patch still does.
-func keptPatch(threadDir, thread string) string {
-	path := filepath.Join(threadDir, patchName(thread))
-	if info, err := os.Stat(path); err == nil && info.Size() > 0 {
-		return path
+// nothing has run in the worktree for this answer since and one answer is
+// one answer. It is the one in the answer's own directory, so a later
+// turn's is never it, and a worktree made again in between holds none of
+// the work while the patch still does. A side copy's answer with no such
+// directory has no patch taken for it, and is not kept (G37, R53).
+func keptPatch(ch *serveChannel, dir, thread string) (string, bool) {
+	if ch.Mode != modeSideCopy {
+		return "", true
 	}
-	return ""
+	if _, err := os.Stat(dir); err != nil {
+		return "", false
+	}
+	path := filepath.Join(dir, patchName(thread))
+	if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+		return path, true
+	}
+	return "", true
 }
 
 // gitRaw is gitOutput without the trimming, for a command whose output is

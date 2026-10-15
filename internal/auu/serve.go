@@ -856,12 +856,20 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 	}
 
 	replyPath := runFile(threadDir, "reply", m.Inner.ID)
+	patchDir := filepath.Join(threadDir, "patch-"+m.Inner.ID)
 	// A reply the handler has already written and serve could not send —
 	// the relay was down, the mailbox full — is sent from the file, with
 	// the patch that was made for it. The handler is not run twice for one
-	// answer, and neither are the hooks.
+	// answer, and neither are the hooks. A reply and its patch are kept
+	// together or not at all: one kept without its own patch, which an
+	// auu before the answer's own directory left, is answered again.
 	if text, ok := keptReply(replyPath); ok {
-		return r.send(m, ch, text, keptPatch(threadDir, thread), facts)
+		if patch, ok := keptPatch(ch, patchDir, thread); ok {
+			return r.send(m, ch, text, patch, facts)
+		}
+		if err := os.Remove(replyPath); err != nil {
+			return err
+		}
 	}
 
 	afterPath := runFile(threadDir, "after", m.Inner.ID)
@@ -960,15 +968,17 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 		// answer and is not one by itself.
 		return r.settle(m, ch, "")
 	}
-	if err := os.Rename(outPath, replyPath); err != nil {
-		return err
-	}
 	// After the hooks, so that an after that refuses a red side copy has
-	// already refused it.
-	patch, err := patchFor(ch, worktree, base, threadDir, thread)
+	// already refused it, and before the reply is kept, so that a patch
+	// that cannot be taken leaves no reply to be sent without it: the
+	// message is tried again whole, as when the after hook refuses.
+	patch, err := patchFor(ch, worktree, base, patchDir, thread)
 	if err != nil {
 		r.failed(m, ch, err.Error())
 		return nil
+	}
+	if err := os.Rename(outPath, replyPath); err != nil {
+		return err
 	}
 	return r.send(m, ch, text, patch, facts)
 }

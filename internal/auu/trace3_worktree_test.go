@@ -229,20 +229,18 @@ func TestASideCopyWorktreeGitHasLostIsMadeAgainAndItsWorkIsSaidGone(t *testing.T
 				t.Fatalf("the thread's base is %s, not the channel's HEAD %s (it began at %s)", got, head, oldBase)
 			}
 
-			// The damaging turn's answer was written and not sent, so the
-			// retry sends it with the thread's latest patch, taken against
-			// the base before: the first turn's. The work is gone from the
-			// worktree but still reaches the asker in that patch.
+			// The damaging turn's patch could not be taken, so its answer
+			// was not kept (G37, R53): the retry answers it again in the
+			// worktree made again, and it goes out with no patch, never
+			// with the first turn's, which reached the asker with the
+			// first answer.
 			if damageID != "" {
 				reply := replyToMessage(t, alice, first.Thread, damageID)
-				if len(reply.Attachments) != 1 || reply.Attachments[0].Name != patchName(first.Thread) {
-					t.Fatalf("the damaging turn's reply carries %+v", reply.Attachments)
+				if len(reply.Attachments) != 0 || strings.Contains(reply.Text, "The changes so far are attached") {
+					t.Fatalf("the damaging turn's reply carries a patch: %+v\n%s", reply.Attachments, reply.Text)
 				}
-				if patch := readFile(t, patchOf(t, alice, reply)); !strings.Contains(patch, "notes.txt") {
-					t.Fatalf("the damaging turn's patch is not the first turn's:\n%s", patch)
-				}
-				if !strings.Contains(reply.Text, "The changes so far are attached") {
-					t.Fatalf("the damaging turn's reply does not say a patch is attached:\n%s", reply.Text)
+				if !strings.HasPrefix(reply.Text, "the expert has spoken again") {
+					t.Fatalf("the damaging turn's reply is not the retry's answer:\n%s", reply.Text)
 				}
 			}
 			// Nor does the next turn's reply carry the gone work.
