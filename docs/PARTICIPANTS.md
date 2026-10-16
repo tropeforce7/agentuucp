@@ -36,10 +36,14 @@ as much the point as the code. This document says who did what.
   reviewer with a verdict, and verifies each landed fix and each release
   candidate on its own: vet, the uncached suite, the race run. Ran tracer
   subagents, one for each trust boundary.
-- **Codex, a third reviewer, from 12 October 2026.** Works from a read-only
-  clone at a named commit. Sends test-backed reports to the outside
-  reviewer, debates them when the two disagree, and verifies every fix of
-  one of its findings by commit sha and finding number.
+- **Codex, a third reviewer, from 12 October 2026.** Reviewed named
+  revisions without editing shared source, keeping its probes and reports
+  apart from it; its later tests ran as overlays against the shared
+  checkout, and a test of a change still staged was marked provisional
+  and repeated once the change had been committed. Sends test-backed
+  reports to the outside reviewer, debates them when the two disagree,
+  and verifies every fix of one of its findings by commit sha and finding
+  number.
 
 ## The rules
 
@@ -50,8 +54,8 @@ most:
   to the maintainer and acts on it when told to.
 - A finding is a test that fails on a named commit. A claim without one is
   a suspicion, and is recorded as one.
-- Build and test from a checkout of a named commit, never from a working
-  tree.
+- The outside reviewer and its tracers build and test only from a
+  checkout of a named commit, never from a working tree.
 - An attachment goes into a fresh, empty directory and is read before
   anything runs it. A shell probe is read, not run: the reviewer writes
   its own harness.
