@@ -57,8 +57,10 @@ func (c *Client) call(req *request) (*response, error) {
 	// The socket is asked who answers before a byte is sent, as the agent
 	// asks who called: a socket another user bound in the runtime
 	// directory would otherwise be handed the passphrase. Where the
-	// platform gives no peer credentials, peerCred says so once and the
-	// runtime directory, the user's own, is what is relied on.
+	// platform gives no peer credentials, the runtime directory, the
+	// user's own, is what is relied on; the agent says so once in its own
+	// log, and the client says nothing, since its standard error is the
+	// command's.
 	if uc, ok := conn.(*net.UnixConn); ok {
 		uid, err := peerUID(uc)
 		if err != nil {

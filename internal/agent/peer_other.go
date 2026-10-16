@@ -3,23 +3,21 @@
 package agent
 
 import (
-	"log"
 	"net"
 	"os"
-	"sync"
 )
 
-var noPeerCredOnce sync.Once
+// havePeerCred is false here: an AF_UNIX socket on Windows carries no
+// peer credentials, and the agent says so once, in its own log.
+const havePeerCred = false
 
-// peerCred cannot be answered on this platform: an AF_UNIX socket on
-// Windows carries no peer credentials. What stands between another user
-// and the socket is the runtime directory, %LOCALAPPDATA%\auu, which is the
-// user's own; so the connection is taken to be the user's, and the agent
-// says once that it is relying on the directory. Against a process of the
-// same user the answer would be the same on every platform.
+// peerCred cannot be answered on this platform. What stands between
+// another user and the socket is the runtime directory,
+// %LOCALAPPDATA%\auu, which is the user's own; so the connection is taken
+// to be the user's. Against a process of the same user the answer would
+// be the same on every platform. It says nothing itself: the client that
+// asks before it sends is a command whose standard error is its user's,
+// and the line is the agent's to say (Server.Handle).
 func peerCred(*net.UnixConn) (Cred, error) {
-	noPeerCredOnce.Do(func() {
-		log.Printf("agent: no peer credentials on this platform; relying on the runtime directory's permissions")
-	})
 	return Cred{UID: os.Getuid(), GID: os.Getgid(), PID: -1}, nil
 }

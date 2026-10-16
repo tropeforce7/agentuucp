@@ -73,6 +73,9 @@ type Server struct {
 
 	stopOnce sync.Once
 	stopped  chan struct{}
+	// noPeerCredOnce is the one notice, where the platform gives no peer
+	// credentials, that the runtime directory is what is relied on.
+	noPeerCredOnce sync.Once
 }
 
 // Options configures a Server. Every field is optional.
@@ -174,6 +177,11 @@ func (s *Server) Handle(conn net.Conn) {
 	defer conn.Close()
 	conn.SetDeadline(s.now().Add(connTimeout))
 	if uc, ok := conn.(*net.UnixConn); ok {
+		if !havePeerCred {
+			s.noPeerCredOnce.Do(func() {
+				s.log.Printf("no peer credentials on this platform; relying on the runtime directory's permissions")
+			})
+		}
 		uid, err := peerUID(uc)
 		if err != nil || uid != s.uid {
 			// Closed without a reply: a process of another user gets no

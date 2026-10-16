@@ -6,6 +6,9 @@ import (
 	"syscall"
 )
 
+// havePeerCred is true: the kernel says who is at the other end.
+const havePeerCred = true
+
 // peerCred is the credentials of the process at the other end of a Unix
 // socket, from SO_PEERCRED: the kernel's answer, not the peer's claim. It
 // carries the uid, the primary gid and the pid; the supplementary groups

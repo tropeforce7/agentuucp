@@ -22,6 +22,9 @@ const (
 	xucredVersion0 = 0
 )
 
+// havePeerCred is true: the kernel says who is at the other end.
+const havePeerCred = true
+
 // peerCred is the credentials of the process at the other end of a Unix
 // socket, from LOCAL_PEERCRED and LOCAL_PEERPID: the kernel's answer, not
 // the peer's claim. The xucred carries the peer's whole group list, the
