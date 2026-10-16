@@ -53,12 +53,20 @@ func settingsFrom(cfg store.Config) (streamSettings, error) {
 	return s, nil
 }
 
-// sendStream seals a message to the outbox and uploads it.
+// sendStream seals a message to the outbox and uploads it. messageID is the
+// id it is sealed under, a new one when empty; serve gives the one it kept
+// for the answer (sendStreamOnce), and whatever an earlier attempt left of
+// that id in the outbox, which nothing could finish, goes first.
 func sendStream(s *store.Store, id *identity.Identity, r *store.Relay, recipient *identity.Public,
-	body message.Body, paths []string, set streamSettings, channel string) (sentJSON, error) {
+	body message.Body, paths []string, set streamSettings, channel, messageID string) (sentJSON, error) {
 
-	messageID, err := envelope.NewID()
-	if err != nil {
+	if messageID == "" {
+		fresh, err := envelope.NewID()
+		if err != nil {
+			return sentJSON{}, err
+		}
+		messageID = fresh
+	} else if err := (&pending{MessageID: messageID, kind: kindStream}).remove(s); err != nil {
 		return sentJSON{}, err
 	}
 	sources, err := sourcesFor(paths)

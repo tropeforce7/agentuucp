@@ -2,9 +2,12 @@ package auu
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -667,7 +670,13 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 			largestAttachmentHint(attachments))
 	}
 	if becomesStream {
-		out, err := sendStream(s, id, r, recipient, body, attachments, set, mode.channel)
+		var out sentJSON
+		var err error
+		if mode.sealed != "" {
+			out, err = sendStreamOnce(s, id, r, recipient, body, attachments, set, mode)
+		} else {
+			out, err = sendStream(s, id, r, recipient, body, attachments, set, mode.channel, "")
+		}
 		// A stream has never printed the line that says how to wait for an
 		// answer, and this is not the change that starts.
 		return out, false, err
@@ -774,6 +783,45 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 type keptSeal struct {
 	Envelope *envelope.Envelope `json:"envelope"`
 	Inner    *envelope.Inner    `json:"inner"`
+	// Stream is the stream a message that became one was sealed as, in
+	// place of the envelope (sendStreamOnce).
+	Stream *keptStream `json:"stream,omitempty"`
+}
+
+// keptStream is what a stream a reply was sealed as is known by from one
+// attempt to the next: the id the outbox holds it under, and the recipient,
+// channel, header, words and files it was sealed for.
+type keptStream struct {
+	MessageID string       `json:"message_id"`
+	To        string       `json:"to"`
+	Channel   string       `json:"channel,omitempty"`
+	Body      message.Body `json:"body"`
+	Files     []keptFile   `json:"files,omitempty"`
+}
+
+// keptFile is a file a kept stream carries, by name and digest.
+type keptFile struct {
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+}
+
+// readKeptSeal is what a caller that keeps a seal (mode.sealed) kept: nil
+// when there is no file, or one that does not decode, as a write that
+// stopped part way leaves it, since neither is a seal anything was sent
+// from; one that is there and cannot be read is the error.
+func readKeptSeal(path string) (*keptSeal, error) {
+	data, err := regular.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("the envelope kept for this message could not be read: %w", err)
+	}
+	var k keptSeal
+	if wire.Decode(data, &k) != nil {
+		return nil, nil
+	}
+	return &k, nil
 }
 
 // sealOnce is the envelope a message goes as. For a send with nowhere to
@@ -800,21 +848,17 @@ type keptSeal struct {
 // both, so that a post the relay took is never followed by a kept envelope
 // a lost power cut has emptied, which would read as no post at all.
 //
-// Envelopes only: a message that becomes a stream is sealed under a new
-// upload at every attempt, as before.
+// A message that becomes a stream is kept by sendStreamOnce instead.
 func sealOnce(id *identity.Identity, recipient *identity.Public, mode sendMode, body message.Body) (*envelope.Envelope, *envelope.Inner, error) {
 	if mode.sealed != "" {
-		data, err := regular.ReadFile(mode.sealed)
-		switch {
-		case err == nil:
-			var k keptSeal
-			if wire.Decode(data, &k) == nil && k.Envelope != nil && k.Inner != nil &&
-				k.Envelope.To == recipient.Fingerprint() && k.Envelope.Ch == mode.channel &&
-				sameMessage(k.Inner.Body, body) {
-				return k.Envelope, k.Inner, nil
-			}
-		case !errors.Is(err, os.ErrNotExist):
-			return nil, nil, fmt.Errorf("the envelope kept for this message could not be read: %w", err)
+		k, err := readKeptSeal(mode.sealed)
+		if err != nil {
+			return nil, nil, err
+		}
+		if k != nil && k.Envelope != nil && k.Inner != nil &&
+			k.Envelope.To == recipient.Fingerprint() && k.Envelope.Ch == mode.channel &&
+			sameMessage(k.Inner.Body, body) {
+			return k.Envelope, k.Inner, nil
 		}
 	}
 	env, inner, err := envelope.SealFor(id, recipient, mode.channel, body)
@@ -831,6 +875,102 @@ func sealOnce(id *identity.Identity, recipient *identity.Public, mode sendMode, 
 		}
 	}
 	return env, inner, nil
+}
+
+// sendStreamOnce is sealOnce for a message that becomes a stream (G46,
+// R57a): the stream was sealed afresh, under a new id, at every attempt,
+// so a retry after a relay took the stream and the answer to it was lost,
+// or after the ledger could not be written, gave the asker a second reply
+// for one request. Now the id is chosen once and written down, synced,
+// before anything is sealed, and every attempt at the one answer sends
+// the message under it:
+//
+//   - the outbox still holds the stream: its upload is resumed, on the
+//     relay it was opened on, as 'send --resume' resumes it;
+//   - the sent box holds the id: a relay took the stream, here or in a
+//     'send --resume', and nothing is sent again;
+//   - neither: the relay never took it, or this process stopped between
+//     the upload and the sent record, and it is sealed again under the
+//     same id, which the recipient keeps as the one message.
+//
+// A kept stream for another recipient, channel, header, words or files is
+// another answer, and is sealed under a new id.
+func sendStreamOnce(s *store.Store, id *identity.Identity, r *store.Relay, recipient *identity.Public,
+	body message.Body, attachments []string, set streamSettings, mode sendMode) (sentJSON, error) {
+
+	files, err := keptFiles(attachments)
+	if err != nil {
+		return sentJSON{}, err
+	}
+	k, err := readKeptSeal(mode.sealed)
+	if err != nil {
+		return sentJSON{}, err
+	}
+	if k != nil && k.Stream != nil && message.ValidID(k.Stream.MessageID) == nil &&
+		k.Stream.To == recipient.Fingerprint() && k.Stream.Channel == mode.channel &&
+		sameMessage(k.Stream.Body, body) && slices.Equal(k.Stream.Files, files) {
+		kept := k.Stream
+		waiting, _, err := listPending(s)
+		if err != nil {
+			return sentJSON{}, err
+		}
+		for _, p := range waiting {
+			if p.MessageID == kept.MessageID && p.kind == kindStream && p.RecipientCount == 0 {
+				pr, err := resumeRelay(s, p, "")
+				if err != nil {
+					return sentJSON{}, err
+				}
+				return finishStream(s, id, pr, p, false)
+			}
+		}
+		prior, err := s.Holding(store.Sent, kept.MessageID)
+		if err != nil {
+			return sentJSON{}, err
+		}
+		if prior != nil {
+			return sentJSON{
+				ID: kept.MessageID, Thread: body.Thread, To: kept.To, ToName: recipient.Name,
+				RelayID: prior.RelayID, InReplyTo: body.InReplyTo, Kind: "stream", Channel: kept.Channel,
+			}, nil
+		}
+		return sendStream(s, id, r, recipient, body, attachments, set, mode.channel, kept.MessageID)
+	}
+	messageID, err := envelope.NewID()
+	if err != nil {
+		return sentJSON{}, err
+	}
+	header := body
+	header.Attachments = nil
+	data, err := json.Marshal(keptSeal{Stream: &keptStream{
+		MessageID: messageID, To: recipient.Fingerprint(), Channel: mode.channel, Body: header, Files: files,
+	}})
+	if err != nil {
+		return sentJSON{}, err
+	}
+	if err := keepSealed(mode.sealed, data); err != nil {
+		return sentJSON{}, err
+	}
+	return sendStream(s, id, r, recipient, body, attachments, set, mode.channel, messageID)
+}
+
+// keptFiles is each attachment's name and digest, for telling the files a
+// stream was kept for from the ones an attempt has.
+func keptFiles(paths []string) ([]keptFile, error) {
+	var out []keptFile
+	for _, p := range paths {
+		f, err := regular.Open(p)
+		if err != nil {
+			return nil, usageErrf("attachment %s: %v", p, err)
+		}
+		h := sha256.New()
+		_, err = io.Copy(h, f)
+		f.Close()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, keptFile{Name: filepath.Base(p), SHA256: hex.EncodeToString(h.Sum(nil))})
+	}
+	return out, nil
 }
 
 // sameMessage says whether a kept envelope's inner body is the message

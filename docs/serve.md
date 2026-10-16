@@ -196,8 +196,11 @@ gone from the worktree, so the asker still gets it. It goes as the same
 envelope, sealed once before its first post and kept beside the answer,
 so a retry after a post the relay took, its answer lost on the way back,
 is one reply under one id: the asker's inbox keeps one and drops the
-copy. A reply large enough to go as a stream is sealed afresh at each
-attempt, as before. An answer whose patch
+copy. A reply large enough to go as a stream is sent under one id at
+every attempt in the same way: the id is kept beside the answer before
+the stream is sealed, a retry finishes the upload the outbox still holds,
+sends nothing when the sent box says a relay took it, and otherwise seals
+it again under that id, which the asker keeps as the one reply. An answer whose patch
 could not be taken is not kept: the message is tried again whole, as when
 the after hook refuses, so the first handler above is run again in the
 worktree made again. If that run answers and its patch can be taken, the

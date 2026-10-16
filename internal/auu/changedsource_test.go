@@ -37,7 +37,7 @@ func TestAStreamSendRefusesAnAttachmentChangedSinceItsHashing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = sendStream(s, wrapped, rs[0], recipient, message.Body{Type: message.TypeAsk, Thread: strings.Repeat("a", 32), Subject: "changed source", Text: "attachment"}, []string{file}, streamSettings{chunkSize: stream.MinChunkSize}, "")
+	_, err = sendStream(s, wrapped, rs[0], recipient, message.Body{Type: message.TypeAsk, Thread: strings.Repeat("a", 32), Subject: "changed source", Text: "attachment"}, []string{file}, streamSettings{chunkSize: stream.MinChunkSize}, "", "")
 	if err == nil || !strings.Contains(err.Error(), "changing.bin changed while it was being sent; send it again") {
 		t.Fatalf("a source changed after hashing: %v; want the refusal naming it", err)
 	}
