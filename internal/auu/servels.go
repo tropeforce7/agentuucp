@@ -266,12 +266,15 @@ func (r *serveRun) letGo(thread, stateDir string) error {
 }
 
 // printJSONLine is one object on one line, for the long run's report: a
-// round to a line makes a log something a reader can follow.
+// round to a line makes a log something a reader can follow. A line that
+// cannot be written is the error, as printJSON's is (G47, R62), and the
+// run ends with it as --once does; the round's work is done and kept by
+// then, so nothing of it is done again.
 func printJSONLine(v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	fmt.Println(string(data))
-	return nil
+	_, err = fmt.Println(string(data))
+	return err
 }
