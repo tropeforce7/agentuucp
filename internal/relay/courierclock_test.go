@@ -72,22 +72,15 @@ func signAt(t *testing.T, req *http.Request, fp string, signer *identity.Identit
 }
 
 // atOffset sends one request stamped off seconds from this machine's
-// clock and answers it, trying again when the second turned between the
-// signing and the answer, since the relay judges by the second it reads
-// and a row at the edge would otherwise be a second off it. send is
-// called once for each try and must build a request a retry does not
-// collide with.
+// clock and answers it. The relay reads the wall clock when it judges the
+// stamp, so the offsets the tests use stand thirty seconds inside the
+// minute or thirty outside it, and a send stalled by many seconds, or the
+// second turning under it, changes no answer. A retry when the second
+// turned would be worse than none: the try it discards has already left
+// its clock line or its row behind.
 func atOffset(t *testing.T, off int64, send func(ts int64) (int, []byte, http.Header)) (int, []byte, http.Header) {
 	t.Helper()
-	for attempt := 0; attempt < 5; attempt++ {
-		sec := time.Now().Unix()
-		status, body, header := send(sec + off)
-		if time.Now().Unix() == sec {
-			return status, body, header
-		}
-	}
-	t.Fatalf("%d s out: five tries each crossed a second", off)
-	return 0, nil, nil
+	return send(time.Now().Unix() + off)
 }
 
 // refusedForTheClock asserts the courier-clock refusal whole: 503, a
@@ -130,13 +123,16 @@ func notForTheClock(t *testing.T, label string, status int, body []byte) {
 // TestACouriersRequestIsHeldToTheMinute (G5, D83, R10, R11): a courier's
 // request on the forward route and on the failed-report route is held
 // fresh within relayapi.CourierSkew of this relay's clock, after its
-// signature has verified. Fifty-nine and sixty seconds out, either way,
-// are taken; sixty-one is refused 503 with a minute's Retry-After, the
-// code courier-clock and the sentence, nothing stored and the row a
-// report names left as it was, and the relay's log says it once for a
-// burst and again once the minute has passed, naming the neighbour by
-// this relay's name for it. A user's request at sixty-one seconds and at
-// four minutes is not refused for its clock: a user is held to MaxSkew.
+// signature has verified. Thirty seconds out, either way, is taken;
+// ninety is refused 503 with a minute's Retry-After, the code
+// courier-clock and the sentence, nothing stored and the row a report
+// names left as it was, and the relay's log says it once for a burst and
+// again once the minute has passed, naming the neighbour by this relay's
+// name for it. A user's request at ninety seconds and at four minutes is
+// not refused for its clock: a user is held to MaxSkew. The minute's own
+// edges, sixty seconds taken and sixty-one refused, are pinned against a
+// fixed clock in relayapi's TestLimitFreshWithin; here the relay reads the
+// wall clock, and the thirty seconds either side are the margin for it.
 // And a stranger naming a courier's fingerprint under a signature that
 // does not verify is answered the 401 any bad signature gets, never the
 // 503, so the answer says nothing about whose fingerprint it named.
@@ -157,7 +153,7 @@ func TestACouriersRequestIsHeldToTheMinute(t *testing.T) {
 			}
 		}
 
-		for _, off := range []int64{59, 60, -59, -60} {
+		for _, off := range []int64{30, -30} {
 			status, body, _ := atOffset(t, off, forwardAt(courier))
 			if status != http.StatusCreated {
 				t.Errorf("a courier %d s out: %d %s; want taken", off, status, body)
@@ -168,7 +164,7 @@ func TestACouriersRequestIsHeldToTheMinute(t *testing.T) {
 		}
 
 		rows := h.outboundRows(t)
-		for _, off := range []int64{61, -61} {
+		for _, off := range []int64{90, -90} {
 			status, body, header := atOffset(t, off, forwardAt(courier))
 			refusedForTheClock(t, h, fmt.Sprintf("a courier %d s out", off), status, body, header)
 		}
@@ -186,14 +182,14 @@ func TestACouriersRequestIsHeldToTheMinute(t *testing.T) {
 			t.Error("the clock line names the courier's fingerprint")
 		}
 		h.clock.advance(2 * time.Minute)
-		status, body, header := atOffset(t, 61, forwardAt(courier))
-		refusedForTheClock(t, h, "a courier 61 s out, two minutes on", status, body, header)
+		status, body, header := atOffset(t, 90, forwardAt(courier))
+		refusedForTheClock(t, h, "a courier 90 s out, two minutes on", status, body, header)
 		if lines := clockLines(h); lines != 2 {
 			t.Errorf("%d clock lines once the minute has passed; want two", lines)
 		}
 
 		// A user is held to MaxSkew, not the courier's minute.
-		for _, off := range []int64{61, -61, 240, -240} {
+		for _, off := range []int64{90, -90, 240, -240} {
 			status, body, _ := atOffset(t, off, forwardAt(alice))
 			if status != http.StatusCreated {
 				t.Errorf("a user %d s out: %d %s; want taken", off, status, body)
@@ -206,11 +202,11 @@ func TestACouriersRequestIsHeldToTheMinute(t *testing.T) {
 		// A stranger naming the courier: the signature is refused first,
 		// with the answer a bad signature under a user's fingerprint gets.
 		stranger := neighbourID(t, "mallory")
-		sStatus, sBody, _ := atOffset(t, 61, func(ts int64) (int, []byte, http.Header) {
+		sStatus, sBody, _ := atOffset(t, 90, func(ts int64) (int, []byte, http.Header) {
 			return h.sendAt(courier.Fingerprint(), stranger, "/v1/forward",
 				request(sealedFor(h.fpOf(t, "bob"), "stranger"), []string{"bar"}, nil), ts)
 		})
-		uStatus, uBody, _ := atOffset(t, 61, func(ts int64) (int, []byte, http.Header) {
+		uStatus, uBody, _ := atOffset(t, 90, func(ts int64) (int, []byte, http.Header) {
 			return h.sendAt(alice.Fingerprint(), stranger, "/v1/forward",
 				request(sealedFor(h.fpOf(t, "bob"), "stranger"), []string{"bar"}, nil), ts)
 		})
@@ -240,7 +236,7 @@ func TestACouriersRequestIsHeldToTheMinute(t *testing.T) {
 			}
 		}
 
-		for _, off := range []int64{59, 60, -59, -60} {
+		for _, off := range []int64{30, -30} {
 			status, body, _ := atOffset(t, off, reportAt(courier))
 			if status != http.StatusNoContent {
 				t.Errorf("a courier's report %d s out: %d %s; want taken", off, status, body)
@@ -249,7 +245,7 @@ func TestACouriersRequestIsHeldToTheMinute(t *testing.T) {
 				t.Errorf("a courier's report %d s out left the row %q", off, got.State)
 			}
 		}
-		for _, off := range []int64{61, -61} {
+		for _, off := range []int64{90, -90} {
 			status, body, header := atOffset(t, off, reportAt(courier))
 			refusedForTheClock(t, h, fmt.Sprintf("a courier's report %d s out", off), status, body, header)
 			if got := h.outbound(t, row); got.State != OutHanded {
@@ -263,7 +259,7 @@ func TestACouriersRequestIsHeldToTheMinute(t *testing.T) {
 		// A user on the report route is refused as not a courier, at any
 		// offset inside MaxSkew, and never for the clock.
 		_, fresh := h.do(alice, "POST", "/v1/forward/failed", failedReq(1, relayapi.CodeRefused, "x"), nil)
-		for _, off := range []int64{61, 240} {
+		for _, off := range []int64{90, 240} {
 			status, body, _ := atOffset(t, off, func(ts int64) (int, []byte, http.Header) {
 				return h.sendAt(alice.Fingerprint(), alice, "/v1/forward/failed", failedReq(1, relayapi.CodeRefused, "x"), ts)
 			})
@@ -275,10 +271,10 @@ func TestACouriersRequestIsHeldToTheMinute(t *testing.T) {
 
 		// A stranger naming the courier on this route too.
 		stranger := neighbourID(t, "mallory")
-		sStatus, sBody, _ := atOffset(t, 61, func(ts int64) (int, []byte, http.Header) {
+		sStatus, sBody, _ := atOffset(t, 90, func(ts int64) (int, []byte, http.Header) {
 			return h.sendAt(courier.Fingerprint(), stranger, "/v1/forward/failed", failedReq(1, relayapi.CodeRefused, "x"), ts)
 		})
-		uStatus, uBody, _ := atOffset(t, 61, func(ts int64) (int, []byte, http.Header) {
+		uStatus, uBody, _ := atOffset(t, 90, func(ts int64) (int, []byte, http.Header) {
 			return h.sendAt(alice.Fingerprint(), stranger, "/v1/forward/failed", failedReq(1, relayapi.CodeRefused, "x"), ts)
 		})
 		if sStatus != http.StatusUnauthorized || sStatus != uStatus || !bytes.Equal(sBody, uBody) {
@@ -343,7 +339,7 @@ func TestACourierClockRefusalIsWaitedOutAndSaid(t *testing.T) {
 // TestARelayAMinuteOutIsToldSoByARealNeighbour is the code's row through a
 // real relay: A's worker hands an envelope to B, a real relay that admits
 // A's courier, through a stand-in for A's clock, a proxy that signs the
-// request again as A's courier sixty-one seconds ahead of this machine.
+// request again as A's courier ninety seconds ahead of this machine.
 // Nothing else is between them. B refuses it for the clock, and A's worker,
 // reading B's own answer through the real client, keeps the row waiting
 // for B's sixty seconds and says once a minute that its clock is out; B
@@ -372,7 +368,12 @@ func TestARelayAMinuteOutIsToldSoByARealNeighbour(t *testing.T) {
 			return
 		}
 		out.Header.Set("Content-Type", r.Header.Get("Content-Type"))
-		signAt(t, out, a.courier.Fingerprint(), a.courier, body, time.Now().Unix()+61)
+		// Ninety seconds ahead: the minute B holds a courier to, and thirty
+		// seconds for the time between this signing and B's check, so the
+		// test fails only when B takes a stamp a minute out. At 61 a loaded
+		// runner spent the one second's margin and B took it as fresh.
+		signAt(t, out, a.courier.Fingerprint(), a.courier, body,
+			time.Now().Unix()+int64((relayapi.CourierSkew+30*time.Second)/time.Second))
 		resp, err := b.srv.Client().Do(out)
 		if err != nil {
 			http.Error(rw, err.Error(), http.StatusBadGateway)
@@ -456,10 +457,10 @@ func peeredWith(t *testing.T, neighbours []string, accept []*identity.Identity, 
 // after chargeIdentity, so a courier refused for its clock has spent its
 // request token as any verified request does, and a courier a minute out
 // cannot ask again and again for nothing. With requests_per_minute at 1:
-// the courier at 61 s is refused 503 courier-clock, and its next request,
+// the courier at 90 s is refused 503 courier-clock, and its next request,
 // fresh, is 429 for requests, neither refused for the clock nor taken; a
-// minute on the bucket has refilled, a request at +60 s is taken and the
-// next is 429; and the same at -60 s.
+// minute on the bucket has refilled, a request at +30 s is taken and the
+// next is 429; and the same at -30 s.
 func TestACourierClockRefusalSpendsTheRequestToken(t *testing.T) {
 	courier := neighbourID(t, "alpha")
 	h := peeredWith(t, []string{"bar"}, []*identity.Identity{courier}, Limits{RequestsPerMinute: 1})
@@ -470,20 +471,13 @@ func TestACourierClockRefusalSpendsTheRequestToken(t *testing.T) {
 		req := request(sealedFor(h.fpOf(t, "bob"), fmt.Sprintf("ct %d", n)), []string{"bar"}, nil)
 		return h.sendAt(courier.Fingerprint(), courier, "/v1/forward", req, ts)
 	}
-	// once sends at off seconds out with a full bucket, refilling and
-	// trying again when the second turned under the request.
+	// once sends at off seconds out with a full bucket, refilled a minute
+	// on. It sends once, as atOffset does and for its reason: the offsets
+	// stand thirty seconds from the minute's edge.
 	once := func(off int64) (int, []byte, http.Header) {
 		t.Helper()
-		for attempt := 0; attempt < 5; attempt++ {
-			h.clock.advance(time.Minute)
-			sec := time.Now().Unix()
-			status, body, header := forwardAt(sec + off)
-			if time.Now().Unix() == sec {
-				return status, body, header
-			}
-		}
-		t.Fatalf("%d s out: five tries each crossed a second", off)
-		return 0, nil, nil
+		h.clock.advance(time.Minute)
+		return forwardAt(time.Now().Unix() + off)
 	}
 	spent := func(label string) {
 		t.Helper()
@@ -495,11 +489,11 @@ func TestACourierClockRefusalSpendsTheRequestToken(t *testing.T) {
 		h.retryAfter(header)
 	}
 
-	status, body, header := once(61)
-	refusedForTheClock(t, h, "a courier 61 s out", status, body, header)
+	status, body, header := once(90)
+	refusedForTheClock(t, h, "a courier 90 s out", status, body, header)
 	spent("after the clock refusal")
 
-	for _, off := range []int64{60, -60} {
+	for _, off := range []int64{30, -30} {
 		if status, body, _ := once(off); status != http.StatusCreated {
 			t.Errorf("a courier %d s out with a full bucket: %d %s; want taken", off, status, body)
 		}
@@ -518,12 +512,12 @@ func TestTheClockLineIsSaidForEachNeighbour(t *testing.T) {
 	n := 0
 	refuse := func(id *identity.Identity) {
 		t.Helper()
-		status, body, header := atOffset(t, 61, func(ts int64) (int, []byte, http.Header) {
+		status, body, header := atOffset(t, 90, func(ts int64) (int, []byte, http.Header) {
 			n++
 			req := request(sealedFor(h.fpOf(t, "bob"), fmt.Sprintf("ct %d", n)), []string{"bar"}, nil)
 			return h.sendAt(id.Fingerprint(), id, "/v1/forward", req, ts)
 		})
-		refusedForTheClock(t, h, id.Name+" 61 s out", status, body, header)
+		refusedForTheClock(t, h, id.Name+" 90 s out", status, body, header)
 	}
 	count := func() (all, a, b int) {
 		for _, line := range strings.Split(h.logs.String(), "\n") {
