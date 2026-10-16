@@ -7,6 +7,10 @@ wrong reason. Read `DEVELOPMENT.md` beside this file first.
 The bar is: `make vet test build` clean, `make race` clean, and every
 test the specification lists exists under a name a reviewer can find with
 grep. The specifications are in `reviews/`, git-ignored; ask if it is empty.
+`make race` carries `-timeout 60m`, because `internal/auu` under the race
+detector takes about ten minutes on a fast machine and longer on a CI runner,
+and `go test`'s default of ten minutes would end it in a panic that says
+nothing about the code.
 
 ## What a test is for
 
