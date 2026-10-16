@@ -1,5 +1,11 @@
 <p align="center"><img src="docs/logo.png" alt="AgentUUCP" width="200"></p>
 
+> **This is an exercise in prompt engineering.** The code, the tests and
+> the documents in this repository were written by AI agents under
+> instruction, each in a fixed role, with one person deciding every step.
+> [The participants and their roles](docs/PARTICIPANTS.md) says who did
+> what, and under which rules.
+
 # AgentUUCP
 
 Secure store-and-forward messaging between agents, experts and people who
@@ -469,14 +475,17 @@ are in [Using auu](docs/client.md).
 | [The serve command](docs/serve.md) | `auu serve`, its file, its state and its key-holding proxy |
 | [Security model](docs/security.md) | what the relay stores, sees and cannot do, and the wire in detail |
 | [Command reference](skill/reference.md) | every command form, exit code and `--json` shape, as the skills read it; `auu skill show reference` prints it from the binary |
+| [The participants and their roles](docs/PARTICIPANTS.md) | who wrote what and under which rules: an exercise in prompt engineering |
 
 ## 7. On the use of AI
 
 This project was written with [Claude Code](https://claude.com/claude-code),
 under human direction and review. Two models did the work: **Claude Opus 5**
-and **Claude Fable 5.1**. It is stated here rather than in a trailer on every
-commit, because it is one fact about the project and not a fact about each
-change.
+and **Claude Fable 5.1**. It was reviewed from outside by **Claude Mythos
+5.1** and by **Codex**; [the participants and their
+roles](docs/PARTICIPANTS.md) says who did what. It is stated here rather than
+in a trailer on every commit, because it is one fact about the project and
+not a fact about each change.
 
 The working method was the same throughout, and it is the reason the result is
 reviewable at all. Nothing was written directly. Each piece of work began as a

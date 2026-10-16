@@ -66,7 +66,7 @@ is the git state:
 | the clone | `auu version` |
 | --- | --- |
 | at a tag | that tag, as a release build reports |
-| past a tag | `v0.0.0-20260930003231-20773bdc4095`: the time and the commit |
+| past a tag | `v0.0.0-20260930003231-11889e0345f7`: the time and the commit |
 | with uncommitted changes | the same, with `+dirty` on the end |
 | no `.git` at all | `unknown` |
 
