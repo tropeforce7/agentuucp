@@ -66,6 +66,10 @@ type serveRun struct {
 	// every round and sweep of a long serve, so a message left in the
 	// inbox is not said again at each.
 	noOpener map[string]bool
+	// retryAt is when the long run's next round is due for a message that
+	// failed and has retries left, zero when there is none: the hold
+	// between rounds ends there if no mail has ended it first (G48, R63).
+	retryAt time.Time
 }
 
 // roundJSON is one round as --json gives it.
@@ -275,7 +279,14 @@ func (r *serveRun) long(ctx context.Context, backlog bool) error {
 			return err
 		}
 		if err := r.hold(ctx); err != nil {
-			if errors.Is(err, context.Canceled) {
+			if ctx.Err() == nil && !r.retryAt.IsZero() && errors.Is(err, context.DeadlineExceeded) {
+				// The hold's own deadline, not the caller's: a failed
+				// message is due again, and the next round retries it.
+				continue
+			}
+			// A stop is the end whichever way the hold saw it, the
+			// hold's deadline among them when the stop came as it passed.
+			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
 				return nil
 			}
 			return err
@@ -353,6 +364,7 @@ func (r *serveRun) round(ctx context.Context, backlog, longRun bool) error {
 			return err
 		}
 	}
+	r.retryAt = r.nextRetry(pending)
 	if longRun && r.asJSON && r.did() {
 		// One object per round that did something, one to a line: a quiet
 		// expert writes nothing, and a log is the record of what it
@@ -375,13 +387,73 @@ func (r *serveRun) did() bool {
 // narrowed to the served channels would sleep through every follow-up
 // there is. The round's own rules decide what is answered; a wake-up that
 // turns out to be nothing costs one fetch.
+//
+// A message that failed and has retries left bounds the hold: it ends at
+// retryAt with context.DeadlineExceeded, which long takes as the cue for
+// the next round, so that a quiet mailbox does not leave the retries the
+// channel promises unspent until unrelated mail arrives (G48, R63). With
+// nothing to retry the hold has no end but mail or a stop.
 func (r *serveRun) hold(ctx context.Context) error {
 	relays, err := selectedRelays(r.s, "")
 	if err != nil {
 		return err
 	}
-	_, err = awaitEvents(ctx, r.s, r.id, relays, watchOptions{messages: true, interval: serveInterval})
+	_, err = awaitEvents(ctx, r.s, r.id, relays,
+		watchOptions{messages: true, interval: serveInterval, deadline: r.retryAt})
 	return err
+}
+
+// serveRetryCap is the longest the long run holds before a failed message's
+// next attempt. The hold doubles from serveInterval at each failure, so that
+// a message that keeps failing on a quiet mailbox is not tried every
+// interval, and five minutes is where the doubling stops: a channel with
+// many retries should spend them within the hour, not over a day, and one
+// attempt every five minutes is one handler run. It bounds the hold and
+// nothing else: a round that mail or another message's retry starts tries
+// every message still pending, as every round has.
+const serveRetryCap = 5 * time.Minute
+
+// retryBackoff is how long after a failed attempt the next one is due:
+// serveInterval for the first failure, twice that for the second, and so on
+// up to serveRetryCap. failures comes from the ledger, which holds it to
+// zero or more and no higher than the type; the doubling stops at the cap,
+// so a count of any size neither overflows nor runs long.
+func retryBackoff(failures int) time.Duration {
+	d := serveInterval
+	for i := 1; i < failures && d < serveRetryCap; i++ {
+		d *= 2
+	}
+	return min(d, serveRetryCap)
+}
+
+// nextRetry is when the earliest of this round's messages that failed and
+// has retries left is due again, zero when there is none. Only messages the
+// round took are counted: one that has left the inbox, or that another
+// rule now holds back, is not work the next round would do.
+//
+// It is never sooner than one serveInterval from now, the watcher's own
+// pause between polls, and every failure has just moved its message's
+// Tried to now, so a round is never followed at once by another: the long
+// run does not spin on a message that fails at once.
+func (r *serveRun) nextRetry(pending []*store.Stored) time.Time {
+	var at time.Time
+	for _, m := range pending {
+		e := r.led.Messages[m.Inner.ID]
+		if e == nil || e.settled() || e.Failures == 0 {
+			continue
+		}
+		due := e.Tried.Add(retryBackoff(e.Failures))
+		if at.IsZero() || due.Before(at) {
+			at = due
+		}
+	}
+	if at.IsZero() {
+		return at
+	}
+	if floor := time.Now().Add(serveInterval); at.Before(floor) {
+		return floor
+	}
+	return at
 }
 
 // pending is every message this run is to answer, oldest first: on a served

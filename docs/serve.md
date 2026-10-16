@@ -301,6 +301,9 @@ What the handler prints on standard output is the reply. Exit 0 having
 printed nothing means "nothing to say": the message is settled and no reply
 goes out. Any other exit is a failure. The message stays unread, the
 attempt is counted, and the next round tries again until `retries` runs out.
+In the long run that round comes when the message is due, with no new mail
+needed: twenty seconds after the first failure, doubling at each, at most
+five minutes apart.
 Serve reads the reply back from the file it caught it in. A file that is
 gone or cannot be read, an after hook's `chmod` among the causes, is a
 failure in the same way, said as `what the handler printed could not be

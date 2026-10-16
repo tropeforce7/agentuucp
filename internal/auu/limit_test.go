@@ -138,6 +138,20 @@ func TestLimitServeLedgerIntegers(t *testing.T) {
 			t.Errorf("failures %d: %v; want it read", n, err)
 		}
 	}
+	// A count of failures read is the long run's backoff (G48, R63): it
+	// doubles from the interval and stops at serveRetryCap, so the type's
+	// maximum neither overflows nor runs the doubling long.
+	for _, c := range []struct {
+		failures int
+		want     time.Duration
+	}{
+		{0, serveInterval}, {1, serveInterval}, {2, 2 * serveInterval}, {4, 8 * serveInterval},
+		{5, serveRetryCap}, {6, serveRetryCap}, {math.MaxInt, serveRetryCap},
+	} {
+		if got := retryBackoff(c.failures); got != c.want {
+			t.Errorf("the backoff after %d failures is %s, want %s", c.failures, got, c.want)
+		}
+	}
 	// relay_id is the relay's counter, ordering a thread's arrivals within
 	// one second: below zero is refused naming the entry, and zero (the
 	// key absent), one and the type's maximum are read.
