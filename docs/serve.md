@@ -326,7 +326,9 @@ Everything a hook or a handler writes to its standard error is printed to
 serve's own, with the thread's short id in front of each line. It is printed
 when the program has finished rather than as it goes: serve gives each
 program a file rather than a pipe, because a pipe held open by something the
-handler started would make the wait after a timeout never end.
+handler started would make the wait after a timeout never end. A line longer
+than a mebibyte is printed cut, with a mark saying how many bytes of it are
+not shown, and the lines after it are printed as usual.
 
 Each program is killed with everything it started when the timeout
 comes — on Unix through a process group of its own, on Windows by walking

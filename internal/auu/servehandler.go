@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/store"
@@ -205,36 +207,118 @@ func exitStatus(err error) int {
 // prefixedTo copies a program's output file to serve's standard error with
 // the thread's short id in front of every line, which is what tells two
 // threads' output apart in a journal. Live output is not possible while the
-// output is a file, and the documentation says so.
+// output is a file, and the documentation says so. A line over
+// maxLogLine is cut with a mark that says how much of it is not shown, and
+// the lines after it are copied (G49, R64): a scanner's cap ended the copy
+// there without a word. A read that fails is said, with the file's path.
 func prefixedTo(w *os.File, path, prefix string) {
 	f, err := regular.Open(path)
 	if err != nil {
 		return
 	}
 	defer f.Close()
-	scan := bufio.NewScanner(f)
-	scan.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scan.Scan() {
-		fmt.Fprintf(w, "%s: %s\n", prefix, scan.Text())
+	err = eachLine(f, func(text string, cut int64) bool {
+		if cut > 0 {
+			fmt.Fprintf(w, "%s: %s [cut: %d more bytes of this line are not shown]\n", prefix, text, cut)
+		} else {
+			fmt.Fprintf(w, "%s: %s\n", prefix, text)
+		}
+		return true
+	})
+	if err != nil {
+		fmt.Fprintf(w, "%s: [the rest of %s could not be read: %v]\n", prefix, path, err)
 	}
 }
 
 // firstLine is the first line of a file, for the sentence that says why a
-// message was not answered. Empty when there is nothing to say.
+// message was not answered. Empty when there is nothing to say. A first
+// line over maxLogLine is given cut, with a mark that says so.
 func firstLine(path string) string {
 	f, err := regular.Open(path)
 	if err != nil {
 		return ""
 	}
 	defer f.Close()
-	scan := bufio.NewScanner(f)
-	scan.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scan.Scan() {
-		if line := strings.TrimSpace(scan.Text()); line != "" {
-			return line
+	var first string
+	eachLine(f, func(text string, cut int64) bool {
+		if line := strings.TrimSpace(text); line != "" {
+			first = line
+			if cut > 0 {
+				first += " [cut]"
+			}
+			return false
 		}
+		return true
+	})
+	return first
+}
+
+// maxLogLine is the most of one line of a program's output that serve
+// prints: the scanner's cap it replaces.
+const maxLogLine = 1024 * 1024
+
+// eachLine gives line every line of r without its line ending, as a
+// scanner of lines does, until line returns false: a line ends at a
+// newline, a carriage return before it or before the end of the file is
+// not part of it, and a last line with no newline is a line. A line over
+// maxLogLine is given its first maxLogLine bytes, less a rune the cut would
+// split, and cut is how many bytes of it are not given; reading goes on
+// from the line's end. A read that fails ends it with the error, after
+// the line it was reading.
+func eachLine(r io.Reader, line func(text string, cut int64) bool) error {
+	br := bufio.NewReaderSize(r, 64*1024)
+	var kept []byte
+	var cut int64
+	var last byte
+	open := false
+	for {
+		piece, err := br.ReadSlice('\n')
+		ended := err == nil
+		if ended {
+			piece = piece[:len(piece)-1]
+		}
+		if len(piece) > 0 {
+			open, last = true, piece[len(piece)-1]
+			room := maxLogLine - len(kept)
+			if len(piece) > room {
+				cut += int64(len(piece) - room)
+				piece = piece[:room]
+			}
+			kept = append(kept, piece...)
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if ended || open {
+			if last == '\r' {
+				if cut > 0 {
+					cut--
+				} else {
+					kept = kept[:len(kept)-1]
+				}
+			}
+			if cut > 0 {
+				for range utf8.UTFMax {
+					r, size := utf8.DecodeLastRune(kept)
+					if len(kept) == 0 || r != utf8.RuneError || size > 1 {
+						break
+					}
+					kept = kept[:len(kept)-1]
+					cut++
+				}
+			}
+			if !line(string(kept), cut) {
+				return nil
+			}
+		}
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		kept, cut, last, open = kept[:0], 0, 0, false
 	}
-	return ""
 }
 
 // createNew makes one of the run's files, empty, under a name of the

@@ -75,8 +75,9 @@ import (
 // courier's queue said when it is next due (G40), 582 when a drop the
 // outbox would not take named its copy in its two refusals (G43), 581
 // when a sent record's change said its read and its save in one warning
-// (G45). A walk that finds fewer is not reaching the tree.
-const floor = 581
+// (G45), 586 when a program's line over the cap was cut and the lines after
+// it copied (G49). A walk that finds fewer is not reaching the tree.
+const floor = 586
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.

@@ -444,6 +444,11 @@ internal/auu/serveconfig.go serveChannel int Retries int = >= 0 shown by TestLim
 internal/auu/serveconfig.go serveChannel int threadTTL time.Duration = > 0s shown by TestLimitServeChannelIntegers
 internal/auu/serveconfig.go serveChannel int timeout time.Duration = > 0s shown by TestLimitServeChannelIntegers
 internal/auu/serveconfig.go serveConfig int V int = [1, 1] shown by TestLimitServeConfigV
+internal/auu/servehandler.go eachLine string kept[:0] = local: the empty prefix of kept
+internal/auu/servehandler.go eachLine string kept[:len(kept) - 1] = local: len(kept)-1 of kept, which holds the whole line since nothing was cut, and the line's last byte
+internal/auu/servehandler.go eachLine string kept[:len(kept) - 1] #2 = local: len(kept)-1 of kept, checked non-empty
+internal/auu/servehandler.go eachLine string piece[:len(piece) - 1] = local: len(piece)-1 of piece, which ReadSlice ended with its newline
+internal/auu/servehandler.go eachLine string piece[:room] = a line of a program's output cut to maxLogLine, room what is left of it, shown by TestLimitAHandlerLineIsCutAtTheCap
 internal/auu/serveledger.go ledger int V int = [1, 1] shown by TestLimitServeLedgerIntegers
 internal/auu/serveledger.go ledgerEntry int Failures int = >= 0 shown by TestLimitServeLedgerIntegers
 internal/auu/serveledger.go ledgerEntry int RelayID int64 = >= 0 shown by TestLimitServeLedgerIntegers
