@@ -108,7 +108,19 @@ if [ "$mode" = update ]; then
 	printf '%s\n' "$usage" | head -1
 	say "systemctl stop auu-relay"
 	systemctl stop auu-relay 2>/dev/null || true
-	stopped=1
+	# The stop's failure is let through for a unit that is not there, an
+	# install being finished, and the relay's state is then asked whatever
+	# the stop said: the backup and the replacement below are made under a
+	# stopped relay or not at all. A unit whose file has gone may still be
+	# running, so not-found decides only whether there is a relay to start
+	# back, and stopped is set once that is known, so fail's sentence is
+	# true. systemd says inactive of a unit it does not know.
+	state=$(systemctl is-active auu-relay 2>/dev/null || true)
+	case "$state" in
+		inactive|failed) ;;
+		*) fail "the relay did not stop (systemctl is-active says ${state:-nothing}); systemctl status auu-relay says why. Nothing was changed" ;;
+	esac
+	[ "$(systemctl show -p LoadState --value auu-relay 2>/dev/null || true)" = not-found ] || stopped=1
 	stamp=$(date -u +%Y%m%dT%H%M%SZ)
 	say "install -d -m 0700 /var/lib/auu/backups/$stamp"
 	install -d -m 0700 "/var/lib/auu/backups/$stamp"

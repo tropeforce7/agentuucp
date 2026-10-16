@@ -213,7 +213,10 @@ An operator can list all of this, and count it, and delete it. None of it can
 be read. Every file is a sealed envelope or a sealed stream.
 
 **Back up the database and the message directory together**, or you will
-restore an index pointing at mail that is not there. A relay that finds
+restore an index pointing at mail that is not there. Stop the relay before
+you copy the two: only a stopped relay makes them one snapshot, since
+SQLite's online backup covers the database alone. The kit's `install.sh
+update` refuses to go on when the relay has not stopped. A relay that finds
 one without the other says so at startup and repairs itself towards the
 database. Files in a mailbox's directory with no row are removed. `tmp/`,
 `uploads/` and `outbound/` are the relay's own and are not read as

@@ -708,6 +708,40 @@ func TestTheInstallerParsesAsPOSIXSh(t *testing.T) {
 	}
 }
 
+// An update backs up and replaces under a stopped relay or not at all
+// (G50, R65): the stop's failure was let through whatever it was, and the
+// database was copied in three pieces under a running relay, the binary
+// and the unit replaced under it, and fail said the relay was stopped. The
+// check that the relay is inactive comes between the stop and the first
+// backup line whatever systemd knows of the unit, since a unit whose file
+// has gone may still run; a running relay is refused by name with the
+// status command; and stopped is set after the check, for a unit systemd
+// still knows, and nowhere before it, so a later edit cannot move either
+// past the backup.
+func TestAnUpdateGoesOnOnlyOnceTheRelayHasStopped(t *testing.T) {
+	script := string(installScript)
+	at := func(text string) int {
+		t.Helper()
+		if n := strings.Count(script, text); n != 1 {
+			t.Fatalf("install.sh has %q %d times, want once", text, n)
+		}
+		return strings.Index(script, text)
+	}
+	stop := at("systemctl stop auu-relay 2>/dev/null || true\n")
+	check := at(`state=$(systemctl is-active auu-relay 2>/dev/null || true)`)
+	goOn := at("inactive|failed) ;;")
+	refused := at(`*) fail "the relay did not stop (systemctl is-active says ${state:-nothing}); systemctl status auu-relay says why. Nothing was changed" ;;`)
+	stopped := at(`[ "$(systemctl show -p LoadState --value auu-relay 2>/dev/null || true)" = not-found ] || stopped=1`)
+	backup := at(`install -d -m 0700 "/var/lib/auu/backups/$stamp"`)
+	if !(stop < check && check < goOn && check < refused && goOn < stopped && refused < stopped && stopped < backup) {
+		t.Fatalf("the update's order is stop %d, check %d, going on %d, refusal %d, stopped %d, backup %d; "+
+			"want the stop, the check with its two outcomes, stopped, then the backup", stop, check, goOn, refused, stopped, backup)
+	}
+	if n := strings.Count(script, "stopped=1"); n != 1 {
+		t.Fatalf("install.sh sets stopped=1 %d times; want once, by the check", n)
+	}
+}
+
 // The kit says what relay it is carrying, read from the binary itself: the
 // maker is handed whatever they built, and a hash alone tells an operator
 // nothing about what it is. A binary with no build information — not a Go
