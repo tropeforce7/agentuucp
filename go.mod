@@ -3,6 +3,7 @@ module github.com/tropeforce7/agentuucp
 go 1.27.0
 
 retract [v0.4.0, v0.10.0] // integer, string and path handling faults fixed in v0.11.0
+retract v0.11.0 // withdrawn with its tag; use v0.13.0 or later
 
 require (
 	golang.org/x/crypto v0.56.0
