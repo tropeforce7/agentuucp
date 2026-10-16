@@ -293,7 +293,7 @@ func finishStream(s *store.Store, id *identity.Identity, r *store.Relay, p *pend
 	}
 	p.clear(s)
 
-	if err := s.Save(store.Sent, &store.Stored{
+	if err := saveSent(s, &store.Stored{
 		RelayID:  relayID,
 		Relay:    r.Name,
 		Received: time.Now().UTC().Truncate(time.Second),

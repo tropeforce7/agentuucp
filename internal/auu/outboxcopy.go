@@ -218,25 +218,36 @@ func refuseCopy(s *store.Store, p *pending, err error) {
 // writing the record, and its copies are finished all the same: nothing is
 // said of the record that is not there. One that will not read, or has no
 // copy for this recipient, is said once, and the copy is finished anyway.
+// The record is read, changed and saved under the sent lock (UpdateSent),
+// since a send, its resume and a drop can each change one copy at once.
 func updateSentCopy(s *store.Store, messageID, to string, change func(*store.SentCopy)) {
-	m, err := s.Holding(store.Sent, messageID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: the sent record of %s could not be read to update: %v\n", messageID[:12], err)
-		return
-	}
-	if m == nil {
-		return
-	}
-	for i := range m.Copies {
-		if m.Copies[i].Fingerprint == to {
-			change(&m.Copies[i])
-			if err := s.Save(store.Sent, m); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: the sent record of %s could not be updated: %v\n", messageID[:12], err)
-			}
-			return
+	found, held := false, false
+	err := s.UpdateSent(messageID, func(m *store.Stored) *store.Stored {
+		if m == nil {
+			return nil
 		}
+		held = true
+		for i := range m.Copies {
+			if m.Copies[i].Fingerprint == to {
+				found = true
+				change(&m.Copies[i])
+				return m
+			}
+		}
+		return nil
+	})
+	switch {
+	case err != nil:
+		fmt.Fprintf(os.Stderr, "warning: the sent record of %s could not be updated: %v\n", messageID[:12], err)
+	case held && !found:
+		fmt.Fprintf(os.Stderr, "warning: the sent record of %s has no copy for %s to update\n", messageID[:12], to[:identity.ShortIDLen])
 	}
-	fmt.Fprintf(os.Stderr, "warning: the sent record of %s has no copy for %s to update\n", messageID[:12], to[:identity.ShortIDLen])
+}
+
+// saveSent writes a whole sent record under the sent lock, as every writer
+// of one does, so that it lands between two changes rather than across one.
+func saveSent(s *store.Store, m *store.Stored) error {
+	return s.UpdateSent(m.Inner.ID, func(*store.Stored) *store.Stored { return m })
 }
 
 // keptSentence is a refusal's sentence as the outbox keeps it, for

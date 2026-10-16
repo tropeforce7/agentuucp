@@ -213,7 +213,7 @@ func cmdKnock(args []string) error {
 	// This machine's own copy of what it sent, as every send keeps one:
 	// the reply comes back on this thread, and without the copy the
 	// thread would begin at the reply.
-	if err := s.Save(store.Sent, &store.Stored{
+	if err := saveSent(s, &store.Stored{
 		RelayID:    relayID,
 		Relay:      r.Name,
 		Received:   time.Now().UTC().Truncate(time.Second),

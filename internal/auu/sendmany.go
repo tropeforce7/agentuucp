@@ -394,7 +394,7 @@ func sendToSeveral(s *store.Store, id *identity.Identity, r *store.Relay, to []a
 			Fingerprint: a.pub.Fingerprint(), Name: a.pub.Name, Path: store.JoinAddress(a.path),
 		})
 	}
-	if err := s.Save(store.Sent, sent); err != nil {
+	if err := saveSent(s, sent); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: the local copy of the message failed: %v\n", err)
 	}
 

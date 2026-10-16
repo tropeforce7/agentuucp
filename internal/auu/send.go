@@ -732,21 +732,24 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 	// Keep our own copy so threads can be reconstructed later: once, on the
 	// first post that succeeded, since a kept envelope posted again is the
 	// same message under the same id.
-	if prior, err := s.Holding(store.Sent, inner.ID); err == nil && prior != nil {
-		// Already kept.
-	} else if err := s.Save(store.Sent, &store.Stored{
-		RelayID:    relayID,
-		Relay:      r.Name,
-		Received:   time.Now().UTC().Truncate(time.Second),
-		Read:       true,
-		Inner:      inner,
-		SenderName: recipient.Name,
-		Channel:    mode.channel,
-		// The address it went by, so that the record says where a message
-		// went and not only to whom. The id beside it is the first hop's
-		// row and not a mailbox's message, which is what an undeliverable
-		// coming back will name.
-		Path: store.JoinAddress(mode.path),
+	if err := s.UpdateSent(inner.ID, func(prior *store.Stored) *store.Stored {
+		if prior != nil {
+			return nil // Already kept.
+		}
+		return &store.Stored{
+			RelayID:    relayID,
+			Relay:      r.Name,
+			Received:   time.Now().UTC().Truncate(time.Second),
+			Read:       true,
+			Inner:      inner,
+			SenderName: recipient.Name,
+			Channel:    mode.channel,
+			// The address it went by, so that the record says where a message
+			// went and not only to whom. The id beside it is the first hop's
+			// row and not a mailbox's message, which is what an undeliverable
+			// coming back will name.
+			Path: store.JoinAddress(mode.path),
+		}
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: message sent but the local copy failed: %v\n", err)
 	}

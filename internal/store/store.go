@@ -925,6 +925,31 @@ func (s *Store) Holding(box Box, id string) (*Stored, error) {
 	return m, err
 }
 
+// UpdateSent is how a sent record is written (G45, R61): the record is
+// read, given to change, and what change returns is saved, all under the
+// home's sent lock, so that two processes placing two of a message's
+// copies at once do not each save over the other's change. Replacing the
+// file atomically is no protection, since each writer replaces the whole
+// record with the one it read. change is given nil when the box does not
+// hold the record, and returns nil to save nothing; it runs under the
+// lock, so it does nothing but change the record.
+func (s *Store) UpdateSent(id string, change func(m *Stored) *Stored) error {
+	lock, _, err := lockfile.Take(context.Background(), s.SentLockPath(), sentLockWait, nil)
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+	m, err := s.Holding(Sent, id)
+	if err != nil {
+		return err
+	}
+	next := change(m)
+	if next == nil {
+		return nil
+	}
+	return s.Save(Sent, next)
+}
+
 // Load reads one message from a spool directory.
 func (s *Store) Load(box Box, id string) (*Stored, error) {
 	// Guards the filesystem: an id arrives inside a signed but otherwise
@@ -1293,6 +1318,15 @@ func (s *Store) Remove(box Box, id string) error {
 	if err := message.ValidID(id); err != nil {
 		return fmt.Errorf("message id %q is %w", id, err)
 	}
+	// A sent record goes under the lock it is changed under, so that a
+	// change read before the removal is not saved after it.
+	if box == Sent {
+		lock, _, err := lockfile.Take(context.Background(), s.SentLockPath(), sentLockWait, nil)
+		if err != nil {
+			return err
+		}
+		defer lock.Release()
+	}
 	if err := os.RemoveAll(s.AttachmentDir(box, id)); err != nil {
 		return err
 	}
@@ -1381,6 +1415,15 @@ const spoolLockWait = 30 * time.Second
 // one for the home: the swap and the record's save are short, and two
 // fetches through two relays can deliver the one message at once.
 func (s *Store) SpoolLockPath() string { return s.path("spool.lock") }
+
+// sentLockWait is how long a writer of a sent record waits for another:
+// the other holds it for one record's read and save.
+const sentLockWait = 30 * time.Second
+
+// SentLockPath is the lock every writer of a sent record holds (UpdateSent),
+// one for the home, as the spool lock is: a send, its resume and a drop
+// are separate processes, and each changes the record of one message.
+func (s *Store) SentLockPath() string { return s.path("sent.lock") }
 
 // ServeDir is where 'auu serve' keeps its state: its lock, its ledger, and a
 // directory apiece for each channel, thread and worktree. It is the store's

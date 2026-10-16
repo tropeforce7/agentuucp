@@ -73,9 +73,10 @@ import (
 // the owed acknowledgement's refusal named its message (G32), 579 when a
 // stream's sources were hashed as they were sealed (G34), 580 when the
 // courier's queue said when it is next due (G40), 582 when a drop the
-// outbox would not take named its copy in its two refusals (G43). A walk
-// that finds fewer is not reaching the tree.
-const floor = 582
+// outbox would not take named its copy in its two refusals (G43), 581
+// when a sent record's change said its read and its save in one warning
+// (G45). A walk that finds fewer is not reaching the tree.
+const floor = 581
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.
