@@ -325,7 +325,7 @@ auu-ca version | --version
 
 The relay itself is flags rather than subcommands, and answers one of them
 without any settings: `auu-relay --version` prints the version it was built
-from and the database schema it speaks, as `auu-relay v0.17.0 (schema 13)`;
+from and the database schema it speaks, as `auu-relay v0.18.0 (schema 13)`;
 its `relay starting` log line leads with the same two, `version=` and
 `schema=`.
 
