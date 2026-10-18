@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1206,20 +1207,52 @@ func peerLabel(p *identity.Public) string {
 	return p.Short()
 }
 
-// loadAttachments reads each named file into an attachment.
+// attachmentInfo is an attachment as its own entry says it is, for every
+// read of one: a regular file, or a usage error that names what stands
+// there instead. A link is not followed. The path is the person's on the
+// command line, and for serve the patch in the thread's directory, which
+// the handler writes as the same account: a link put there in place of a
+// kept reply's patch was followed, and the file it named was attached to
+// the reply (F1, A-1, B-1), so a link is refused for both, and the person
+// attaches the file it points at. A pipe, which is what a process
+// substitution such as <(command) is, is refused too: an attachment's
+// size is taken before it is read, to choose between an envelope and a
+// stream, and a stream reads it twice, to hash and to seal, where a pipe
+// has no size and gives its bytes once.
+func attachmentInfo(p string) (fs.FileInfo, error) {
+	info, err := os.Lstat(p)
+	if err != nil {
+		return nil, usageErrf("attachment %s: %v", p, err)
+	}
+	switch mode := info.Mode(); {
+	case mode.IsRegular():
+		return info, nil
+	case mode.IsDir():
+		return nil, usageErrf("attachment %s is a directory; attach files individually", p)
+	case mode&fs.ModeSymlink != 0:
+		return nil, usageErrf("attachment %s is a symbolic link, which is not followed; attach the file it points at", p)
+	}
+	return nil, usageErrf("attachment %s is not a regular file; a pipe, which <(command) is, is not attached: write it to a file and attach that", p)
+}
+
+// loadAttachments reads each named file into an attachment, through the
+// handle, so a link put in place of the file after attachmentInfo looked
+// is refused at the open as well; and what is read must be as long as
+// the entry said, which on Windows, where an open follows a link to a
+// regular file, is what is left to tell a file swapped in after the look.
 func loadAttachments(paths []string) ([]message.Attachment, error) {
 	var out []message.Attachment
 	for _, p := range paths {
-		info, err := os.Stat(p)
+		info, err := attachmentInfo(p)
 		if err != nil {
-			return nil, usageErrf("attachment %s: %v", p, err)
+			return nil, err
 		}
-		if info.IsDir() {
-			return nil, usageErrf("attachment %s is a directory; attach files individually", p)
-		}
-		data, err := os.ReadFile(p)
+		data, err := regular.ReadFile(p)
 		if err != nil {
 			return nil, usageErrf("reading %s: %v", p, err)
+		}
+		if int64(len(data)) != info.Size() {
+			return nil, usageErrf("%s changed while it was being read; attach it again", p)
 		}
 		// The sender's rule, here as a usage error before anything is
 		// sealed, naming the step a receiver would take with the name;
@@ -1241,12 +1274,9 @@ func loadAttachments(paths []string) ([]message.Attachment, error) {
 func estimateSize(body message.Body, paths []string) (int64, error) {
 	total := int64(len(body.Text) + len(body.Subject))
 	for _, p := range paths {
-		info, err := os.Stat(p)
+		info, err := attachmentInfo(p)
 		if err != nil {
-			return 0, usageErrf("attachment %s: %v", p, err)
-		}
-		if info.IsDir() {
-			return 0, usageErrf("attachment %s is a directory; attach files individually", p)
+			return 0, err
 		}
 		total += info.Size()
 	}
@@ -1266,8 +1296,8 @@ func largestAttachmentHint(paths []string) string {
 	}
 	var sizes []entry
 	for _, p := range paths {
-		info, err := os.Stat(p)
-		if err != nil {
+		info, err := os.Lstat(p)
+		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
 		sizes = append(sizes, entry{filepath.Base(p), info.Size()})

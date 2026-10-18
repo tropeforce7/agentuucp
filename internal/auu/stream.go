@@ -620,12 +620,9 @@ func uploadStream(c *client.Client, s *store.Store, p *pending) (int64, error) {
 func sourcesFor(paths []string) ([]stream.Source, error) {
 	var out []stream.Source
 	for _, p := range paths {
-		info, err := os.Stat(p)
+		info, err := attachmentInfo(p)
 		if err != nil {
-			return nil, usageErrf("attachment %s: %v", p, err)
-		}
-		if info.IsDir() {
-			return nil, usageErrf("attachment %s is a directory; attach files individually", p)
+			return nil, err
 		}
 		name := filepath.Base(p)
 		if err := message.ValidAttachmentName(name); err != nil {
@@ -636,7 +633,15 @@ func sourcesFor(paths []string) ([]stream.Source, error) {
 			Name:  name,
 			Media: message.MediaTypeFor(name),
 			Size:  info.Size(),
-			Open:  func() (io.ReadCloser, error) { return os.Open(path) },
+			// Through the handle at each of the two opens, so a link put
+			// in place of the file after it was looked at is refused.
+			Open: func() (io.ReadCloser, error) {
+				f, err := regular.Open(path)
+				if err != nil {
+					return nil, err
+				}
+				return f, nil
+			},
 		})
 	}
 	return out, nil
