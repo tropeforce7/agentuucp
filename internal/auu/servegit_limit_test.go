@@ -260,3 +260,34 @@ func TestLimitGitVersion(t *testing.T) {
 		}
 	}
 }
+
+// TestLimitAChannelIsNotNamedAsAThread: a read-only channel's worktree is
+// worktrees/<channel>, in the directory a side copy's worktrees/<thread>
+// are in, and a thread id is 32 hex characters a sender chooses, so a
+// channel named as one shared a thread's directory, and letting that
+// thread go removed it (F7, tracer A's A-4). serve check refuses a channel
+// named with 32 hex characters, in either case, since the filesystem may
+// fold it; 31 and 33 of them, and 32 characters with one that is not hex,
+// are names like any other.
+func TestLimitAChannelIsNotNamedAsAThread(t *testing.T) {
+	dir := repo(t)
+	check := func(name string) error {
+		cfg := &serveConfig{
+			V:        1,
+			path:     filepath.Join(t.TempDir(), "serve.json"),
+			Channels: map[string]*serveChannel{name: {Dir: dir, Exec: "cat", Mode: modeReadOnly, MaxTurns: 1}},
+		}
+		return cfg.check()
+	}
+	id := "0123456789abcdef0123456789abcdef"
+	for _, name := range []string{id, strings.ToUpper(id), "0123456789ABCdef0123456789abcdef"} {
+		if err := check(name); err == nil || !strings.Contains(err.Error(), "the shape of a thread id") {
+			t.Errorf("channel %q: %v", name, err)
+		}
+	}
+	for _, name := range []string{id[:31], id + "0", id[:31] + "g", id[:31] + "-"} {
+		if err := check(name); err != nil {
+			t.Errorf("channel %q was refused: %v", name, err)
+		}
+	}
+}

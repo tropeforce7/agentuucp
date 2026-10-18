@@ -18,6 +18,14 @@ import (
 // link, not followed to what it points at — through Open, Create,
 // OpenFile for append and ReadFile, with no byte written and no entry
 // removed, and a witness file beside them untouched.
+//
+// There is no Windows half. There a FIFO and a socket cannot be planted
+// under a file's name; a symbolic link needs a privilege or developer mode;
+// a junction names a directory, which Dir's test covers; and an open
+// follows a link to a regular file by design (the package's doc, S57), so
+// a planted link would show the follow, not a refusal. The exclusive
+// create's refusal of an existing entry, and the device names, are
+// TestLimitADeviceIsRefusedByItsHandle's, which runs there.
 func TestLimitAPlantedEntryIsRefusedByItsHandle(t *testing.T) {
 	// A Unix socket's path is short by the platform's rule (104 bytes on
 	// macOS), and a test's temporary directory is not, so the names here

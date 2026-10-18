@@ -166,7 +166,10 @@ which is the same hook that runs the tests.
 
 A thread's worktree is let go of when the thread has been idle for
 `thread_ttl`. A read-only channel's is not, and lasts as long as the
-channel is in the file.
+channel is in the file. Both are under `serve/worktrees/`, a thread's by
+its id and a read-only channel's by its name, so a channel may not be
+named with 32 hex characters, in either case, which is a thread id's
+shape: `auu serve check` refuses one, saying so.
 
 A handler with a shell can be talked by a message into damaging its
 worktree, and in `read-only` that worktree is every thread's on the
@@ -310,6 +313,12 @@ environment:
 | `AUU_ATTACHMENTS` | where the sender's files were put, or empty |
 | `ANTHROPIC_BASE_URL` | with a proxy configured: `http://127.0.0.1:PORT/TOKEN`, where to send Anthropic API requests for this invocation |
 | `ANTHROPIC_API_KEY` | with a proxy configured: the same token, a placebo, since Claude Code refuses to run with no key at all |
+
+On Windows, an `exec` line must not name a variable as `%AUU_SUBJECT%` or
+any other `%AUU_…%`: serve runs the line with `cmd /S /C`, which puts the
+value in before it reads the line, and a subject, which the asker writes,
+may hold `&`, `^` or `|`, which `cmd` then reads as its own syntax. Read
+the variable inside the program instead, as the shipped wrapper does.
 
 The files an asker attached are unpacked into a directory of the message's
 own under the thread's, each checked against the digest the message carries

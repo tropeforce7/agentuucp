@@ -1000,9 +1000,16 @@ from a shell. And a name list is one guard, never complete on its own.
 Every file the program reads or creates by a name from the network, or
 from a directory entry it read back, is opened through `internal/regular`.
 That asks the open handle what it is and refuses a device, a named pipe,
-a socket, a directory or a symbolic link under any name before a byte
-moves. A create is exclusive, so nothing that already stood under the name
-is opened, and no such name is a rename's destination. On Windows the
+a socket or a directory under any name before a byte moves. On Linux and
+macOS it also refuses a symbolic link as the name itself, though not one
+among the directories above it, which are the program's own or the
+operator's. On Windows an open follows a link to a regular file and the
+handle judges the file it reaches; refusing the link itself there would
+refuse every cloud file too, and is planned for a later release. A
+create is exclusive on every platform, so nothing that already stood
+under the name, a link included, is opened, and no such name is a
+rename's destination. A hard link is the file it names, and no open
+refuses it. On Windows the
 device rule asks the OS itself. The Windows CI job holds the hand list,
 which is the rule everywhere else, to be no narrower than what its OS
 says. Windows versions differ in which names are devices under a

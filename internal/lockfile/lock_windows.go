@@ -20,7 +20,11 @@ const errSharingViolation = syscall.Errno(32)
 // IMPLEMENTATION_NOTES.md.
 type Lock struct{ f *os.File }
 
-// Try takes the lock or reports ErrHeld at once.
+// Try takes the lock or reports ErrHeld at once. CreateFile without
+// FILE_FLAG_OPEN_REPARSE_POINT follows a link or junction at the path, as
+// regular's opens do on Windows: a lock is under the home or the user's
+// own runtime directory, and what keeps a link out of those is that they
+// are the user's.
 func Try(path string) (*Lock, error) {
 	name, err := syscall.UTF16PtrFromString(path)
 	if err != nil {

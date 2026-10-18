@@ -52,8 +52,12 @@
 # A name from outside — a network row, or a derived row that is an entry
 # of a directory read back — is opened or created through internal/regular
 # (regular.Open, Create, OpenFile, ReadFile, Dir), which asks the handle
-# what it is and refuses a device, a pipe, a socket, a link or a
-# directory under any name; a row of either kind whose callee is the
+# what it is and refuses a device, a pipe, a socket or a directory under
+# any name, and a symbolic link as the last component on unix; a link
+# among the directories above it is followed there, and on Windows an
+# open follows a link to a regular file, which the handle then judges,
+# while an exclusive create refuses one (internal/regular's doc says
+# each); a row of either kind whose callee is the
 # plain os.Open, OpenFile, Create, WriteFile or ReadFile fails the test.
 # Such a name is never a rename's destination either, since a rename has
 # no handle to ask: a rename row of either kind whose argument is the

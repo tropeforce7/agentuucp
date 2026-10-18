@@ -11,13 +11,22 @@
 // direction; Dir does the same with the mode inverted, for a directory
 // that is opened to be synced. On Unix every open of a file carries
 // O_NOFOLLOW, so a symbolic link under the name is refused as a link
-// rather than followed to wherever it points; Dir follows a link, since
+// rather than followed to wherever it points. The flag covers the last
+// component only: a link among the directories above the name is
+// followed, so what keeps those directories the program's is where the
+// path came from, which the ledger says for every row, and not this
+// package. Dir follows a link, since
 // a link that resolves to a directory is a directory (an operator's home
 // or authority behind a link is the ordinary case) and the handle check
 // judges what it resolves to. On Windows the flag does not exist and is
-// zero: an open follows a link to a regular file and the handle check
-// stands alone, while an exclusive create refuses a link as an existing
-// entry without following it. A create is exclusive
+// zero: an open follows a link to a regular file, a symbolic link or a
+// junction above it alike, and the handle check stands alone, judging the
+// file the link reaches; an exclusive create refuses a link as an existing
+// entry without following it. The open flag that would refuse a reparse
+// point there is not used: it would make every cloud-file and
+// deduplicated file an irregular one, and is after this release (S57).
+// A hard link is the file it names on every platform, and no open
+// refuses it. A create is exclusive
 // (O_CREATE|O_EXCL), so the program never opens something that already
 // stood under the name: an existing file, a device, a link. There is no
 // rename here and no temporary file, since a rename's destination has no

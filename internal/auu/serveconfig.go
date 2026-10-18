@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/channels"
+	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/wire"
 )
@@ -196,6 +197,14 @@ func (cfg *serveConfig) check() error {
 		if err := channels.ValidName(name); err != nil {
 			return cfg.errf(name, "%v", err)
 		}
+		// A read-only channel's worktree is worktrees/<channel>, beside a
+		// side copy's worktrees/<thread>, and a thread id is what a
+		// sender chooses: a channel named as one, in either case since
+		// the filesystem may fold it, would share a thread's directory,
+		// and letting the thread go would remove it (F7).
+		if threadShaped(name) {
+			return cfg.errf(name, "a name of 32 hex characters is the shape of a thread id, whose worktree is in the same directory as a channel's; rename it")
+		}
 		// Each channel is a directory under serve/channels/, and in
 		// read-only mode that directory holds the worktree's base; two
 		// names that fold to one are one directory on macOS and Windows,
@@ -241,6 +250,12 @@ func (cfg *serveConfig) check() error {
 		}
 	}
 	return nil
+}
+
+// threadShaped says whether a name has a thread id's shape, 32 hex
+// characters, in either case.
+func threadShaped(name string) bool {
+	return len(name) == 32 && message.ValidID(strings.ToLower(name)) == nil
 }
 
 // gitAtLeast says whether git's version line, "git version 2.54.0" with
