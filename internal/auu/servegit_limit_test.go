@@ -1,12 +1,15 @@
 package auu
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestLimitTheBaseIsARevision: the base a worktree stands on is recorded
@@ -83,6 +86,11 @@ func TestLimitTheBaseIsARevision(t *testing.T) {
 //	                   checkout's objects so that it resolves
 //	config.worktree=M  write the directory's config.worktree with a clean
 //	                   filter that touches M
+//	nested=M           make a repository at sub whose own configuration
+//	                   has a clean filter that touches M (nestedRepository)
+//	gitlink=M          that, and a commit of the handler's own holding it
+//	                   as a submodule entry, its id written to the thread's
+//	                   base file
 func plantInWorktree(kind, value string) error {
 	dotGit, err := os.ReadFile(".git")
 	if err != nil {
@@ -116,8 +124,88 @@ func plantInWorktree(kind, value string) error {
 	case "config.worktree":
 		text := "[filter \"x\"]\n\tclean = touch '" + value + "' && cat\n"
 		return os.WriteFile(filepath.Join(admin, "config.worktree"), []byte(text), 0o600)
+	case "nested":
+		_, err := nestedRepository(value)
+		return err
+	case "gitlink":
+		baseFile := filepath.Join(os.Getenv("AUU_THREAD_DIR"), baseFile)
+		head, err := nestedRepository(value)
+		if err != nil {
+			return err
+		}
+		// A commit of the handler's own, in the object store the
+		// worktree shares, holding the repository as a submodule entry,
+		// made with an index of its own so the worktree's is untouched.
+		env := append(os.Environ(), "GIT_INDEX_FILE="+filepath.Join(filepath.Dir(baseFile), "plant-index"))
+		steps := [][]string{
+			{"read-tree", os.Getenv("AUU_BASE")},
+			{"update-index", "--add", "--cacheinfo", "160000," + head + ",sub"},
+			{"write-tree"},
+		}
+		var tree string
+		for _, args := range steps {
+			if tree, err = plantGit(".", env, args...); err != nil {
+				return err
+			}
+		}
+		commit, err := plantGit(".", env, "commit-tree", tree, "-p", os.Getenv("AUU_BASE"), "-m", "a base of the handler's own")
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(baseFile, []byte(commit+"\n"), 0o600)
 	}
 	return fmt.Errorf("no plant %q", kind)
+}
+
+// nestedRepository makes a repository at sub in the working directory, in
+// place of a file there if there is one,
+// with a clean filter in its own configuration that touches marker, an
+// attribute naming it, and a file whose stat no longer matches its index,
+// so that a git status run in it would run the filter; it answers with
+// the repository's commit.
+func nestedRepository(marker string) (string, error) {
+	// A file the base holds at sub is replaced by the repository.
+	if err := os.Remove("sub"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	if _, err := plantGit(".", nil, "init", "-q", "sub"); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join("sub", "f"), []byte("x\n"), 0o600); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join("sub", ".gitattributes"), []byte("* filter=x\n"), 0o600); err != nil {
+		return "", err
+	}
+	for _, args := range [][]string{
+		{"add", "."}, {"commit", "-q", "-m", "nested"},
+		{"config", "filter.x.clean", "touch '" + filepath.ToSlash(marker) + "' && cat"},
+	} {
+		if _, err := plantGit("sub", nil, args...); err != nil {
+			return "", err
+		}
+	}
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(filepath.Join("sub", "f"), later, later); err != nil {
+		return "", err
+	}
+	return plantGit("sub", nil, "rev-parse", "HEAD")
+}
+
+// plantGit is git as a handler runs it, in dir, with env when one is
+// given, answering with what it printed.
+func plantGit(dir string, env []string, args ...string) (string, error) {
+	cmd := exec.Command("git", append([]string{
+		"-c", "user.email=handler@example.invalid", "-c", "user.name=handler",
+		"-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main",
+	}, args...)...)
+	cmd.Dir = dir
+	cmd.Env = env
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("git %s: %v", strings.Join(args, " "), err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // copyTree copies a directory of regular files and directories.

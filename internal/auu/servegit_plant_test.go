@@ -1,6 +1,7 @@
 package auu
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,6 +102,10 @@ func TestLimitServesGitDoesNotReadTheWorktreesGitFile(t *testing.T) {
 // checkout; a thread begun after the checkout is made full again answers
 // with the handler's change and nothing else.
 func TestLimitASideCopyOfASparseCheckoutIsRefused(t *testing.T) {
+	// sparse-checkout's --no-cone is from git 2.35, newer than serve needs.
+	if line, err := gitOutput("", "--version"); err != nil || !gitAtLeast(line, 2, 35) {
+		t.Skipf("git 2.35 or later makes the sparse checkout: %q %v", line, err)
+	}
 	alice, bob := newExpert(t, modeSideCopy)
 	git(t, bob.dir, "sparse-checkout", "set", "--no-cone", "/nothing-here/")
 	t.Setenv(handlerScript, "write:one.txt=a change;echo:an answer")
@@ -174,4 +179,93 @@ func TestLimitTheRepositoryServesGitReadsIsNamedAbsolutely(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestLimitServesGitStartsNothingInARepositoryTheHandlerMade: add -A asks a
+// submodule's own repository whether it is modified by running git status
+// in it, which reads that repository's configuration and runs a clean
+// filter it names; no -c of serve's reaches a filter name the handler
+// chose. A base of the handler's own, a commit in the object store the
+// worktree shares, can hold a submodule entry where the handler made a
+// repository, and serve's add then ran its filter (F1, the second reader
+// of A-3's fix). Now every submodule entry of serve's index is marked
+// skip-worktree before add -A, and the filter does not run: the answer
+// goes with the handler's change and with nothing for the repository. A
+// repository at a path the base does not hold, or in place of a file the
+// base holds, starts nothing either; add -A records it as a submodule
+// entry, which is taken out again, so the patch carries no commit id the
+// asker does not have, and a replaced file goes as deleted.
+func TestLimitServesGitStartsNothingInARepositoryTheHandlerMade(t *testing.T) {
+	t.Run("a submodule entry in the base", func(t *testing.T) {
+		alice, bob := newExpert(t, modeSideCopy)
+		ran := filepath.Join(t.TempDir(), "filter-ran")
+		// The first turn plants the repository and the base, which serve
+		// reads back at the next.
+		t.Setenv(handlerScript, "write:one.txt=a change;plant:gitlink="+ran+";echo:the first answer")
+		sent := alice.ask(t, "jostle", "a question", "the first")
+		bob.serve(t)
+		reply := alice.replyOn(t, sent.Thread)
+		t.Setenv(handlerScript, "write:two.txt=another change;echo:the second answer")
+		alice.run("reply", reply.ID[:12], "and one more thing")
+		said := captureStderr(t, func() { bob.tryRun("serve", "--once") })
+		if _, err := os.Stat(ran); err == nil {
+			t.Fatal("serve's git ran the filter of the repository the handler made")
+		}
+		got := readFile(t, patchOf(t, alice, replyWith(t, alice, "the second answer", said)))
+		if !strings.Contains(got, "two.txt") || strings.Contains(got, "Subproject") {
+			t.Fatalf("the second answer went with:\n%s", got)
+		}
+	})
+	for _, at := range []string{"a repository the base does not hold", "a repository in place of a file of the base"} {
+		t.Run(at, func(t *testing.T) {
+			alice, bob := newExpert(t, modeSideCopy)
+			if at != "a repository the base does not hold" {
+				if err := os.WriteFile(filepath.Join(bob.dir, "sub"), []byte("a file\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				git(t, bob.dir, "add", "sub")
+				git(t, bob.dir, "commit", "-q", "-m", "a file at sub")
+			}
+			ran := filepath.Join(t.TempDir(), "filter-ran")
+			t.Setenv(handlerScript, "write:one.txt=a change;plant:nested="+ran+";echo:an answer")
+			sent := alice.ask(t, "jostle", "a question", "the first")
+			bob.serve(t)
+			if _, err := os.Stat(ran); err == nil {
+				t.Fatal("serve's git ran the filter of the repository the handler made")
+			}
+			got := readFile(t, patchOf(t, alice, alice.replyOn(t, sent.Thread)))
+			if !strings.Contains(got, "one.txt") || strings.Contains(got, "Subproject") || strings.Contains(got, "160000") {
+				t.Fatalf("the answer went with:\n%s", got)
+			}
+			// The file the repository replaced goes as deleted, which is
+			// what the worktree holds; nothing of the repository goes.
+			if wantSub := at != "a repository the base does not hold"; strings.Contains(got, "a/sub") != wantSub || wantSub && !strings.Contains(got, "deleted file mode 100644") {
+				t.Fatalf("the answer went with:\n%s", got)
+			}
+		})
+	}
+}
+
+// replyWith is the reply in u's inbox whose words begin with text, as
+// serve's note on the patch follows them.
+func replyWith(t *testing.T, u *user, text, said string) messageJSON {
+	t.Helper()
+	var in inboxJSON
+	if err := json.Unmarshal([]byte(u.run("inbox", "--json")), &in); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range in.Messages {
+		if m.Type != "reply" {
+			continue
+		}
+		var full messageJSON
+		if err := json.Unmarshal([]byte(u.run("read", m.ID, "--json")), &full); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(full.Text, text+"\n") {
+			return full
+		}
+	}
+	t.Fatalf("no reply says %q; serve said:\n%s", text, said)
+	return messageJSON{}
 }

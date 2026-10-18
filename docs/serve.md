@@ -146,7 +146,11 @@ Three things follow from `git add -A`. What the handler committed is in the
 patch, and so is what it merely wrote. What `.gitignore` hides is not. A
 handler that writes its answer into an ignored path will find it does not
 travel. And a file that is not text travels too, since the diff is taken
-with `--binary`.
+with `--binary`. A submodule is not part of the patch: a change to a
+submodule's commit does not travel, and neither does a repository the
+handler makes inside its worktree, whether or not BASE holds a submodule
+at its path; serve's git runs nothing inside one. A file BASE holds that
+the handler replaced with a repository goes as deleted.
 
 A handler that changes files and prints nothing sends nothing at all: exit
 0 with no output is "nothing to say", so the message is settled, no reply

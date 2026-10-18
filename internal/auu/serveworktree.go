@@ -36,7 +36,10 @@ const baseFile = "base"
 // 40 lowercase hex characters, or 64 in a repository of SHA-256 objects.
 // The file is in a directory the handler writes, and the base goes to git
 // as an argument: a handler that wrote --output=<path> there made serve's
-// git write the diff to that path (F1, A-2).
+// git write the diff to that path (F1, A-2). The shape does not say where
+// the commit came from: a handler's own commit, in the object store the
+// worktree shares with the checkout, is a valid base, which is why the
+// index patchFor makes from it is never trusted to run anything.
 func validBase(base string) bool {
 	if len(base) != 40 && len(base) != 64 {
 		return false
@@ -485,8 +488,12 @@ func patchFor(ch *serveChannel, worktree, base, dir, thread string) (string, err
 		return "", err
 	}
 	defer os.RemoveAll(scratch)
+	// diff.ignoreSubmodules=all leaves out of the diff a submodule entry at
+	// a path the base does not hold, behind the force-remove below; that
+	// step alone keeps out one in place of a file of the base, which the
+	// setting still diffs.
 	call := &gitCall{
-		global: []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull},
+		global: []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull, "-c", "diff.ignoreSubmodules=all"},
 		env: append(withoutGitVariables(os.Environ()),
 			"GIT_DIR="+common, "GIT_WORK_TREE="+worktree, "GIT_INDEX_FILE="+filepath.Join(scratch, "index")),
 	}
@@ -495,8 +502,46 @@ func patchFor(ch *serveChannel, worktree, base, dir, thread string) (string, err
 	if _, err := gitRunWith(worktree, call, "read-tree", "--end-of-options", base); err != nil {
 		return "", err
 	}
+	// add -A asks a submodule's own repository whether it is modified, by
+	// running git status in it, which reads that repository's
+	// configuration and runs a clean filter it names. The base can be a
+	// commit of the handler's own, so a submodule entry in it can stand
+	// where the handler made a repository: each is marked skip-worktree,
+	// and add -A does not look at its path.
+	links, err := submodulesIn(worktree, call)
+	if err != nil {
+		return "", err
+	}
+	if len(links) > 0 {
+		if _, err := gitRunWith(worktree, call, append([]string{"update-index", "--skip-worktree", "--"}, links...)...); err != nil {
+			return "", err
+		}
+	}
 	if _, err := gitRunWith(worktree, call, "add", "-A"); err != nil {
 		return "", err
+	}
+	// add -A records a repository the handler made at a path the base
+	// does not hold as a submodule entry, by reading its HEAD and running
+	// nothing; it is taken out again, so that the patch carries no commit
+	// id the asker does not have.
+	after, err := submodulesIn(worktree, call)
+	if err != nil {
+		return "", err
+	}
+	inBase := make(map[string]bool, len(links))
+	for _, p := range links {
+		inBase[p] = true
+	}
+	var added []string
+	for _, p := range after {
+		if !inBase[p] {
+			added = append(added, p)
+		}
+	}
+	if len(added) > 0 {
+		if _, err := gitRunWith(worktree, call, append([]string{"update-index", "--force-remove", "--"}, added...)...); err != nil {
+			return "", err
+		}
 	}
 	// --binary, so that a change to a file that is not text applies on the
 	// other side as well as reads.
@@ -555,6 +600,24 @@ func keptPatch(ch *serveChannel, dir, thread string) (string, bool) {
 // that may not apply.
 func gitRaw(dir string, args ...string) ([]byte, error) {
 	return gitRawWith(dir, nil, args...)
+}
+
+// submodulesIn is the path of every submodule entry, mode 160000, in the
+// index a call names. A path is given to git as git wrote it, after --,
+// and never opened here.
+func submodulesIn(dir string, call *gitCall) ([]string, error) {
+	out, err := gitRawWith(dir, call, "ls-files", "-z", "--stage")
+	if err != nil {
+		return nil, err
+	}
+	var links []string
+	for _, entry := range strings.Split(string(out), "\x00") {
+		info, path, ok := strings.Cut(entry, "\t")
+		if ok && strings.HasPrefix(info, "160000 ") {
+			links = append(links, path)
+		}
+	}
+	return links, nil
 }
 
 // gitCall is how one of serve's git commands is run when serve's own way
