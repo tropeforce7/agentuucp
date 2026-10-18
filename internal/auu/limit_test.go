@@ -304,6 +304,7 @@ func TestLimitPendingRecordIntegers(t *testing.T) {
 		p.To = strings.Repeat("c", 64)
 		p.Relay = "relay"
 		p.Started = time.Now()
+		p.Body = pendingBody(id)
 		data, err := json.Marshal(p)
 		if err != nil {
 			t.Fatal(err)
@@ -357,7 +358,7 @@ func TestLimitPendingRecordIntegers(t *testing.T) {
 	writeCopy := func(t *testing.T, count int) {
 		t.Helper()
 		os.Remove(pendingPath(s, id))
-		p := pending{MessageID: id, To: to, Relay: "relay", Started: time.Now(), RecipientCount: count}
+		p := pending{MessageID: id, To: to, Relay: "relay", Started: time.Now(), Body: pendingBody(id), RecipientCount: count}
 		data, err := json.Marshal(p)
 		if err != nil {
 			t.Fatal(err)
@@ -567,7 +568,7 @@ func TestLimitPendingRecordShapes(t *testing.T) {
 		if err := os.WriteFile(streamPath(s, id), []byte("sealed"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		p := pending{MessageID: id, To: to, Relay: "relay", Started: time.Now(), ChunkSize: stream.DefaultChunkSize}
+		p := pending{MessageID: id, To: to, Relay: "relay", Started: time.Now(), Body: pendingBody(id), ChunkSize: stream.DefaultChunkSize}
 		if len(relay) > 0 {
 			p.Relay = relay[0]
 		}
@@ -643,7 +644,7 @@ func TestLimitPendingRecordShapes(t *testing.T) {
 	// numbers, and a kept refusal held to a line of relayapi.MaxSaid and
 	// a code to the name rule.
 	to := strings.Repeat("c", 64)
-	good := pending{MessageID: fullID, To: to, Relay: "relay", Started: time.Now(), RecipientCount: 2}
+	good := pending{MessageID: fullID, To: to, Relay: "relay", Started: time.Now(), Body: pendingBody(fullID), RecipientCount: 2}
 	writeCopy := func(t *testing.T, stem string, p pending, sealed ...string) {
 		t.Helper()
 		entries, _ := os.ReadDir(outboxDir(s))
@@ -1037,7 +1038,7 @@ func TestLimitOutboxDirectoryEntries(t *testing.T) {
 	good := strings.Repeat("b", 32)
 	record := func(name, id string) {
 		t.Helper()
-		data, err := json.Marshal(pending{MessageID: id, To: strings.Repeat("c", 64), Relay: "relay", Started: time.Now(), ChunkSize: stream.DefaultChunkSize})
+		data, err := json.Marshal(pending{MessageID: id, To: strings.Repeat("c", 64), Relay: "relay", Started: time.Now(), Body: pendingBody(id), ChunkSize: stream.DefaultChunkSize})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1624,7 +1625,7 @@ func TestTheLocalStrictFilesRefuseEveryTrailingByte(t *testing.T) {
 	if err := os.WriteFile(streamPath(s, id), []byte("sealed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	whole, err := json.Marshal(pending{MessageID: id, To: strings.Repeat("c", 64), Relay: "relay", Started: time.Now(), ChunkSize: stream.DefaultChunkSize})
+	whole, err := json.Marshal(pending{MessageID: id, To: strings.Repeat("c", 64), Relay: "relay", Started: time.Now(), Body: pendingBody(id), ChunkSize: stream.DefaultChunkSize})
 	if err != nil {
 		t.Fatal(err)
 	}

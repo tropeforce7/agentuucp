@@ -283,8 +283,9 @@ type LimitsConfig struct {
 	// UploadOpensPerHour is the uploads one sender may open in an hour,
 	// whatever became of them.
 	UploadOpensPerHour int64 `json:"max_upload_opens_per_hour"`
-	MaxInflight        int64 `json:"max_inflight"`
-	MaxWaiting         int64 `json:"max_waiting"`
+	// MaxInflight has the relay's ceiling, relay.MaxInflightCeiling.
+	MaxInflight int64 `json:"max_inflight"`
+	MaxWaiting  int64 `json:"max_waiting"`
 	// KnockMaxBytes is the largest knock envelope, on the knock route's
 	// own cap; zero means max_bytes, since zero is unlimited everywhere
 	// and a knock is a post, and over max_bytes it is refused at the
@@ -1078,6 +1079,10 @@ func (l LimitsConfig) validate() error {
 	if l.MaxOpenUploads > maxOpenUploadsCeiling {
 		return fmt.Errorf("max_open_uploads must be at most %d, got %d (use 0 for unlimited)",
 			maxOpenUploadsCeiling, l.MaxOpenUploads)
+	}
+	if l.MaxInflight > relay.MaxInflightCeiling {
+		return fmt.Errorf("max_inflight must be at most %d, got %d (use 0 for unlimited)",
+			relay.MaxInflightCeiling, l.MaxInflight)
 	}
 	if l.MaxKnocksWaiting > maxKnocksWaitingCeiling {
 		return fmt.Errorf("max_knocks_waiting must be at most %d, got %d (use 0 for unlimited)",

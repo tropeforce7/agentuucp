@@ -710,22 +710,11 @@ func oneLine(s string) string {
 const reportEllipsis = "…"
 
 // runeStart is the smallest index at or above n that begins a rune, so that a
-// string cut there is still a string of characters. It is runeBoundary's
-// other direction: that one walks down for a cut that keeps the head, this
-// one walks up for a cut that keeps the tail.
+// string cut there is still a string of characters: it walks up, for a cut
+// that keeps the tail.
 func runeStart(s string, n int) int {
 	for n < len(s) && !utf8.RuneStart(s[n]) {
 		n++
-	}
-	return n
-}
-
-// runeBoundary is the largest index at or below n that begins a rune, so
-// that a string cut there is still a string of characters. n must be an
-// index into s.
-func runeBoundary(s string, n int) int {
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
 	}
 	return n
 }

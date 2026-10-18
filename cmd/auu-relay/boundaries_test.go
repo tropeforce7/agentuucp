@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/relay"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
@@ -55,21 +56,21 @@ func TestLimitMaxBytesBoundaries(t *testing.T) {
 	}
 }
 
-// Every numeric limit at the extremes of its type; max_open_uploads, the
-// one with a ceiling, is TestLimitRelaySettings' at its own edges.
+// Every numeric limit at the extremes of its type; those with a ceiling,
+// max_open_uploads and max_inflight among them, are TestLimitRelaySettings'
+// at their own edges.
 func TestLimitsAtTypeExtremes(t *testing.T) {
 	flags := []string{
 		"--limit-requests", "--limit-posts", "--limit-post-bytes",
 		"--limit-unauthenticated", "--limit-registrations", "--max-mailboxes",
 		"--mailbox-max-messages", "--mailbox-max-bytes", "--relay-max-bytes",
-		"--max-upload-opens-per-hour", "--max-inflight", "--max-waiting",
+		"--max-upload-opens-per-hour", "--max-waiting",
 	}
-	// max_waiting must sit under max_inflight when both are set, so each is
-	// taken to its extremes with the other unlimited; the pair is
+	// max_waiting must sit under max_inflight when both are set, so it is
+	// taken to its extremes with max_inflight unlimited; the pair is
 	// TestMaxWaitingMustBeUnderMaxInflight's.
 	alone := map[string][]string{
-		"--max-inflight": {"--max-waiting", "0"},
-		"--max-waiting":  {"--max-inflight", "0"},
+		"--max-waiting": {"--max-inflight", "0"},
 	}
 	for _, flag := range flags {
 		t.Run(flag, func(t *testing.T) {
@@ -145,18 +146,19 @@ func TestTokenMaxAgeBoundaries(t *testing.T) {
 	}
 }
 
-// A relay must actually start with the extremes it accepts.
+// A relay must actually start with the extremes it accepts: max_inflight
+// at the relay's ceiling (P5), the others at their type's.
 func TestRelayStartsWithExtremeLimits(t *testing.T) {
 	cfg, err := resolve(t, "",
 		"--max-bytes", strconv.FormatInt(relayapi.MaxBytesCeiling, 10),
-		"--max-inflight", strconv.FormatInt(math.MaxInt64, 10),
-		"--max-waiting", strconv.FormatInt(math.MaxInt64-1, 10),
+		"--max-inflight", strconv.FormatInt(relay.MaxInflightCeiling, 10),
+		"--max-waiting", strconv.FormatInt(relay.MaxInflightCeiling-1, 10),
 		"--limit-post-bytes", strconv.FormatInt(math.MaxInt64, 10))
 	if err != nil {
 		t.Fatal(err)
 	}
 	l := cfg.Limits.Relay()
-	if l.MaxInflight != math.MaxInt64 || l.MaxWaiting != math.MaxInt64-1 || cfg.MaxBytes != relayapi.MaxBytesCeiling {
+	if l.MaxInflight != relay.MaxInflightCeiling || l.MaxWaiting != relay.MaxInflightCeiling-1 || cfg.MaxBytes != relayapi.MaxBytesCeiling {
 		t.Fatalf("the extremes did not survive resolution: %+v", l)
 	}
 	if _, err := cfg.TokenMaxAge(); err != nil {

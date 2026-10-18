@@ -1188,8 +1188,10 @@ func (r *serveRun) failed(m *store.Stored, ch *serveChannel, why string) {
 	if gaveUp {
 		tail = fmt.Sprintf("given up after %s", plural(e.Failures, "attempt"))
 	}
+	// why holds a handler's first line, or git's own words about a tree
+	// the handler wrote, and is printed escaped (P1).
 	fmt.Fprintf(os.Stderr, "%s: %s from %s was not answered: %s (%s)\n",
-		ch.name, shortID(m.Inner.ID), orNone(identity.Printable(m.SenderName)), why, tail)
+		ch.name, shortID(m.Inner.ID), orNone(identity.Printable(m.SenderName)), identity.PrintableText(why), tail)
 }
 
 // report is one message as --json names it, under the channel that answers

@@ -203,6 +203,11 @@ func Intermediate(parent *Key, name string, eku x509.ExtKeyUsage, hosts []string
 // lets a witness tell the real relay from an impostor holding its
 // intermediates.
 func ServerLeaf(parent *Key, hosts []string, params mldsa.Parameters, now time.Time) (*Key, error) {
+	// The first host is the leaf's common name; every caller has one, and
+	// the check is the function's own, as Intermediate's is (P3).
+	if len(hosts) == 0 {
+		return nil, errors.New("pki: a server leaf needs at least one host")
+	}
 	// Past the intermediate's expiry the clamp below would mint a leaf
 	// already expired, and a relay would serve it without noticing.
 	if !now.Before(parent.Cert.NotAfter) {

@@ -367,6 +367,10 @@ func (s *Store) Record(host string) (*RelayRecord, error) { return s.relayRecord
 // a new one would drop the retired intermediate and break every certificate
 // it issued.
 func (s *Store) FindRecord(hosts []string) (string, *RelayRecord, error) {
+	// The first host names a new record (P3).
+	if len(hosts) == 0 {
+		return "", nil, errors.New("pki: a relay is found by at least one host")
+	}
 	known, err := s.Relays()
 	if err != nil {
 		return "", nil, err

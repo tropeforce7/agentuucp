@@ -73,7 +73,7 @@ Later ones win. A flag you do not type never overrides the file.
 | `--relay-max-bytes N` | `limits.relay_max_bytes` | 0, unlimited |
 | `--max-open-uploads N` | `limits.max_open_uploads` | 4, at most 1000 |
 | `--max-upload-opens-per-hour N` | `limits.max_upload_opens_per_hour` | 64 |
-| `--max-inflight N` | `limits.max_inflight` | 256 |
+| `--max-inflight N` | `limits.max_inflight` | 256, at most 65536 |
 | `--max-waiting N` | `limits.max_waiting` | 64 |
 | `--knock-max-bytes N` | `limits.knock_max_bytes` | 20480, at most `max_bytes`; 0 is `max_bytes`; never above 64 MiB in force |
 | `--max-knocks-waiting N` | `limits.max_knocks_waiting` | 10, at most 1000 |
@@ -426,7 +426,7 @@ switch the lot off.
 | `relay_max_bytes` | queued bytes in the mailboxes across the whole relay; mail waiting to go to a neighbouring relay is a second pool, under `courier.queue_max_bytes` | unlimited |
 | `max_open_uploads` | uploads one sender may have open at once, across every mailbox it sends to; each is a file and a reservation the relay holds for that sender, so 0, unlimited like the rest, lets one sender hold as many as it likes; at most 1000 | 4 |
 | `max_upload_opens_per_hour` | uploads one sender may open in an hour, whatever became of them, refused `429` with a `Retry-After` over it; a stream to several opens one upload for each recipient's copy, so the default is four such messages to sixteen; 0 is unlimited | 64 |
-| `max_inflight` | requests being handled at once | 256 |
+| `max_inflight` | requests being handled at once, at most 65536 | 256 |
 | `max_waiting` | listings held open at once for watchers; over it the next is answered at once rather than held, and each held listing keeps an in-flight slot, so keep this well under `max_inflight` | 64 |
 | `knock_max_bytes` | the largest knock envelope, on the knock route's own cap, so a stranger's one message is read under a bound of its own; 0 is `max_bytes`, since a knock is a post, and a value over `max_bytes` is refused at startup naming both; in force it is never above 64 MiB, since a knock is a row like any other, and the health answer says the figure in force; the default takes a knock at its longest with four vouches and not five | 20480 |
 | `max_knocks_waiting` | knockers one mailbox holds a knock from, counted as rows the relay has whatever the owner has read. One knocker holds one row however often they knock: a second knock from a key replaces the first, so this counts knockers and one identity cannot fill it. A knock from somebody the mailbox holds none from is refused `429` at the cap, with no `Retry-After`, since the relay cannot say when the owner will fetch or remove them, and the sender's knock is not charged for it; 0 is unlimited; at most 1000, for the reason `max_open_uploads` has a ceiling | 10 |

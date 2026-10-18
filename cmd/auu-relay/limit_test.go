@@ -15,11 +15,12 @@ import (
 // TestLimitRelaySettings: every integer setting of the relay, from the
 // file and from its flag. max_bytes is within [1, MaxBytesCeiling]
 // (TestLimitMaxBytesBoundaries walks its edges); max_stream_bytes and
-// thirteen of the sixteen limits, max_upload_opens_per_hour among them,
+// twelve of the sixteen limits, max_upload_opens_per_hour among them,
 // are zero or more, zero meaning unlimited:
 // a negative and the type's minimum are refused naming the setting, and
 // zero and the type's maximum are taken; max_open_uploads and
-// max_knocks_waiting are zero or within [1, 1000], the two limits with a
+// max_knocks_waiting are zero or within [1, 1000], and max_inflight zero
+// or within [1, 65536], the relay's own ceiling, the limits with a
 // ceiling: one over it and the type's maximum are refused naming the
 // setting, the two edges and zero taken; knock_max_bytes is zero, which
 // means max_bytes, or within [1, max_bytes]: one over max_bytes and the
@@ -41,7 +42,6 @@ func TestLimitRelaySettings(t *testing.T) {
 		{"limits.mailbox_max_bytes", "--mailbox-max-bytes"},
 		{"limits.relay_max_bytes", "--relay-max-bytes"},
 		{"limits.max_upload_opens_per_hour", "--max-upload-opens-per-hour"},
-		{"limits.max_inflight", "--max-inflight"},
 		{"limits.max_waiting", "--max-waiting"},
 		{"limits.knocks_per_hour", "--knocks-per-hour"},
 	}
@@ -114,7 +114,8 @@ func TestLimitRelaySettings(t *testing.T) {
 		})
 	}
 
-	// The four with a ceiling: the two counts at 1000, the recipients at
+	// The five with a ceiling: the two counts at 1000, the in-flight cap at
+	// the relay's 65536, the recipients at
 	// the protocol's 32, and the knock cap at max_bytes, which is the
 	// default 16 MiB here and named in the refusal beside the knock cap.
 	for _, c := range []struct {
@@ -123,6 +124,8 @@ func TestLimitRelaySettings(t *testing.T) {
 		sentence  string
 	}{
 		{"limits.max_open_uploads", "--max-open-uploads", maxOpenUploadsCeiling, "must be at most 1000"},
+		// The relay's own ceiling, so the command cannot drift from it (P5).
+		{"limits.max_inflight", "--max-inflight", relay.MaxInflightCeiling, "must be at most 65536"},
 		{"limits.max_knocks_waiting", "--max-knocks-waiting", maxKnocksWaitingCeiling, "must be at most 1000"},
 		{"limits.max_recipients", "--max-recipients", relayapi.MaxRecipients, "must be at most 32, the protocol's ceiling"},
 		{"limits.knock_max_bytes", "--knock-max-bytes", relayapi.DefaultMaxBytes, "must be at most max_bytes (" + strconv.FormatInt(relayapi.DefaultMaxBytes, 10) + ")"},
@@ -135,7 +138,7 @@ func TestLimitRelaySettings(t *testing.T) {
 				if _, err := resolve(t, fileWith(c.key, text)); err == nil || !strings.Contains(err.Error(), name) {
 					t.Errorf("%s %s in the file: %v; want the refusal naming it", name, text, err)
 				}
-				if _, err := resolve(t, "", c.flag, text); err == nil || !strings.Contains(err.Error(), name) {
+				if _, err := resolve(t, "", flagsWith(c.flag, text)...); err == nil || !strings.Contains(err.Error(), name) {
 					t.Errorf("%s %s: %v; want the refusal naming the setting", c.flag, text, err)
 				}
 			}
@@ -143,20 +146,20 @@ func TestLimitRelaySettings(t *testing.T) {
 				if _, err := resolve(t, fileWith(c.key, text)); err != nil {
 					t.Errorf("%s %s in the file: %v; want it taken", name, text, err)
 				}
-				if _, err := resolve(t, "", c.flag, text); err != nil {
+				if _, err := resolve(t, "", flagsWith(c.flag, text)...); err != nil {
 					t.Errorf("%s %s: %v; want it taken", c.flag, text, err)
 				}
 			}
-			if _, err := resolve(t, "", c.flag, over); err == nil || !strings.Contains(err.Error(), c.sentence) {
+			if _, err := resolve(t, "", flagsWith(c.flag, over)...); err == nil || !strings.Contains(err.Error(), c.sentence) {
 				t.Errorf("%s %s: %v; want the ceiling in the sentence", c.flag, over, err)
 			}
 			for _, text := range []string{"9223372036854775808", "1-2", " 1", "\u0661", "1.0", ""} {
-				if _, err := resolve(t, "", c.flag, text); err == nil || !strings.Contains(err.Error(), `invalid value "`+text+`" for flag -`+strings.TrimPrefix(c.flag, "--")) {
+				if _, err := resolve(t, "", flagsWith(c.flag, text)...); err == nil || !strings.Contains(err.Error(), `invalid value "`+text+`" for flag -`+strings.TrimPrefix(c.flag, "--")) {
 					t.Errorf("%s %q: %v; want the flag package's refusal", c.flag, text, err)
 				}
 			}
 			for _, text := range []string{"-0", "+1"} {
-				if _, err := resolve(t, "", c.flag, text); err != nil {
+				if _, err := resolve(t, "", flagsWith(c.flag, text)...); err != nil {
 					t.Errorf("%s %q: %v; want it taken", c.flag, text, err)
 				}
 			}

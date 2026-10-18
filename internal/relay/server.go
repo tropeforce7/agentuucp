@@ -210,8 +210,8 @@ func NewServer(store *Store, cfg Config) *Server {
 		holds:   newHolds(cfg.Limits.MaxWaiting),
 		maxWait: relayapi.MaxWait,
 	}
-	if cfg.Limits.MaxInflight > 0 {
-		s.inflight = make(chan struct{}, cfg.Limits.MaxInflight)
+	if n := cfg.Limits.MaxInflight; n > 0 {
+		s.inflight = make(chan struct{}, min(n, MaxInflightCeiling))
 	}
 	// The workers start with the relay and stop with it, and are started
 	// after the server is built so a wake from a request can never reach a

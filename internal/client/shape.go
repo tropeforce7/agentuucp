@@ -375,6 +375,15 @@ func (c *Client) checkQueue(q *relayapi.QueueResponse) error {
 		if !stamp(row.LastTry) {
 			return c.malformed(answer, "last_try", wantStamp)
 		}
+		// The two times ahead are printed as LastTry is, so they are held
+		// to what can be written back; being ahead of now is what they
+		// are for, so only the years are held (the second trace's G).
+		if !relayapi.Writable(row.NextTry) {
+			return c.malformed(answer, "next_try", wantTime)
+		}
+		if !relayapi.Writable(row.GivesUp) {
+			return c.malformed(answer, "gives_up", wantTime)
+		}
 		if !oneOf(row.State, queueStates) {
 			return c.malformed(answer, "state", wantOneOf(queueStates))
 		}

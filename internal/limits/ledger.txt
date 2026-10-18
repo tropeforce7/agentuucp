@@ -247,7 +247,7 @@ cmd/auu-relay/config.go LimitsConfig int KnockMaxBytes int64 = 0 or [1, 10737418
 cmd/auu-relay/config.go LimitsConfig int KnocksPerHour int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MailboxMaxBytes int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MailboxMaxMessages int64 = >= 0 shown by TestLimitRelaySettings
-cmd/auu-relay/config.go LimitsConfig int MaxInflight int64 = >= 0 shown by TestLimitRelaySettings
+cmd/auu-relay/config.go LimitsConfig int MaxInflight int64 = 0 or [1, 65536] shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MaxKnocksWaiting int64 = 0 or [1, 1000] shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MaxMailboxes int64 = >= 0 shown by TestLimitRelaySettings
 cmd/auu-relay/config.go LimitsConfig int MaxOpenUploads int64 = 0 or [1, 1000] shown by TestLimitRelaySettings

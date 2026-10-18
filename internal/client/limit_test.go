@@ -1182,3 +1182,33 @@ func TestLimitTheUploadIDIsHeldToItsShape(t *testing.T) {
 		}
 	}
 }
+
+// TestLimitAQueueRowsTimesAheadAreWritable: checkQueue held last_try to a
+// stamp but not next_try and gives_up, which the queue listing prints
+// beside it (the second trace's G, display only). Both are now held to
+// the years a time can be written back in, which a four-digit year with
+// an offset can leave in UTC; being ahead of now is what they are for, so
+// a time far ahead within those years is taken.
+func TestLimitAQueueRowsTimesAheadAreWritable(t *testing.T) {
+	row := func(nextTry, givesUp string) json.RawMessage {
+		return json.RawMessage(`{"queued": [{"id": 1, "neighbour": "bar", "path": "", "state": "waiting", "tries": 0,` +
+			`"last_try": "0001-01-01T00:00:00Z", "next_try": "` + nextTry + `", "gives_up": "` + givesUp + `", "code": "", "said": ""}]}`)
+	}
+	const fine = "2030-01-01T00:00:00Z"
+	for _, bad := range []string{"9999-12-31T23:59:59-23:59", "0000-01-01T00:00:00+23:59"} {
+		for name, body := range map[string]json.RawMessage{"next_try": row(bad, fine), "gives_up": row(fine, bad)} {
+			rec := &recorder{replies: []reply{{status: http.StatusOK, body: body}}}
+			c, _ := newTestClient(t, rec)
+			if _, err := c.Queue(context.Background()); err == nil || !strings.Contains(err.Error(), name) {
+				t.Errorf("%s at %s: %v", name, bad, err)
+			}
+		}
+	}
+	for _, at := range []string{time.Now().Add(time.Hour).UTC().Format(time.RFC3339), "9999-12-31T23:59:59Z", "0001-01-01T00:00:00Z"} {
+		rec := &recorder{replies: []reply{{status: http.StatusOK, body: row(at, at)}}}
+		c, _ := newTestClient(t, rec)
+		if _, err := c.Queue(context.Background()); err != nil {
+			t.Errorf("next_try and gives_up at %s: %v", at, err)
+		}
+	}
+}

@@ -63,7 +63,9 @@ func TestAHandlersLastLineIsCopiedAsAScannerCopiesIt(t *testing.T) {
 		{"over the cap", strings.Repeat("x", 2*maxLogLine), "thread: " + strings.Repeat("x", maxLogLine) + mark(maxLogLine)},
 		{"carriage return at the end", "a\r", "thread: a\n"},
 		{"carriage return split from its newline", strings.Repeat("x", 64*1024-1) + "\r\nnext\n", "thread: " + strings.Repeat("x", 64*1024-1) + "\nthread: next\n"},
-		{"carriage return inside", "a\rb\n", "thread: a\rb\n"},
+		// Kept as the line's, and printed escaped, since a bare carriage
+		// return lets a line write over itself on a terminal (P1).
+		{"carriage return inside", "a\rb\n", `thread: a\rb` + "\n"},
 		{"empty lines", "\n\na\n", "thread: \nthread: \nthread: a\n"},
 	} {
 		if got := prefixedOf(t, c.content); got != c.want {
@@ -111,4 +113,40 @@ func tailOf(s string) string {
 		return s[len(s)-80:]
 	}
 	return s
+}
+
+// TestLimitAHandlersWordsReachTheTerminalEscaped: serve copied a handler's
+// output lines and the first line of a failed run to its own standard
+// error as they were, while every other print of a string from outside
+// goes through identity.PrintableText, so a handler working from a peer's
+// message could put an escape sequence, a title change or a cursor move,
+// onto the host's terminal or journal (P1, the second trace's G-D1). Both
+// are now escaped; the prefix and the cut mark are serve's own and stay as
+// they are.
+func TestLimitAHandlersWordsReachTheTerminalEscaped(t *testing.T) {
+	const osc, csi = "\x1b]0;title\x07", "\x1b[31mred\x1b[0m"
+	got := prefixedOf(t, osc+"\n"+csi+"\n"+"\x1b"+strings.Repeat("x", maxLogLine)+"\n")
+	if strings.ContainsAny(got, "\x1b\x07") {
+		t.Fatalf("a raw escape reached serve's output: %q", got)
+	}
+	for _, want := range []string{
+		`thread: \x1b]0;title\a` + "\n",
+		`thread: \x1b[31mred\x1b[0m` + "\n",
+		`thread: \x1b` + strings.Repeat("x", maxLogLine-1) + " [cut: 1 more bytes of this line are not shown]\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no %q in the output", want[:min(len(want), 40)])
+		}
+	}
+
+	alice, bob := newExpert(t, modeReadOnly)
+	t.Setenv(handlerScript, "say:"+csi+"\x07bad;exit:3")
+	alice.ask(t, "jostle", "a question", "the first")
+	said := captureStderr(t, func() { bob.tryRun("serve", "--once") })
+	if strings.ContainsAny(said, "\x1b\x07") {
+		t.Fatalf("a raw escape reached serve's output: %q", said)
+	}
+	if !strings.Contains(said, `was not answered: exited 3: \x1b[31mred\x1b[0m\abad`) {
+		t.Fatalf("the failure was said as:\n%q", said)
+	}
 }

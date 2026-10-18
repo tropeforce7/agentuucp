@@ -78,7 +78,8 @@ type Limits struct {
 	// within it.
 	MaxRecipients int64
 
-	// MaxInflight caps requests being handled at once.
+	// MaxInflight caps requests being handled at once, up to
+	// MaxInflightCeiling.
 	MaxInflight int64
 	// MaxWaiting caps listings held open at once across the relay. Over
 	// it a listing that asked to be held is answered at once instead, so
@@ -87,6 +88,12 @@ type Limits struct {
 	// must sit well under MaxInflight.
 	MaxWaiting int64
 }
+
+// MaxInflightCeiling is the most MaxInflight may be: a count of requests
+// handled at once, and the capacity of the channel that counts them, so
+// a number past any host's means is refused by the command rather than
+// passed to make (P5). The server holds a larger one to it.
+const MaxInflightCeiling = 1 << 16
 
 // DefaultLimits is the policy a relay on the open internet should start with:
 // generous enough that no honest agent notices, tight enough that one identity

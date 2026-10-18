@@ -42,3 +42,28 @@ func TestLimitBundleV(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestLimitAServerLeafAndARecordNeedAHost: ServerLeaf names the leaf by
+// hosts[0] and FindRecord files a new relay under it, and neither checked
+// the list as Intermediate and the bundle's load do; every caller passes
+// one, so nothing reached it, but the index was the function's to guard
+// (P3, the second trace's E-1 and E-2). Both refuse nil and an empty list,
+// and take one host.
+func TestLimitAServerLeafAndARecordNeedAHost(t *testing.T) {
+	s := hierarchy(t)
+	l := TestBundleFrom(t, s, []string{"relay.example.com"})
+	for _, hosts := range [][]string{nil, {}} {
+		if _, err := ServerLeaf(l.ServerInt, hosts, l.Params, time.Now()); err == nil || !strings.Contains(err.Error(), "at least one host") {
+			t.Errorf("ServerLeaf(%#v): %v", hosts, err)
+		}
+		if _, _, err := s.FindRecord(hosts); err == nil || !strings.Contains(err.Error(), "at least one host") {
+			t.Errorf("FindRecord(%#v): %v", hosts, err)
+		}
+	}
+	if leaf, err := ServerLeaf(l.ServerInt, []string{"relay.example.com"}, l.Params, time.Now()); err != nil || leaf.Cert.Subject.CommonName != "relay.example.com" {
+		t.Errorf("ServerLeaf with one host: %v", err)
+	}
+	if name, _, err := s.FindRecord([]string{"other.example.com"}); err != nil || name != "other.example.com" {
+		t.Errorf("FindRecord with one host: %q, %v", name, err)
+	}
+}

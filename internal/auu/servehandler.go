@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/store"
 )
@@ -218,6 +219,10 @@ func prefixedTo(w *os.File, path, prefix string) {
 	}
 	defer f.Close()
 	err = eachLine(f, func(text string, cut int64) bool {
+		// A handler's words, which a peer's message may have shaped, reach
+		// the host's terminal or journal escaped, as every other print of
+		// a string from outside does (P1).
+		text = identity.PrintableText(text)
 		if cut > 0 {
 			fmt.Fprintf(w, "%s: %s [cut: %d more bytes of this line are not shown]\n", prefix, text, cut)
 		} else {

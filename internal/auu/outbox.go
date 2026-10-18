@@ -299,6 +299,13 @@ func listPending(s *store.Store) ([]*pending, []string, error) {
 			broken = append(broken, stem)
 			continue
 		}
+		// The body becomes the sent record at the end, which Load holds
+		// to the same shape: one that would not read back is broken here,
+		// where it is read, rather than a sent copy found damaged later.
+		if p.Body.ValidShape() != nil {
+			broken = append(broken, stem)
+			continue
+		}
 		out = append(out, &p)
 	}
 	// Oldest first, and the copies of one message, started together, in the
