@@ -70,7 +70,14 @@ func TestLimitServesGitDoesNotReadTheWorktreesGitFile(t *testing.T) {
 			}
 			t.Setenv(handlerScript, script+";echo:an answer")
 			sent := alice.ask(t, "jostle", "a question", "the first")
-			said := captureStderr(t, func() { bob.tryRun("serve", "--once") })
+			var runErr error
+			said := captureStderr(t, func() { _, runErr = bob.tryRun("serve", "--once") })
+			if plant != ".git" && runErr != nil {
+				// Where the answer is meant to go out, whatever serve
+				// returned is said here, with its words: a run that failed
+				// before it reached the message says nothing else.
+				t.Fatalf("serve --once: %v\nserve said:\n%s", runErr, said)
+			}
 			for what, marker := range ran {
 				if _, err := os.Stat(marker); err == nil {
 					t.Errorf("serve's git ran the planted %s", what)
@@ -84,6 +91,9 @@ func TestLimitServesGitDoesNotReadTheWorktreesGitFile(t *testing.T) {
 					t.Fatalf("a reply went out:\n%s", out)
 				}
 				return
+			}
+			if out := alice.run("inbox", "--json"); !strings.Contains(out, `"type": "reply"`) {
+				t.Fatalf("no reply came; serve said:\n%s", said)
 			}
 			reply := alice.replyOn(t, sent.Thread)
 			if got := readFile(t, patchOf(t, alice, reply)); !strings.Contains(got, "one.txt") {

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -954,7 +955,7 @@ func TestLimitThreadIDIsNotAPathAtServe(t *testing.T) {
 	run := &serveRun{s: bs, cfg: cfg, led: led, root: serveDir}
 	beside := filepath.Dir(bob.home)
 	idFor := func(i int) string { return fmt.Sprintf("%032x", i+1) }
-	planted := 0
+	planted := map[string]bool{}
 	for i, v := range pathSet() {
 		threadDir := filepath.Join(serveDir, "threads", v)
 		rel, err := filepath.Rel(beside, threadDir)
@@ -970,12 +971,25 @@ func TestLimitThreadIDIsNotAPathAtServe(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		planted++
+		planted[v] = true
 	}
-	// The relative values name a directory the planting can make; the
-	// absolute path, the empty name, the NUL and the long name do not.
-	if planted < len(pathSet())-4 {
-		t.Fatalf("a kept reply was planted for %d values of %d, so the test shows little", planted, len(pathSet()))
+	// These values name a directory the planting can make on every
+	// platform. Windows refuses a colon, a drive and a device name in a
+	// directory's name, so those are planted only where the filesystem
+	// holds them; elsewhere every value but the empty name, the NUL and
+	// the long name is.
+	everywhere := []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, ".",
+		"x.", "x ", `\\srv\share`, "é", "é", "ABCDEF0123456789ABCDEF0123456789"}
+	for _, v := range everywhere {
+		if !planted[v] {
+			t.Errorf("a kept reply was not planted for %q, so the test shows little for it", v)
+		}
+	}
+	if runtime.GOOS != "windows" && len(planted) < len(pathSet())-3 {
+		t.Errorf("a kept reply was planted for %d values of %d, so the test shows little", len(planted), len(pathSet()))
+	}
+	if t.Failed() {
+		t.FailNow()
 	}
 	before := snapshotHome(t, beside)
 	ledgerAt, err := filepath.Rel(beside, filepath.Join(serveDir, ledgerFile))

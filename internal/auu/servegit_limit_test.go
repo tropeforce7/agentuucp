@@ -122,8 +122,18 @@ func plantInWorktree(kind, value string) error {
 		}
 		return os.WriteFile(filepath.Join(admin, "commondir"), []byte(value+"\n"), 0o600)
 	case "config.worktree":
-		text := "[filter \"x\"]\n\tclean = touch '" + value + "' && cat\n"
-		return os.WriteFile(filepath.Join(admin, "config.worktree"), []byte(text), 0o600)
+		// A backslash in a configuration value is git's escape, so a
+		// Windows path written as it stands is a file git refuses whole,
+		// and the worktree reads as no longer serve's before the filter
+		// is ever in question. The path goes with forward slashes, which
+		// git's shell takes there, and the plant asks git to read it back.
+		path := filepath.Join(admin, "config.worktree")
+		text := "[filter \"x\"]\n\tclean = touch '" + filepath.ToSlash(value) + "' && cat\n"
+		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+			return err
+		}
+		_, err := plantGit(".", os.Environ(), "config", "--file", path, "--get", "filter.x.clean")
+		return err
 	case "nested":
 		_, err := nestedRepository(value)
 		return err
