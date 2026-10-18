@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -228,12 +229,38 @@ func (cfg *serveConfig) check() error {
 	if _, err := exec.LookPath("git"); err != nil {
 		return usageErrf("git is not on the PATH, and every channel is served from a git worktree: %v", err)
 	}
+	// A side copy's patch is taken with the base after --end-of-options,
+	// which git has from 2.24. A version line that cannot be read is left
+	// to fail where git is used, in git's words.
+	if line, err := gitOutput("", "--version"); err == nil && !gitAtLeast(line, 2, 24) {
+		return usageErrf("%s is older than 2.24, which auu serve needs", line)
+	}
 	if cfg.Proxy != nil {
 		if err := cfg.Proxy.check(cfg); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// gitAtLeast says whether git's version line, "git version 2.54.0" with
+// whatever a packager adds after it, is at least major.minor. A line it
+// cannot read is taken as new enough.
+func gitAtLeast(line string, major, minor int) bool {
+	fields := strings.Fields(line)
+	if len(fields) < 3 {
+		return true
+	}
+	parts := strings.SplitN(fields[2], ".", 3)
+	if len(parts) < 2 {
+		return true
+	}
+	gotMajor, err1 := strconv.Atoi(parts[0])
+	gotMinor, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil {
+		return true
+	}
+	return gotMajor > major || gotMajor == major && gotMinor >= minor
 }
 
 // gitRepository says whether a directory is one, in the terms a person can

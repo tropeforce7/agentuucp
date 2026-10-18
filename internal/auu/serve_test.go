@@ -59,6 +59,8 @@ const (
 //	binary:NAME    write a file that is not text
 //	commit:MSG     commit everything in the working directory
 //	sleep:D        wait
+//	plant:KIND=V   rewrite what git keeps for the worktree, as a handler
+//	               that runs git in it can (plantInWorktree)
 //	say:TEXT       print TEXT to standard error
 //	exit:N         stop with that status
 func TestServeHelperProcess(t *testing.T) {
@@ -157,6 +159,12 @@ func TestServeHelperProcess(t *testing.T) {
 				os.Exit(9)
 			}
 			time.Sleep(d)
+		case "plant":
+			kind, value, _ := strings.Cut(arg, "=")
+			if err := plantInWorktree(kind, value); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(9)
+			}
 		case "say":
 			fmt.Fprintln(os.Stderr, arg)
 		case "exit":
@@ -2121,7 +2129,7 @@ func TestServeFailsWhenThePatchCannotBeBuilt(t *testing.T) {
 	}
 	alice.run("reply", reply.ID[:12], "and one more thing")
 	stderr := captureStderr(t, func() { bob.tryRun("serve", "--once") })
-	if !strings.Contains(stderr, "was not answered") || !strings.Contains(stderr, "git diff") {
+	if !strings.Contains(stderr, "was not answered") || !strings.Contains(stderr, "git read-tree") {
 		t.Fatalf("the failure was said as:\n%s", stderr)
 	}
 	var in inboxJSON

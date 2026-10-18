@@ -874,10 +874,12 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 	newThread := !r.led.touched(thread)
 	worktree, base, remade, err := worktreeFor(r.root, ch, thread, stateDir, newThread)
 	var unmendable *unmendableError
-	if errors.As(err, &unmendable) {
-		// What a handler left at the path is a message's failure, so that
-		// it is retried and given up on rather than met at every start.
-		r.failed(m, ch, unmendable.Error())
+	var left *leftByHandlerError
+	if errors.As(err, &unmendable) || errors.As(err, &left) {
+		// What a handler left at the path, or in the base file, is a
+		// message's failure, so that it is retried and given up on rather
+		// than met at every start.
+		r.failed(m, ch, err.Error())
 		return nil
 	}
 	if err != nil {

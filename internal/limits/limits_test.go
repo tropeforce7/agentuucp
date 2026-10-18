@@ -76,8 +76,9 @@ import (
 // outbox would not take named its copy in its two refusals (G43), 581
 // when a sent record's change said its read and its save in one warning
 // (G45), 586 when a program's line over the cap was cut and the lines after
-// it copied (G49). A walk that finds fewer is not reaching the tree.
-const floor = 586
+// it copied (G49), 588 when serve read git's version for the oldest it
+// takes (F1). A walk that finds fewer is not reaching the tree.
+const floor = 588
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.

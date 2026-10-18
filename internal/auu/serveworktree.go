@@ -32,6 +32,31 @@ import (
 // in its worktree does not move the base a patch will be taken against.
 const baseFile = "base"
 
+// validBase says whether a recorded base is a commit id as git writes one:
+// 40 lowercase hex characters, or 64 in a repository of SHA-256 objects.
+// The file is in a directory the handler writes, and the base goes to git
+// as an argument: a handler that wrote --output=<path> there made serve's
+// git write the diff to that path (F1, A-2).
+func validBase(base string) bool {
+	if len(base) != 40 && len(base) != 64 {
+		return false
+	}
+	for i := 0; i < len(base); i++ {
+		if c := base[i]; !('0' <= c && c <= '9' || 'a' <= c && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// leftByHandlerError is something in a directory the handler writes that
+// serve will not act on: the message's failure, as an unmendable worktree
+// is (G10), so that it is retried and given up on rather than met at
+// every start, and never rewritten without a word.
+type leftByHandlerError struct{ what string }
+
+func (e *leftByHandlerError) Error() string { return e.what }
+
 // worktreeFor makes sure the worktree for this message exists and is where
 // it should be, and answers with its path and the commit it stands on, and
 // whether what stood at the path was not a git worktree of the checkout's
@@ -89,7 +114,12 @@ func worktreeFor(root string, ch *serveChannel, thread, stateDir string, newThre
 		}
 		return path, head, false, writeNew(basePath, []byte(head+"\n"))
 	}
-	return path, strings.TrimSpace(string(recorded)), false, nil
+	base = strings.TrimSpace(string(recorded))
+	if !validBase(base) {
+		return "", "", false, &leftByHandlerError{fmt.Sprintf(
+			"its base file %s does not hold a commit id, 40 or 64 lowercase hex characters, and was not used; the file is serve's own", basePath)}
+	}
+	return path, base, false, nil
 }
 
 // ensureWorktree makes the worktree if it is not there, and says whether it
@@ -325,8 +355,12 @@ func sameDir(a, b string) bool {
 // gitRun runs git in a directory and gives what it said, which is what the
 // failure names: git's own words are better than any this could invent.
 func gitRun(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
+	return gitRunWith(dir, nil, args...)
+}
+
+// gitRunWith is gitRun as a call says.
+func gitRunWith(dir string, call *gitCall, args ...string) (string, error) {
+	cmd := gitCommand(dir, call, args)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		said := strings.TrimSpace(string(out))
@@ -388,17 +422,85 @@ func patchName(thread string) string { return shortID(thread) + ".patch" }
 // 'git add -A' is what makes an untracked file part of it, and what makes
 // an ignored one not: a handler that writes its answer where .gitignore
 // says nothing lives will find it does not travel.
+//
+// The worktree is the handler's, its .git file among it, and so is the
+// directory git keeps the worktree's index and HEAD in, inside the
+// checkout's repository, since a handler that commits in its worktree
+// writes there. git run on either reads the configuration of whatever
+// repository they name: a handler that pointed the .git file, or that
+// directory's commondir, at a repository of its own, with a filesystem
+// monitor, a clean filter or a hook set there, had serve's 'git add' run
+// its command as the serve account (F1, A-3). So the worktree is first
+// asked whether it is still the one serve made, as before every handler
+// run, and what is not is the message's failure (G10); and then the patch
+// is taken with neither: git is given the checkout's own repository, the
+// worktree as the tree to read, and an index of serve's own made from the
+// base, and is told to run no monitor, no hook, no external diff and no
+// text conversion, with whatever git variables serve was started with
+// left out. The configuration read is the operator's, and the worktree's
+// own index is not touched.
 func patchFor(ch *serveChannel, worktree, base, dir, thread string) (string, error) {
 	path := filepath.Join(dir, patchName(thread))
 	if ch.Mode != modeSideCopy {
 		return "", nil
 	}
-	if _, err := gitRun(worktree, "add", "-A"); err != nil {
+	lost, err := lostWorktree(ch.Dir, worktree)
+	if err != nil {
+		return "", err
+	}
+	if lost {
+		return "", fmt.Errorf("its worktree %s is no longer the git worktree serve made: its .git was changed, and nothing was run in it", worktree)
+	}
+	// An index made from the base has no file left out of a sparse
+	// checkout, so every such file would read as deleted in the patch.
+	// The setting is the operator's checkout's, asked of it.
+	sparse, err := gitRun(ch.Dir, "config", "--type=bool", "--default=false", "core.sparseCheckout")
+	if err != nil {
+		return "", err
+	}
+	if sparse == "true" {
+		return "", fmt.Errorf("the checkout %s is sparse (core.sparseCheckout is true), where a side copy's patch would carry every file it leaves out as deleted; serve a side copy from a full checkout", ch.Dir)
+	}
+	common, answered, err := gitAsk(ch.Dir, "--git-common-dir")
+	if err != nil {
+		return "", err
+	}
+	if !answered {
+		return "", fmt.Errorf("git rev-parse --git-common-dir in %s: the checkout is not a git repository", ch.Dir)
+	}
+	// git resolves a relative GIT_DIR or GIT_WORK_TREE against the
+	// directory it runs in, which is the worktree the handler fills, so a
+	// relative checkout or AUU_HOME would let the handler choose the
+	// repository serve's git reads its settings from.
+	if common, err = filepath.Abs(common); err != nil {
+		return "", err
+	}
+	if worktree, err = filepath.Abs(worktree); err != nil {
+		return "", err
+	}
+	// Made under the system's temporary directory, private to this
+	// account, and never where the handler writes.
+	scratch, err := os.MkdirTemp("", "auu-patch-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(scratch)
+	call := &gitCall{
+		global: []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.DevNull},
+		env: append(withoutGitVariables(os.Environ()),
+			"GIT_DIR="+common, "GIT_WORK_TREE="+worktree, "GIT_INDEX_FILE="+filepath.Join(scratch, "index")),
+	}
+	// The base after --end-of-options, so that it is never an option,
+	// though it was held to a commit id when it was read back.
+	if _, err := gitRunWith(worktree, call, "read-tree", "--end-of-options", base); err != nil {
+		return "", err
+	}
+	if _, err := gitRunWith(worktree, call, "add", "-A"); err != nil {
 		return "", err
 	}
 	// --binary, so that a change to a file that is not text applies on the
 	// other side as well as reads.
-	diff, err := gitRaw(worktree, "diff", "--cached", "--binary", base)
+	diff, err := gitRawWith(worktree, call, "diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv", "--end-of-options", base)
 	if err != nil {
 		return "", err
 	}
@@ -452,8 +554,46 @@ func keptPatch(ch *serveChannel, dir, thread string) (string, bool) {
 // bytes rather than a word: a patch that lost its last newline is a patch
 // that may not apply.
 func gitRaw(dir string, args ...string) ([]byte, error) {
+	return gitRawWith(dir, nil, args...)
+}
+
+// gitCall is how one of serve's git commands is run when serve's own way
+// is not enough: options for git itself before the command, which an
+// error leaves out, since what failed is the command, in git's words; and
+// the whole environment it runs in.
+type gitCall struct {
+	global []string
+	env    []string
+}
+
+// withoutGitVariables is an environment with every GIT_ variable taken
+// out, in any case, since Windows does not tell names apart by it.
+func withoutGitVariables(env []string) []string {
+	var out []string
+	for _, kv := range env {
+		if !strings.HasPrefix(strings.ToUpper(kv), "GIT_") {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// gitCommand is git in a directory, as a call says when there is one.
+func gitCommand(dir string, call *gitCall, args []string) *exec.Cmd {
+	if call != nil {
+		args = append(append([]string(nil), call.global...), args...)
+	}
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
+	if call != nil && call.env != nil {
+		cmd.Env = call.env
+	}
+	return cmd
+}
+
+// gitRawWith is gitRaw as a call says.
+func gitRawWith(dir string, call *gitCall, args ...string) ([]byte, error) {
+	cmd := gitCommand(dir, call, args)
 	var said strings.Builder
 	cmd.Stderr = &said
 	out, err := cmd.Output()

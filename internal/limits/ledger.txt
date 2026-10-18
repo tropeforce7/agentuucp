@@ -438,6 +438,8 @@ internal/auu/serve.go (*serveRun).send string m.Inner.From[:16] = local: ValidFi
 internal/auu/serve.go shortID string id[:12] = local: len(id) > 12 by the check before
 internal/auu/serveconfig.go (*serveConfig).check string names[:i] = local: i is an index of names from range
 internal/auu/serveconfig.go duration int time.ParseDuration(text) = > 0s shown by TestLimitServeChannelIntegers
+internal/auu/serveconfig.go gitAtLeast int strconv.Atoi(parts[0]) = open shown by TestLimitGitVersion
+internal/auu/serveconfig.go gitAtLeast int strconv.Atoi(parts[1]) = open shown by TestLimitGitVersion
 internal/auu/serveconfig.go plainList string words[:len(words) - 1] = local: len(words)-1 of words, checked non-empty
 internal/auu/serveconfig.go serveChannel int MaxTurns int = 0 or >= 1 shown by TestLimitServeChannelIntegers
 internal/auu/serveconfig.go serveChannel int Retries int = >= 0 shown by TestLimitServeChannelIntegers

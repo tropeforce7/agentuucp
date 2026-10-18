@@ -7,6 +7,8 @@ by running a program — Claude Code, in the case this was built for — in a
 git worktree of that checkout, and sending back what the program printed.
 
 One machine can be an expert for several projects: one channel each.
+It needs git 2.24 or later, which `auu serve --check` and every start
+check.
 
 `auu serve` runs until it is stopped, holding on the relay between rounds.
 `auu serve --once` is one round, for a timer or a person.
@@ -115,8 +117,10 @@ nothing.
 
 Its reply carries the thread's whole change so far, attached as
 `THREAD12.patch`, and one sentence at the end of the text saying so. The
-patch is taken as `git add -A && git diff --cached --binary BASE` in the
-worktree, where BASE is the commit the worktree was made from — recorded
+patch is the worktree's files against BASE, as `git add -A && git diff
+--cached --binary BASE` gives it, taken with an index of serve's own made
+from BASE and the checkout's own repository (see *Serve cannot sandbox
+the handler*), where BASE is the commit the worktree was made from — recorded
 when it was made and read back from a file, never asked of git again, so a
 handler that commits in its own worktree cannot move what the change is
 measured against. It is cumulative on purpose: every turn's patch is the
@@ -128,6 +132,15 @@ and an asker need keep only the last, unless the worktree was made again
 auu extract MESSAGE-ID --out .
 git apply THREAD12.patch
 ```
+
+A base file that does not hold a commit id, 40 or 64 lowercase hex
+characters, is the message's failure, `its base file PATH does not hold a
+commit id`, and is left as it is. A side copy needs a full checkout: the
+patch's index holds every file of BASE, so a sparse checkout's worktree
+would send every file it leaves out as deleted, and an answer on a channel
+whose checkout is sparse is the message's failure, `the checkout DIR is
+sparse`. A thread whose worktree was made while the checkout was sparse
+stays so; let it go, or begin a new one.
 
 Three things follow from `git add -A`. What the handler committed is in the
 patch, and so is what it merely wrote. What `.gitignore` hides is not. A
@@ -708,6 +721,25 @@ it the way anything else is contained: a separate Unix account with its own
 home and its own identity, or a container. Everything the expert can read,
 it can be asked about. The peer list is the whole of the access control,
 and anyone on it can ask anything.
+
+What serve does itself with what a handler leaves is held to that
+containment. The handler writes its worktree and the thread's directory,
+and serve reads both after it. A kept answer's patch is attached only as
+the regular file it is: a link put in its place is refused by name and
+the message fails. The base is used only as a commit id. A handler that
+can run git in its worktree can also write what git keeps for that
+worktree in the checkout's repository, and the worktree's `.git` and that
+directory can each be pointed at a repository of the handler's own, whose
+configuration git would read. So a worktree whose `.git` was changed is
+the message's failure, `its worktree PATH is no longer the git worktree
+serve made`, and serve's own git, which takes the patch, reads neither:
+it is given the checkout's repository, the worktree as the files to read
+and an index of serve's own, and runs no filesystem monitor, hook,
+external diff or text conversion. Only the operator's configuration is
+read, and a filter the worktree's attributes name runs only if the
+operator defined it. A hard link is the file it links to, and no open
+refuses it: where that matters, a contained handler must not share a
+filesystem with what the serve account can read.
 
 Messages are data, not instructions. A handler that acts on what a message
 tells it to do is a handler that does what the sender wants rather than what
