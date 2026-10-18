@@ -78,6 +78,26 @@ func ValidRelayName(name string) error {
 	return nil
 }
 
+// validNewRelayName is ValidRelayName for a name this home is about to
+// give a relay's directory, by an add, a rename or a name made from the
+// host: it also refuses a trailing dot, which Windows takes off a
+// directory's name, so relay.example. would be the directory of
+// relay.example and an add would overwrite that relay's record and
+// pinned anchor (F2). A trailing space, which Windows takes off too, is
+// not a character the rule allows. ValidRelayName itself is unchanged: it
+// is also the rule for names a home already holds and for names on the
+// wire, a bang path's and a relay's neighbours', and a dotted name an
+// older home kept is still listed and used.
+func validNewRelayName(name string) error {
+	if err := ValidRelayName(name); err != nil {
+		return err
+	}
+	if strings.HasSuffix(name, ".") {
+		return fmt.Errorf("relay name %q ends in '.', which Windows takes off a directory's name", name)
+	}
+	return nil
+}
+
 // CheckAddress holds a bang-path address to its rule: every name is a relay
 // name, no name is repeated, and the whole address names at most hops
 // relays. path is what is left to travel and via the hops already made; the
@@ -379,11 +399,11 @@ func (s *Store) AddRelay(name, rawURL string) (*Relay, error) {
 			return nil, err
 		}
 	}
-	if err := ValidRelayName(name); err != nil {
+	if err := validNewRelayName(name); err != nil {
 		return nil, err
 	}
 	for _, r := range relays {
-		if strings.EqualFold(r.Name, name) {
+		if sameRelayName(r.Name, name) {
 			return nil, fmt.Errorf("this home already has a relay called %q, at %s; "+
 				"choose another name", r.Name, r.URL)
 		}
@@ -425,11 +445,11 @@ func defaultRelayName(normalised string, existing []*Relay) (string, error) {
 	}
 	taken := func(name string) bool {
 		for _, r := range existing {
-			if strings.EqualFold(r.Name, name) {
+			if sameRelayName(r.Name, name) {
 				return true
 			}
 		}
-		return ValidRelayName(name) != nil
+		return validNewRelayName(name) != nil
 	}
 	if !taken(base) {
 		return base, nil
@@ -463,15 +483,24 @@ func relayNameBase(host string) string {
 			b.WriteByte(c)
 		}
 	}
-	base := b.String()
+	// No trailing dot, before the cut and after it, since a cut can leave
+	// one (F2).
+	base := strings.TrimRight(b.String(), ".")
 	// Room for "-" and up to four digits under MaxNameBytes.
 	if room := identity.MaxNameBytes - 5; len(base) > room {
-		base = base[:room]
+		base = strings.TrimRight(base[:room], ".")
 	}
-	if base == "" || ValidRelayName(base) != nil {
+	if base == "" || validNewRelayName(base) != nil {
 		return "relay"
 	}
 	return base
+}
+
+// sameRelayName says whether two relay names are one directory on every
+// filesystem a home may be on: case folded, and a trailing dot taken off,
+// as Windows does, so a dotted name an older home kept is still seen.
+func sameRelayName(a, b string) bool {
+	return strings.EqualFold(strings.TrimRight(a, "."), strings.TrimRight(b, "."))
 }
 
 // RenameRelay moves a relay's directory, which is its name.
@@ -480,7 +509,7 @@ func (s *Store) RenameRelay(oldName, newName string) error {
 	if err != nil {
 		return err
 	}
-	if err := ValidRelayName(newName); err != nil {
+	if err := validNewRelayName(newName); err != nil {
 		return err
 	}
 	if strings.EqualFold(r.Name, newName) && r.Name != newName {
@@ -493,6 +522,16 @@ func (s *Store) RenameRelay(oldName, newName string) error {
 	}
 	if _, err := s.Relay(newName); err == nil {
 		return fmt.Errorf("this home already has a relay called %q", newName)
+	}
+	// A dotted name an older home kept is the same directory on Windows.
+	relays, err := s.Relays()
+	if err != nil {
+		return err
+	}
+	for _, other := range relays {
+		if other.Name != r.Name && sameRelayName(other.Name, newName) {
+			return fmt.Errorf("this home already has a relay called %q", other.Name)
+		}
 	}
 	if err := os.Rename(s.relayDir(r.Name), s.relayDir(newName)); err != nil {
 		return err

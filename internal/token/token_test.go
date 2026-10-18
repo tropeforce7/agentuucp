@@ -357,6 +357,13 @@ func TestNormaliseRelay(t *testing.T) {
 		" https://relay.example.com/ ":   "https://relay.example.com",
 		"http://127.0.0.1:8080":          "http://127.0.0.1:8080",
 		"https://relay.example.com:443/": "https://relay.example.com:443",
+		// One dot at the end of the host is the same host (F2), with a
+		// port or without; a second is not taken off.
+		"https://relay.example.com.":       "https://relay.example.com",
+		"https://relay.example.com./":      "https://relay.example.com",
+		"https://relay.example.com.:9443/": "https://relay.example.com:9443",
+		"https://relay.example.com..":      "https://relay.example.com.",
+		"http://[::1]:8080":                "http://[::1]:8080",
 	} {
 		if got := NormaliseRelay(in); got != want {
 			t.Errorf("NormaliseRelay(%q) = %q, want %q", in, got, want)

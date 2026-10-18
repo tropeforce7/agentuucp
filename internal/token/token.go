@@ -403,13 +403,21 @@ func ValidateNote(note string) error {
 }
 
 // NormaliseRelay trims a relay URL to the bare scheme and host used as a token
-// audience, so that a trailing slash never causes a mismatch.
+// audience, so that a trailing slash never causes a mismatch. One dot at the
+// end of the host name is taken off too: relay.example. is the DNS root's
+// spelling of relay.example, the same relay, and a home that kept both
+// would name two directories that Windows makes one (F2).
 func NormaliseRelay(raw string) string {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Host == "" {
 		return strings.TrimSuffix(strings.TrimSpace(raw), "/")
 	}
-	return u.Scheme + "://" + u.Host
+	host := u.Host
+	if port := u.Port(); port != "" {
+		host = strings.TrimSuffix(host, ":"+port)
+		return u.Scheme + "://" + strings.TrimSuffix(host, ".") + ":" + port
+	}
+	return u.Scheme + "://" + strings.TrimSuffix(host, ".")
 }
 
 func isLowerHex(s string) bool {

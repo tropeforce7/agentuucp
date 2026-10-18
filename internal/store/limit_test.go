@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
@@ -1344,5 +1345,109 @@ func TestADamagedRecordIsReadStrictly(t *testing.T) {
 	}
 	if n, size, err := s.DamagedKept(); err != nil || n != 1 || size != DamagedBudget {
 		t.Errorf("DamagedKept after the keep: %d of %d bytes (%v); want the new keep alone", n, size, err)
+	}
+}
+
+// TestLimitARelayNameEndsInALetterOrDigit: a relay's name is its directory,
+// and Windows takes a trailing dot off a directory's name, so
+// relays/relay.example. and relays/relay.example were one directory there,
+// and adding https://relay.example. beside https://relay.example
+// overwrote the first relay's record and its pinned anchor (F2, tracer C's
+// TestTracerCRelayTrailingDot). Now one dot at the end of a host is the
+// same relay (D119), a new name may not end in a dot, a name made from a
+// host never does, before the cut or after it, and a dotted name an older
+// home kept, where the filesystem keeps the dot, is still listed and still
+// counts as taken.
+func TestLimitARelayNameEndsInALetterOrDigit(t *testing.T) {
+	for name, ok := range map[string]bool{
+		"relay.example": true, "a": true, "a.b": true,
+		"relay.example.": false, "relay.example..": false, "a.": false,
+	} {
+		if err := validNewRelayName(name); (err == nil) != ok {
+			t.Errorf("validNewRelayName(%q): %v", name, err)
+		}
+	}
+	room := identity.MaxNameBytes - 5
+	for host, want := range map[string]string{
+		"relay.example.":  "relay.example",
+		"relay.example..": "relay.example",
+		// A cut that leaves a dot at the end.
+		strings.Repeat("a", room-1) + ".bcdef": strings.Repeat("a", room-1),
+	} {
+		if got := relayNameBase(host); got != want {
+			t.Errorf("relayNameBase(%q) = %q, want %q", host, got, want)
+		}
+	}
+
+	for _, port := range []string{"", ":9443"} {
+		s, err := Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, err := s.AddRelay("", "https://relay.example"+port)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.AddRelay("", "https://relay.example."+port); err == nil || !strings.Contains(err.Error(), `is already here, as "relay.example"`) {
+			t.Fatalf("the dotted URL beside %s: %v", first.URL, err)
+		}
+		if _, err := s.AddRelay("other", "https://relay.example."+port+"/"); err == nil {
+			t.Fatal("the dotted URL under another name was added")
+		}
+		relays, err := s.Relays()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(relays) != 1 || relays[0].URL != "https://relay.example"+port {
+			t.Fatalf("the relays: %+v", relays)
+		}
+		// The dotted URL added first is kept without its dot.
+		s2, err := Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		dotted, err := s2.AddRelay("", "https://relay.example."+port)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dotted.Name != "relay.example" || dotted.URL != "https://relay.example"+port {
+			t.Fatalf("the dotted URL was kept as %q at %s", dotted.Name, dotted.URL)
+		}
+	}
+
+	// A home an older version left with a dotted relay directory, where
+	// the filesystem keeps the dot. Where it takes it off, as Win32 does,
+	// the directory is relay.example itself, and what is asserted is what
+	// is true there: that name is taken.
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveRelay(&Relay{Name: "relay.example.", URL: "https://old.example", Added: time.Now().UTC().Truncate(time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	relays, err := s.Relays()
+	if err != nil || len(relays) != 1 || !sameRelayName(relays[0].Name, "relay.example.") {
+		t.Fatalf("the older relay is not listed: %+v, %v", relays, err)
+	}
+	kept := relays[0].Name
+	if kept != "relay.example." {
+		t.Logf("the filesystem kept the directory as %q, without its dot", kept)
+	}
+	if _, err := s.AddRelay("relay.example", "https://new.example"); err == nil || !strings.Contains(err.Error(), "already has a relay called") {
+		t.Fatalf("the name of the older relay's directory, %q, was given again: %v", kept, err)
+	}
+	r, err := s.AddRelay("", "https://relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sameRelayName(r.Name, kept) {
+		t.Fatalf("the relay at https://relay.example was named %q, the older relay's directory", r.Name)
+	}
+	if err := s.RenameRelay(r.Name, "relay.example"); err == nil {
+		t.Fatalf("a rename onto the older relay's directory, %q, was taken", kept)
+	}
+	if err := s.RenameRelay(r.Name, "renamed."); err == nil {
+		t.Fatal("a rename to a dotted name was taken")
 	}
 }
