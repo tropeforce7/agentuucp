@@ -1,12 +1,17 @@
 package auu
 
 import (
+	"bytes"
 	"context"
 	"crypto/hpke"
 	"crypto/mldsa"
+	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -39,7 +44,14 @@ import (
 // the safe name and the sender's refusal), and is fed the limit guide's
 // traversal set: `..`, `../x`, `x/../../y`, `a/b`, an absolute path, a
 // backslash form, a drive letter, a Windows device name, a NUL, the empty
-// string, `.`, and a name longer than a filesystem allows. When a new
+// string, `.`, and a name longer than a filesystem allows; and the names
+// Windows spells as another (the trace's C-7): a trailing dot and a
+// trailing space, a device name with a space, a UNC path and an alternate
+// data stream in its two spellings. The rows whose rule is lowercase hex
+// are fed as well the upper case of a fingerprint and of an id, and é
+// composed and decomposed, which macOS and Windows take as the lower's
+// file or as one name; an attachment name, a channel name and a relay
+// host may be either, and are held apart where they are written. When a new
 // place turns something from the network into a path, add its row here
 // first, before the code; a rule that is not in this table is a rule
 // somebody will forget. security.md's paragraph on paths lists the same
@@ -48,14 +60,24 @@ import (
 //
 // The second adversarial trace found the thread id missing from the list:
 // an admitted peer's `--thread "../../outside"` was joined onto an expert
-// host's serve directory.
+// host's serve directory. The path trace found the relay's mailbox
+// directory reached by two more doors than the GET route this test drove
+// (D-C1): the recipient a forward's envelope names, which the forward
+// route queues or delivers, and the recipient of an upload, which the
+// stream's open writes into a row and the completion reads back and
+// places under; each is driven over HTTP, the row's with the value
+// planted in relay.db, and nothing appears in the relay's directory or
+// beside it.
 func TestLimitNothingTheNetworkNamesIsAPath(t *testing.T) {
 	long := strings.Repeat("a", 300)
-	values := []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", long}
+	values := []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", long,
+		"x.", "x ", "CON .txt", "AUX .  ", `\\srv\share`, "foo::$DATA", "a:b"}
 	names := map[string]string{"..": "dot-dot", "../x": "dot-dot-slash", "x/../../y": "x-dot-dot-dot-dot-y", "a/b": "a-slash-b",
 		"/etc/passwd": "an absolute path", `..\x`: "a backslash form", `C:\x`: "a drive letter", "C:x": "a drive-relative name",
 		"CON": "a Windows device name", "com1.txt": "a Windows device name with an extension", "\x00": "NUL", "": "empty", ".": "dot",
-		long: "300 bytes"}
+		long: "300 bytes", "x.": "a trailing dot", "x ": "a trailing space", "CON .txt": "a device name with a space",
+		"AUX .  ": "a device name with dots and spaces after it", `\\srv\share`: "a UNC path", "foo::$DATA": "an alternate data stream",
+		"a:b": "a named stream"}
 
 	alice, err := identity.Generate("alice")
 	if err != nil {
@@ -74,8 +96,25 @@ func TestLimitNothingTheNetworkNamesIsAPath(t *testing.T) {
 	if err := os.WriteFile(admins, []byte(boss.Public().ExportLine()+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	srv, st, _ := startRelayOnDisk(t, relay.Config{AdminFile: admins})
-	for _, id := range []*identity.Identity{alice, bob} {
+	// A relay that takes forwarded mail, from one neighbour, so that the
+	// forward route reads an envelope from a user, whose path names a relay
+	// still to go, and from a courier, whose empty path is delivery here.
+	courier, err := identity.Generate("courier")
+	if err != nil {
+		t.Fatal(err)
+	}
+	couriers := filepath.Join(t.TempDir(), "couriers")
+	if err := os.WriteFile(couriers, []byte(courier.Public().ExportLine()+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := relay.NewCourier(relay.CourierConfig{AuthorizedFile: couriers, PublicURL: "https://mine.example"},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, st, messages := startRelayOnDisk(t, relay.Config{AdminFile: admins, Courier: c, CourierLimits: relay.DefaultCourierLimits()})
+	relayDir := filepath.Dir(messages)
+	for _, id := range []*identity.Identity{alice, bob, courier} {
 		if err := st.Register(id.Fingerprint(), id.Public().Bundle(), id.Name, relay.RegisterOptions{}); err != nil {
 			t.Fatal(err)
 		}
@@ -118,6 +157,48 @@ func TestLimitNothingTheNetworkNamesIsAPath(t *testing.T) {
 		t.Errorf("%s %s%s: %d %s, which is neither the named refusal nor the mux's", method, before, url.PathEscape(value), resp.StatusCode, body)
 		return "refused, elsewhere"
 	}
+	// send is wire for a request with a body or with more path after the
+	// value: the mux cleans a path with a dot segment or an empty one by
+	// pointing at the cleaned one, which is the refusal, and every other
+	// answer is the named refusal or a failure of the test.
+	send := func(as *identity.Identity, method, path, value string, body []byte, sentence string) string {
+		t.Helper()
+		req, err := http.NewRequest(method, srv.URL+path, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := relayapi.SignRequest(as, req, body); err != nil {
+			t.Fatal(err)
+		}
+		resp, err := web.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		got, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		switch {
+		case resp.StatusCode == http.StatusBadRequest && strings.Contains(string(got), sentence):
+			return "refused at the handler"
+		case resp.StatusCode/100 == 3 && (value == "." || value == ".." || value == ""):
+			return "redirected by the mux"
+		}
+		t.Errorf("%s %s: %d %s, which is neither the named refusal nor the mux's", method, path, resp.StatusCode, got)
+		return "refused, elsewhere"
+	}
+	// forward sends an envelope whose recipient is the value, with the
+	// path given, as the caller given; the route's rule is parseCarried's.
+	forward := func(as *identity.Identity, v string, path []string) string {
+		t.Helper()
+		env, err := json.Marshal(relayapi.Carried{V: 1, To: v, CT: []byte("sealed")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := json.Marshal(relayapi.ForwardRequest{Envelope: env, Path: path, Via: []string{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return send(as, "POST", "/v1/forward", v, body, "envelope to is not a fingerprint")
+	}
 	ca := pki.TestStore(t, mldsa.MLDSA44())
 	memSource := func(name string) []stream.Source {
 		return []stream.Source{{Name: name, Media: "application/octet-stream", Size: 1,
@@ -134,6 +215,54 @@ func TestLimitNothingTheNetworkNamesIsAPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// complete opens a stream from alice to bob, plants the value as the
+	// row's recipient in relay.db, as a restored backup or a hand edit
+	// could, and sends the whole stream, which the relay holds only to its
+	// shape: the completion is refused, nothing is placed, and the upload
+	// is let go so the next value has room.
+	db, err := sql.Open("sqlite", filepath.Join(relayDir, "relay.db")+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	complete := func(v string) string {
+		t.Helper()
+		ctx := context.Background()
+		size := int64(stream.HeaderSize + stream.MinChunk0 + stream.TagSize)
+		open, err := aliceClient.OpenStream(ctx, bob.Fingerprint(), "", size, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer aliceClient.AbortStream(ctx, open.Upload)
+		if _, err := db.Exec(`UPDATE uploads SET to_fp = ? WHERE id = ?`, v, open.Upload); err != nil {
+			t.Fatal(err)
+		}
+		// bob's mailbox goes under the value for the attempt, so that the
+		// completion's judgement of the recipient admits alice as it did at
+		// the open, and the value reaches the placement.
+		if _, err := db.Exec(`UPDATE mailboxes SET fp = ? WHERE fp = ?`, v, bob.Fingerprint()); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if _, err := db.Exec(`UPDATE mailboxes SET fp = ? WHERE fp = ?`, bob.Fingerprint(), v); err != nil {
+				t.Fatal(err)
+			}
+		}()
+		data := make([]byte, size)
+		binary.BigEndian.PutUint32(data[stream.EncSize:], stream.MinChunk0)
+		// The judgement admits, so the refusal is the placement's: the
+		// row's recipient is no fingerprint, and the relay says it could
+		// not store what it was given rather than name a directory by it.
+		if _, err := aliceClient.PutStream(ctx, open.Upload, 0, bytes.NewReader(data), size); err == nil || !strings.Contains(err.Error(), "500: storage error") {
+			t.Errorf("the completion with the recipient %q: %v; want the placement's refusal", v, err)
+			return ""
+		}
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&n); err != nil || n != 0 {
+			return ""
+		}
+		return "refused at the completion"
+	}
 
 	// Each row: what the network names, where its rule runs, and a check
 	// that reports the refusal, or "" for accepted. The check runs the rule
@@ -149,6 +278,31 @@ func TestLimitNothingTheNetworkNamesIsAPath(t *testing.T) {
 					return ""
 				}
 				return wire(alice, "GET", "/v1/mailbox/", v, "bad mailbox fingerprint")
+			}},
+		{"a recipient in a stream's open", "relay: the authed wrapper, identity.ValidFingerprint, 400 before a row names it",
+			func(v string) string {
+				if identity.ValidFingerprint(v) {
+					return ""
+				}
+				body := []byte(`{"size":1000}`)
+				return send(alice, "POST", "/v1/mailbox/"+url.PathEscape(v)+"/streams", v, body, "bad mailbox fingerprint")
+			}},
+		{"a recipient in a forward's envelope", "relay: parseCarried, identity.ValidFingerprint, 400 before the route queues it for a user's path or delivers it for a courier's",
+			func(v string) string {
+				if identity.ValidFingerprint(v) {
+					return ""
+				}
+				if forward(alice, v, []string{"bar"}) == "" {
+					return ""
+				}
+				return forward(courier, v, []string{})
+			}},
+		{"a recipient read back from an upload's row", "relay: the completion judges the row's recipient again and placeUpload holds it to identity.ValidFingerprint before the mailbox's directory is named",
+			func(v string) string {
+				if identity.ValidFingerprint(v) {
+					return ""
+				}
+				return complete(v)
 			}},
 		{"an upload id in a URL", "relay: s.upload, relay.ValidUploadID, 400 before the row is read",
 			func(v string) string {
@@ -281,6 +435,66 @@ func TestLimitNothingTheNetworkNamesIsAPath(t *testing.T) {
 			}
 		}
 	}
+	// The other half of a case pair and of é: an attachment name is held
+	// apart from its pair at the write (TestLimitAttachmentNameIsNotAPathAtExtract)
+	// and refused beside it by the sender (TestLimitNamesAreNotPathsAtManifestValidate),
+	// a channel name is never a path from the wire, and a relay host is a
+	// DNS name in either case; every other row's rule is lowercase hex.
+	folds := map[string]string{strings.ToUpper(bob.Fingerprint()): "a fingerprint in upper case", strings.ToUpper(anID): "an id in upper case",
+		"\u00e9": "é composed", "e\u0301": "é decomposed"}
+	either := map[string]bool{"an attachment name": true, "a channel name": true, "a relay host": true}
+	for _, row := range rows {
+		if either[row.what] {
+			continue
+		}
+		for v, name := range folds {
+			if got := row.refused(v); got == "" {
+				t.Errorf("%s: %s was accepted; the rule is %s", row.what, name, row.where)
+			}
+		}
+	}
+	// Nothing was placed, and nothing the values name was made in the
+	// relay's directory or beside it.
+	if n, err := countTree(messages); err != nil || n != 0 {
+		t.Errorf("the relay's messages directory holds %d entries after the set (%v)", n, err)
+	}
+	entries, err := os.ReadDir(relayDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		switch e.Name() {
+		case "messages", "relay.db", "relay.db-shm", "relay.db-wal":
+		default:
+			t.Errorf("a value from the set made %q in the relay's directory", e.Name())
+		}
+	}
+	// Beside it are the test's other temporary directories, which the
+	// testing package numbers, and nothing else.
+	entries, err = os.ReadDir(filepath.Dir(relayDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if _, err := strconv.Atoi(e.Name()); err != nil || !e.IsDir() {
+			t.Errorf("a value from the set made %q beside the relay's directory", e.Name())
+		}
+	}
+}
+
+// countTree is the number of files under dir, at any depth.
+func countTree(dir string) (int, error) {
+	n := 0
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			n++
+		}
+		return nil
+	})
+	return n, err
 }
 
 // sealInnerByHand is sealByHand for identities rather than users: the inner

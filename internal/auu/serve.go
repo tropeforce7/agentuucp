@@ -853,9 +853,15 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 	short := shortID(thread)
 
 	// Every message in the spool has been through Validate, which holds a
-	// thread id to the shape of a message id, so this is met only by a
-	// record written by hand; it is checked here all the same, before the
-	// id is joined onto anything.
+	// thread id to the shape of a message id, and through envelope.Open
+	// and Store.Load, which hold its own id to it, so these are met only by
+	// a record written by hand; both are checked here all the same, before
+	// either is joined onto anything: the message id names the run files,
+	// the kept reply and the patch's directory (the path trace's A-D1).
+	if err := message.ValidID(m.Inner.ID); err != nil {
+		r.failed(m, ch, "its message id is "+err.Error())
+		return nil
+	}
 	if err := message.ValidID(thread); err != nil {
 		r.failed(m, ch, "its thread id is "+err.Error())
 		return nil

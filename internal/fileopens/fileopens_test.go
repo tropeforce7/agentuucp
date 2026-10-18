@@ -46,7 +46,9 @@ var pathArg = map[string][]int{
 	"os.Stat": {0}, "os.Lstat": {0}, "os.ReadDir": {0}, "os.Chmod": {0},
 	"os.Chown": {0}, "os.Symlink": {0, 1}, "os.Link": {0, 1}, "os.Truncate": {0},
 	"os.Chdir": {0}, "os.DirFS": {0},
-	"filepath.Walk": {0}, "filepath.WalkDir": {0},
+	"filepath.Walk": {0}, "filepath.WalkDir": {0}, "filepath.Glob": {0}, "filepath.Abs": {0},
+	"lockfile.Take": {1}, "lockfile.Try": {0},
+	"syscall.CreateFile": {0}, "tls.LoadX509KeyPair": {0, 1},
 	"sql.Open":   {1},
 	"net.Listen": {1}, "net.Dial": {1}, "net.DialTimeout": {1},
 	"exec.Command": {0}, "exec.CommandContext": {1},
@@ -73,7 +75,9 @@ const linkPhrase = "; the link is an exclusive create"
 // import under another name is still found.
 var importPaths = map[string]string{
 	"os": "os", "path/filepath": "filepath", "database/sql": "sql", "net": "net", "os/exec": "exec",
-	"github.com/tropeforce7/agentuucp/internal/regular": "regular",
+	"syscall": "syscall", "crypto/tls": "tls",
+	"github.com/tropeforce7/agentuucp/internal/regular":  "regular",
+	"github.com/tropeforce7/agentuucp/internal/lockfile": "lockfile",
 }
 
 // site is one call of a path-taking function; dest says the argument is
@@ -389,7 +393,7 @@ func check(root, ledger string) (problems []string, sites []site) {
 	fset := token.NewFileSet()
 	funcs := map[string]map[string]bool{} // package name -> declared funcs
 	byKey := map[string][]site{}
-	for _, dir := range []string{"internal", "cmd"} {
+	for _, dir := range []string{"internal", "cmd", "docker"} {
 		filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 				return nil
@@ -513,8 +517,45 @@ func sitesIn(fset *token.FileSet, f *ast.File, rel string) []site {
 	}
 	var out []site
 	enclosing := "<package>"
+	// commands are the names in the enclosing function bound to an
+	// exec.Command, or to a function of the tree's whose name ends in
+	// Command and which makes one (shellCommand, gitCommand), whose Dir is
+	// the directory the program runs in and so a path of its own: an
+	// assignment to it is a site, keyed as a call of exec.Cmd.Dir with
+	// the value assigned. It sees the one shape the tree uses, a name
+	// bound by := or = and its Dir assigned after; a var declaration, a
+	// command from a call that also returns an error, a field or a
+	// parameter, an exec.Cmd literal's Dir, or a maker named otherwise
+	// would go unseen, and is to be added here when the tree first uses it.
+	commands := map[string]bool{}
 	var walk func(n ast.Node) bool
 	walk = func(n ast.Node) bool {
+		if as, ok := n.(*ast.AssignStmt); ok && len(as.Lhs) == len(as.Rhs) {
+			for i, lhs := range as.Lhs {
+				if call, ok := as.Rhs[i].(*ast.CallExpr); ok {
+					makes := false
+					switch fn := call.Fun.(type) {
+					case *ast.SelectorExpr:
+						id, ok := fn.X.(*ast.Ident)
+						makes = ok && alias[id.Name] == "exec" && (fn.Sel.Name == "Command" || fn.Sel.Name == "CommandContext")
+					case *ast.Ident:
+						makes = strings.HasSuffix(fn.Name, "Command")
+					}
+					if name, ok := lhs.(*ast.Ident); ok && makes {
+						commands[name.Name] = true
+					}
+				}
+				if sel, ok := lhs.(*ast.SelectorExpr); ok && sel.Sel.Name == "Dir" {
+					if id, ok := sel.X.(*ast.Ident); ok && commands[id.Name] {
+						out = append(out, site{
+							key: fmt.Sprintf("%s %s exec.Cmd.Dir(%s)", rel, enclosing, types.ExprString(as.Rhs[i])),
+							pos: fset.Position(as.Pos()),
+						})
+					}
+				}
+			}
+			return true
+		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -552,6 +593,7 @@ func sitesIn(fset *token.FileSet, f *ast.File, rel string) []site {
 	for _, decl := range f.Decls {
 		if fd, ok := decl.(*ast.FuncDecl); ok {
 			enclosing = funcName(fd)
+			commands = map[string]bool{}
 			ast.Inspect(fd, walk)
 			enclosing = "<package>"
 			continue
@@ -652,7 +694,7 @@ func kindOf(prov string) string {
 func limitTests(root string) map[string]int {
 	out := map[string]int{}
 	fset := token.NewFileSet()
-	for _, top := range []string{"internal", "cmd"} {
+	for _, top := range []string{"internal", "cmd", "docker"} {
 		filepath.WalkDir(filepath.Join(root, top), func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(path, "_test.go") {
 				return nil

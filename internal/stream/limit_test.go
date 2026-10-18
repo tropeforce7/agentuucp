@@ -175,9 +175,20 @@ func TestLimitManifestLength(t *testing.T) {
 // refused but made safe: a received manifest takes each value (but a NUL
 // and the 300 bytes, which the text rule refuses), SafeName of it is a
 // base name, and BuildManifest, the sender's side, refuses the value.
+// The set holds the names Windows and macOS spell as another (the trace's
+// C-7): a trailing dot and space, a device name with a space, a UNC path
+// and an alternate data stream, each refused as an id, as a thread and by
+// the sender as an attachment name. Of the case pair and é composed and
+// decomposed, the upper case and both é are refused as an id and as a
+// thread; as attachment names each is one the sender's rule takes, and
+// the case pair in one manifest is refused as one file where case does
+// not count, while the é pair is taken, since the receiver settles a name
+// the filesystem folds at the write.
 func TestLimitNamesAreNotPathsAtManifestValidate(t *testing.T) {
 	from, to := pair(t)
-	set := []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", strings.Repeat("a", 300)}
+	set := []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", strings.Repeat("a", 300),
+		"x.", "x ", "CON .txt", "AUX .  ", `\\srv\share`, "foo::$DATA", "a:b"}
+	const lower, upper, nfc, nfd = "abcdef0123456789abcdef0123456789", "ABCDEF0123456789ABCDEF0123456789", "\u00e9", "e\u0301"
 	fresh := func() *Manifest {
 		_, m := build(t, from, to, MinChunkSize, map[string][]byte{"a.bin": []byte("hello")})
 		return m
@@ -206,5 +217,28 @@ func TestLimitNamesAreNotPathsAtManifestValidate(t *testing.T) {
 			sourcesOf(memSource{v, []byte("x")}), MinChunkSize); !errors.Is(err, ErrForm) {
 			t.Errorf("BuildManifest took the attachment name %q: %v", v, err)
 		}
+	}
+	for _, v := range []string{upper, nfc, nfd} {
+		m := fresh()
+		m.ID = v
+		if err := m.Validate(); !errors.Is(err, ErrForm) {
+			t.Errorf("id %q: %v; want ErrForm", v, err)
+		}
+		m = fresh()
+		m.Body.Thread = v
+		if err := m.Validate(); !errors.Is(err, ErrForm) {
+			t.Errorf("thread %q: %v; want ErrForm", v, err)
+		}
+	}
+	both := func(a, b string) error {
+		_, err := BuildManifest(from, to.Public(), lower, Body{Type: "ask", Thread: lower, Text: "x"},
+			sourcesOf(memSource{a, []byte("x")}, memSource{b, []byte("y")}), MinChunkSize)
+		return err
+	}
+	if err := both(lower, upper); !errors.Is(err, ErrForm) || !strings.Contains(err.Error(), "case does not count") {
+		t.Errorf("BuildManifest took the attachment names %q and %q: %v", lower, upper, err)
+	}
+	if err := both(nfc, nfd); err != nil {
+		t.Errorf("BuildManifest refused the attachment names %q and %q: %v", nfc, nfd, err)
 	}
 }

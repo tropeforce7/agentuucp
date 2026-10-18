@@ -1013,7 +1013,10 @@ func TestLimitDamagedIds(t *testing.T) {
 // id, is refused at the command before any file is touched, and the
 // store's ReadDamaged and RemoveDamaged refuse each name themselves; a
 // kept pair planted where each relative name would land, and a witness
-// outside the home, are still there and as they were.
+// outside the home, are still there and as they were. Two of the set are
+// relay names, a name ending in a dot, which an older home may hold, and
+// the upper case of an id: each is taken as a name, finds nothing kept
+// and is refused as that, with the same files untouched.
 func TestLimitDamagedReopenNames(t *testing.T) {
 	relayURL := startRelay(t)
 	scratch := t.TempDir()
@@ -1047,6 +1050,15 @@ func TestLimitDamagedReopenNames(t *testing.T) {
 	for _, name := range append(pathSet(), outside) {
 		_, err := bob.tryRun("damaged", "reopen", name, "1")
 		var e *exitError
+		if store.ValidRelayName(name) == nil {
+			if !asExit(err, &e) || e.code != exitUsage || !strings.Contains(err.Error(), "nothing is kept for") {
+				t.Errorf("reopen with the relay name %q: %v; want it refused as nothing kept", name, err)
+			}
+			if _, _, err := bs.ReadDamaged(name, 1); !errors.Is(err, store.ErrNotDamaged) {
+				t.Errorf("ReadDamaged with the relay name %q: %v; want nothing kept", name, err)
+			}
+			continue
+		}
 		if !asExit(err, &e) || e.code != exitUsage || !strings.Contains(err.Error(), "relay name ") {
 			t.Errorf("reopen with the relay name %q: %v; want it refused as no relay name", name, err)
 		}

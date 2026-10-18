@@ -553,10 +553,25 @@ func TestLimitCertRecordSerial(t *testing.T) {
 // traversalSet is the limit guide's set for a value that becomes part of
 // a path: `..`, `../x`, `x/../../y`, `a/b`, an absolute path, a backslash
 // form, a drive letter, a Windows device name, a NUL, the empty string,
-// `.`, and a name longer than a filesystem allows.
+// `.`, and a name longer than a filesystem allows; and the names Windows
+// and macOS spell as another (the trace's C-7): a trailing dot and a
+// trailing space, which Windows takes off, a device name with a space
+// before its extension and one with only dots and spaces after it, which
+// Windows opens as the device, a UNC path, an alternate data stream in
+// its two spellings, and é composed and decomposed, which APFS takes as
+// one name. The case pair, which one rule takes in both cases and
+// another in one, is casePair.
 func traversalSet() []string {
-	return []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", strings.Repeat("a", 300)}
+	return []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", strings.Repeat("a", 300),
+		"x.", "x ", "CON .txt", "AUX .  ", `\\srv\share`, "foo::$DATA", "a:b", "\u00e9", "e\u0301"}
 }
+
+// casePair is one name in two cases, which macOS by default and Windows
+// take as one file: the lower is a message id and a relay name, the upper
+// is a relay name and no message id. Where a rule takes only one case the
+// test asserts the other refused; where it takes both, that the second is
+// refused as the first's.
+const casePairLower, casePairUpper = "abcdef0123456789abcdef0123456789", "ABCDEF0123456789ABCDEF0123456789"
 
 // outsideUntouched fails the test when anything appeared outside the
 // home: the scratch directory beside it holds one witness file and
@@ -584,7 +599,9 @@ func outsideUntouched(t *testing.T, outside, witness string, what string) {
 // message.ValidID before the join: Save, Load, Remove, RemoveByID, and the damaged
 // box's DamagedPath and KeepDamaged through the relay's number. Each is
 // fed the traversal set and refuses it, and nothing appears outside the
-// home.
+// home. Of the case pair, the lower is saved and the upper, which names
+// the same file where case does not count, is refused at every edge and
+// leaves the lower's record as it was.
 func TestLimitMessageIDIsNotAPathAtTheStoresEdges(t *testing.T) {
 	s, outside, witness := reviewHome(t)
 	now := time.Now().UTC().Truncate(time.Second)
@@ -608,13 +625,39 @@ func TestLimitMessageIDIsNotAPathAtTheStoresEdges(t *testing.T) {
 			t.Errorf("%s holds %d entries after ids from the traversal set", box, len(entries))
 		}
 	}
+	if err := s.Save(Inbox, stored(casePairLower, now)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(Inbox, stored(casePairUpper, now)); err == nil {
+		t.Errorf("Save took the id %q beside %q", casePairUpper, casePairLower)
+	}
+	if _, err := s.Load(Inbox, casePairUpper); err == nil {
+		t.Errorf("Load took the id %q", casePairUpper)
+	}
+	if err := s.Remove(Inbox, casePairUpper); err == nil {
+		t.Errorf("Remove took the id %q", casePairUpper)
+	}
+	if _, _, _, _, err := s.RemoveByID(casePairUpper); err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Errorf("RemoveByID took the id %q: %v", casePairUpper, err)
+	}
+	if m, err := s.Load(Inbox, casePairLower); err != nil || m.Inner.ID != casePairLower {
+		t.Errorf("the record %q after its upper case was refused: %v", casePairLower, err)
+	}
 }
 
 // TestLimitRelayNameIsNotAPath: a relay name is a directory under the
 // home, and ValidRelayName runs at AddRelay, at RenameRelay, and at the
 // store's own edges that take a name — SetLeftBehind, LeftBehind,
 // DamagedPath, KeepDamaged and CertKey — before the join. Each is fed the
-// traversal set and refuses it, and nothing appears outside the home.
+// traversal set and refuses it, and nothing appears outside the home. A
+// name ending in a dot is the one the set holds that ValidRelayName takes,
+// since an older home may hold one and it is still read;
+// AddRelay and RenameRelay, which give a directory its name, refuse it as
+// the directory Windows would make without the dot (F2), and the edges
+// that take a name the home holds are not asked. Of the case pair, both
+// are relay names: with the lower added, the upper is refused at AddRelay
+// and RenameRelay as the relay already here, and relays/ holds the one
+// directory.
 func TestLimitRelayNameIsNotAPath(t *testing.T) {
 	s, outside, witness := reviewHome(t)
 	r, err := s.AddRelay("work", "https://relay.example:9443")
@@ -624,6 +667,15 @@ func TestLimitRelayNameIsNotAPath(t *testing.T) {
 	for _, v := range traversalSet() {
 		if v == "" {
 			// An empty name at AddRelay is "derive one from the host".
+			continue
+		}
+		if strings.HasSuffix(v, ".") && ValidRelayName(v) == nil {
+			if _, err := s.AddRelay(v, "https://other.example:9443"); err == nil || !strings.Contains(err.Error(), "ends in '.'") {
+				t.Errorf("AddRelay took the name %q: %v", v, err)
+			}
+			if err := s.RenameRelay(r.Name, v); err == nil || !strings.Contains(err.Error(), "ends in '.'") {
+				t.Errorf("RenameRelay took the name %q: %v", v, err)
+			}
 			continue
 		}
 		if _, err := s.AddRelay(v, "https://other.example:9443"); err == nil {
@@ -680,6 +732,23 @@ func TestLimitRelayNameIsNotAPath(t *testing.T) {
 	if len(entries) != 1 || entries[0].Name() != "work" {
 		t.Errorf("relays/ holds %d entries after names from the traversal set", len(entries))
 	}
+	if err := s.RenameRelay("work", casePairLower); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddRelay(casePairUpper, "https://other.example:9443"); err == nil || !strings.Contains(err.Error(), "already has a relay called") {
+		t.Errorf("AddRelay took %q beside %q: %v", casePairUpper, casePairLower, err)
+	}
+	other, err := s.AddRelay("other", "https://other.example:9443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RenameRelay(other.Name, casePairUpper); err == nil || !strings.Contains(err.Error(), "already has a relay called") {
+		t.Errorf("RenameRelay took %q beside %q: %v", casePairUpper, casePairLower, err)
+	}
+	if entries, err = os.ReadDir(s.path(relaysDir)); err != nil || len(entries) != 2 {
+		t.Errorf("relays/ holds %d entries after the case pair; want the lower and other (%v)", len(entries), err)
+	}
+	outsideUntouched(t, outside, witness, "a relay name from the case pair")
 }
 
 // TestLimitDamagedDirectoryEntries: the damaged box is read back by

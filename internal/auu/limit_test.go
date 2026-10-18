@@ -2,6 +2,7 @@ package auu
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -868,9 +869,15 @@ func TestLimitServeAndProxyPathsResolveAgainstTheirFile(t *testing.T) {
 	}
 }
 
-// pathSet is the limit guide's traversal set, as the store's tests have it.
+// pathSet is the limit guide's traversal set, as the store's tests have it,
+// with the names Windows and macOS spell as another (the trace's C-7): a
+// trailing dot and space, a device name with a space, a UNC path, an
+// alternate data stream in its two spellings, é composed and decomposed,
+// and the upper case of an id, which is no id and is the lower's file
+// where case does not count.
 func pathSet() []string {
-	return []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", strings.Repeat("a", 300)}
+	return []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", strings.Repeat("a", 300),
+		"x.", "x ", "CON .txt", "AUX .  ", `\\srv\share`, "foo::$DATA", "a:b", "\u00e9", "e\u0301", "ABCDEF0123456789ABCDEF0123456789"}
 }
 
 // TestLimitThreadIDIsNotAPathAtServe: a thread id names a directory and a
@@ -879,6 +886,23 @@ func pathSet() []string {
 // is not an id rather than print it as a path. Each is fed the traversal
 // set, worktreeFor refuses it, and nothing appears beside the serve
 // directory.
+//
+// handle's own check is reached too (the path trace's A-D2), since every
+// other path of a message's is made after it: the thread's directory, the
+// files the asker sent, the run files, a reply kept from a round whose
+// send did not get through and its patch, which keptPatch gives to the
+// send, and the envelope kept for that send, which readKeptSeal reads and
+// keptFiles checks the patch against. For each value of the set as a
+// thread id, a kept reply and its patch are planted where the thread's
+// directory would resolve to, where the value names one; handle fails the
+// message with the rule's sentence and sends nothing, the planted files
+// are as they were, and nothing else in the home or beside it changes but
+// the ledger's record of the failure. A message id reaches handle only
+// through store.Load, which runs message.ValidID, and Save refuses each
+// value of the set as an inbox record's id, so no round hands one to
+// handle; handle checks it all the same, and each value as a record's own
+// id, with a good thread, fails the message with no handler run and
+// nothing written (D126).
 func TestLimitThreadIDIsNotAPathAtServe(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git is not on the PATH")
@@ -915,6 +939,105 @@ func TestLimitThreadIDIsNotAPathAtServe(t *testing.T) {
 			t.Errorf("a refused thread id left %d entries under the serve directory", len(under))
 		}
 	}
+
+	alice, bob := newExpert(t, modeSideCopy)
+	bs := storeOf(t, bob.user)
+	cfg, err := loadServeConfig(bob.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveDir := filepath.Join(bob.home, "serve")
+	led, err := loadLedger(filepath.Join(serveDir, ledgerFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &serveRun{s: bs, cfg: cfg, led: led, root: serveDir}
+	beside := filepath.Dir(bob.home)
+	idFor := func(i int) string { return fmt.Sprintf("%032x", i+1) }
+	planted := 0
+	for i, v := range pathSet() {
+		threadDir := filepath.Join(serveDir, "threads", v)
+		rel, err := filepath.Rel(beside, threadDir)
+		if v == "" || strings.ContainsRune(v, 0) || len(v) > 200 || err != nil || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		patch := filepath.Join(threadDir, "patch-"+idFor(i), patchName(v))
+		if os.MkdirAll(filepath.Dir(patch), 0o700) != nil {
+			continue
+		}
+		for path, data := range map[string]string{runFile(threadDir, "reply", idFor(i)): "a kept reply\n", patch: "a kept patch\n"} {
+			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		planted++
+	}
+	// The relative values name a directory the planting can make; the
+	// absolute path, the empty name, the NUL and the long name do not.
+	if planted < len(pathSet())-4 {
+		t.Fatalf("a kept reply was planted for %d values of %d, so the test shows little", planted, len(pathSet()))
+	}
+	before := snapshotHome(t, beside)
+	ledgerAt, err := filepath.Rel(beside, filepath.Join(serveDir, ledgerFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, v := range pathSet() {
+		crafted := &store.Stored{
+			Relay: bob.defaultRelayName(), Received: time.Now().UTC(), SenderName: "alice", Channel: "jostle",
+			Inner: &envelope.Inner{From: alice.exportFingerprint(), To: bob.exportFingerprint(), ID: idFor(i), Time: time.Now().UTC(),
+				Body: message.Body{Type: message.TypeAsk, Thread: v, Subject: "by hand", Text: "a thread id from the set"}},
+		}
+		var err error
+		said := captureStderr(t, func() { err = run.handle(context.Background(), crafted) })
+		if err != nil || len(run.out.Failed) != i+1 || run.out.Failed[i].ID != idFor(i) {
+			t.Errorf("handle with the thread id %q: %v, failed %+v; want the message failed", v, err, run.out.Failed)
+		}
+		if !strings.Contains(said, "its thread id is not a message id") {
+			t.Errorf("handle with the thread id %q said:\n%s", v, said)
+		}
+		if err := bs.Save(store.Inbox, &store.Stored{Relay: "relay", Inner: &envelope.Inner{ID: v, Body: message.Body{Type: message.TypeAsk, Thread: idFor(i), Text: "x"}}}); err == nil {
+			t.Errorf("Save took the message id %q", v)
+		}
+	}
+	// A record whose own id is one of the set, with a good thread, is
+	// failed by handle's check of the message id before anything is made
+	// from it: the handler does not run, and nothing is written (D126).
+	marker := filepath.Join(t.TempDir(), "runs")
+	t.Setenv(handlerScript, "append:"+marker+";echo:an answer")
+	failedBefore := len(run.out.Failed)
+	for i, v := range pathSet() {
+		crafted := &store.Stored{
+			Relay: bob.defaultRelayName(), Received: time.Now().UTC(), SenderName: "alice", Channel: "jostle",
+			Inner: &envelope.Inner{From: alice.exportFingerprint(), To: bob.exportFingerprint(), ID: v, Time: time.Now().UTC(),
+				Body: message.Body{Type: message.TypeAsk, Thread: idFor(len(pathSet()) + i), Subject: "by hand", Text: "a message id from the set"}},
+		}
+		var err error
+		said := captureStderr(t, func() { err = run.handle(context.Background(), crafted) })
+		if err != nil || len(run.out.Failed) != failedBefore+i+1 {
+			t.Errorf("handle with the message id %q: %v, failed %d; want the message failed", v, err, len(run.out.Failed)-failedBefore)
+		}
+		if !strings.Contains(said, "its message id is not a message id") {
+			t.Errorf("handle with the message id %q said:\n%s", v, said)
+		}
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("the handler ran for a message whose id is not one")
+	}
+	if len(run.out.Answered) != 0 {
+		t.Errorf("handle answered %+v", run.out.Answered)
+	}
+	after := snapshotHome(t, beside)
+	for k, data := range after {
+		if was, ok := before[k]; k != ledgerAt && (!ok || !bytes.Equal(was, data)) {
+			t.Errorf("a thread id from the set wrote %s", k)
+		}
+	}
+	for k := range before {
+		if _, ok := after[k]; !ok {
+			t.Errorf("a thread id from the set removed %s", k)
+		}
+	}
 }
 
 // TestLimitAttachmentNameIsNotAPathAtExtract: an attachment's name becomes
@@ -922,7 +1045,10 @@ func TestLimitThreadIDIsNotAPathAtServe(t *testing.T) {
 // and the unique loop at the write; a record carrying a name from the
 // traversal set is not refused but written under the safe name, one file
 // per record, under the directory and nowhere else, and the line extract
-// prints says the sender's name differs.
+// prints says the sender's name differs. A record carrying both of a pair
+// the filesystem may take as one name, é composed and decomposed, and a
+// name in two cases, writes two files, each holding its own bytes, so
+// neither of a pair is written over the other where the disk folds them.
 func TestLimitAttachmentNameIsNotAPathAtExtract(t *testing.T) {
 	s, err := store.Open(t.TempDir())
 	if err != nil {
@@ -968,6 +1094,30 @@ func TestLimitAttachmentNameIsNotAPathAtExtract(t *testing.T) {
 		}
 		if line := wroteLine(written[0], m.Inner.Body.Attachments[0]); v != message.SafeName(v) && !strings.Contains(line, "the sender named it") {
 			t.Errorf("the line for %q does not say the sender's name differs: %s", v, line)
+		}
+	}
+	for _, pair := range [][2]string{{"\u00e9", "e\u0301"}, {"report.txt", "REPORT.txt"}} {
+		out := filepath.Join(t.TempDir(), "out")
+		if err := os.MkdirAll(out, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		m := &store.Stored{Relay: "relay", Inner: &envelope.Inner{
+			ID: strings.Repeat("a", 32), Time: time.Now(),
+			Body: message.Body{Type: message.TypeNote, Thread: strings.Repeat("a", 32), Text: "hi",
+				Attachments: []message.Attachment{rawAttachment(pair[0], []byte("first")), rawAttachment(pair[1], []byte("second"))}},
+		}}
+		written, err := extractInto(s, store.Inbox, m, out)
+		if err != nil || len(written) != 2 || written[0] == written[1] {
+			t.Errorf("extractInto with the names %q and %q: %v, %v; want two files", pair[0], pair[1], written, err)
+			continue
+		}
+		for k, want := range []string{"first", "second"} {
+			if data, err := os.ReadFile(written[k]); err != nil || string(data) != want {
+				t.Errorf("the name %q, written as %q, holds %q (%v); want %q", pair[k], written[k], data, err, want)
+			}
+		}
+		if under, _ := os.ReadDir(out); len(under) != 2 {
+			t.Errorf("the names %q and %q left %d entries in the directory", pair[0], pair[1], len(under))
 		}
 	}
 }
