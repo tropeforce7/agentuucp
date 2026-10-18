@@ -262,6 +262,53 @@ func TestLimitAStagedCopyIsSweptOnlyWhenItsLockIsFree(t *testing.T) {
 	os.Remove(live + stagedLockSuffix)
 }
 
+// TestLimitTheSweepReadsTheHomesPathAsAPath: sweepStaged found the staged
+// copies with a glob over the box's joined path, so the home's path was a
+// pattern too, and a home at a path holding [x] matched a sibling x and
+// removed its staged-looking entries (F3, tracer B's B-2). The box's own
+// entries are now read and matched by name: the sibling is untouched and
+// the home's own dead staged copy is swept.
+func TestLimitTheSweepReadsTheHomesPathAsAPath(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "[x]", "home")
+	s, err := store.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	box := filepath.Dir(s.AttachmentDir(store.Inbox, strings.Repeat("b", 32)))
+	rel, err := filepath.Rel(home, box)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What the home's path matches as a pattern: x in place of [x].
+	sibling := filepath.Join(root, "x", "home", rel)
+	own := filepath.Join(box, strings.Repeat("c", 32)+".d.new-dead")
+	other := filepath.Join(sibling, strings.Repeat("c", 32)+".d.new-dead")
+	for _, base := range []string{own, other} {
+		if err := os.MkdirAll(base+".part", 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(base+".part", "0"), []byte("partial"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(base+stagedLockSuffix, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fill := func(target string) error { return os.Mkdir(target, 0o700) }
+	if err := replaceSpool(context.Background(), s, filepath.Join(box, strings.Repeat("e", 32)+".d"), fill, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{filepath.Join(other+".part", "0"), other + stagedLockSuffix} {
+		if _, err := os.Lstat(p); err != nil {
+			t.Errorf("the sweep removed %s, beside the home: %v", p, err)
+		}
+	}
+	if _, err := os.Lstat(own + ".part"); err == nil {
+		t.Error("the home's own dead staged copy was not swept")
+	}
+}
+
 // Quarantine trust asks the quarantine by name (G31, R46): with a record of
 // the same message in the inbox too, as a move cut short before this
 // release could leave, Find answers the inbox's and trust's lookup the

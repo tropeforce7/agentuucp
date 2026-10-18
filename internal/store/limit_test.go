@@ -1451,3 +1451,32 @@ func TestLimitARelayNameEndsInALetterOrDigit(t *testing.T) {
 		t.Fatal("a rename to a dotted name was taken")
 	}
 }
+
+// TestLimitARecordIsTheMessageItsNameSays: Save names a record's file by
+// its message's id, and Load re-validated the id inside but did not ask
+// that it was the name's, so a record copied under another id's name was
+// read as that message, and a save or a remove of what it said it was
+// touched another file (C-4, tracer C). A record under another name is now
+// refused as damaged, naming both; the record under its own name loads.
+func TestLimitARecordIsTheMessageItsNameSays(t *testing.T) {
+	s := newStore(t)
+	m := stored("00000000000000000000000000000001", time.Now().UTC().Truncate(time.Second))
+	if err := s.Save(Inbox, m); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(s.msgPath(Inbox, m.Inner.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := "00000000000000000000000000000002"
+	if err := os.WriteFile(s.msgPath(Inbox, other), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Load(Inbox, other)
+	if err == nil || !strings.Contains(err.Error(), "holds the message "+m.Inner.ID+", not the one its name says") {
+		t.Fatalf("a record under another id's name: %v", err)
+	}
+	if got, err := s.Load(Inbox, m.Inner.ID); err != nil || got.Inner.ID != m.Inner.ID {
+		t.Fatalf("the record under its own name: %v", err)
+	}
+}

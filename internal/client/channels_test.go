@@ -130,8 +130,8 @@ func TestPostAndOpenStreamCarryTheChannel(t *testing.T) {
 	rec := &recorder{replies: []reply{
 		{status: http.StatusOK, body: relayapi.PostResponse{ID: 1}},
 		{status: http.StatusOK, body: relayapi.PostResponse{ID: 2}},
-		{status: http.StatusCreated, body: relayapi.OpenStreamResponse{Upload: "u"}},
-		{status: http.StatusCreated, body: relayapi.OpenStreamResponse{Upload: "u"}},
+		{status: http.StatusCreated, body: relayapi.OpenStreamResponse{Upload: strings.Repeat("a", 32)}},
+		{status: http.StatusCreated, body: relayapi.OpenStreamResponse{Upload: strings.Repeat("a", 32)}},
 	}}
 	c, _ := newTestClient(t, rec)
 	ctx := context.Background()

@@ -137,7 +137,9 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 		{"/v1/mailbox/" + fp, listing(func(l *relayapi.ListResponse, n int64) { l.Messages[0].Size = n }), callList},
 		{"/v1/listed", func(n int64) any { return relayapi.ListedResponse{Entries: []relayapi.ListedEntry{}, Listed: n} },
 			func(c *Client) error { _, err := c.Listed(context.Background()); return err }},
-		{"/v1/mailbox/" + bob.Fingerprint() + "/streams", func(n int64) any { return relayapi.OpenStreamResponse{Upload: "u", ResumeThreshold: n} },
+		{"/v1/mailbox/" + bob.Fingerprint() + "/streams", func(n int64) any {
+			return relayapi.OpenStreamResponse{Upload: strings.Repeat("a", 32), ResumeThreshold: n}
+		},
 			func(c *Client) error {
 				_, err := c.OpenStream(context.Background(), bob.Fingerprint(), "", 5000, 0)
 				return err
@@ -167,7 +169,9 @@ func TestLimitRelayAnswerIntegers(t *testing.T) {
 	seconds := []shape{
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.TokenMaxAgeSecs = n }), callStatus},
 		{"/v1/admin/status", status(func(st *relayapi.AdminStatusResponse, n int64) { st.CertLifetimeSecs = n }), callStatus},
-		{"/v1/mailbox/" + bob.Fingerprint() + "/streams", func(n int64) any { return relayapi.OpenStreamResponse{Upload: "u", ResumeWindow: n} },
+		{"/v1/mailbox/" + bob.Fingerprint() + "/streams", func(n int64) any {
+			return relayapi.OpenStreamResponse{Upload: strings.Repeat("a", 32), ResumeWindow: n}
+		},
 			func(c *Client) error {
 				_, err := c.OpenStream(context.Background(), bob.Fingerprint(), "", 5000, 0)
 				return err
@@ -1150,5 +1154,31 @@ func TestLimitListingOrder(t *testing.T) {
 				t.Errorf("a refused page returned %+v; want nothing", l)
 			}
 		})
+	}
+}
+
+// TestLimitTheUploadIDIsHeldToItsShape: the relay's answer to a stream's
+// open names the upload, and the id went into every later request's path
+// and into the outbox record unchecked, so a relay that answered
+// "../../v1/x" had this client send its signed PUT and DELETE to other
+// paths on that relay (F9, tracer B's CONCERN-5). The id is now held to
+// the shape the relay makes it in, 32 lowercase hex characters, and an
+// answer with any other is malformed.
+func TestLimitTheUploadIDIsHeldToItsShape(t *testing.T) {
+	to := strings.Repeat("cd", 32)
+	for _, upload := range []string{"", "../../v1/x", strings.Repeat("a", 31), strings.Repeat("a", 33), strings.Repeat("A", 32), strings.Repeat("a", 31) + "g", strings.Repeat("a", 30) + "/x"} {
+		rec := &recorder{replies: []reply{{status: http.StatusCreated, body: relayapi.OpenStreamResponse{Upload: upload}}}}
+		c, _ := newTestClient(t, rec)
+		_, err := c.OpenStream(context.Background(), to, "", 5000, 0)
+		if err == nil || !strings.Contains(err.Error(), wantUploadID) {
+			t.Errorf("upload %q: %v", upload, err)
+		}
+	}
+	for _, upload := range []string{strings.Repeat("0", 32), strings.Repeat("f", 32), "0123456789abcdef0123456789abcdef"} {
+		rec := &recorder{replies: []reply{{status: http.StatusCreated, body: relayapi.OpenStreamResponse{Upload: upload}}}}
+		c, _ := newTestClient(t, rec)
+		if _, err := c.OpenStream(context.Background(), to, "", 5000, 0); err != nil {
+			t.Errorf("upload %q: %v", upload, err)
+		}
 	}
 }

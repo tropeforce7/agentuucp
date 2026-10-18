@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/client"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/regular"
@@ -265,8 +266,10 @@ func listPending(s *store.Store) ([]*pending, []string, error) {
 		// relay is a name this home gave; a record that names none is
 		// from before a home could know more than one relay, and
 		// nothing on this machine is from before.
+		// The upload id is the relay's, kept from its answer, and goes
+		// into a request's path on a resume (F9).
 		if message.ValidID(p.MessageID) != nil || !identity.ValidFingerprint(p.To) ||
-			store.ValidRelayName(p.Relay) != nil {
+			store.ValidRelayName(p.Relay) != nil || p.Upload != "" && !client.ValidUploadID(p.Upload) {
 			broken = append(broken, stem)
 			continue
 		}

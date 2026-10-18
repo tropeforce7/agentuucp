@@ -69,10 +69,10 @@
 
 cmd/auu-ca/kit.go adminLines os.ReadFile(path) = operator's absolute path
 cmd/auu-ca/kit.go cmdKit os.ReadFile(*relayBinary) = operator's absolute path
-cmd/auu-ca/kit.go writeSecret os.OpenFile(tmp) = operator's absolute path
 cmd/auu-ca/kit.go writeSecret os.Remove(tmp) = operator's absolute path
 cmd/auu-ca/kit.go writeSecret os.Rename(path) = operator's absolute path
 cmd/auu-ca/kit.go writeSecret os.Rename(tmp) = operator's absolute path
+cmd/auu-ca/kit.go writeSecret regular.Create(tmp) = operator's absolute path
 cmd/auu-ca/main.go cmdShow os.Stat(rec.BundlePath) = operator's absolute path, --out as the authority's own record holds it
 cmd/auu-relay/config.go (Config).Validate os.MkdirAll(c.MessagesDir) = operator: messages_dir in the relay's settings file, resolved against the file's directory shown by TestLimitConfigPathsResolveAgainstTheirFile
 cmd/auu-relay/config.go (Config).Validate os.Stat(c.MessagesDir) = operator: messages_dir in the relay's settings file, resolved against the file's directory shown by TestLimitConfigPathsResolveAgainstTheirFile
@@ -223,9 +223,10 @@ internal/auu/spoolswap.go replaceSpool os.RemoveAll(staged) = network: message i
 internal/auu/spoolswap.go replaceSpool os.Rename(aside) = network: message id from a manifest, message.ValidID at Manifest.Validate; the last name is an id shown by TestLimitNamesAreNotPathsAtManifestValidate
 internal/auu/spoolswap.go replaceSpool os.Rename(dir) = network: message id from a manifest, message.ValidID at Manifest.Validate; the last name is an id shown by TestLimitNamesAreNotPathsAtManifestValidate
 internal/auu/spoolswap.go replaceSpool os.Rename(staged) = network: message id from a manifest, message.ValidID at Manifest.Validate; the last name is an id shown by TestLimitNamesAreNotPathsAtManifestValidate
-internal/auu/spoolswap.go sweepStaged os.Remove(path) = derived: an entry of a box's directory, held by the glob *.d.new-*.lock to a staged copy's lock there shown by TestLimitAStagedCopyIsSweptOnlyWhenItsLockIsFree
-internal/auu/spoolswap.go sweepStaged os.RemoveAll(base + ".part") = derived: an entry of a box's directory, held by the glob *.d.new-*.lock to a staged copy's lock there shown by TestLimitAStagedCopyIsSweptOnlyWhenItsLockIsFree
-internal/auu/spoolswap.go sweepStaged os.RemoveAll(base) = derived: an entry of a box's directory, held by the glob *.d.new-*.lock to a staged copy's lock there shown by TestLimitAStagedCopyIsSweptOnlyWhenItsLockIsFree
+internal/auu/spoolswap.go sweepStaged os.ReadDir(boxDir) = derived: a box's directory under the home, the parent of replaceSpool's spool path, whose last name is an id held by message.ValidID, and never a pattern shown by TestLimitAStagedCopyIsSweptOnlyWhenItsLockIsFree
+internal/auu/spoolswap.go sweepStaged os.Remove(path) = derived: an entry of a box's directory, held by the name match *.d.new-*.lock, on the entry's name alone, to a staged copy's lock there shown by TestLimitAStagedCopyIsSweptOnlyWhenItsLockIsFree
+internal/auu/spoolswap.go sweepStaged os.RemoveAll(base + ".part") = derived: an entry of a box's directory, held by the name match *.d.new-*.lock, on the entry's name alone, to a staged copy's lock there shown by TestLimitAStagedCopyIsSweptOnlyWhenItsLockIsFree
+internal/auu/spoolswap.go sweepStaged os.RemoveAll(base) = derived: an entry of a box's directory, held by the name match *.d.new-*.lock, on the entry's name alone, to a staged copy's lock there shown by TestLimitAStagedCopyIsSweptOnlyWhenItsLockIsFree
 internal/auu/stream.go sealStreams os.MkdirAll(outboxDir(s)) = local
 internal/auu/stream.go sealStreams os.OpenFile(path) = derived: a message id this program made and the recipient's fingerprint from its own peer list, which BuildManifestMany's recipients section holds to identity.ValidFingerprint, the stem listPending reads back by the same rule shown by TestLimitOutboxDirectoryEntries
 internal/auu/stream.go sealStreams os.Remove(path) = derived: a message id this program made and the recipient's fingerprint from its own peer list, which BuildManifestMany's recipients section holds to identity.ValidFingerprint, the stem listPending reads back by the same rule shown by TestLimitOutboxDirectoryEntries
@@ -310,7 +311,7 @@ internal/relay/streamstore.go (*Store).OpenMessage regular.Open(s.messagePath(to
 internal/relay/streamstore.go (*Store).OpenUpload os.OpenFile(s.uploadPath(id)) = local
 internal/relay/streamstore.go (*Store).OpenUpload os.Remove(s.uploadPath(id)) = local
 internal/relay/streamstore.go (*Store).ReceiveUploadAdmitted regular.OpenFile(s.uploadPath(id)) = network: upload id in the URL, ValidUploadID at upload shown by TestLimitNothingTheNetworkNamesIsAPath
-internal/relay/streamstore.go (*Store).abortLocked os.Remove(s.uploadPath(id)) = network: upload id in the URL, ValidUploadID at upload shown by TestLimitNothingTheNetworkNamesIsAPath
+internal/relay/streamstore.go (*Store).abortLocked os.Remove(s.uploadPath(id)) = network: upload id in the URL, ValidUploadID at upload, or an id PurgeUploads read back from relay.db, ValidUploadID where it is read shown by TestLimitNothingTheNetworkNamesIsAPath
 internal/relay/streamstore.go (*Store).truncateUpload regular.OpenFile(s.uploadPath(id)) = network: upload id in the URL, ValidUploadID at upload shown by TestLimitNothingTheNetworkNamesIsAPath
 internal/store/allowpushed.go (*Store).AllowPushed regular.ReadFile(path) = operator: a relay name, ValidRelayName at AddRelay, RenameRelay and Relays shown by TestLimitRelayNameIsNotAPath
 internal/store/allowpushed.go (*Store).ClearAllowPushed os.Remove(s.relayPath(r, allowPushedFile)) = operator: a relay name, ValidRelayName at AddRelay, RenameRelay and Relays shown by TestLimitRelayNameIsNotAPath

@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/kit"
 	"github.com/tropeforce7/agentuucp/internal/pki"
+	"github.com/tropeforce7/agentuucp/internal/regular"
 )
 
 // adminList collects a repeatable --admin: an export line, or @FILE for a
@@ -207,10 +210,16 @@ func adminLines(admins adminList) ([]string, error) {
 }
 
 // writeSecret writes the archive readable by its owner alone, whole or not
-// at all: to a file beside its name, then renamed over it.
+// at all: to a file beside its name, then renamed over it. The file beside
+// it is made new, never opened as it stands: an entry already there, a link
+// among them, would have had the archive written through it to wherever it
+// pointed (F5), so it is an error that names it.
 func writeSecret(path string, data []byte) error {
 	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	f, err := regular.Create(tmp, 0o600)
+	if errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("%s is already there, from an earlier kit that stopped or put there by something else; look at it, remove it, and run the kit again", tmp)
+	}
 	if err != nil {
 		return err
 	}

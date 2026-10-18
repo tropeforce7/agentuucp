@@ -683,7 +683,7 @@ func TestLimitPendingRecordShapes(t *testing.T) {
 		{"a copy named as a stream to one", fullID, good, nil},
 		{"both kinds beside it", stem, good, []string{".env", ".stream"}},
 		{"neither kind beside it", stem, good, []string{".txt"}},
-		{"a copy with an upload", stem, with(func(p *pending) { p.Upload = "u" }), nil},
+		{"a copy with an upload", stem, with(func(p *pending) { p.Upload = strings.Repeat("a", 32) }), nil},
 		{"a copy with a chunk size", stem, with(func(p *pending) { p.ChunkSize = stream.DefaultChunkSize }), nil},
 		{"a copy with no count", stem, with(func(p *pending) { p.RecipientCount = 0 }), nil},
 		{"a path that is not an address", stem, with(func(p *pending) { p.Path = "bar!!baz" }), nil},
@@ -720,7 +720,11 @@ func TestLimitPendingRecordShapes(t *testing.T) {
 	// .stream beside it, a count and an upload's numbers, and no path,
 	// since a stream crosses no relay. The count is held to [2, 32] at
 	// both edges.
-	streamCopy := with(func(p *pending) { p.ChunkSize = stream.DefaultChunkSize; p.Chunks = 2; p.Upload = "u" })
+	streamCopy := with(func(p *pending) {
+		p.ChunkSize = stream.DefaultChunkSize
+		p.Chunks = 2
+		p.Upload = strings.Repeat("a", 32)
+	})
 	streamWith := func(change func(p *pending)) pending {
 		p := streamCopy
 		change(&p)

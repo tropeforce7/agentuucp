@@ -190,7 +190,10 @@ func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
 //
 // A URL the home does not know is taken as it stands, with no pinned anchor
 // and no certificate. That is how the first administrator's machine starts:
-// there is a relay to administer before anybody has joined it.
+// there is a relay to administer before anybody has joined it. It has no
+// record, so it has no name: the URL was once its name, and every read of
+// the relay's directory joined it under relays/, where https://.. named
+// relays/ itself (F8). A relay with no name is never looked for there.
 func adminRelay(s *store.Store, c *common) (*store.Relay, error) {
 	query := strings.TrimSpace(*c.relay)
 	if query == "" {
@@ -203,7 +206,10 @@ func adminRelay(s *store.Store, c *common) (*store.Relay, error) {
 		}
 		if strings.Contains(query, "://") {
 			url := token.NormaliseRelay(query)
-			return &store.Relay{Name: url, URL: url}, nil
+			if err := token.ValidateRelay(url); err != nil {
+				return nil, usageErrf("relay URL %s %v", query, err)
+			}
+			return &store.Relay{URL: url}, nil
 		}
 		return nil, usageErrf("%v", err)
 	}
@@ -228,6 +234,21 @@ func dial(c *common) (*store.Store, *identity.Identity, *client.Client, error) {
 	r, err := adminRelay(s, c)
 	if err != nil {
 		return nil, nil, nil, err
+	}
+	cert, anchor := relayCredentials(s, r)
+	cl, err := client.NewWithAnchor(r.URL, id, cert, anchor)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return s, id, cl, nil
+}
+
+// relayCredentials is what this machine holds for a relay it has a record
+// of; a relay with no name, a URL the home does not know, has none, and
+// nothing under relays/ is read or written for it.
+func relayCredentials(s *store.Store, r *store.Relay) (*tls.Certificate, *client.Anchor) {
+	if r.Name == "" {
+		return nil, nil
 	}
 	// An administrator needs no client certificate: their authority is the
 	// line in the relay host's file, and /v1/admin is exempt so that
@@ -254,11 +275,7 @@ func dial(c *common) (*store.Store, *identity.Identity, *client.Client, error) {
 			},
 		}
 	}
-	cl, err := client.NewWithAnchor(r.URL, id, cert, anchor)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	return s, id, cl, nil
+	return cert, anchor
 }
 
 // relayURL is the address a command is acting on, for error messages.

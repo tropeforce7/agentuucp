@@ -122,11 +122,19 @@ const stagedLockSuffix = ".lock"
 // is still held is a delivery under way and is left alone; one whose lock
 // can be taken has no process behind it. Run under the spool lock.
 func sweepStaged(boxDir string) {
-	locks, err := filepath.Glob(filepath.Join(boxDir, "*.d.new-*"+stagedLockSuffix))
+	// The box's own entries, matched by name alone: a glob over the joined
+	// path read the home's path as a pattern too, and a home whose path
+	// held [, ], *, ? or a backslash matched a sibling directory's staged
+	// copies and removed them (F3).
+	entries, err := os.ReadDir(boxDir)
 	if err != nil {
 		return
 	}
-	for _, path := range locks {
+	for _, e := range entries {
+		if ok, _ := filepath.Match("*.d.new-*"+stagedLockSuffix, e.Name()); !ok {
+			continue
+		}
+		path := filepath.Join(boxDir, e.Name())
 		l, err := lockfile.Try(path)
 		if err != nil {
 			continue

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/tropeforce7/agentuucp/internal/relay"
+	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/token"
 )
 
@@ -117,5 +119,50 @@ func TestLimitFingerprintAndSerialArgsOneShort(t *testing.T) {
 	}
 	if requests != 0 {
 		t.Errorf("%d requests were made for arguments refused for their shape", requests)
+	}
+}
+
+// TestLimitAnUnknownRelayURLIsNotADirectory: a --relay URL the home does
+// not know was made a relay whose name was the URL, and the certificate
+// and the anchor were looked for under relays/<that name>, so
+// https://.. named relays/ itself (F8, tracer C's C-2). Such a relay now
+// has no name, nothing is read for it, a URL the relay rule refuses is a
+// usage error, and a relay the home knows still has its record.
+func TestLimitAnUnknownRelayURLIsNotADirectory(t *testing.T) {
+	home := t.TempDir()
+	s, err := store.Open(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	known, err := s.AddRelay("work", "https://relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ask := func(query string) (*store.Relay, error) {
+		return adminRelay(s, &common{relay: &query})
+	}
+	for _, query := range []string{"https://..", "https://...", "https://other.example/", "https://other.example/path", "http://127.0.0.1:8080"} {
+		r, err := ask(query)
+		if err != nil {
+			t.Errorf("--relay %s: %v", query, err)
+			continue
+		}
+		if r.Name != "" || r.URL != token.NormaliseRelay(query) {
+			t.Errorf("--relay %s is the relay %+v", query, r)
+		}
+		if cert, anchor := relayCredentials(s, r); cert != nil || anchor != nil {
+			t.Errorf("--relay %s was given what this machine holds for a relay", query)
+		}
+	}
+	// What NormaliseRelay leaves that the relay rule refuses: one dot is
+	// the root and is taken off, leaving no host.
+	for _, query := range []string{"https://.", "ftp://relay.example", "https://"} {
+		var exit *exitError
+		if _, err := ask(query); !errors.As(err, &exit) || exit.code != exitUsage {
+			t.Errorf("--relay %s: %v; want a usage error", query, err)
+		}
+	}
+	if r, err := ask("https://relay.example"); err != nil || r.Name != known.Name {
+		t.Errorf("--relay for the relay the home knows: %+v, %v", r, err)
 	}
 }

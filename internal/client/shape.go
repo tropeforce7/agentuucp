@@ -53,6 +53,7 @@ const (
 	wantFingerprint    = "a fingerprint (64 lowercase hex characters)"
 	wantSerial         = "a certificate serial"
 	wantTokenID        = "a token id (32 lowercase hex characters)"
+	wantUploadID       = "an upload id (32 lowercase hex characters)"
 	wantSeconds        = "a number of seconds within a hundred years"
 	wantCount          = "a count (zero or more)"
 	wantID             = "a message id (one or more)"
@@ -533,8 +534,16 @@ func (c *Client) checkID(answer string, id int64) error {
 // checkOpenStream is an opened upload: the threshold past which a first
 // attempt that stops short is kept, zero or more, and the window a kept
 // partial lives, in seconds within the bound every seconds field has.
+//
+// The upload id names the upload in every later request's path, and is
+// kept in the outbox record for a resume, so it is held to the shape the
+// relay makes it in: an id with a slash or a dot-dot in it sent this
+// client's signed PUT and DELETE to other paths on the relay (F9).
 func (c *Client) checkOpenStream(out *relayapi.OpenStreamResponse) error {
 	const answer = "the opened stream"
+	if !ValidUploadID(out.Upload) {
+		return c.malformed(answer, "upload", wantUploadID)
+	}
 	if err := c.counts(answer, count{"resume_threshold", out.ResumeThreshold}); err != nil {
 		return err
 	}
@@ -552,6 +561,21 @@ func (c *Client) parseOffset(raw string) (int64, error) {
 		return 0, c.malformed("the upload answer", relayapi.UploadOffsetHeader, wantCount)
 	}
 	return n, nil
+}
+
+// ValidUploadID is the shape a relay gives an upload's id: 32 lowercase hex
+// characters, as relay.NewUploadID makes it and relay.ValidUploadID holds
+// it there.
+func ValidUploadID(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; !('0' <= c && c <= '9' || 'a' <= c && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func validSeconds(n int64) bool { return n >= 0 && n <= relayapi.MaxDurationSeconds }

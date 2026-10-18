@@ -156,6 +156,15 @@ func (f *faultLog) noteDirectoryIssued(fp, raw string) {
 	}
 }
 
+// noteBrokenUpload says an uploads row was skipped because what it holds is
+// not what any request could have written, by its row number alone,
+// unless that was said for the row inside the last minute.
+func (f *faultLog) noteBrokenUpload(rowid int64, what string) {
+	if f.due(fmt.Sprintf("brokenupload:%d", rowid)) {
+		f.log.Warn("uploads row skipped: it holds "+what+"; nothing was removed by it", "row", rowid)
+	}
+}
+
 // noteUndialable says a courier this relay accepts from is one it cannot dial,
 // so news for it stops here. It is the one-way peering the start already says
 // out loud, met at the moment it costs something.

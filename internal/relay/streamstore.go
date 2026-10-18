@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
@@ -515,6 +516,12 @@ func (s *Store) truncateUpload(id string, n int64) error {
 // removed, so that the caller finds the upload's file where it was or
 // gone, never a third thing.
 func (s *Store) placeUpload(u *Upload) (int64, error) {
+	// The recipient read back from the row names the mailbox's directory
+	// the message goes into, so it is held to the fingerprint rule here,
+	// as the request that wrote it was (F4).
+	if !identity.ValidFingerprint(u.To) || !ValidUploadID(u.ID) {
+		return 0, fmt.Errorf("relay: upload row names a recipient or an id that is not one: %w", ErrForm)
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
@@ -658,17 +665,28 @@ func (s *Store) forgetUploadLock(id string, unlock func()) {
 // with that caller's slot held and its answer unsent. An upload whose lock
 // is held is skipped and met at the next purge; by then the attempt has
 // ended, or the expiry has refused it and aborted the row itself.
+//
+// An id is held to ValidUploadID where it is read back, since it names the
+// upload's file: a row whose id is not one, which no request could have
+// written, is skipped, counted and said by its row number, and nothing is
+// removed by its path (F4).
 func (s *Store) PurgeUploads(now time.Time) (purged []Upload, skipped int, err error) {
-	rows, err := s.db.Query(`SELECT id FROM uploads WHERE expires < ?`, now.Unix())
+	rows, err := s.db.Query(`SELECT rowid, id FROM uploads WHERE expires < ?`, now.Unix())
 	if err != nil {
 		return nil, 0, err
 	}
 	var ids []string
 	for rows.Next() {
+		var rowid int64
 		var id string
-		if err := rows.Scan(&id); err != nil {
+		if err := rows.Scan(&rowid, &id); err != nil {
 			rows.Close()
 			return nil, 0, err
+		}
+		if !ValidUploadID(id) {
+			s.faults.noteBrokenUpload(rowid, "an id that is not one")
+			skipped++
+			continue
 		}
 		ids = append(ids, id)
 	}

@@ -1016,6 +1016,12 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	if err := message.ValidID(m.Inner.ID); err != nil {
 		return nil, fmt.Errorf("the record's message id: %v", err)
 	}
+	// Save names the file by the message's id, so a record under another
+	// id's name was put there by something else, and a later save or
+	// remove of what it says it is would touch another file (C-4).
+	if m.Inner.ID != id {
+		return nil, damaged(path, "holds the message "+m.Inner.ID+", not the one its name says", nil, recordAdvice)
+	}
 	if !identity.ValidFingerprint(m.Inner.From) || !identity.ValidFingerprint(m.Inner.To) {
 		return nil, errors.New("the record's from or to is not a fingerprint")
 	}

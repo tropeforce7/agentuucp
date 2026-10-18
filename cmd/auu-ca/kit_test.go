@@ -426,3 +426,43 @@ func TestKitChecksItsArgumentsBeforeIssuing(t *testing.T) {
 		t.Fatalf("the first kit that built was reported as a rotation, so a refused one issued:\n%s", stdout)
 	}
 }
+
+// TestLimitTheKitIsNotWrittenThroughALink: writeSecret wrote the archive to
+// out+".tmp" opened with O_TRUNC, so a link put at that name had the kit,
+// which holds the relay's private keys, written through it to the file it
+// named (F5, tracer D's D-C10). The name is now made new: an entry there,
+// a link or a file, is an error that names it, the file a link names is
+// untouched, and nothing is written at the kit's own name.
+func TestLimitTheKitIsNotWrittenThroughALink(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "relay-kit.zip")
+	if err := writeSecret(out, []byte("the kit")); err != nil {
+		t.Fatalf("a kit with nothing in the way: %v", err)
+	}
+	if got, err := os.ReadFile(out); err != nil || string(got) != "the kit" {
+		t.Fatalf("the kit reads %q, %v", got, err)
+	}
+	target := filepath.Join(dir, "elsewhere")
+	if err := os.WriteFile(target, []byte("not the kit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, plant := range map[string]func(string) error{
+		"link": func(p string) error { return os.Symlink(target, p) },
+		"file": func(p string) error { return os.WriteFile(p, []byte("left"), 0o600) },
+	} {
+		out := filepath.Join(dir, name+"-kit.zip")
+		if err := plant(out + ".tmp"); err != nil {
+			t.Skipf("%s: %v", name, err)
+		}
+		err := writeSecret(out, []byte("the second kit"))
+		if err == nil || !strings.Contains(err.Error(), out+".tmp is already there") {
+			t.Errorf("%s at the temporary name: %v", name, err)
+		}
+		if got, _ := os.ReadFile(target); name == "link" && string(got) != "not the kit" {
+			t.Errorf("the kit was written through the link: %q", got)
+		}
+		if _, err := os.Lstat(out); err == nil {
+			t.Errorf("%s: a kit was written at %s", name, out)
+		}
+	}
+}
