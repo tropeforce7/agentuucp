@@ -42,8 +42,8 @@ func (s Source) Hash() (string, error) {
 		return "", err
 	}
 	if n != s.Size {
-		return "", fmt.Errorf("%w: %q changed size while it was being read: %d, expected %d",
-			ErrForm, s.Name, n, s.Size)
+		return "", fmt.Errorf("%w: %q %w (%d bytes where %d were expected)",
+			ErrForm, s.Name, ErrChanged, n, s.Size)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
@@ -314,6 +314,13 @@ func (s *sourceReader) Read(p []byte) (int, error) {
 		if n > 0 {
 			s.hash.Write(p[:n])
 			s.read += int64(n)
+			// A source that gives more than its entry says has grown since
+			// it was hashed, and is refused by name the moment it does: at
+			// its end it would be past the payload's last byte, and the
+			// probe there could say only that the sum was wrong.
+			if a := s.attachments[s.index-1]; holdSources && s.read > a.Size {
+				return 0, fmt.Errorf("%w: %s %w", ErrForm, a.Name, ErrChanged)
+			}
 			return n, nil
 		}
 		if err == io.EOF {

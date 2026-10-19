@@ -1113,3 +1113,60 @@ func TestSealRefusesSourcesThatAreNotTheManifests(t *testing.T) {
 		}
 	}
 }
+
+// An attachment that changed after it was hashed is refused by name
+// however it changed (57a): grown, as the last source or by more than all
+// that follow it, which used to reach the payload's end and be refused only
+// as more bytes than the manifest declares; shrunk; or changed at its size.
+// Each is ErrChanged, and the sentence is the stream package's own.
+func TestASourceChangedSinceItsHashingIsRefusedByName(t *testing.T) {
+	from, to := pair(t)
+	for _, tc := range []struct {
+		name    string
+		changed string // which of the two sources changes
+		with    string
+	}{
+		{"the last grown by a byte", "b.bin", "tail!"},
+		{"the first grown by more than the rest", "a.bin", "the real bytes, and more of them"},
+		{"the first shrunk", "a.bin", "the real"},
+		{"the last changed at its size", "b.bin", "TAIL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := map[string][]byte{"a.bin": []byte("the real bytes"), "b.bin": []byte("tail")}
+			var sources []Source
+			for _, n := range []string{"a.bin", "b.bin"} {
+				sources = append(sources, Source{
+					Name: n, Media: "text/plain", Size: int64(len(data[n])),
+					Open: func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data[n])), nil },
+				})
+			}
+			m, err := BuildManifest(from, to.Public(), strings.Repeat("c", 32), body(), sources, MinChunkSize)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data[tc.changed] = []byte(tc.with)
+			var out bytes.Buffer
+			err = Seal(&out, from, to.Public(), m, sources)
+			want := "stream: malformed: " + tc.changed + " changed while it was being sent; send it again"
+			if !errors.Is(err, ErrChanged) || !errors.Is(err, ErrForm) || err.Error() != want {
+				t.Fatalf("sealing after %s: %v; want %q", tc.name, err, want)
+			}
+		})
+	}
+}
+
+// A source whose size is not its entry's when it is hashed is the same
+// changed attachment, named, with the sizes said.
+func TestASourceThatChangedBeforeItsHashingIsChanged(t *testing.T) {
+	from, to := pair(t)
+	data := []byte("the real bytes")
+	sources := []Source{{
+		Name: "f.bin", Media: "text/plain", Size: int64(len(data)) - 1,
+		Open: func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil },
+	}}
+	_, err := BuildManifest(from, to.Public(), strings.Repeat("c", 32), body(), sources, MinChunkSize)
+	want := `stream: malformed: "f.bin" changed while it was being sent; send it again (14 bytes where 13 were expected)`
+	if !errors.Is(err, ErrChanged) || err == nil || err.Error() != want {
+		t.Fatalf("hashing a source that grew: %v; want %q", err, want)
+	}
+}

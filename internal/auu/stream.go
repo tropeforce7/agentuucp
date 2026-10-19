@@ -82,7 +82,7 @@ func sendStream(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 	}, sources, set.chunkSize)
 	if err != nil {
 		if errors.Is(err, stream.ErrForm) {
-			return sentJSON{}, usageErrf("%v", err)
+			return sentJSON{}, streamFormErr(err)
 		}
 		return sentJSON{}, err
 	}
@@ -112,7 +112,7 @@ func sendStream(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 	if sealErr != nil {
 		os.Remove(path)
 		if errors.Is(sealErr, stream.ErrForm) {
-			return sentJSON{}, usageErrf("%v", sealErr)
+			return sentJSON{}, streamFormErr(sealErr)
 		}
 		return sentJSON{}, sealErr
 	}
@@ -171,7 +171,7 @@ func sealStreams(s *store.Store, id *identity.Identity, r *store.Relay, to []add
 	}, sources, set.chunkSize, nil)
 	if err != nil {
 		if errors.Is(err, stream.ErrForm) {
-			return nil, nil, usageErrf("%v", err)
+			return nil, nil, streamFormErr(err)
 		}
 		return nil, nil, err
 	}
@@ -189,7 +189,7 @@ func sealStreams(s *store.Store, id *identity.Identity, r *store.Relay, to []add
 	var written []*pending
 	fail := func(who string, err error) error {
 		if errors.Is(err, stream.ErrForm) {
-			_, err = withLeftovers(usageErrf("%v", err), written, s)
+			_, err = withLeftovers(streamFormErr(err), written, s)
 			return err
 		}
 		// The sentence that the outbox keeps none of it is true only when
@@ -645,4 +645,16 @@ func sourcesFor(paths []string) ([]stream.Source, error) {
 		})
 	}
 	return out, nil
+}
+
+// streamFormErr is a stream the sender's own sources could not make, as
+// the command says it: a usage error, and for an attachment that changed
+// while it was being sent the sentence alone, without the stream package's
+// "stream: malformed" in front, since the stream is not malformed but the
+// file moved under it (57a). Any other form error keeps its words.
+func streamFormErr(err error) error {
+	if errors.Is(err, stream.ErrChanged) {
+		return usageErrf("%s", strings.TrimPrefix(err.Error(), stream.ErrForm.Error()+": "))
+	}
+	return usageErrf("%v", err)
 }
