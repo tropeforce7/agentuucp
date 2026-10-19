@@ -29,6 +29,27 @@ func queuedOn(t *testing.T, st *relay.Store, fp string) []int64 {
 	return ids
 }
 
+// storedAgain stores a row's envelope in its mailbox again, as a relay
+// from before S50 stored a second post of the same envelope, and as one
+// still does for a post past its window or over its poster's carried
+// share: what a client meets as the same message on two rows.
+func storedAgain(t *testing.T, st *relay.Store, fp string, row relay.Row) {
+	t.Helper()
+	if _, err := st.Put(fp, row.Channel, row.Kind, "", row.Envelope, relay.DefaultLimits().Quotas(), relay.Forwarded{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// onlyRow is the one row a mailbox holds.
+func onlyRow(t *testing.T, st *relay.Store, fp string) relay.Row {
+	t.Helper()
+	rows, err := st.List(fp, 0, 100)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("the relay holds %d rows for the mailbox (%v), want one", len(rows), err)
+	}
+	return rows[0]
+}
+
 // recordOf is one stored message from a user's inbox, by subject.
 func recordOf(t *testing.T, u *user, box store.Box, subject string) *store.Stored {
 	t.Helper()

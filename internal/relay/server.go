@@ -1436,12 +1436,73 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 	if !ok {
 		return
 	}
-	put := func() (int64, error) {
-		return s.store.Put(fp, channel, relayapi.KindEnvelope, "", body, s.cfg.Limits.Quotas(), Forwarded{})
+	// A post is stored once by its envelope (S50): a sender whose answer
+	// was lost on the way back posts the same envelope again, and it is
+	// answered as the first was, with the first row's id, nothing stored
+	// and nothing charged. The hash is a forward's, so the same envelope
+	// is one message whichever way it came; the window is fixed, so a
+	// relay with couriers off holds a post to it too (D133), held to
+	// max_hops forward_ttls (D137); and the hash spends the poster's
+	// carried share, as a forward's does, so one poster's standing hashes
+	// stay within it, while a poster over its share is stored without the
+	// hash and never refused (D135, amended). This is the cheap answer; Put's transaction
+	// decides.
+	now := s.cfg.Now()
+	hash := CarriedHash(env)
+	var wrote Forwarded
+	if first, ok, err := s.store.deliveredAs(hash, now); err != nil {
+		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
+		return
+	} else if ok {
+		s.writeJSON(w, http.StatusOK, relayapi.PostResponse{ID: first})
+		return
 	}
-	id, err := put()
+	once := Forwarded{}
+	window, tokens := s.cfg.CourierLimits.directPost()
+	if ok, _ := s.lim.carried.AllowN(callerFP, tokens); ok {
+		once = Forwarded{Hash: hash, Expires: now.Add(window), Now: now, Quotas: s.cfg.CourierLimits.Quotas()}
+		// Every way out that wrote no hash gives the tokens back.
+		defer func() {
+			if wrote.Hash == "" {
+				s.lim.carried.Return(callerFP, tokens)
+			}
+		}()
+	}
+	put := func(f Forwarded) (int64, error) {
+		id, err := s.store.Put(fp, channel, relayapi.KindEnvelope, "", body, s.cfg.Limits.Quotas(), f)
+		if err == nil {
+			wrote = f
+		}
+		return id, err
+	}
+	id, err := put(once)
+	if s.roomFreed(err) || s.carriedFreed(err) {
+		id, err = put(once)
+	}
+	if errors.Is(err, ErrCarried) {
+		// Posted again between the check and the transaction, and stored:
+		// the first row's id. A hash that names no row here is an envelope
+		// this relay is carrying on, or one past its window, and the post
+		// is stored as it was before S50.
+		first, ok, lerr := s.store.deliveredAs(hash, now)
+		if lerr != nil {
+			s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
+			return
+		}
+		if ok {
+			s.writeJSON(w, http.StatusOK, relayapi.PostResponse{ID: first})
+			return
+		}
+		id, err = put(Forwarded{})
+	}
+	if errors.Is(err, ErrCarriedFull) {
+		// The carried table at its ceiling refuses no post: the post is
+		// stored without its hash, and a retry of it is stored again
+		// (D134).
+		id, err = put(Forwarded{})
+	}
 	if s.roomFreed(err) {
-		id, err = put()
+		id, err = put(Forwarded{})
 	}
 	switch {
 	case errors.Is(err, ErrMailboxFull):

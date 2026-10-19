@@ -253,6 +253,22 @@ func (s *Store) Carried(hash string) (bool, error) {
 	return true, nil
 }
 
+// deliveredAs says which mailbox row an envelope was stored as, when its
+// hash stands at now and names one: what a direct post of the same
+// envelope is answered with (S50). A hash for an envelope this relay is
+// carrying on, or one whose window has passed, names none.
+func (s *Store) deliveredAs(hash string, now time.Time) (int64, bool, error) {
+	var id int64
+	err := s.db.QueryRow(`SELECT delivered FROM carried WHERE hash = ? AND expires > ?`, hash, now.Unix()).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return id, id > 0, nil
+}
+
 // PurgeCarried forgets the hashes whose window has passed.
 //
 // It runs on the nonce purge's timer, and it must run: the table is the only

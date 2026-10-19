@@ -169,14 +169,21 @@ func sealWithSections(t *testing.T, from, to *user, subject string, sections []w
 // peeredGated is peered on a relay that counts every request it is sent.
 func peeredGated(t *testing.T) (alice, bob *user, gate *waitGate) {
 	t.Helper()
-	url, gate, _ := startGatedRelayStore(t)
+	alice, bob, gate, _ = peeredGatedOn(t)
+	return alice, bob, gate
+}
+
+// peeredGatedOn is peeredGated with the relay's store.
+func peeredGatedOn(t *testing.T) (alice, bob *user, gate *waitGate, st *relay.Store) {
+	t.Helper()
+	url, gate, st := startGatedRelayStore(t)
 	alice = newUser(t, "alice", url)
 	bob = newUser(t, "bob", url)
 	alice.run("peers", "add", bob.exportLine())
 	bob.run("peers", "add", alice.exportLine())
 	alice.run("allow", "push")
 	bob.run("allow", "push")
-	return alice, bob, gate
+	return alice, bob, gate, st
 }
 
 // keptNewer fetches for bob and returns the ids of what was kept as newer,
@@ -621,15 +628,16 @@ func TestAHeldLockMidwayIsSaidWithTheCount(t *testing.T) {
 	}
 }
 
-// One message posted twice and kept twice, once per relay id: the first
+// One message posted twice and kept twice, once per relay id, the second
+// row made as a relay from before S50 stores a second post: the first
 // reopen files it, and the second finds it held from the same signer and
 // removes the kept copy, leaving the held record as it was. Neither makes
 // a request of the relay: the fetch acknowledged both when it kept them.
 func TestReopenOfACopyKeptTwiceAcksNothing(t *testing.T) {
-	alice, bob, gate := peeredGated(t)
+	alice, bob, gate, st := peeredGatedOn(t)
 	_, post := sealWithSections(t, alice, bob, "posted twice", critical("twice-later"))
 	post()
-	post()
+	storedAgain(t, st, bob.exportFingerprint(), onlyRow(t, st, bob.exportFingerprint()))
 	ids := keptNewer(t, bob, 2)
 	relayName := bob.defaultRelayName()
 	bs := storeOf(t, bob)

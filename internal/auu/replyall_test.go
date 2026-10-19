@@ -49,7 +49,9 @@ func saveOutbox(t *testing.T, u *user) map[string][]byte {
 }
 
 // A copy posted a second time, as --resume does after a lost answer, is
-// one message here. Where the channel keeps its mail, the relay still lists
+// one message here. A relay stores it once by its hash (S50); one from
+// before that, or a post past its window, holds it twice, and the second
+// row is made here as such a relay makes it. Where the channel keeps its mail, the relay still lists
 // the record's own row, so the second is acknowledged, counted as already
 // held, and the record stays on its first row. Where it does not, the
 // record's row is gone, and the second row is what a message served again
@@ -68,6 +70,8 @@ func TestACopyPostedTwiceIsHeldOnce(t *testing.T) {
 			alice.run("send", "--resume")
 			putBack(t, alice, saved)
 			alice.run("send", "--resume")
+			copyRow := onlyRow(t, r.st, bob.exportFingerprint())
+			storedAgain(t, r.st, bob.exportFingerprint(), copyRow)
 			rows := queuedOn(t, r.st, bob.exportFingerprint())
 			if len(rows) != 2 {
 				t.Fatalf("the relay holds %d rows for bob, want the copy twice", len(rows))
@@ -94,6 +98,7 @@ func TestACopyPostedTwiceIsHeldOnce(t *testing.T) {
 			// The plain line says so, where it is counted.
 			putBack(t, alice, saved)
 			alice.run("send", "--resume")
+			storedAgain(t, r.st, bob.exportFingerprint(), copyRow)
 			out := bob.run("inbox")
 			if keep == "on" && !strings.Contains(out, "fetched 0 new message(s), 1 already held") ||
 				keep == "off" && strings.Contains(out, "fetched") {
@@ -560,8 +565,9 @@ func TestKeptMailUnderANewNumberingIsNotACopy(t *testing.T) {
 	}
 }
 
-// A message removed here alone, left on the relay, that is posted again is
-// that message a second time and not a move: the second row is
+// A message removed here alone, left on the relay, that is posted again,
+// and stored again as a relay from before S50 stores it, is that message
+// a second time and not a move: the second row is
 // acknowledged, the entry that says the first was left stays on it, and no
 // fetch says mail is waiting behind the cursor, before a reset or after.
 func TestACopyPostedAgainAfterItWasRemovedHereAlone(t *testing.T) {
@@ -577,9 +583,11 @@ func TestACopyPostedAgainAfterItWasRemovedHereAlone(t *testing.T) {
 	if len(first) != 1 {
 		t.Fatalf("the relay holds %v for bob, want one row", first)
 	}
+	copyRow := onlyRow(t, r.st, fp)
 	bob.run("rm", "--local-only", id[:12])
 	putBack(t, alice, saved)
 	alice.run("send", "--resume")
+	storedAgain(t, r.st, fp, copyRow)
 	if rows := queuedOn(t, r.st, fp); len(rows) != 2 {
 		t.Fatalf("the relay holds %v, want the copy twice", rows)
 	}

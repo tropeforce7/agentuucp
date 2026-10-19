@@ -209,13 +209,43 @@ type CourierLimits struct {
 	CarriedRowsPerCourier int64
 }
 
+// defaultForwardTTL is how long a courier's row waits by default, and
+// directPostWindow is how long a directly posted envelope's hash stands at
+// most: the same number, fixed, so a plain post does not follow how long a
+// relay's couriers wait, and a relay with couriers off holds a post to it
+// too (S50, D133). A retry after an answer lost on the way back comes
+// within seconds or minutes; three days covers a sender that was offline.
+const (
+	defaultForwardTTL = 72 * time.Hour
+	directPostWindow  = defaultForwardTTL
+)
+
+// directPost is how long a direct post's hash stands and what it costs its
+// poster's carried share: one token for each forward_ttl it stands, as a
+// forward's hash costs one for each forward_ttl it is kept, since the
+// share refills once a forward_ttl. The cost is held to max_hops tokens,
+// the most a forward's costs and the most the share's bucket is sized for,
+// so the window is directPostWindow or max_hops forward_ttls, whichever is
+// shorter: three days at the default forward_ttl, eight hours at an hour's
+// (D137). One poster's standing hashes then stay within the share whatever
+// forward_ttl is, and no post costs more than the bucket holds. A zero
+// forward_ttl is a relay with no courier limits, whose share is unlimited:
+// the full window, one token.
+func (c CourierLimits) directPost() (window time.Duration, tokens int64) {
+	if c.ForwardTTL <= 0 {
+		return directPostWindow, 1
+	}
+	window = min(directPostWindow, time.Duration(c.carriedHops(relayapi.MaxHops))*c.ForwardTTL)
+	return window, int64((window + c.ForwardTTL - 1) / c.ForwardTTL)
+}
+
 // DefaultCourierLimits is the policy a relay peered with another should
 // start with. Every number here is a guess to be corrected by running two
 // relays, and the container suite is where that happens.
 func DefaultCourierLimits() CourierLimits {
 	c := CourierLimits{
 		MaxHops:       8,
-		ForwardTTL:    72 * time.Hour,
+		ForwardTTL:    defaultForwardTTL,
 		QueueMaxBytes: 1 << 30,
 		// A hundred thousand rows across the relay: a thousand times one
 		// poster's share, so a hundred people all waiting out the same

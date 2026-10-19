@@ -1527,6 +1527,22 @@ and asks again; it refuses to take anything new only when the ceiling is
 still reached, rather than forgetting a hash that stands, since forgetting
 is what the table exists to prevent. The refusal names the setting.
 
+A post straight to a mailbox is held to the same table: its hash is the
+one a forward of the same envelope has, so a sender whose answer was lost
+and who posts again is answered with the first post's id, and nothing is
+stored or charged a second time, however the envelope came. Its window is
+fixed at three days, the default `courier.forward_ttl`, and does not
+follow the setting, so a relay with couriers off holds a post to it too;
+where `courier.forward_ttl` is short enough that three days would be more
+than `courier.max_hops` of them, it is that many, eight hours at an
+hour's.
+A post's hash is charged to its poster's carried share, as a forward's
+is, one token for each `courier.forward_ttl` it stands, so one sender's
+standing hashes stay within `courier.carried_rows_per_poster` and couriers
+keep their room. A post is
+never refused for the table: over the share, or at the ceiling, it is
+stored without its hash, and a retry of it is stored again.
+
 A hash outlives the row that wrote it, so a share of the queue does not
 bound it. A row handed on leaves the queue at once, and its hash stays.
 So each poster has a share of the hashes as well:

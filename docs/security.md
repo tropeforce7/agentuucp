@@ -526,6 +526,18 @@ One poster's standing hashes stay at or under its share at every moment,
 across any window and any mix of paths. `docs/relay.md` section 1.10 gives
 the numbers.
 
+A post straight to a mailbox writes its hash to the same table, for three
+days or `courier.max_hops` forward_ttls, whichever is shorter, so a sender's retry after a lost
+answer is stored once. The hash says nothing of who posted, so a second
+poster holding the same sealed envelope, which only its sender and its
+recipient do, is answered with the first row's id and nothing is stored,
+where before the recipient saw it twice. The id is a mailbox row number
+the recipient sees anyway. A post's hash is charged to its poster's
+carried share as a forward's is, one token for each `courier.forward_ttl`
+it stands and never more than a forward's longest, so the sentence above
+holds for posts too, and a post over its share or at the ceiling is
+stored without its hash rather than refused.
+
 What remains is this. The shares are kept in memory and the hashes on
 disk, so a restart refills every share while the hashes stay. A
 poster's bucket is forgotten when it is the least recently seen of
