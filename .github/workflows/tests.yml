@@ -108,7 +108,7 @@ jobs:
         run: go test -count=1 -v -run 'TestLimitAPlantedLinkIsRefusedOnWindows|TestLimitAReparsePointIsJudgedByItsHandle|TestLimitADeviceIsRefusedByItsHandle|TestLimitTheDeviceListAgreesWithWindows|TestLimitTheForbiddenCharactersAgreeWithWindows|TestARegularFileOpensAndReads|TestADirectoryIsRefusedByItsHandle|TestTheOpenErrorPassesThroughUnwrapped' ./internal/regular/ ./internal/channels/
 
       - name: the agent end to end, and serve, as second processes
-        run: go test -count=1 -run 'Agent|Passphrase|Unlock|Locked|PublicCommandsNeedNoAgent|InitForceRefusesAnEncryptedHome|HalfConvertedHome|SkillsExitCode|TestSkillInstall|TestSkillShowConnect|TestTheTarget|NoTargetWithoutATerminal|AnInstallReportsEveryFile|Serve|TestLimitExtractionWritesSafeUniqueNames|TestLimitAStreamExtractsUnderSafeUniqueNames|TestADirectoryAtTheNameIsANameThatStands|DoesNotStopTheExpert|ALinkAtAWorktreePath' ./internal/auu/
+        run: go test -count=1 -run 'Agent|Passphrase|Unlock|Locked|PublicCommandsNeedNoAgent|InitForceRefusesAnEncryptedHome|HalfConvertedHome|SkillsExitCode|TestSkillInstall|TestSkillShowConnect|TestTheTarget|NoTargetWithoutATerminal|AnInstallReportsEveryFile|SkillRmNameIsHeldToTheSet|Serve|TestLimitExtractionWritesSafeUniqueNames|TestLimitAStreamExtractsUnderSafeUniqueNames|TestADirectoryAtTheNameIsANameThatStands|DoesNotStopTheExpert|ALinkAtAWorktreePath' ./internal/auu/
 
   race:
     name: race detector

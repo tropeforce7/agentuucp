@@ -2,13 +2,18 @@ package auu
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/tropeforce7/agentuucp/internal/buildinfo"
+	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/skill"
 )
 
@@ -27,7 +32,25 @@ const (
 	skillInstalled = "installed" // ls: both files this binary's
 	skillDiffers   = "differs"   // ls: a file differs or is missing
 	skillAbsent    = "absent"    // ls: neither file is there
+
+	legacyOurs    = "legacy"   // a connect directory an earlier auu wrote
+	legacyNotOurs = "not-ours" // a connect directory auu did not write as it is
 )
+
+// legacyName is the messaging skill's name before v0.19.0, the directory
+// an install over an earlier one leaves beside auu-connect.
+const legacyName = "connect"
+
+// legacyAgainst is what a file in a connect directory differs from when
+// it is no version an earlier auu wrote there.
+const legacyAgainst = "any copy auu installed"
+
+// legacyJSON is a connect directory as --json reports it.
+type legacyJSON struct {
+	Name  string `json:"name"`
+	Path  string `json:"path"`
+	State string `json:"state"`
+}
 
 // skillFileJSON is one installed file as --json reports it.
 type skillFileJSON struct {
@@ -42,6 +65,7 @@ type skillInstallJSON struct {
 	Dir     string          `json:"dir"`
 	Version string          `json:"version"`
 	Skills  []skillFileJSON `json:"skills"`
+	Legacy  []legacyJSON    `json:"legacy"`
 }
 
 // skillLsJSON is 'skill ls --json'.
@@ -50,11 +74,20 @@ type skillLsJSON struct {
 	Dir     string          `json:"dir"`
 	Version string          `json:"version"`
 	Skills  []skillFileJSON `json:"skills"`
+	Legacy  []legacyJSON    `json:"legacy"`
+}
+
+// skillRmJSON is 'skill rm --json --yes'.
+type skillRmJSON struct {
+	Target  string   `json:"target"`
+	Dir     string   `json:"dir"`
+	Name    string   `json:"name"`
+	Removed []string `json:"removed"`
 }
 
 func cmdSkill(args []string) error {
 	if len(args) == 0 {
-		return usageErrf("usage: %s skill install|ls|show", prog)
+		return usageErrf("usage: %s skill install|ls|rm|show", prog)
 	}
 	sub, rest := args[0], args[1:]
 	switch sub {
@@ -62,10 +95,12 @@ func cmdSkill(args []string) error {
 		return skillInstall(rest)
 	case "ls":
 		return skillLs(rest)
+	case "rm":
+		return skillRm(rest)
 	case "show":
 		return skillShow(rest)
 	default:
-		return usageErrf("unknown skill subcommand %q; install, ls or show", sub)
+		return usageErrf("unknown skill subcommand %q; install, ls, rm or show", sub)
 	}
 }
 
@@ -84,7 +119,7 @@ type skillTarget struct {
 	dir  string
 }
 
-// resolveSkillsDir is the one rule install and ls resolve their
+// resolveSkillsDir is the one rule install, ls and rm resolve their
 // directory by. --dir and --target together are refused, since each names
 // a place and one would silently cancel the other (D147). --dir is
 // DIR/skills; --target claude is $CLAUDE_CONFIG_DIR, else ~/.claude, then
@@ -93,10 +128,11 @@ type skillTarget struct {
 // ask — no terminal, or --json, whose reader is a program — it refuses
 // naming the command for each target and the directory each would use,
 // so whoever ran it, a person or their agent, has the next command whole.
-// command is what the refusal names, "skill install" or "skill ls"; what
-// is the word for what an unanswered prompt leaves undone; cannotAsk is
-// why there is no asking, or empty when the command may ask.
-func resolveSkillsDir(command, what, target, dir, cannotAsk string) (skillTarget, error) {
+// command is what the refusal names, "skill install", "skill ls" or
+// "skill rm NAME"; question is what the prompt asks; what is the word for
+// what an unanswered prompt leaves undone; cannotAsk is why there is no
+// asking, or empty when the command may ask.
+func resolveSkillsDir(command, question, what, target, dir, cannotAsk string) (skillTarget, error) {
 	target, dir = strings.TrimSpace(target), strings.TrimSpace(dir)
 	switch {
 	case dir != "" && target != "":
@@ -130,7 +166,7 @@ func resolveSkillsDir(command, what, target, dir, cannotAsk string) (skillTarget
 			"  %[1]s %[2]s --target agents    # Codex reads %[4]s\n"+
 			"or give the base directory with --dir DIR (the skills go in DIR/skills)", prog, command, claude, agents, cannotAsk)
 	}
-	kind, err := askSkillTarget(claude, agents)
+	kind, err := askSkillTarget(question, claude, agents)
 	if err != nil {
 		return skillTarget{}, usageErrf("no target chosen; nothing %s", what)
 	}
@@ -158,9 +194,9 @@ func whyNotAsk(asJSON bool) string {
 // command must not guess where a person's skills go, and Enter is not a
 // choice (D152). A last line with no newline before end of file is read
 // as an answer, as confirm reads one.
-func askSkillTarget(claude, agents string) (string, error) {
+func askSkillTarget(question, claude, agents string) (string, error) {
 	w := max(len(claude), len(agents))
-	fmt.Println("Where should the skills go?")
+	fmt.Println(question)
 	fmt.Printf("  1  claude   %-*s   read by Claude Code\n", w, claude)
 	fmt.Printf("  2  agents   %-*s   read by Codex, and by other agents that read ~/.agents\n", w, agents)
 	fmt.Print("Target [1/2]: ")
@@ -271,12 +307,12 @@ func skillInstall(args []string) error {
 	if len(positional) > 0 {
 		return usageErrf("unexpected argument %q", positional[0])
 	}
-	target, err := resolveSkillsDir("skill install", "installed", *targetFlag, *dirFlag, whyNotAsk(*asJSON))
+	target, err := resolveSkillsDir("skill install", "Where should the skills go?", "installed", *targetFlag, *dirFlag, whyNotAsk(*asJSON))
 	if err != nil {
 		return err
 	}
 	dir := target.dir
-	out := skillInstallJSON{Target: target.kind, Dir: dir, Version: buildinfo.Version(), Skills: []skillFileJSON{}}
+	out := skillInstallJSON{Target: target.kind, Dir: dir, Version: buildinfo.Version(), Skills: []skillFileJSON{}, Legacy: []legacyJSON{}}
 	var kept []string
 	written := false
 	for _, name := range skill.Names() {
@@ -302,12 +338,15 @@ func skillInstall(args []string) error {
 			}
 		}
 	}
+	if out.Legacy, err = legacyCopies(dir); err != nil {
+		return err
+	}
 	if *asJSON {
 		if err := printJSON(out); err != nil {
 			return err
 		}
 	} else {
-		printSkillInstall(target, out.Skills, written, len(kept) > 0)
+		printSkillInstall(target, out.Skills, out.Legacy, written, len(kept) > 0)
 	}
 	if len(kept) > 0 {
 		return &exitError{code: exitUsage, err: fmt.Errorf("%s from this binary's copy; kept. --force replaces %s",
@@ -332,7 +371,7 @@ func differsSentence(paths []string) string {
 // was written or replaced, "already installed" when every file was this
 // binary's, and "not all installed" when nothing was written and a file
 // was kept, since "installed" there would be a false word (D157).
-func printSkillInstall(target skillTarget, files []skillFileJSON, written, kept bool) {
+func printSkillInstall(target skillTarget, files []skillFileJSON, legacy []legacyJSON, written, kept bool) {
 	first := "installed"
 	switch {
 	case written:
@@ -348,6 +387,9 @@ func printSkillInstall(target skillTarget, files []skillFileJSON, written, kept 
 			rel = f.Path
 		}
 		fmt.Printf("  %s: %s\n", filepath.ToSlash(rel), fileWords[f.State])
+	}
+	for _, l := range legacy {
+		fmt.Println(legacyLine(target, l))
 	}
 	if written {
 		fmt.Println(target.seeThem())
@@ -430,12 +472,12 @@ func skillLs(args []string) error {
 	if len(positional) > 0 {
 		return usageErrf("unexpected argument %q", positional[0])
 	}
-	target, err := resolveSkillsDir("skill ls", "listed", *targetFlag, *dirFlag, whyNotAsk(*asJSON))
+	target, err := resolveSkillsDir("skill ls", "Which skills directory?", "listed", *targetFlag, *dirFlag, whyNotAsk(*asJSON))
 	if err != nil {
 		return err
 	}
 	dir := target.dir
-	out := skillLsJSON{Target: target.kind, Dir: dir, Version: buildinfo.Version(), Skills: []skillFileJSON{}}
+	out := skillLsJSON{Target: target.kind, Dir: dir, Version: buildinfo.Version(), Skills: []skillFileJSON{}, Legacy: []legacyJSON{}}
 	for _, name := range skill.Names() {
 		skillMD, ref, err := embedded(name)
 		if err != nil {
@@ -448,12 +490,18 @@ func skillLs(args []string) error {
 		}
 		out.Skills = append(out.Skills, skillFileJSON{Name: name, Path: filepath.Dir(skillPath), State: state})
 	}
+	if out.Legacy, err = legacyCopies(dir); err != nil {
+		return err
+	}
 	if *asJSON {
 		return printJSON(out)
 	}
 	fmt.Printf("%s%s %s\n", dir, target.forWhom(), builtAs())
 	for _, s := range out.Skills {
 		fmt.Printf("%-12s %-10s %s\n", s.Name, s.State, s.Path)
+	}
+	for _, l := range out.Legacy {
+		fmt.Printf("%-12s %-10s %s\n", l.Name, l.State, l.Path)
 	}
 	return nil
 }
@@ -485,6 +533,223 @@ func skillState(skillPath string, skillMD []byte, refPath string, ref []byte) (s
 	default:
 		return skillDiffers, nil
 	}
+}
+
+// legacyCopies is the connect directory under dir, if there is one, as a
+// list for --json: legacy when it holds exactly the two files an earlier
+// auu wrote, not-ours when it is anything else, which nothing here touches
+// (D149). A directory or a file in it that cannot be read is not ours
+// either: what it is cannot be told, and neither install nor ls fails
+// for it.
+func legacyCopies(dir string) ([]legacyJSON, error) {
+	path := filepath.Join(dir, legacyName)
+	fi, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return []legacyJSON{}, nil
+	}
+	state := legacyNotOurs
+	if err == nil && fi.IsDir() && isLegacyConnect(path) {
+		state = legacyOurs
+	}
+	return []legacyJSON{{Name: legacyName, Path: path, State: state}}, nil
+}
+
+// isLegacyConnect reports whether the directory at path holds exactly
+// SKILL.md and reference.md, each a version an earlier auu wrote there.
+func isLegacyConnect(path string) bool {
+	files, bad, err := judgeSkillDir(path, legacyAgainst, skill.Legacy)
+	return err == nil && bad == "" && len(files) == 2
+}
+
+// legacyLine is what an install says of a connect directory, with the
+// command that removes one auu wrote, its target given, since rm without
+// one asks or refuses.
+func legacyLine(target skillTarget, l legacyJSON) string {
+	if l.State == legacyOurs {
+		return fmt.Sprintf("%s in %s is the old name of auu-connect, installed by an earlier auu: %s skill rm %s %s removes it",
+			legacyName, target.dir, prog, legacyName, target.flags())
+	}
+	return fmt.Sprintf("%s in %s is not a copy auu installed, or was edited; left alone", legacyName, target.dir)
+}
+
+// flags is the target as the command line gives it, a --dir quoted for a
+// shell when it holds anything but the plainest characters.
+func (t skillTarget) flags() string {
+	if t.kind == targetDir {
+		return "--dir " + shellWord(filepath.Dir(t.dir))
+	}
+	return "--target " + t.kind
+}
+
+// shellWord is s as one word to a POSIX shell: as it is when every
+// character is one no shell treats specially, else in single quotes, a
+// quote in it closed, escaped and opened again.
+func shellWord(s string) string {
+	plain := s != ""
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/._-:+,@%=", r) || r == filepath.Separator) {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// judgeSkillDir reads a skill directory's entries against what auu writes
+// there: each must be SKILL.md or reference.md, a regular file whose
+// SHA-256 known accepts. It returns the files' names, or the first entry
+// that is not one, with the sentence saying why, against is what a file
+// that known refuses differs from. Nothing is read for its meaning; the
+// files are only hashed.
+func judgeSkillDir(path, against string, known func(file, digest string) bool) (files []string, bad string, err error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, e := range entries {
+		entry := filepath.Join(path, e.Name())
+		if (e.Name() != "SKILL.md" && e.Name() != skill.Reference) || !e.Type().IsRegular() {
+			return nil, fmt.Sprintf("%s is not a file auu installed; left alone", entry), nil
+		}
+		digest, err := fileDigest(entry)
+		var mode *regular.ModeError
+		if errors.As(err, &mode) {
+			return nil, fmt.Sprintf("%s is not a file auu installed; left alone", entry), nil
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		if !known(e.Name(), digest) {
+			return nil, fmt.Sprintf("%s differs from %s; left alone", entry, against), nil
+		}
+		files = append(files, e.Name())
+	}
+	return files, "", nil
+}
+
+// fileDigest is the SHA-256 of a regular file, in hex, read as it streams.
+func fileDigest(path string) (string, error) {
+	f, err := regular.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// skillRm removes one skill's directory, on request and only when every
+// file in it is one auu wrote: for the three the binary carries, this
+// binary's bytes, and for connect, a version an earlier auu installed. A
+// copy from an older auu of one of the three differs, and install --force
+// then rm is the way (D150, D156). The name is held to the set before it
+// is joined to anything. It says what will go and asks; --yes skips the
+// asking, and --json, which cannot answer it, needs --yes.
+func skillRm(args []string) error {
+	fs := newFlagSet("skill rm")
+	targetFlag := fs.String("target", "", "claude, for Claude Code's skills directory, or agents, for ~/.agents/skills; asked at a terminal when neither this nor --dir is given")
+	dirFlag := fs.String("dir", "", "the base directory the skills are under, in DIR/skills; in place of --target")
+	yes := fs.Bool("yes", false, "remove it without asking")
+	asJSON := fs.Bool("json", false, "machine readable output; needs --yes")
+	positional, err := parseArgs(fs, args)
+	if err != nil {
+		return err
+	}
+	removable := append(skill.Names(), legacyName)
+	if len(positional) != 1 {
+		return usageErrf("usage: %s skill rm %s [--target claude|agents | --dir DIR] [--yes] [--json]", prog, strings.Join(removable, "|"))
+	}
+	name := positional[0]
+	if !slices.Contains(removable, name) {
+		return usageErrf("unknown skill %q; %s or %s", name, strings.Join(skill.Names(), ", "), legacyName)
+	}
+	if *asJSON && !*yes {
+		return usageErrf("--json cannot answer the prompt; pass --yes")
+	}
+	target, err := resolveSkillsDir("skill rm "+name, "Which skills directory?", "removed", *targetFlag, *dirFlag, whyNotAsk(*asJSON))
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(target.dir, name)
+	fi, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return usageErrf("%s is not installed in %s", name, target.dir)
+	}
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return usageErrf("%s is not a directory auu installed; left alone", path)
+	}
+	known, against := skill.Legacy, legacyAgainst
+	if name != legacyName {
+		known = func(file, digest string) bool { return digest == embeddedDigest(name, file) }
+		against = "this binary's copy"
+	}
+	files, bad, err := judgeSkillDir(path, against, known)
+	if err != nil {
+		return err
+	}
+	if bad != "" {
+		return usageErrf("%s", bad)
+	}
+	// connect goes only as install and ls call it legacy, the pair whole:
+	// an empty or half directory is not one auu left as it is.
+	if name == legacyName && len(files) != 2 {
+		return usageErrf("%s is not a copy auu installed; left alone", path)
+	}
+	if !*asJSON {
+		fmt.Printf("removing %s: %s\n", path, strings.Join(files, ", "))
+	}
+	if !*yes && !confirm("Remove it?") {
+		fmt.Fprintln(os.Stderr, "nothing was removed")
+		return &exitError{code: exitUsage, err: errors.New("cancelled")}
+	}
+	out := skillRmJSON{Target: target.kind, Dir: target.dir, Name: name, Removed: []string{}}
+	for _, f := range files {
+		p := filepath.Join(path, f)
+		if err := os.Remove(p); err != nil {
+			return err
+		}
+		out.Removed = append(out.Removed, p)
+	}
+	// The directory itself, which is refused if anything appeared in it
+	// since it was read: that is not ours to remove.
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	out.Removed = append(out.Removed, path)
+	if *asJSON {
+		return printJSON(out)
+	}
+	fmt.Printf("removed %s\n", path)
+	return nil
+}
+
+// embeddedDigest is the SHA-256, in hex, of one of the files this binary
+// writes for a skill, or empty for a file it does not.
+func embeddedDigest(name, file string) string {
+	skillMD, ref, err := embedded(name)
+	if err != nil {
+		return ""
+	}
+	var data []byte
+	switch file {
+	case "SKILL.md":
+		data = skillMD
+	case skill.Reference:
+		data = ref
+	default:
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 // skillShow prints one skill's SKILL.md, or the reference, from the binary.

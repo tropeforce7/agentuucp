@@ -139,6 +139,7 @@ var subcommands = []subcommand{
 	{name: "skill", describe: "the agent skills the binary carries", subs: []subcommand{
 		{name: "install", describe: "write them for Claude Code or for ~/.agents"},
 		{name: "ls", describe: "which of them are installed, and whether they match"},
+		{name: "rm", describe: "remove one auu wrote, or the old connect"},
 		{name: "show", describe: "print one without installing it"},
 	}},
 	{name: "completion", describe: "print a completion script for your shell", subs: []subcommand{

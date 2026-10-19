@@ -259,6 +259,7 @@ auu skill install --target claude|agents [--force] [--json]   # write these thre
 auu skill install --dir DIR [--force] [--json]     # the same under DIR/skills, in place of --target
 auu skill ls --target claude|agents [--json]       # which of them the directory holds, and whether they match
 auu skill ls --dir DIR [--json]                    # the same for DIR/skills
+auu skill rm NAME --target claude|agents|--dir DIR [--yes] [--json]   # remove one auu wrote; NAME may be connect
 auu skill show NAME|reference                      # print one, without installing it
 ```
 
@@ -287,6 +288,32 @@ and the other files are still written. `auu skill ls` names the directory on
 its first line and says per skill `installed`, `differs` or `absent`, which
 is what to run after an upgrade; `differs` means run `auu skill install`
 with the same target (and `--force` if the user did not edit it).
+
+The messaging skill was `connect` before v0.19.0, and an install over an
+earlier one leaves that directory where it was. `ls` lists it as a row:
+`legacy` when it holds exactly the two files an earlier auu wrote, each in a
+version the tree held, and `not-ours` when it is anything else — a file that
+differs, one missing or one more, or not a directory — which nothing
+touches. `install` says the same in a line, DIR being the skills directory:
+`connect in DIR is the old name of auu-connect, installed by an earlier auu:
+auu skill rm connect --target claude removes it` (with the target the
+command was given), or `connect in DIR is not a copy auu installed, or was
+edited; left alone`. Neither fails the install. `auu skill rm NAME` removes
+one skill's directory, NAME being `auu-connect`, `auu-setup`, `auu-relay` or
+`connect`, and only when every file in it is one auu wrote: this binary's
+copy for the three, and for `connect` the pair whole, each in a version the
+tree held. It says `removing DIR/NAME: SKILL.md, reference.md`, asks `Remove
+it? [y/N]`, and says `removed DIR/NAME`; `--yes` skips the asking, and
+`--json` needs it. Anything else is refused, exit 1, and left as it is:
+`NAME is not installed in DIR`; `DIR/NAME is not a directory auu installed;
+left alone`; `PATH is not a file auu installed; left alone` for an entry
+that is not one of the two, or not a regular file; `PATH differs from this
+binary's copy; left alone` for the three, or `PATH differs from any copy auu
+installed; left alone` for `connect`; and `DIR/connect is not a copy auu
+installed; left alone` for a `connect` that is not the pair whole. An older
+auu's copy of one of the three differs, and `install --force` then `rm` is
+the way. Removing a skill is the user's decision: run `rm` only when they
+ask.
 
 Keys under a passphrase:
 
@@ -595,8 +622,11 @@ an end), `keys`, `socket`.
 looked at: `name` (the skill), `path`, and `state` (`new`, `updated`,
 `unchanged` or `kept`). `auu skill ls --json`: `target`, `dir`, `version`,
 and `skills` of `name`, `path` (the skill's directory) and `state`
-(`installed`, `differs` or `absent`). `--json` needs the target given, since
-it never asks.
+(`installed`, `differs` or `absent`). Both carry `legacy`, a list, empty
+when there is no `connect` directory, else one entry of `name` (`connect`),
+`path` and `state` (`legacy` or `not-ours`). `auu skill rm --json --yes`:
+`target`, `dir`, `name`, and `removed`, every path it removed, the
+directory last. `--json` needs the target given, since it never asks.
 
 `auu version --json`: `version`, and `skills`, the names of the skills the
 binary carries. The version is the one the binary was built from — a tag for

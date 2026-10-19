@@ -139,6 +139,7 @@ Usage:
 
   auu skill install [--target claude|agents | --dir DIR] [--force] [--json]   # write the skills the binary carries
   auu skill ls [--target claude|agents | --dir DIR] [--json]  # which of them the directory holds, and whether they match
+  auu skill rm NAME [--target claude|agents | --dir DIR] [--yes] [--json]   # remove one auu wrote, connect among them
   auu skill show NAME|reference      # print one, without installing it
 
   auu completion zsh|bash            # print a completion script for your shell
