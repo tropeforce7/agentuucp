@@ -483,6 +483,13 @@ func resumeRelay(s *store.Store, p *pending, flag string) (*store.Relay, error) 
 	if err := p.save(s); err != nil {
 		return nil, err
 	}
+	// A copy of a message to several shares one sent record with the
+	// rest, which names the relay the message went by; the moved copy's
+	// own relay is written on it, so its id is read against the relay
+	// that gave it (57c2, D140).
+	if p.RecipientCount != 0 {
+		updateSentCopy(s, p.MessageID, p.To, func(c *store.SentCopy) { c.Relay = r.Name })
+	}
 	return r, nil
 }
 

@@ -187,8 +187,16 @@ func postCopy(c *client.Client, s *store.Store, p *pending) (int64, error) {
 // sent record says where it is.
 func landCopy(s *store.Store, p *pending, relayID int64) {
 	p.clear(s)
-	updateSentCopy(s, p.MessageID, p.To, func(c *store.SentCopy) {
+	updateSentCopyOf(s, p.MessageID, p.To, func(m *store.Stored, c *store.SentCopy) {
 		c.RelayID, c.RefusedCode, c.Refused, c.Dropped = relayID, "", "", false
+		// The relay that gave the id, where it is not the record's: a
+		// copy moved to another, said here as well as at the move, so a
+		// stop between the move and its record still lands it named
+		// (57c2, D140).
+		c.Relay = ""
+		if p.Relay != m.Relay {
+			c.Relay = p.Relay
+		}
 	})
 }
 
@@ -221,6 +229,12 @@ func refuseCopy(s *store.Store, p *pending, err error) {
 // The record is read, changed and saved under the sent lock (UpdateSent),
 // since a send, its resume and a drop can each change one copy at once.
 func updateSentCopy(s *store.Store, messageID, to string, change func(*store.SentCopy)) {
+	updateSentCopyOf(s, messageID, to, func(_ *store.Stored, c *store.SentCopy) { change(c) })
+}
+
+// updateSentCopyOf is updateSentCopy with the record the copy is in, for a
+// change that depends on what the record says.
+func updateSentCopyOf(s *store.Store, messageID, to string, change func(*store.Stored, *store.SentCopy)) {
 	found, held := false, false
 	err := s.UpdateSent(messageID, func(m *store.Stored) *store.Stored {
 		if m == nil {
@@ -230,7 +244,7 @@ func updateSentCopy(s *store.Store, messageID, to string, change func(*store.Sen
 		for i := range m.Copies {
 			if m.Copies[i].Fingerprint == to {
 				found = true
-				change(&m.Copies[i])
+				change(m, &m.Copies[i])
 				return m
 			}
 		}

@@ -441,6 +441,7 @@ func TestLimitStoredRecordShapes(t *testing.T) {
 		{"a code that is not a name", Sent, func(m *Stored) { m.Copies[1].RefusedCode = "Not A Code" }, "copy 2's refusal code is not a name"},
 		{"a refusal of two lines", Sent, func(m *Stored) { m.Copies[1].Refused = "one\ntwo" }, "copy 2's refusal is not one line"},
 		{"a refusal one byte over", Sent, func(m *Stored) { m.Copies[1].Refused = strings.Repeat("a", relayapi.MaxSaid+1) }, "copy 2's refusal is not one line"},
+		{"a moved copy's relay that is not a relay name", Sent, func(m *Stored) { m.Copies[0].Relay = "../x" }, "copy 1's relay is not a relay name"},
 	} {
 		if err := writeSent(t, tc.box, tc.mutate); err == nil || !strings.Contains(err.Error(), tc.says) {
 			t.Errorf("%s: %v; want %q", tc.name, err, tc.says)
@@ -457,6 +458,7 @@ func TestLimitStoredRecordShapes(t *testing.T) {
 			m.Copies[1].RefusedCode = relayapi.CodeMailboxFull
 			m.Copies[1].Refused = strings.Repeat("a", relayapi.MaxSaid)
 		}},
+		{"a copy moved to another relay", func(m *Stored) { m.Copies[1].Relay = "personal" }},
 	} {
 		if err := writeSent(t, Sent, tc.mutate); err != nil {
 			t.Errorf("%s: %v; want it loaded", tc.name, err)

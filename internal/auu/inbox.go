@@ -721,6 +721,9 @@ type copyJSON struct {
 	Code        string `json:"code,omitempty"`
 	Error       string `json:"error,omitempty"`
 	Dropped     bool   `json:"dropped,omitempty"`
+	// Relay is the relay a copy was moved to, which its id is from once
+	// it is placed, empty for one on the message's own relay.
+	Relay string `json:"relay,omitempty"`
 }
 
 // printCopies says, for a sent message to several, who has it and who does
@@ -748,6 +751,8 @@ func printCopies(m *store.Stored) {
 			state = "refused: " + identity.PrintableText(c.Refused)
 		case c.RelayID == 0:
 			state = "waiting in the outbox"
+		case c.Relay != "":
+			state = "sent, on " + identity.Printable(c.Relay)
 		}
 		fmt.Printf("%-8s %s <%s>: %s\n", head, label, c.Fingerprint[:16], state)
 	}
@@ -784,7 +789,7 @@ func toJSON(s *store.Store, box store.Box, m *store.Stored, includeText bool) me
 	}
 	for _, c := range m.Copies {
 		out.Copies = append(out.Copies, copyJSON{
-			Fingerprint: c.Fingerprint, Name: c.Name, Path: c.Path, RelayID: c.RelayID,
+			Fingerprint: c.Fingerprint, Name: c.Name, Path: c.Path, RelayID: c.RelayID, Relay: c.Relay,
 			Code: c.RefusedCode, Error: c.Refused, Dropped: c.Dropped,
 		})
 	}

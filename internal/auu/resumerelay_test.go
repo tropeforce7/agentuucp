@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
 )
 
@@ -207,5 +208,83 @@ func TestTheDropCommandNamesTheCopyOnlyForSeveral(t *testing.T) {
 	several := &pending{MessageID: id, To: strings.Repeat("c", 64), ToName: "carol", RecipientCount: 2}
 	if got, want := dropCommand(several), "auu outbox drop "+id[:12]+" carol"; got != want {
 		t.Errorf("a copy of a message to several: %q, want %q", got, want)
+	}
+}
+
+// A copy of a message to several moved to another relay has that relay in
+// the message's sent record, beside the copies that stayed on the record's
+// own relay, which name none (57c2, D140): the record names the relay the
+// message went by, and the moved copy's id is the other relay's. The record
+// reads back under the strict read, and the copy that stayed carries no
+// relay, as every record from before the key does.
+func TestAMovedCopyNamesItsRelayInTheSentRecord(t *testing.T) {
+	work, personal := startRelay(t), startRelay(t)
+	alice := onBothRelays(t, "alice", work, personal)
+	bob := onBothRelays(t, "bob", work, personal)
+	// carol is on personal alone, so work refuses her copy and it waits.
+	carol := newUser(t, "carol", personal)
+	for _, u := range []*user{bob, carol} {
+		alice.run("peers", "add", u.exportLine())
+		u.run("peers", "add", alice.exportLine())
+	}
+	captureStderr(t, func() { alice.tryRun("send", "--to", "bob,carol", "--subject", "to both", "one message") })
+	left := pendingOf(t, alice)
+	if len(left) != 1 || left[0].To != carol.exportFingerprint() {
+		t.Fatalf("waiting after the send: %+v; want carol's copy alone", left)
+	}
+	id := left[0].MessageID
+
+	alice.run("relay", "rm", "work", "--yes")
+	alice.run("send", "--resume", "--relay", "personal")
+	if got := carol.inboxJSON().Fetch.Delivered; got != 1 {
+		t.Fatalf("carol's moved copy delivered %d times; want once", got)
+	}
+	sent := alice.stored(store.Sent, id)
+	if sent.Relay != "work" {
+		t.Fatalf("the sent record names %q; want the relay the message went by, work", sent.Relay)
+	}
+	for _, c := range sent.Copies {
+		switch c.Fingerprint {
+		case bob.exportFingerprint():
+			if c.Relay != "" || c.RelayID == 0 {
+				t.Errorf("bob's copy, which stayed on work: %+v; want no relay and its id", c)
+			}
+		case carol.exportFingerprint():
+			if c.Relay != "personal" || c.RelayID == 0 {
+				t.Errorf("carol's moved copy: %+v; want personal and its id there", c)
+			}
+		default:
+			t.Errorf("a copy for nobody sent to: %+v", c)
+		}
+	}
+	// auu read says where the moved copy is, and --json carries it.
+	if out := alice.run("read", id[:12]); !strings.Contains(out, "sent, on personal") {
+		t.Errorf("auu read of the message says:\n%s", out)
+	}
+	if out := alice.run("read", id[:12], "--json"); !strings.Contains(out, `"relay": "personal"`) {
+		t.Errorf("auu read --json of the message says:\n%s", out)
+	}
+
+	// A stop between the move and its write to the sent record leaves the
+	// copy naming no relay; landing it says the relay all the same, from
+	// the outbox record the move saved.
+	t.Setenv("AUU_HOME", alice.home)
+	s, err := store.Open(alice.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateSent(id, func(m *store.Stored) *store.Stored {
+		for i := range m.Copies {
+			m.Copies[i].Relay = ""
+		}
+		return m
+	}); err != nil {
+		t.Fatal(err)
+	}
+	landCopy(s, &pending{MessageID: id, To: carol.exportFingerprint(), Relay: "personal"}, 7)
+	for _, c := range alice.stored(store.Sent, id).Copies {
+		if c.Fingerprint == carol.exportFingerprint() && (c.Relay != "personal" || c.RelayID != 7) {
+			t.Errorf("carol's copy landed after a stop: %+v; want personal and its id", c)
+		}
 	}
 }

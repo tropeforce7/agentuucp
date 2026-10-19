@@ -870,6 +870,12 @@ type SentCopy struct {
 	// Dropped says the sender gave the copy up with auu outbox drop, so it
 	// will never be placed; a copy the relay has cannot be dropped.
 	Dropped bool `json:"dropped,omitempty"`
+	// Relay is the relay the copy was moved to by a resume, once this home
+	// no longer had the one the message went by: its RelayID is that
+	// relay's. Empty for a copy on the record's own relay, which is every
+	// copy a record from before the key holds (57c2, D140). An auu before
+	// v0.18.2 reads a record that names one as damaged, by name.
+	Relay string `json:"relay,omitempty"`
 }
 
 // Box names a spool directory.
@@ -1105,6 +1111,9 @@ func validCopies(box Box, m *Stored) error {
 		}
 		if c.RelayID < 0 {
 			return fmt.Errorf("copy %d's relay id %d is negative", i+1, c.RelayID)
+		}
+		if c.Relay != "" && ValidRelayName(c.Relay) != nil {
+			return fmt.Errorf("copy %d's relay is not a relay name", i+1)
 		}
 		if c.Dropped && c.RelayID != 0 {
 			return fmt.Errorf("copy %d is given up and placed both", i+1)
