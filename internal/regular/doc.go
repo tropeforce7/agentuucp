@@ -18,15 +18,29 @@
 // package. Dir follows a link, since
 // a link that resolves to a directory is a directory (an operator's home
 // or authority behind a link is the ordinary case) and the handle check
-// judges what it resolves to. On Windows the flag does not exist and is
-// zero: an open follows a link to a regular file, a symbolic link or a
-// junction above it alike, and the handle check stands alone, judging the
-// file the link reaches; an exclusive create refuses a link as an existing
-// entry without following it. The open flag that would refuse a reparse
-// point there is not used: it would make every cloud-file and
-// deduplicated file an irregular one, and is after this release (S57).
-// A hard link is the file it names on every platform, and no open
-// refuses it. A create is exclusive
+// judges what it resolves to. On Windows every open of a file carries
+// FILE_FLAG_OPEN_REPARSE_POINT instead, so a reparse point under the name
+// is opened as itself and the handle asked (S57). Go 1.27 reports a
+// symbolic link as ModeSymlink, refused as a link as on unix, and every
+// other tag as ModeIrregular but one, a deduplicated file, which it
+// reports as regular. A reparse point on a directory, a mount point (a
+// junction) among them, is refused saying so, from the handle's
+// attributes, by an open for reading; one for writing is refused by the
+// platform, which opens no directory to write. Any other reparse point,
+// a deduplicated file or a cloud placeholder, is never read or written
+// through that handle, which is on the reparse data, but opened again
+// without the flag, neither creating nor truncating, for the platform to
+// open the file it stands for; that handle must be on the very file the
+// first one was (os.SameFile), and is then judged as an open's always
+// was, so a deduplicated file is used and a placeholder Go reports as
+// irregular is refused, as before, and a truncate asked for is made on
+// the judged handle. Go truncates as it opens, on the flagged handle, so
+// an open asked to truncate has by then emptied the object at the name,
+// the reparse point's own, and never what a link names. As on unix the flag covers the last component
+// only, and a link or junction among the directories above is followed.
+// An exclusive create refuses a link as an existing entry without
+// following it. A hard link is the file it names on every platform, and
+// no open refuses it. A create is exclusive
 // (O_CREATE|O_EXCL), so the program never opens something that already
 // stood under the name: an existing file, a device, a link. There is no
 // rename here and no temporary file, since a rename's destination has no

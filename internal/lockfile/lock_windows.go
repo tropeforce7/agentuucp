@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"syscall"
+
+	"github.com/tropeforce7/agentuucp/internal/regular"
 )
 
 // errSharingViolation is ERROR_SHARING_VIOLATION, which the syscall package
@@ -20,25 +22,39 @@ const errSharingViolation = syscall.Errno(32)
 // IMPLEMENTATION_NOTES.md.
 type Lock struct{ f *os.File }
 
-// Try takes the lock or reports ErrHeld at once. CreateFile without
-// FILE_FLAG_OPEN_REPARSE_POINT follows a link or junction at the path, as
-// regular's opens do on Windows: a lock is under the home or the user's
-// own runtime directory, and what keeps a link out of those is that they
-// are the user's.
+// Try takes the lock or reports ErrHeld at once. CreateFile carries
+// FILE_FLAG_OPEN_REPARSE_POINT, as regular's opens do on Windows, so a
+// link at the path is opened as itself and the handle refused as one, by
+// regular's sentence, and a directory, a junction among them, is one
+// CreateFile opens for neither reading nor writing without backup
+// semantics and refuses itself: the lock is never taken through a link,
+// as on unix, where it is opened through regular (S57). A file with
+// another tag is the lock file all the same, since nothing is read from
+// it.
 func Try(path string) (*Lock, error) {
 	name, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err
 	}
 	h, err := syscall.CreateFile(name, syscall.GENERIC_READ|syscall.GENERIC_WRITE,
-		0, nil, syscall.OPEN_ALWAYS, syscall.FILE_ATTRIBUTE_NORMAL, 0)
+		0, nil, syscall.OPEN_ALWAYS, syscall.FILE_ATTRIBUTE_NORMAL|syscall.FILE_FLAG_OPEN_REPARSE_POINT, 0)
 	if err != nil {
 		if errors.Is(err, errSharingViolation) {
 			return nil, ErrHeld
 		}
 		return nil, fmt.Errorf("locking %s: %w", path, err)
 	}
-	return &Lock{f: os.NewFile(uintptr(h), path)}, nil
+	f := os.NewFile(uintptr(h), path)
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("locking %s: %w", path, err)
+	}
+	if err := regular.NotALink(path, fi); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return &Lock{f: f}, nil
 }
 
 // Release lets the lock go. A nil or released lock is nothing to release.

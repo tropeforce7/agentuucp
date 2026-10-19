@@ -1003,9 +1003,11 @@ That asks the open handle what it is and refuses a device, a named pipe,
 a socket or a directory under any name before a byte moves. On Linux and
 macOS it also refuses a symbolic link as the name itself, though not one
 among the directories above it, which are the program's own or the
-operator's. On Windows an open follows a link to a regular file and the
-handle judges the file it reaches; refusing the link itself there would
-refuse every cloud file too, and is planned for a later release. A
+operator's. On Windows an open carries the flag that opens a reparse
+point as itself: a symbolic link is refused as a link and a mount point
+as one, from the handle, and any other reparse point is opened again
+without the flag, which must reach the same file, and judged as an open
+always was: a deduplicated file is used, a cloud placeholder refused. A
 create is exclusive on every platform, so nothing that already stood
 under the name, a link included, is opened, and no such name is a
 rename's destination. A hard link is the file it names, and no open

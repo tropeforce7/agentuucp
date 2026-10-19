@@ -54,10 +54,11 @@
 # (regular.Open, Create, OpenFile, ReadFile, Dir), which asks the handle
 # what it is and refuses a device, a pipe, a socket or a directory under
 # any name, and a symbolic link as the last component on unix; a link
-# among the directories above it is followed there, and on Windows an
-# open follows a link to a regular file, which the handle then judges,
-# while an exclusive create refuses one (internal/regular's doc says
-# each); a row of either kind whose callee is the
+# among the directories above it is followed, and on Windows an open
+# carries the reparse-point flag, refusing a symbolic link and a mount
+# point as the last component and opening any other reparse tag again as
+# the same file, while an exclusive create refuses a link everywhere
+# (internal/regular's doc says each); a row of either kind whose callee is the
 # plain os.Open, OpenFile, Create, WriteFile or ReadFile fails the test.
 # Such a name is never a rename's destination either, since a rename has
 # no handle to ask: a rename row of either kind whose argument is the
@@ -286,7 +287,7 @@ internal/clientca/ca.go writeFile os.Remove(tmp) = operator's absolute path, fro
 internal/clientca/ca.go writeFile os.Rename(path) = operator's absolute path, from tests alone: no program calls Create or Load
 internal/clientca/ca.go writeFile os.Rename(tmp) = operator's absolute path, from tests alone: no program calls Create or Load
 internal/lockfile/lock_unix.go Try regular.OpenFile(path) = network: message id from a manifest through a staged copy's lock name, the least trusted of the callers' paths (a relay name's fetch lock, a box's directory entry, the home's and the runtime directory's own locks), message.ValidID at Manifest.Validate shown by TestLimitNamesAreNotPathsAtManifestValidate
-internal/lockfile/lock_windows.go Try syscall.CreateFile(name) = network: message id from a manifest through a staged copy's lock name, the least trusted of the callers' paths (a relay name's fetch lock, a box's directory entry, the home's and the runtime directory's own locks), opened with no reparse-point flag (S57), message.ValidID at Manifest.Validate shown by TestLimitNamesAreNotPathsAtManifestValidate
+internal/lockfile/lock_windows.go Try syscall.CreateFile(name) = network: message id from a manifest through a staged copy's lock name, the least trusted of the callers' paths (a relay name's fetch lock, a box's directory entry, the home's and the runtime directory's own locks), opened with the reparse-point flag and refused as a link or mount point by regular.NotALink (S57), message.ValidID at Manifest.Validate shown by TestLimitNamesAreNotPathsAtManifestValidate
 internal/pki/bundle.go LoadBundle os.ReadFile(path) = operator's absolute path, or in credential mode $CREDENTIALS_DIRECTORY joined with the bundle's name in the settings file
 internal/pki/bundle.go syncDir regular.Dir(dir) = operator: a relay host from auu-ca's flags or its own records, through saveRelayRecord's directory (the least trusted of the callers' paths), validDNSName at IssueRelay and safeHost at the join shown by TestLimitNothingTheNetworkNamesIsAPath
 internal/pki/bundle.go writeFile os.CreateTemp(dir) = operator: a relay host from auu-ca's flags or its own records, through saveRelayRecord's directory (the least trusted of the callers' paths), validDNSName at IssueRelay and safeHost at the join shown by TestLimitNothingTheNetworkNamesIsAPath
@@ -311,6 +312,7 @@ internal/regular/regular.go Dir os.OpenFile(path) = network: a name each caller 
 internal/regular/regular.go OpenFile os.OpenFile(path) = network: a name each caller has held to its rule before the call, OpenFile at the handle, which is the check itself shown by TestLimitAPlantedEntryIsRefusedByItsHandle
 internal/regular/regular.go OpenFile os.Remove(path) = network: a name each caller has held to its rule before the call, OpenFile at the handle; what this call made under it and found not to be a file shown by TestLimitAPlantedEntryIsRefusedByItsHandle
 internal/regular/regular.go linkOr os.Lstat(path) = network: a name each caller has held to its rule before the call, linkOr at the platform's refusal of a link, to say so shown by TestLimitAPlantedEntryIsRefusedByItsHandle
+internal/regular/regular.go openAgain os.OpenFile(path) = network: a name each caller has held to its rule before the call, OpenFile at the handle, which is the check itself, held to the file the flagged open found shown by TestLimitAReparsePointIsJudgedByItsHandle
 internal/relay/admin.go (*adminSet).refreshLocked os.Stat(a.path) = operator: admin.authorized_file in the relay's settings file, resolved against the file's directory shown by TestLimitConfigPathsResolveAgainstTheirFile
 internal/relay/admin.go LoadAdmins os.ReadFile(path) = operator: admin.authorized_file in the relay's settings file, resolved against the file's directory shown by TestLimitConfigPathsResolveAgainstTheirFile
 internal/relay/admin.go LoadAdmins os.Stat(path) = operator: admin.authorized_file in the relay's settings file, resolved against the file's directory shown by TestLimitConfigPathsResolveAgainstTheirFile

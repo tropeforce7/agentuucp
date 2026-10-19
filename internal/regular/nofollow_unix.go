@@ -3,6 +3,7 @@
 package regular
 
 import (
+	"io/fs"
 	"os"
 	"syscall"
 )
@@ -34,3 +35,7 @@ func isLoop(errno syscall.Errno) bool { return errno == syscall.ELOOP || errno =
 func settle(f *os.File) {
 	syscall.SetNonblock(int(f.Fd()), false)
 }
+
+// attributesOf is zero: there are no reparse points here, and judge
+// never reopens.
+func attributesOf(fs.FileInfo) uint32 { return 0 }
