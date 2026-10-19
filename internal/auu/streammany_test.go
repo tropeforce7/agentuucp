@@ -3,6 +3,7 @@ package auu
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -493,7 +494,7 @@ func TestSealingStreamsThatFailsPartWayLeavesNothing(t *testing.T) {
 
 	locked := signer(t, func() error { return identity.ErrLocked })
 	_, _, err = sealStreams(s, locked, r, to, body, []string{file}, set, "")
-	if !isLocked(err) || !strings.Contains(err.Error(), "sealing the copy for carol") ||
+	if !isLocked(err) || !strings.Contains(err.Error(), "sealing the copy for carol on "+r.Name+": ") ||
 		!strings.Contains(err.Error(), "nothing was sent, and the outbox keeps none of this message") {
 		t.Errorf("a key locked at the second copy: %v", err)
 	}
@@ -519,7 +520,8 @@ func TestSealingStreamsThatFailsPartWayLeavesNothing(t *testing.T) {
 		return fmt.Errorf("the first copy's record is not in the outbox at the second signature")
 	})
 	_, _, err = sealStreams(s, full, r, to, body, []string{file}, set, "")
-	if err == nil || !strings.Contains(err.Error(), "nothing was sent, and the outbox keeps none of this message") {
+	if err == nil || !strings.HasPrefix(err.Error(), "sealing the copy for carol on "+r.Name+": ") ||
+		!strings.HasSuffix(err.Error(), "; nothing was sent, and the outbox keeps none of this message") {
 		t.Fatalf("a record that cannot be written for the second copy: %v", err)
 	}
 	if blocker == "" {
@@ -528,6 +530,78 @@ func TestSealingStreamsThatFailsPartWayLeavesNothing(t *testing.T) {
 	os.RemoveAll(blocker)
 	if left := outboxFiles(t, alice); len(left) != 0 {
 		t.Errorf("the outbox after a write failed part way: %v", left)
+	}
+}
+
+// An attachment changed between one copy's sealing and the next is said
+// as every seal failure of a message to several is (57b): the copy and the
+// relay it was for, the changed attachment's sentence without the stream
+// package's prefix, that nothing was sent and that the outbox keeps none
+// of it, at a usage error's exit code. It used to say the attachment's
+// sentence alone, naming no copy and no relay. And where a copy already
+// written cannot be taken back, the sentence says so in place of the
+// outbox keeping none.
+func TestASealFailureInAStreamToSeveralNamesTheCopyAndTheRelay(t *testing.T) {
+	alice, _, _ := threePeers(t)
+	t.Setenv("AUU_HOME", alice.home)
+	s, me, err := loadIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := selectRelay(s, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var to []addressed
+	for _, name := range []string{"bob", "carol"} {
+		pub, err := s.Resolve(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		to = append(to, addressed{pub: pub})
+	}
+	file, _ := attachment(t, "x.bin", 10<<10)
+	body := message.Body{Type: message.TypeAsk, Thread: strings.Repeat("a", 32), Text: "x"}
+	set := streamSettings{threshold: stream.DefaultThreshold, chunkSize: stream.MinChunkSize}
+	signer := func(t *testing.T, fault func() error) *identity.Identity {
+		t.Helper()
+		f := &failingSigner{inner: me, at: 2, fault: fault}
+		id, err := identity.FromRemote(me.Suite(), me.Name, me.Public().Bundle(), f, me.KEM())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+
+	// The first copy is sealed from the file as it was; it is rewritten at
+	// its size before the second copy's.
+	rewrite := signer(t, func() error { return os.WriteFile(file, bytes.Repeat([]byte("z"), 10<<10), 0o600) })
+	_, _, err = sealStreams(s, rewrite, r, to, body, []string{file}, set, "")
+	want := "sealing the copy for carol on " + identity.Printable(r.Name) +
+		": x.bin changed while it was being sent; send it again; nothing was sent, and the outbox keeps none of this message"
+	var e *exitError
+	if !errors.As(err, &e) || e.code != exitUsage || err.Error() != want {
+		t.Fatalf("an attachment changed between two copies: %v; want exit %d and %q", err, exitUsage, want)
+	}
+	if left := outboxFiles(t, alice); len(left) != 0 {
+		t.Errorf("the outbox after a changed attachment: %v", left)
+	}
+
+	skipUnlessPermissionsHold(t)
+	outbox := filepath.Join(alice.home, "outbox")
+	stuck := signer(t, func() error {
+		if err := os.Chmod(outbox, 0o500); err != nil {
+			return err
+		}
+		return identity.ErrLocked
+	})
+	t.Cleanup(func() { os.Chmod(outbox, 0o700) })
+	_, _, err = sealStreams(s, stuck, r, to, body, []string{file}, set, "")
+	os.Chmod(outbox, 0o700)
+	if err == nil || !strings.HasPrefix(err.Error(), "sealing the copy for carol on "+identity.Printable(r.Name)+": ") ||
+		!strings.Contains(err.Error(), "; nothing was sent; and what was written of it could not all be taken back: ") ||
+		strings.Contains(err.Error(), "the outbox keeps none") {
+		t.Fatalf("a copy that could not be taken back: %v", err)
 	}
 }
 

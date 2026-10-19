@@ -187,16 +187,23 @@ func sealStreams(s *store.Store, id *identity.Identity, r *store.Relay, to []add
 	}
 
 	var written []*pending
+	// Every copy is sealed before any is posted, so a copy that cannot be
+	// sealed is said as the other refusals of a message to several are,
+	// by the copy and the relay it was for, and the message goes nowhere
+	// (57b). No relay has spoken yet, so the cause is this machine's: a
+	// changed attachment's sentence alone, as a stream to one says it, any
+	// other form error with its words, and a usage error's exit code for
+	// either.
 	fail := func(who string, err error) error {
+		cause := err
 		if errors.Is(err, stream.ErrForm) {
-			_, err = withLeftovers(streamFormErr(err), written, s)
-			return err
+			cause = streamFormErr(err)
 		}
 		// The sentence that the outbox keeps none of it is true only when
 		// everything written was taken back; what was not is said instead
 		// (G43, R59).
-		left, err := withLeftovers(fmt.Errorf("sealing the copy for %s: %w; nothing was sent",
-			identity.Printable(who), err), written, s)
+		left, err := withLeftovers(fmt.Errorf("sealing the copy for %s on %s: %w; nothing was sent",
+			identity.Printable(who), identity.Printable(r.Name), cause), written, s)
 		if !left {
 			err = fmt.Errorf("%w, and the outbox keeps none of this message", err)
 		}
