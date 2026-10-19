@@ -3,9 +3,11 @@ package relay
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -225,10 +227,11 @@ func (w *workers) Stop() {
 // run is one neighbour's worker.
 func (w *workers) run(r *store.Relay, wakeup chan struct{}) {
 	defer w.done.Done()
+	var faults int64
 	for {
 		// Everything due for this neighbour, oldest first, until it is empty
 		// or the neighbour is not answering.
-		wait := w.drain(r)
+		wait := w.turn(r, &faults)
 		// The wait is the injected one, so a test can drive a worker
 		// without the clock: a bare timer here would mean every test of a
 		// backoff had to sleep through it, and a test that sleeps is a test
@@ -242,6 +245,34 @@ func (w *workers) run(r *store.Relay, wakeup chan struct{}) {
 			return
 		}
 	}
+}
+
+// turn is one drain, and a fault in it a failed turn rather than the end of
+// the relay (S59): the goroutine is outside every HTTP handler, so a panic
+// here would end the process and every mailbox with it. The fault is said
+// once, with its stack, and the neighbour is left alone for the backoff a
+// failed attempt gets, doubling with each fault in a row, so a row that
+// faults every time it is taken, which NextOutbound does not claim, is
+// tried again on the retry schedule and not at every wake. A turn that
+// reaches the neighbour and ends without one counts the run back to none;
+// a turn a wake brings while the neighbour is still left alone does not,
+// or a busy neighbour's run would never double.
+func (w *workers) turn(r *store.Relay, faults *int64) (wait time.Duration) {
+	defer func() {
+		if v := recover(); v != nil {
+			*faults++
+			wait = backoffFor(*faults, w.rnd)
+			w.backOff(r.Name, wait)
+			w.log.Error("courier: a turn for a neighbour ended with a fault; it is left alone for a while and tried again",
+				"neighbour", r.Name, "fault", fmt.Sprint(v), "wait", wait, "stack", string(debug.Stack()))
+		}
+	}()
+	waiting := w.waitFor(r.Name) > 0
+	wait = w.drain(r)
+	if !waiting {
+		*faults = 0
+	}
+	return wait
 }
 
 // drain takes rows for one neighbour until there are none due or one of them

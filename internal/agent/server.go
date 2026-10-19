@@ -14,6 +14,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -135,8 +136,9 @@ type Status struct {
 // process which exits when Serve returns does not take a reply with it.
 func (s *Server) Serve(l net.Listener) error {
 	go func() {
+		defer l.Close()
+		defer s.recoverFault("the agent's listener", s.Stop)
 		<-s.stopped
-		l.Close()
 	}()
 	var handlers sync.WaitGroup
 	defer handlers.Wait()
@@ -162,6 +164,23 @@ func (s *Server) Serve(l net.Listener) error {
 	}
 }
 
+// recoverFault is deferred by each goroutine the agent starts outside a
+// connection's own: a fault in it is said once in the agent's log, with its
+// stack, and then after runs, so the fault ends that connection or that
+// turn and leaves the agent whole, locked, or stopped cleanly, and not a
+// process half alive (S59). It must be the deferred function itself, for
+// recover to see the fault.
+func (s *Server) recoverFault(where string, after func()) {
+	v := recover()
+	if v == nil {
+		return
+	}
+	s.log.Printf("%s ended with a fault: %v\n%s", where, v, debug.Stack())
+	if after != nil {
+		after()
+	}
+}
+
 // Stopped is closed when the agent has been told to stop.
 func (s *Server) Stopped() <-chan struct{} { return s.stopped }
 
@@ -175,6 +194,11 @@ func (s *Server) Stop() {
 // writes one reply, closes.
 func (s *Server) Handle(conn net.Conn) {
 	defer conn.Close()
+	// A fault answering one connection closes that connection, and the
+	// agent goes on answering others (S59); what it held is locked first,
+	// since a fault part way through an unlock can leave the keys half
+	// set, and before the close, so the next connection meets it locked.
+	defer s.recoverFault("a connection to the agent", s.Lock)
 	conn.SetDeadline(s.now().Add(connTimeout))
 	if uc, ok := conn.(*net.UnixConn); ok {
 		if !havePeerCred {
@@ -195,15 +219,16 @@ func (s *Server) Handle(conn net.Conn) {
 		s.reply(conn, &response{Error: err.Error()})
 		return
 	}
+	// Deferred, so a fault anywhere after this still overwrites what the
+	// frame and the request held, the passphrase among them (S59).
+	defer zero(frame)
 	req, err := decodeRequest(frame)
 	if err != nil {
-		zero(frame)
 		s.reply(conn, &response{Error: err.Error()})
 		return
 	}
+	defer zero(req.Passphrase)
 	resp := s.dispatch(req)
-	zero(frame)
-	zero(req.Passphrase)
 	s.reply(conn, resp)
 	// Stop is acknowledged and then acted on, in that order: the reply is
 	// written before the listener closes and the process goes, so the
@@ -419,6 +444,9 @@ func (s *Server) unlockLocked(passphrase []byte, ttl time.Duration, scope Scope)
 		// one, so a test with a moved clock is refused by the check every
 		// request makes, and a real agent zeroes on time even when idle.
 		s.timer = time.AfterFunc(s.until.Sub(now), func() {
+			// The timer's goroutine is outside every connection, so a fault
+			// here would end the agent; it locks instead (S59).
+			defer s.recoverFault("the agent's expiry", s.Lock)
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			s.expireLocked()

@@ -338,6 +338,9 @@ func (s *Store) dropMessages(fp string, removeMailbox bool) (bool, error) {
 		if err != nil {
 			return false, err
 		}
+		// Deferred as well as closed where the loop ends: the store has one
+		// connection, and rows a recovered fault left open would hold it (S59).
+		defer rows.Close()
 		for rows.Next() {
 			var id int64
 			if err := rows.Scan(&id); err != nil {

@@ -171,6 +171,11 @@ func Run(ctx context.Context, home Home, opts Options) error {
 		interval = watchInterval
 	}
 	go func() {
+		// A fault in the watch stops the agent cleanly: going on without it
+		// would leave an agent that no longer heard SIGTERM, since the
+		// signals are still taken from the default, or watched its socket
+		// (S59).
+		defer s.recoverFault("the agent's watch of its socket", s.Stop)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		// An error reading the path is logged once for the agent's life,
@@ -190,7 +195,7 @@ func Run(ctx context.Context, home Home, opts Options) error {
 				s.Stop()
 				return
 			case <-ticker.C:
-				switch state, err := l.stat(); state {
+				switch state, err := statSocket(l); state {
 				case socketGone:
 					logger.Printf("stopping: the socket %s is gone", l.paths.Socket)
 					s.Stop()
@@ -212,3 +217,7 @@ func Run(ctx context.Context, home Home, opts Options) error {
 	logger.Printf("stopped")
 	return err
 }
+
+// statSocket is the watch's look at its socket, a variable so a test can
+// plant a fault in the watch.
+var statSocket = func(l *Listener) (socketState, error) { return l.stat() }

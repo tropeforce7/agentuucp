@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -362,3 +363,37 @@ func TestServeAsksTheSplitProxyForATokenPerInvocation(t *testing.T) {
 
 // agentCred is a Cred for the rule tests.
 func agentCred(uid, gid int) agent.Cred { return agent.Cred{UID: uid, GID: gid, PID: -1} }
+
+// A fault answering one connection to the control socket closes that
+// connection, and the socket answers the next (S59): the connection's
+// goroutine is outside every HTTP handler, so a panic there ended serve and
+// every handler's token with it. The fault is said once with its stack.
+func TestAFaultInAControlConnectionEndsThatConnection(t *testing.T) {
+	up := newUpstream(t)
+	// Set before the listener starts, which copies it, and put back once
+	// it has: nothing the listener runs reads the variable again.
+	old := controlLine
+	var faulted atomic.Bool
+	controlLine = func(r *bufio.Reader) (string, error) {
+		if faulted.CompareAndSwap(false, true) {
+			panic("a fault planted in a control connection")
+		}
+		return readControlLine(r)
+	}
+	_, _, logs, path := splitProxy(t, up, ownRule())
+	controlLine = old
+
+	conn, r := dialControl(t, path)
+	if reply := say(t, conn, r, "PING"); !strings.HasPrefix(reply, "closed: ") {
+		t.Fatalf("the faulted connection answered %q", reply)
+	}
+	conn, r = dialControl(t, path)
+	if reply := say(t, conn, r, "PING"); reply != "OK" {
+		t.Fatalf("the connection after a fault: %q; logs:\n%s", reply, logs.String())
+	}
+	said := logs.String()
+	if n := strings.Count(said, "a connection to the control socket ended with a fault"); n != 1 ||
+		!strings.Contains(said, "a fault planted in a control connection") || !strings.Contains(said, "goroutine ") {
+		t.Fatalf("the fault was said %d times, want once with its stack:\n%s", n, said)
+	}
+}

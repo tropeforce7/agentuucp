@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/tls"
 	"fmt"
+	"runtime/debug"
 	"time"
 
 	"github.com/tropeforce7/agentuucp/internal/clientca"
@@ -117,7 +118,7 @@ func renewLeaf(parts *clientCertParts, log logger, stop <-chan struct{}) {
 	if parts == nil {
 		return
 	}
-	t := time.NewTicker(leafCheckInterval)
+	t := time.NewTicker(leafCheckEvery)
 	defer t.Stop()
 	var lastWarned time.Time
 	for {
@@ -125,24 +126,46 @@ func renewLeaf(parts *clientCertParts, log logger, stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-t.C:
-			now := time.Now()
-			renewed, err := parts.server.RenewIfDue(now, leafRenewBefore)
-			switch {
-			case err != nil:
-				log.Error("could not renew this relay's certificate", "err", err)
-			case renewed:
-				log.Info("renewed this relay's certificate",
-					"expires", parts.server.NotAfter().Format(time.DateOnly))
-			}
-			if now.Sub(lastWarned) >= intermediateWarnEvery {
-				lastWarned = now
-				for _, w := range intermediateWarnings(parts, now) {
-					log.Warn(w.msg, "expires", w.when.Format(time.DateOnly))
-				}
-			}
+			leafCheck(parts, log, time.Now(), &lastWarned)
 		}
 	}
 }
+
+// leafCheck is one tick of renewLeaf, and a fault in it ends that check and
+// not the relay (S59): the goroutine is outside every HTTP handler, so a
+// panic here would end the process. It is said once, with its stack, and
+// the next check runs at its time.
+func leafCheck(parts *clientCertParts, log logger, now time.Time, lastWarned *time.Time) {
+	defer func() {
+		if v := recover(); v != nil {
+			log.Error("a check of this relay's certificate ended with a fault; the next runs at its time",
+				"fault", fmt.Sprint(v), "stack", string(debug.Stack()))
+		}
+	}()
+	renewed, err := renewStep(parts, now)
+	switch {
+	case err != nil:
+		log.Error("could not renew this relay's certificate", "err", err)
+	case renewed:
+		log.Info("renewed this relay's certificate",
+			"expires", parts.server.NotAfter().Format(time.DateOnly))
+	}
+	if now.Sub(*lastWarned) >= intermediateWarnEvery {
+		*lastWarned = now
+		for _, w := range intermediateWarnings(parts, now) {
+			log.Warn(w.msg, "expires", w.when.Format(time.DateOnly))
+		}
+	}
+}
+
+// leafCheckEvery and renewStep are renewLeaf's interval and its renewal,
+// variables so a test can tick it quickly and plant a fault in it.
+var (
+	leafCheckEvery = leafCheckInterval
+	renewStep      = func(parts *clientCertParts, now time.Time) (bool, error) {
+		return parts.server.RenewIfDue(now, leafRenewBefore)
+	}
+)
 
 // expiryWarning is one signing intermediate near the end of its life.
 type expiryWarning struct {

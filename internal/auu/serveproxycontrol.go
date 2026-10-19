@@ -12,6 +12,7 @@ import (
 	osuser "os/user"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -190,6 +191,9 @@ type controlListener struct {
 	ln   net.Listener
 	path string
 	done chan struct{}
+	// readLine reads a request's first line: readControlLine, or a test's
+	// that plants a fault, set before the listener's goroutine starts.
+	readLine func(*bufio.Reader) (string, error)
 }
 
 // startControl opens the control socket for a proxy: refuses a directory
@@ -244,7 +248,7 @@ func startControl(p *keyProxy, path string, rule allowRule) (*controlListener, e
 			}
 		}
 	}
-	cl := &controlListener{ln: ln, path: path, done: make(chan struct{})}
+	cl := &controlListener{ln: ln, path: path, done: make(chan struct{}), readLine: controlLine}
 	go cl.serve(p, rule)
 	return cl, nil
 }
@@ -258,19 +262,39 @@ func (cl *controlListener) Close() error {
 
 func (cl *controlListener) serve(p *keyProxy, rule allowRule) {
 	defer close(cl.done)
-	for {
-		conn, err := cl.ln.Accept()
-		if err != nil {
-			return
-		}
-		go cl.handle(p, rule, conn)
+	for cl.acceptOne(p, rule) {
 	}
+}
+
+// acceptOne takes one connection and hands it to handle, and says whether
+// to take another. A fault in it is said and the loop goes on (S59), as a
+// fault in a connection is that connection's alone.
+func (cl *controlListener) acceptOne(p *keyProxy, rule allowRule) (more bool) {
+	defer func() {
+		if v := recover(); v != nil {
+			p.logf("proxy: the control socket's accept ended with a fault, and goes on: %v\n%s", v, debug.Stack())
+			more = true
+		}
+	}()
+	conn, err := cl.ln.Accept()
+	if err != nil {
+		return false
+	}
+	go cl.handle(p, rule, conn)
+	return true
 }
 
 // handle is one connection: the peer's credentials, then one request,
 // then, for a mint, the rest of the connection's life.
 func (cl *controlListener) handle(p *keyProxy, rule allowRule, conn net.Conn) {
 	defer conn.Close()
+	// Outside every HTTP handler, so a fault here would end serve; it ends
+	// this connection instead, said once with its stack (S59).
+	defer func() {
+		if v := recover(); v != nil {
+			p.logf("proxy: a connection to the control socket ended with a fault: %v\n%s", v, debug.Stack())
+		}
+	}()
 	cred := agent.Cred{UID: os.Getuid(), GID: os.Getgid(), PID: -1}
 	if uc, ok := conn.(*net.UnixConn); ok {
 		c, err := agent.PeerCred(uc)
@@ -283,7 +307,7 @@ func (cl *controlListener) handle(p *keyProxy, rule allowRule, conn net.Conn) {
 		cred = c
 	}
 	r := bufio.NewReaderSize(conn, controlLineMax)
-	line, err := readControlLine(r)
+	line, err := cl.readLine(r)
 	if err != nil {
 		fmt.Fprintf(conn, "ERR %v\n", err)
 		return
@@ -486,3 +510,8 @@ func parseGid(text string) (int, error) {
 	}
 	return gid, nil
 }
+
+// controlLine is what a new control listener reads a request's first line
+// with, a variable so a test can plant a fault in a connection: it is read
+// once, into the listener, before the listener's goroutine starts.
+var controlLine = readControlLine

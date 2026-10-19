@@ -815,6 +815,9 @@ func (s *Store) MailboxByShort(short string) (*Mailbox, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Deferred as well as closed where the loop ends: the store has one
+	// connection, and rows a recovered fault left open would hold it (S59).
+	defer rows.Close()
 	var fps []string
 	for rows.Next() {
 		var fp string
@@ -1158,6 +1161,9 @@ func (s *Store) ListingWithin(toFP string, after int64, limit int, stubs bool, b
 	if err != nil {
 		return l, err
 	}
+	// Deferred as well as closed where the loop ends: the store has one
+	// connection, and rows a recovered fault left open would hold it (S59).
+	defer rows.Close()
 	type stub struct {
 		id       int64
 		received time.Time

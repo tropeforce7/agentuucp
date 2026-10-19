@@ -247,6 +247,9 @@ func (s *Store) sweep() (SweepResult, error) {
 	if err != nil {
 		return res, err
 	}
+	// Deferred as well as closed where the loop ends: the store has one
+	// connection, and rows a recovered fault left open would hold it (S59).
+	defer rows.Close()
 	type key struct {
 		fp string
 		id int64

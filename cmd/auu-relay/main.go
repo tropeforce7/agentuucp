@@ -311,6 +311,10 @@ func run(cfg Config, log *slog.Logger) error {
 
 	handler := relay.NewServer(store, rcfg)
 	srv := newHTTPServer(cfg.Listen, handler, tlsCfg, DefaultTimeouts())
+	// What net/http says of its own, a fault in a handler it recovered
+	// among it, goes to the relay's log with everything else, not to the
+	// standard logger on stderr beside it (S59).
+	srv.ErrorLog = slog.NewLogLogger(log.Handler(), slog.LevelError)
 
 	logStartup(cfg, rcfg.Admins, log)
 	logClientCerts(parts, certLifetime, log)

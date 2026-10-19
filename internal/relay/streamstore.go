@@ -675,6 +675,9 @@ func (s *Store) PurgeUploads(now time.Time) (purged []Upload, skipped int, err e
 	if err != nil {
 		return nil, 0, err
 	}
+	// Deferred as well as closed where the loop ends: the store has one
+	// connection, and rows a recovered fault left open would hold it (S59).
+	defer rows.Close()
 	var ids []string
 	for rows.Next() {
 		var rowid int64

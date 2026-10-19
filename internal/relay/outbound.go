@@ -829,6 +829,9 @@ func (s *Store) PurgeOutbound(now time.Time, finalFor time.Duration, handedFor f
 	if err != nil {
 		return 0, err
 	}
+	// Deferred as well as closed where the loop ends: the store has one
+	// connection, and rows a recovered fault left open would hold it (S59).
+	defer rows.Close()
 	var ids []int64
 	for rows.Next() {
 		var id, lastTry int64
@@ -918,6 +921,9 @@ func (s *Store) GiveUp(ctx context.Context, neighbour string, now time.Time, ttl
 	if err != nil {
 		return 0, err
 	}
+	// Deferred as well as closed where the loop ends: the store has one
+	// connection, and rows a recovered fault left open would hold it (S59).
+	defer rows.Close()
 	var ended []*Outbound
 	for rows.Next() {
 		var o Outbound
