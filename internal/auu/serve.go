@@ -47,6 +47,10 @@ type serveRun struct {
 	asJSON bool
 	// out is what this round did, for --json.
 	out roundJSON
+	// writeErr is the first console line of this round that could not be
+	// written, which ends the run at the round's end as a report that
+	// could not be written does under --json (57e).
+	writeErr error
 	// unreachable says the last fetch reached no relay at all, so that the
 	// sentence about it is said once per run of failures.
 	unreachable bool
@@ -255,7 +259,9 @@ func (r *serveRun) once(ctx context.Context, backlog bool) error {
 			return err
 		}
 	} else if !r.did() {
-		fmt.Println("nothing to answer")
+		if _, err := fmt.Println("nothing to answer"); err != nil {
+			return err
+		}
 	}
 	if n := len(r.out.Failed); n > 0 {
 		return usageErrf("%s went unanswered; the failures are above, and the next round tries again", plural(n, "message"))
@@ -306,7 +312,7 @@ func (r *serveRun) long(ctx context.Context, backlog bool) error {
 // wait for. Under --once it is this run's failure, since there is nothing
 // else this run was going to do.
 func (r *serveRun) round(ctx context.Context, backlog, longRun bool) error {
-	r.out = roundJSON{}
+	r.out, r.writeErr = roundJSON{}, nil
 	relays, err := selectedRelays(r.s, "")
 	if err != nil {
 		return err
@@ -368,6 +374,12 @@ func (r *serveRun) round(ctx context.Context, backlog, longRun bool) error {
 		}
 	}
 	r.retryAt = r.nextRetry(pending)
+	// A console line that could not be written ends the run here, where
+	// the JSON line would be written, so the round's other messages are
+	// answered and settled first, as they are under --json.
+	if r.writeErr != nil {
+		return r.writeErr
+	}
 	if longRun && r.asJSON && r.did() {
 		// One object per round that did something, one to a line: a quiet
 		// expert writes nothing, and a log is the record of what it
@@ -1183,12 +1195,18 @@ func (r *serveRun) settle(m *store.Stored, ch *serveChannel, replyID string) err
 	}
 	r.out.Answered = append(r.out.Answered, r.report(m))
 	if !r.asJSON {
+		var err error
 		switch {
 		case replyID == "":
-			fmt.Printf("%s: %s from %s had nothing to say\n", ch.name, shortID(m.Inner.ID), orNone(identity.Printable(m.SenderName)))
+			_, err = fmt.Printf("%s: %s from %s had nothing to say\n", ch.name, shortID(m.Inner.ID), orNone(identity.Printable(m.SenderName)))
 		default:
-			fmt.Printf("%s: answered %s from %s (reply %s)\n",
+			_, err = fmt.Printf("%s: answered %s from %s (reply %s)\n",
 				ch.name, shortID(m.Inner.ID), orNone(identity.Printable(m.SenderName)), shortID(replyID))
+		}
+		// Kept, not returned: the message is settled, and the round goes
+		// on to the rest before the run ends with it (57e).
+		if err != nil && r.writeErr == nil {
+			r.writeErr = err
 		}
 	}
 	return nil
