@@ -1210,9 +1210,10 @@ func peerLabel(p *identity.Public) string {
 // attachmentInfo is an attachment as its own entry says it is, for every
 // read of one: a regular file, or a usage error that names what stands
 // there instead. A link is not followed. The path is the person's on the
-// command line, and for serve the patch in the thread's directory, which
-// the handler writes as the same account: a link put there in place of a
-// kept reply's patch was followed, and the file it named was attached to
+// command line, and for serve the patch in serve's kept directory, which
+// was the thread's directory, where the handler writes as the same
+// account (S56): a link put there in place of a kept reply's patch was
+// followed, and the file it named was attached to
 // the reply (F1, A-1, B-1), so a link is refused for both, and the person
 // attaches the file it points at. A pipe, which is what a process
 // substitution such as <(command) is, is refused too: an attachment's

@@ -42,6 +42,10 @@ type runFacts struct {
 	base       string
 	threadDir  string
 	channelDir string
+	// keptDir is serve's own directory for the thread, where the run
+	// files, the kept reply, its patch and its sealed envelope are; no
+	// program is told of it (S56).
+	keptDir string
 	// attachments is where the asker's files were put, empty when there
 	// were none.
 	attachments string
@@ -327,7 +331,7 @@ func eachLine(r io.Reader, line func(text string, cut int64) bool) error {
 }
 
 // createNew makes one of the run's files, empty, under a name of the
-// run's own in a thread's directory. A file from an earlier attempt at
+// run's own in serve's kept directory for a thread. A file from an earlier attempt at
 // the same message is removed first, and the create is then exclusive
 // and by the handle: the program never opens what already stood under
 // the name, and whatever the remove could not take — a directory with
@@ -357,7 +361,8 @@ func writeNew(path string, data []byte) error {
 	return err
 }
 
-// runFile names one of a message's files in the thread's directory.
-func runFile(threadDir, kind, id string) string {
-	return filepath.Join(threadDir, kind+"-"+id+".txt")
+// runFile names one of a message's run files in serve's kept directory
+// for its thread.
+func runFile(keptDir, kind, id string) string {
+	return filepath.Join(keptDir, kind+"-"+id+".txt")
 }

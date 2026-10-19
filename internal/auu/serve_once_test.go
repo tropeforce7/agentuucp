@@ -147,7 +147,7 @@ func TestServeSealsAFreshAnswerAfresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	threadDir := filepath.Join(bob.home, "serve", "threads", sent.Thread)
+	threadDir := filepath.Join(bob.home, "serve", "kept", sent.Thread)
 	if err := os.MkdirAll(threadDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestServeSealsAgainAnEnvelopeThatIsNotTheAnswers(t *testing.T) {
 	bob.run("inbox")
 	bob.run("peers", "rm", "alice")
 	captureStderr(t, func() { bob.tryRun("serve", "--once") })
-	threadDir := filepath.Join(bob.home, "serve", "threads", sent.Thread)
+	threadDir := filepath.Join(bob.home, "serve", "kept", sent.Thread)
 	if _, err := os.Stat(filepath.Join(threadDir, "reply-"+sent.ID+".txt")); err != nil {
 		t.Fatalf("no reply was kept: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestServeFailsWhenItCannotReadAKeptEnvelope(t *testing.T) {
 	t.Setenv(handlerScript, "append:"+marker+";echo:an answer worth keeping")
 	sent := alice.ask(t, "jostle", "a question", "the first")
 	bob.run("inbox")
-	threadDir := filepath.Join(bob.home, "serve", "threads", sent.Thread)
+	threadDir := filepath.Join(bob.home, "serve", "kept", sent.Thread)
 	sealed := sealedFile(threadDir, sent.ID)
 	_, _, relays := bob.opened()
 	target, err := url.Parse(relays[0].URL)

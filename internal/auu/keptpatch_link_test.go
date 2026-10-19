@@ -12,8 +12,7 @@ import (
 )
 
 // TestLimitAKeptPatchIsNotReadThroughALink: a side copy's reply that could
-// not be sent is kept with its patch in the thread's directory, which the
-// handler writes as the same account, and the retry attaches the patch
+// not be sent is kept with its patch, and the retry attaches the patch
 // without running the handler again. A link put in place of the patch was
 // followed, and the file it named went to the asker as the patch (F1,
 // tracer A's TestProbeAKeptPatchFollowsLink, B's link probe). Now the
@@ -21,11 +20,14 @@ import (
 // the file it names leaves: inline, and as a stream, which a file over the
 // threshold makes the reply.
 //
+// The patch is kept in serve's kept directory, which no program is told
+// of (S56), so the link here stands for one an older serve's home holds,
+// moved there as the link it is, and for a second line of defence.
+//
 // On Windows a symbolic link needs the privilege or developer mode, and
 // the test skips where it cannot make one; a junction names a directory,
 // never the patch file. A hard link is not refused by any open, since it
-// is the file: it needs the same filesystem, and keeping the patch where
-// the handler cannot write is the remedy, after this release (S56).
+// is the file, and is TestServeKeepsItsAnswerWhereTheHandlerIsNotGiven's.
 func TestLimitAKeptPatchIsNotReadThroughALink(t *testing.T) {
 	for _, size := range []struct {
 		name  string
@@ -47,7 +49,7 @@ func TestLimitAKeptPatchIsNotReadThroughALink(t *testing.T) {
 			// with its patch.
 			bob.run("peers", "rm", "alice")
 			captureStderr(t, func() { bob.tryRun("serve", "--once") })
-			patch := filepath.Join(bob.home, "serve", "threads", sent.Thread, "patch-"+sent.ID, patchName(sent.Thread))
+			patch := filepath.Join(bob.home, "serve", "kept", sent.Thread, "patch-"+sent.ID, patchName(sent.Thread))
 			if !strings.Contains(readFile(t, patch), "one.txt") {
 				t.Fatal("no patch was kept, so the test proves nothing")
 			}

@@ -2,7 +2,9 @@ package auu
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -170,10 +172,7 @@ func existingDir(path string) string {
 func (r *serveRun) sweep() error {
 	dir := filepath.Join(r.root, "threads")
 	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	now := time.Now()
@@ -194,6 +193,41 @@ func (r *serveRun) sweep() error {
 		}
 		fmt.Fprintf(os.Stderr, "%s: thread %s has been idle for %s; its working copy is gone\n",
 			prog, shortID(thread), ttl)
+	}
+	return r.sweepKept()
+}
+
+// sweepKept lets go of serve's kept directory for a thread whose own
+// directory is gone, removed by hand, so that kept/ does not grow for
+// ever: it is aged as a thread is, by the ledger, or by the directory's
+// own time where the ledger has nothing for it, and one with anything
+// unsettled is kept. Only a directory named by a thread id is serve's.
+func (r *serveRun) sweepKept() error {
+	dir := filepath.Join(r.root, "kept")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	now := time.Now()
+	for _, e := range entries {
+		if !e.IsDir() || message.ValidID(e.Name()) != nil {
+			continue
+		}
+		thread := e.Name()
+		stateDir := filepath.Join(r.root, "threads", thread)
+		if _, err := os.Lstat(stateDir); !errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		last, ttl, sweepable := r.threadIdle(thread, filepath.Join(dir, thread))
+		if !sweepable || now.Sub(last) <= ttl {
+			continue
+		}
+		if err := r.letGo(thread, stateDir); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -236,7 +270,8 @@ func (r *serveRun) threadIdle(thread, path string) (last time.Time, ttl time.Dur
 	return last, ttl, true
 }
 
-// letGo removes one thread's worktree and its state directory. The worktree
+// letGo removes one thread's worktree, its state directory and serve's kept
+// directory for it. The worktree
 // goes through git where the channel that made it is still in the file, so
 // that the registration in the checkout goes with it; where it is not, the
 // directory is removed and the next worktree made from that checkout prunes
@@ -261,6 +296,9 @@ func (r *serveRun) letGo(thread, stateDir string) error {
 				return err
 			}
 		}
+	}
+	if err := os.RemoveAll(filepath.Join(r.root, "kept", thread)); err != nil {
+		return err
 	}
 	return os.RemoveAll(stateDir)
 }

@@ -145,6 +145,9 @@ func cmdServe(args []string) error {
 		return err
 	}
 	defer lock.Release()
+	if err := keepFromThreads(root); err != nil {
+		return err
+	}
 
 	led, err := loadLedger(filepath.Join(root, ledgerFile))
 	if err != nil {
@@ -868,7 +871,15 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 	}
 	threadDir := filepath.Join(r.root, "threads", thread)
 	channelDir := filepath.Join(r.root, "channels", ch.name)
-	for _, dir := range []string{threadDir, channelDir} {
+	// Every file serve writes for a run, and reads or sends after it, is in
+	// a directory of serve's own that the handler is never told of: the
+	// thread's directory is the handler's to write, and a file serve kept
+	// there could be replaced between rounds, or after the handler exited
+	// and before serve read it, by a link to a file the serve account can
+	// read, which the retry then sent (S56). A hard link is the file it
+	// names, so no open can refuse it; only where the file is can.
+	keptDir := filepath.Join(r.root, "kept", thread)
+	for _, dir := range []string{threadDir, channelDir, keptDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
@@ -904,7 +915,7 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 		turn:      r.led.answered(thread) + 1,
 		worktree:  worktree,
 		base:      base,
-		threadDir: threadDir, channelDir: channelDir,
+		threadDir: threadDir, channelDir: channelDir, keptDir: keptDir,
 		proxied: r.cfg.Proxy != nil,
 	}
 	// The files the asker sent, where the handler can read them. A retry
@@ -938,8 +949,8 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 		facts.attachments = in
 	}
 
-	replyPath := runFile(threadDir, "reply", m.Inner.ID)
-	patchDir := filepath.Join(threadDir, "patch-"+m.Inner.ID)
+	replyPath := runFile(keptDir, "reply", m.Inner.ID)
+	patchDir := filepath.Join(keptDir, "patch-"+m.Inner.ID)
 	// A reply the handler has already written and serve could not send —
 	// the relay was down, the mailbox full — is sent from the file, with
 	// the patch that was made for it. The handler is not run twice for one
@@ -962,13 +973,13 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 
 	// The handler runs for this message afresh, so an envelope kept for an
 	// earlier answer to it is not this one's.
-	if err := os.Remove(sealedFile(threadDir, m.Inner.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(sealedFile(keptDir, m.Inner.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 
-	afterPath := runFile(threadDir, "after", m.Inner.ID)
+	afterPath := runFile(keptDir, "after", m.Inner.ID)
 	if ch.Before != "" {
-		beforePath := runFile(threadDir, "before", m.Inner.ID)
+		beforePath := runFile(keptDir, "before", m.Inner.ID)
 		before, err := r.runOne(ctx, ch.Before, beforePath, facts.env(false, ""), nil, ch, facts, short)
 		if err != nil {
 			return err
@@ -986,7 +997,7 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 		}
 	}
 
-	stdinPath := runFile(threadDir, "msg", m.Inner.ID)
+	stdinPath := runFile(keptDir, "msg", m.Inner.ID)
 	if err := writeNew(stdinPath, []byte(m.Inner.Body.Text)); err != nil {
 		return err
 	}
@@ -994,8 +1005,8 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
 	if err != nil {
 		return err
 	}
-	outPath := runFile(threadDir, "out", m.Inner.ID)
-	errPath := runFile(threadDir, "err", m.Inner.ID)
+	outPath := runFile(keptDir, "out", m.Inner.ID)
+	errPath := runFile(keptDir, "err", m.Inner.ID)
 	stdout, err := createNew(outPath)
 	if err != nil {
 		stdin.Close()
@@ -1130,7 +1141,7 @@ func (r *serveRun) send(m *store.Stored, ch *serveChannel, text, patch string, f
 	// so that every retry posts the same envelope under the same id
 	// (sealOnce, G41, R57).
 	out, _, err := sendSealed(r.s, r.id, relay, recipient, body, attach,
-		sendMode{sealed: sealedFile(facts.threadDir, m.Inner.ID)})
+		sendMode{sealed: sealedFile(facts.keptDir, m.Inner.ID)})
 	if err != nil {
 		if isLocked(err) {
 			// The keys went away under a running service. Nothing is
@@ -1248,8 +1259,8 @@ func output(path string) (string, bool, error) {
 
 // sealedFile is where the envelope a message's reply was sealed as is kept
 // between attempts to post it.
-func sealedFile(threadDir, id string) string {
-	return filepath.Join(threadDir, "sealed-"+id+".json")
+func sealedFile(keptDir, id string) string {
+	return filepath.Join(keptDir, "sealed-"+id+".json")
 }
 
 // keptReply is a reply written by an earlier round whose send did not get
@@ -1278,6 +1289,70 @@ func shortID(id string) string {
 		return id[:12]
 	}
 	return id
+}
+
+// keepFromThreads moves what a serve before kept/ kept in a thread's
+// directory, an answer it could not send with its patch and its sealed
+// envelope, into kept/, once, so that the answer is not lost and the
+// handler is not run again for it. It runs under the serve lock and before
+// any round, so nothing a handler of this serve wrote is ever moved: once
+// kept/ is there, a thread's directory is not read for these files again,
+// and a reply and a patch a handler put there, knowing its message id,
+// stay where it put them (S56).
+//
+// Each file is renamed into kept.tmp, the reply last, and kept.tmp is
+// renamed to kept/ when every thread is done: kept/ is written last. A
+// start that stopped part way finds kept.tmp and goes on from where it
+// was, since every rename moved a file whole and the reply still in the
+// thread's directory names what is left to move. A file is moved as the
+// entry it is: a link an older handler put at a kept patch's name is
+// moved as the link, and the send refuses it by name as it did.
+func keepFromThreads(root string) error {
+	kept := filepath.Join(root, "kept")
+	if _, err := os.Lstat(kept); !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	tmp := kept + ".tmp"
+	if err := os.MkdirAll(tmp, 0o700); err != nil {
+		return err
+	}
+	threads := filepath.Join(root, "threads")
+	entries, err := os.ReadDir(threads)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	for _, e := range entries {
+		// Only a directory named by a thread id is serve's, as in the
+		// sweep, and only a reply named by a message id is moved, so
+		// neither name is joined onto kept.tmp unchecked.
+		if !e.IsDir() || message.ValidID(e.Name()) != nil {
+			continue
+		}
+		from := filepath.Join(threads, e.Name())
+		files, err := os.ReadDir(from)
+		if err != nil {
+			return err
+		}
+		to := filepath.Join(tmp, e.Name())
+		for _, f := range files {
+			id, ok := strings.CutPrefix(f.Name(), "reply-")
+			if !ok {
+				continue
+			}
+			if id, ok = strings.CutSuffix(id, ".txt"); !ok || message.ValidID(id) != nil {
+				continue
+			}
+			if err := os.MkdirAll(to, 0o700); err != nil {
+				return err
+			}
+			for _, name := range []string{"patch-" + id, "sealed-" + id + ".json", f.Name()} {
+				if err := os.Rename(filepath.Join(from, name), filepath.Join(to, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+			}
+		}
+	}
+	return os.Rename(tmp, kept)
 }
 
 // takeServeLock is one serve per home. The pid goes in the file once the

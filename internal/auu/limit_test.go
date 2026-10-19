@@ -894,8 +894,9 @@ func pathSet() []string {
 // send did not get through and its patch, which keptPatch gives to the
 // send, and the envelope kept for that send, which readKeptSeal reads and
 // keptFiles checks the patch against. For each value of the set as a
-// thread id, a kept reply and its patch are planted where the thread's
-// directory would resolve to, where the value names one; handle fails the
+// thread id, a kept reply and its patch are planted where serve's kept
+// directory for the thread would resolve to, and where the thread's
+// directory would, where the value names one; handle fails the
 // message with the rule's sentence and sends nothing, the planted files
 // are as they were, and nothing else in the home or beside it changes but
 // the ledger's record of the failure. A message id reaches handle only
@@ -957,21 +958,26 @@ func TestLimitThreadIDIsNotAPathAtServe(t *testing.T) {
 	idFor := func(i int) string { return fmt.Sprintf("%032x", i+1) }
 	planted := map[string]bool{}
 	for i, v := range pathSet() {
-		threadDir := filepath.Join(serveDir, "threads", v)
-		rel, err := filepath.Rel(beside, threadDir)
-		if v == "" || strings.ContainsRune(v, 0) || len(v) > 200 || err != nil || strings.HasPrefix(rel, "..") {
-			continue
-		}
-		patch := filepath.Join(threadDir, "patch-"+idFor(i), patchName(v))
-		if os.MkdirAll(filepath.Dir(patch), 0o700) != nil {
-			continue
-		}
-		for path, data := range map[string]string{runFile(threadDir, "reply", idFor(i)): "a kept reply\n", patch: "a kept patch\n"} {
-			if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
-				t.Fatal(err)
+		// Where serve keeps an answer, and where a serve before kept/ did.
+		for _, under := range []string{"kept", "threads"} {
+			dir := filepath.Join(serveDir, under, v)
+			rel, err := filepath.Rel(beside, dir)
+			if v == "" || strings.ContainsRune(v, 0) || len(v) > 200 || err != nil || strings.HasPrefix(rel, "..") {
+				continue
+			}
+			patch := filepath.Join(dir, "patch-"+idFor(i), patchName(v))
+			if os.MkdirAll(filepath.Dir(patch), 0o700) != nil {
+				continue
+			}
+			for path, data := range map[string]string{runFile(dir, "reply", idFor(i)): "a kept reply\n", patch: "a kept patch\n"} {
+				if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if under == "kept" {
+				planted[v] = true
 			}
 		}
-		planted[v] = true
 	}
 	// These values name a directory the planting can make on every
 	// platform. Windows refuses a colon, a drive and a device name in a
@@ -1183,6 +1189,124 @@ func TestLimitThreadsDirectoryEntries(t *testing.T) {
 			names = append(names, e.Name())
 		}
 		t.Errorf("worktrees holds %v after the sweep", names)
+	}
+}
+
+// TestLimitKeptMoveEntries: the start move of an older serve's kept
+// answers reads the threads directory, and each thread's directory, back,
+// and moves a reply and what goes with it by the names it finds there; the
+// sweep reads kept/ back as it reads threads/. A directory under threads/
+// that is not a thread id, and a reply whose name holds no message id,
+// are not serve's: nothing of either is moved, nothing is joined onto
+// kept.tmp, and an entry under kept/ that is not a thread id survives the
+// sweep untouched.
+func TestLimitKeptMoveEntries(t *testing.T) {
+	alice, bob := newExpert(t, modeSideCopy)
+	sent := alice.ask(t, "jostle", "a question", "the first")
+	bob.serve(t)
+	serveDir := filepath.Join(bob.home, "serve")
+	if err := os.RemoveAll(filepath.Join(serveDir, "kept")); err != nil {
+		t.Fatal(err)
+	}
+	threads := filepath.Join(serveDir, "threads")
+	id := fmt.Sprintf("%032x", 0xabcdef)
+	strays := []string{"stray", "..x", "CON", strings.Repeat("b", 31), strings.ToUpper(sent.Thread)}
+	var planted []string
+	real := filepath.Join(threads, sent.Thread)
+	realInfo, err := os.Stat(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range strays {
+		dir := filepath.Join(threads, name)
+		if os.MkdirAll(dir, 0o700) != nil {
+			// A name the filesystem does not hold plants nothing here.
+			continue
+		}
+		// Where case does not count, the upper case is the real thread's
+		// own directory, whose entry is listed by its own name and whose
+		// reply is serve's to move; it is no stray there.
+		if info, err := os.Stat(dir); err == nil && os.SameFile(info, realInfo) {
+			continue
+		}
+		planted = append(planted, filepath.Join(dir, "reply-"+id+".txt"))
+	}
+	for _, bad := range []string{"..", "CON", "x", strings.Repeat("a", 31), strings.ToUpper(id), id + ".", ""} {
+		planted = append(planted, filepath.Join(real, "reply-"+bad+".txt"))
+	}
+	for _, path := range planted {
+		if err := os.WriteFile(path, []byte("not serve's\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(filepath.Base(path), "reply-") {
+			patch := filepath.Join(filepath.Dir(path), "patch-"+strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "reply-"), ".txt"))
+			os.MkdirAll(patch, 0o700)
+		}
+	}
+	keptStrays := []string{"stray", "..y", strings.Repeat("c", 31)}
+	beside := filepath.Dir(bob.home)
+	topLevel := func() map[string]bool {
+		names := map[string]bool{}
+		entries, _ := os.ReadDir(beside)
+		for _, e := range entries {
+			names[e.Name()] = true
+		}
+		return names
+	}
+	before := topLevel()
+
+	bob.row.ThreadTTL = "1h"
+	bob.write(t)
+	bob.serve(t)
+	kept := filepath.Join(serveDir, "kept")
+	entries, err := os.ReadDir(kept)
+	if err != nil {
+		t.Fatalf("the start made no kept/: %v", err)
+	}
+	for _, e := range entries {
+		if e.Name() != sent.Thread {
+			t.Errorf("kept/ holds %q, which is no thread of serve's", e.Name())
+		}
+	}
+	if under, _ := os.ReadDir(filepath.Join(kept, sent.Thread)); len(under) != 0 {
+		var names []string
+		for _, e := range under {
+			names = append(names, e.Name())
+		}
+		t.Errorf("the start moved %v, whose names hold no message id", names)
+	}
+	for _, path := range planted {
+		if got, err := os.ReadFile(path); err != nil || string(got) != "not serve's\n" {
+			t.Errorf("%s was moved or changed: %q, %v", path, got, err)
+		}
+	}
+	if _, err := os.Stat(kept + ".tmp"); !os.IsNotExist(err) {
+		t.Errorf("kept.tmp is left: %v", err)
+	}
+	for name := range topLevel() {
+		if !before[name] {
+			t.Errorf("the start made %s beside the home", name)
+		}
+	}
+
+	// The sweep reads kept/ by its entries, and one that is not a thread
+	// id is never let go of, joined or spoken of.
+	for _, name := range keptStrays {
+		if err := os.MkdirAll(filepath.Join(kept, name), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	bob.row.ThreadTTL = "1ms"
+	bob.write(t)
+	time.Sleep(5 * time.Millisecond)
+	stderr := captureStderr(t, func() { bob.serve(t) })
+	for _, name := range keptStrays {
+		if _, err := os.Stat(filepath.Join(kept, name)); err != nil {
+			t.Errorf("the sweep touched kept/%s, which is not a thread: %v", name, err)
+		}
+		if strings.Contains(stderr, name) {
+			t.Errorf("the sweep spoke of %q, which is not a thread:\n%s", name, stderr)
+		}
 	}
 }
 

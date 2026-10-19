@@ -576,10 +576,11 @@ func patchFor(ch *serveChannel, worktree, base, dir, thread string) (string, err
 // directory has no patch taken for it, and is not kept (G37, R53).
 //
 // The patch is asked about by its own entry. Anything there that is not a
-// regular file, a link the handler put in its place among them, is given
-// as the patch, so that the send refuses it by name and the message fails
-// for it: a link here was followed, and the file it named was attached to
-// the reply (F1, A-1).
+// regular file, a link an older serve's handler put in its place among
+// them, is given as the patch, so that the send refuses it by name and the
+// message fails for it: a link here was followed, and the file it named
+// was attached to the reply (F1, A-1). The directory is serve's kept one,
+// which the handler is never told of (S56).
 func keptPatch(ch *serveChannel, dir, thread string) (string, bool) {
 	if ch.Mode != modeSideCopy {
 		return "", true

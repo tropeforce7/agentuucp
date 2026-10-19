@@ -169,7 +169,11 @@ A thread's worktree is let go of when the thread has been idle for
 channel is in the file. Both are under `serve/worktrees/`, a thread's by
 its id and a read-only channel's by its name, so a channel may not be
 named with 32 hex characters, in either case, which is a thread id's
-shape: `auu serve check` refuses one, saying so.
+shape: `auu serve check` refuses one, saying so. A thread's state is
+under `serve/threads/`, and serve's own files for it under
+`serve/kept/`, each by the thread's id; both go with the worktree, and
+a `kept/` directory whose thread's directory was removed by hand is
+swept as the thread would have been.
 
 A handler with a shell can be talked by a message into damaging its
 worktree, and in `read-only` that worktree is every thread's on the
@@ -736,10 +740,21 @@ it can be asked about. The peer list is the whole of the access control,
 and anyone on it can ask anything.
 
 What serve does itself with what a handler leaves is held to that
-containment. The handler writes its worktree and the thread's directory,
-and serve reads both after it. A kept answer's patch is attached only as
-the regular file it is: a link put in its place is refused by name and
-the message fails. The base is used only as a commit id. A handler that
+containment. A handler is given its worktree, its thread's directory
+and the asker's files in it, and nothing else. Every file serve writes
+for a run and reads or sends after it, the message it hands the handler,
+what the handler and the hooks print, the answer, its patch and the
+envelope it was sealed as, is under `serve/kept/<thread>/`, a directory
+of serve's own that no program is told of, removed with the thread; the
+one exception is the base a side copy's worktree was made from, which
+stays in the thread's directory and is used only as a commit id. The
+first serve of this release in a home an older one ran in moves an
+answer that one kept in a thread's directory, with its patch and
+envelope, into `kept/` once, before any round, so it still goes out as
+it was sealed; after that, nothing in a thread's directory is read for
+an answer. A kept answer's patch is attached only as the regular file it
+is: a link put in its place is refused by name and the message fails.
+The base is used only as a commit id. A handler that
 can run git in its worktree can also write what git keeps for that
 worktree in the checkout's repository, and the worktree's `.git` and that
 directory can each be pointed at a repository of the handler's own, whose
@@ -751,8 +766,12 @@ and an index of serve's own, and runs no filesystem monitor, hook,
 external diff or text conversion. Only the operator's configuration is
 read, and a filter the worktree's attributes name runs only if the
 operator defined it. A hard link is the file it links to, and no open
-refuses it: where that matters, a contained handler must not share a
-filesystem with what the serve account can read.
+refuses it, which is why serve keeps nothing it sends in the thread's
+directory. A side copy's patch is still what the worktree holds, though,
+and git reads a hard link there as the file it is, so a file a handler
+links into its worktree goes with the answer: where that matters, a
+contained handler must not share a filesystem with what the serve
+account can read.
 
 Messages are data, not instructions. A handler that acts on what a message
 tells it to do is a handler that does what the sender wants rather than what

@@ -780,7 +780,7 @@ func TestServeKeepsAReplyItCouldNotSend(t *testing.T) {
 	if runs := strings.Count(readFile(t, marker), "\n"); runs != 1 {
 		t.Fatalf("the handler ran %d times", runs)
 	}
-	kept := filepath.Join(bob.home, "serve", "threads", sent.Thread, "reply-"+sent.ID+".txt")
+	kept := filepath.Join(bob.home, "serve", "kept", sent.Thread, "reply-"+sent.ID+".txt")
 	if text := strings.TrimSpace(readFile(t, kept)); text != "an answer worth keeping" {
 		t.Fatalf("the kept reply is %q", text)
 	}
@@ -808,13 +808,15 @@ func TestServeKeepsAReplyItCouldNotSend(t *testing.T) {
 func TestServeFailsWhenItCannotReadWhatTheHandlerPrinted(t *testing.T) {
 	skipUnlessPermissionsHold(t)
 	alice, bob := newExpert(t, modeReadOnly)
-	bob.row.After = `chmod 000 "$AUU_THREAD_DIR/out-$AUU_MESSAGE_ID.txt"`
+	// The run files are in serve's kept directory, which no program is
+	// told of; the fault is the operator's, who knows the layout.
+	bob.row.After = `chmod 000 "$AUU_THREAD_DIR/../../kept/$AUU_THREAD_ID/out-$AUU_MESSAGE_ID.txt"`
 	bob.write(t)
 	t.Setenv(handlerScript, "echo:an answer the program cannot read")
 	sent := alice.ask(t, "jostle", "output read failure", "question")
 	var out string
 	stderr := captureStderr(t, func() { out, _ = bob.tryRun("serve", "--once", "--json") })
-	outputPath := filepath.Join(bob.home, "serve", "threads", sent.Thread, "out-"+sent.ID+".txt")
+	outputPath := filepath.Join(bob.home, "serve", "kept", sent.Thread, "out-"+sent.ID+".txt")
 	if _, err := os.ReadFile(outputPath); !os.IsPermission(err) {
 		t.Fatalf("the fault did not make the output unreadable: %v", err)
 	}
@@ -856,7 +858,7 @@ func TestServeFailsWhenItCannotReadAKeptReply(t *testing.T) {
 	bob.run("inbox")
 	bob.run("peers", "rm", "alice")
 	captureStderr(t, func() { bob.tryRun("serve", "--once") })
-	kept := filepath.Join(bob.home, "serve", "threads", sent.Thread, "reply-"+sent.ID+".txt")
+	kept := filepath.Join(bob.home, "serve", "kept", sent.Thread, "reply-"+sent.ID+".txt")
 	if err := os.Chmod(kept, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -1554,8 +1556,9 @@ func TestServeSweepsAnIdleThread(t *testing.T) {
 	bob.serve(t)
 	threadDir := filepath.Join(bob.home, "serve", "threads", sent.Thread)
 	worktree := filepath.Join(bob.home, "serve", "worktrees", sent.Thread)
-	patchDir := filepath.Join(threadDir, "patch-"+sent.ID)
-	for _, path := range []string{threadDir, worktree, patchDir} {
+	keptDir := filepath.Join(bob.home, "serve", "kept", sent.Thread)
+	patchDir := filepath.Join(keptDir, "patch-"+sent.ID)
+	for _, path := range []string{threadDir, worktree, keptDir, patchDir} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("%s is not there to sweep: %v", path, err)
 		}
@@ -1568,7 +1571,7 @@ func TestServeSweepsAnIdleThread(t *testing.T) {
 	if !strings.Contains(stderr, "thread "+shortID(sent.Thread)+" has been idle") {
 		t.Fatalf("the sweep said:\n%s", stderr)
 	}
-	for _, path := range []string{threadDir, worktree, patchDir} {
+	for _, path := range []string{threadDir, worktree, keptDir, patchDir} {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("%s survived the sweep (%v)", path, err)
 		}
@@ -1597,7 +1600,7 @@ func TestServeSweepsNothingThatIsStillWork(t *testing.T) {
 	bob.run("inbox")
 	bob.run("peers", "rm", "alice")
 	captureStderr(t, func() { bob.tryRun("serve", "--once") })
-	kept := filepath.Join(bob.home, "serve", "threads", sent.Thread, "reply-"+sent.ID+".txt")
+	kept := filepath.Join(bob.home, "serve", "kept", sent.Thread, "reply-"+sent.ID+".txt")
 	if _, err := os.Stat(kept); err != nil {
 		t.Fatalf("there is no kept reply to protect: %v", err)
 	}
@@ -2054,7 +2057,7 @@ func TestServeKeepsThePatchWithTheReply(t *testing.T) {
 	bob.run("peers", "rm", "alice")
 	captureStderr(t, func() { bob.tryRun("serve", "--once") })
 
-	patch := filepath.Join(bob.home, "serve", "threads", sent.Thread, "patch-"+sent.ID, patchName(sent.Thread))
+	patch := filepath.Join(bob.home, "serve", "kept", sent.Thread, "patch-"+sent.ID, patchName(sent.Thread))
 	before := readFile(t, patch)
 	if !strings.Contains(before, "one.txt") {
 		t.Fatalf("the kept patch:\n%s", before)
@@ -2091,13 +2094,13 @@ func TestServeAnswersAgainAReplyKeptWithoutItsOwnPatch(t *testing.T) {
 	bob.run("peers", "rm", "alice")
 	captureStderr(t, func() { bob.tryRun("serve", "--once") })
 
-	threadDir := filepath.Join(bob.home, "serve", "threads", sent.Thread)
-	if err := os.RemoveAll(filepath.Join(threadDir, "patch-"+sent.ID)); err != nil {
+	keptDir := filepath.Join(bob.home, "serve", "kept", sent.Thread)
+	if err := os.RemoveAll(filepath.Join(keptDir, "patch-"+sent.ID)); err != nil {
 		t.Fatal(err)
 	}
 	// The thread's patch where the older auu kept it, which is not this
 	// answer's.
-	if err := os.WriteFile(filepath.Join(threadDir, patchName(sent.Thread)), []byte("not this answer's\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(keptDir, patchName(sent.Thread)), []byte("not this answer's\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	bob.run("peers", "add", alice.exportLine())
