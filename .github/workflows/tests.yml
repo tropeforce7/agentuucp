@@ -46,9 +46,11 @@ jobs:
 
       # A test that passes four times in five is a failing test, and a single
       # run will not tell you which one it is. Several of these use real
-      # sockets and a real clock, so the repeat is worth its minute.
+      # sockets and a real clock, so the repeat is worth its time. Three
+      # runs of internal/auu take longer than go test's ten-minute default,
+      # so the step names its own timeout (D138).
       - name: repeat the suite, to catch flakes
-        run: go test -count=3 ./...
+        run: go test -count=3 -timeout 40m ./...
 
       # The agent's hardening, peer-credential and lock files are
       # build-tagged per platform, and Windows is the platform nobody here
