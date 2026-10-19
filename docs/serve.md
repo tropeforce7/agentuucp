@@ -228,7 +228,13 @@ copy. A reply large enough to go as a stream is sent under one id at
 every attempt in the same way: the id is kept beside the answer before
 the stream is sealed, a retry finishes the upload the outbox still holds,
 sends nothing when the sent box says a relay took it, and otherwise seals
-it again under that id, which the asker keeps as the one reply. An answer whose patch
+it again under that id, which the asker keeps as the one reply. The
+form it was sealed in, an envelope or a stream, is the form it goes in
+at every attempt that may have reached the relay, whatever
+`stream_threshold` has become since; one the relay refused outright,
+which stored nothing, goes in the form the threshold says, and a stream
+kept for an answer that is no longer this one, its asker's key changed,
+is given up in the outbox before the new one goes. An answer whose patch
 could not be taken is not kept: the message is tried again whole, as when
 the after hook refuses, so the first handler above is run again in the
 worktree made again. If that run answers and its patch can be taken, the
