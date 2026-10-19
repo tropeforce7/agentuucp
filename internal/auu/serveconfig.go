@@ -3,6 +3,7 @@ package auu
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -183,6 +184,45 @@ func (cfg *serveConfig) names() []string {
 // it, since a person reading it is looking at the file.
 func (cfg *serveConfig) errf(channel, format string, a ...any) error {
 	return usageErrf("%s: channel %q: %s", cfg.path, channel, fmt.Sprintf(format, a...))
+}
+
+// checkFolds asks the disk under serveDir whether it takes two channel
+// names as one directory, which check, comparing case alone, cannot see: a
+// filesystem that folds Unicode normalisation, as APFS does, takes é
+// composed and é decomposed as one name, and the standard library has no
+// table to say so (S63). It makes a directory of its own under serveDir,
+// on the filesystem serve's channels and worktrees are on, so a running
+// serve's directories are never touched and two checks never meet; makes
+// each channel's name in it in order, a name the disk answers as already
+// there being one it folds onto an earlier; and removes the directory
+// whatever happened. It runs after check, whose rule every name has met
+// before it is joined onto anything.
+func (cfg *serveConfig) checkFolds(serveDir string) error {
+	if err := os.MkdirAll(serveDir, 0o700); err != nil {
+		return err
+	}
+	probe, err := os.MkdirTemp(serveDir, ".channel-names-")
+	if err != nil {
+		return fmt.Errorf("asking the disk under %s whether it folds the channels' names: %w", serveDir, err)
+	}
+	defer os.RemoveAll(probe)
+	var made []string
+	for _, name := range cfg.names() {
+		dir := filepath.Join(probe, name)
+		err := os.Mkdir(dir, 0o700)
+		if errors.Is(err, fs.ErrExist) {
+			for _, earlier := range made {
+				if sameDir(filepath.Join(probe, earlier), dir) {
+					return cfg.errf(name, "channels %q and %q are one directory on this filesystem, which takes them as one name; rename one", earlier, name)
+				}
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("asking the disk under %s whether it folds the channels' names: %w", serveDir, err)
+		}
+		made = append(made, name)
+	}
+	return nil
 }
 
 // check is every rule the file must satisfy, over every channel, without

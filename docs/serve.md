@@ -169,7 +169,11 @@ A thread's worktree is let go of when the thread has been idle for
 channel is in the file. Both are under `serve/worktrees/`, a thread's by
 its id and a read-only channel's by its name, so a channel may not be
 named with 32 hex characters, in either case, which is a thread id's
-shape: `auu serve check` refuses one, saying so. A thread's state is
+shape: `auu serve check` refuses one, saying so. It also refuses two
+channels whose names are one directory on the disk under `serve/`: in
+case, everywhere, and in Unicode spelling, as é composed and decomposed
+are on APFS, which it finds by making every name side by side in one
+directory of its own under `serve/` and removing it after. A thread's state is
 under `serve/threads/`, and serve's own files for it under
 `serve/kept/`, each by the thread's id; both go with the worktree, and
 a `kept/` directory whose thread's directory was removed by hand is
