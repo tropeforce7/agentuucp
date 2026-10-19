@@ -20,6 +20,9 @@ auu-attachments/
 # per-machine Claude Code settings; the guides beside it are shared
 .claude/settings.local.json
 
+# the maintainers' notes beside CLAUDE.md, read by Claude Code, not tracked
+CLAUDE.local.md
+
 # editors
 .idea/
 .vscode/
