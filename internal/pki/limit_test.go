@@ -83,8 +83,8 @@ func TestLimitAServerLeafAndARecordNeedAHost(t *testing.T) {
 // either case, and splitHosts takes an IPv4 and an IPv6 address. safeHost,
 // the belt and braces, makes every one of them one segment of the
 // characters a DNS name and an address hold and of '_', never empty and
-// never beginning with a dot, and leaves a name validDNSName takes as it
-// is.
+// never beginning with a dot, and in lower case, and leaves a name
+// validDNSName takes as it is but for the case (S62).
 func TestLimitAHostIsHeldToItsRules(t *testing.T) {
 	label63 := strings.Repeat("a", 63)
 	refused := []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, `C:\x`, "C:x", "CON", "com1.txt", "\x00", "", ".", strings.Repeat("a", 300),
@@ -105,8 +105,8 @@ func TestLimitAHostIsHeldToItsRules(t *testing.T) {
 		if err := validDNSName(v); err != nil {
 			t.Errorf("validDNSName refused %q: %v", v, err)
 		}
-		if got := safeHost(v); got != v {
-			t.Errorf("safeHost(%q) = %q; a name validDNSName takes is its own segment", v, got)
+		if got := safeHost(v); got != strings.ToLower(v) {
+			t.Errorf("safeHost(%q) = %q; a name validDNSName takes is its own segment, lower-cased", v, got)
 		}
 	}
 	if n := len(taken[len(taken)-1]); n != 253 {
@@ -125,7 +125,7 @@ func TestLimitAHostIsHeldToItsRules(t *testing.T) {
 		}
 		for i := 0; i < len(got); i++ {
 			c := got[i]
-			if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '.' || c == '-' || c == '_') {
+			if !('a' <= c && c <= 'z' || '0' <= c && c <= '9' || c == '.' || c == '-' || c == '_') {
 				t.Errorf("safeHost(%q) = %q holds %q", v, got, string(c))
 				break
 			}

@@ -1304,3 +1304,49 @@ func TestAKeptRecordWithAnUnknownFieldIsNeverReopened(t *testing.T) {
 		t.Error("a message beside a record that does not read was filed")
 	}
 }
+
+// A kept record naming its relay in another case is that relay (S62), by
+// the rule the home's names are taken under: reopen waits on that relay's
+// fetch lock and files the message as from it. It matched the name byte for
+// byte, so on a filesystem that folds case it reached the relay's directory
+// under a name the home does not have, with no lock taken, and on one that
+// does not it took the relay for one since removed. A record naming a
+// relay since removed still reaches no other (TestAHeldLockMidwayIsSaidWithTheCount).
+func TestReopenFindsTheRelayARecordNamesInAnotherCase(t *testing.T) {
+	alice, bob, _ := peered(t)
+	postSections(t, alice, bob, "kept under another case", critical("fold-later"))
+	id := keptNewer(t, bob, 1)[0]
+	bob.run("relay", "rename", bob.defaultRelayName(), "work")
+	bs := storeOf(t, bob)
+	t.Cleanup(wire.Register("fold-later", wire.OnMessage))
+	entries, _, err := bs.DamagedEntries()
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("the kept message: %+v, %v", entries, err)
+	}
+	moveKept(t, bs, entries[0].Relay, id, "WORK", time.Now().Add(-time.Hour))
+	r, err := bs.Relay("work")
+	if err != nil || r.Name != "work" {
+		t.Fatalf("the relay: %+v, %v", r, err)
+	}
+	held, err := lockfile.Try(filepath.Join(bs.RelayDir(r), fetchLockName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	fetchLockSleep = func(time.Duration) {
+		waited = true
+		held.Release()
+	}
+	t.Cleanup(func() { held.Release(); fetchLockSleep = time.Sleep })
+	out, stderr, err := reopenDamaged(t, bob, "--all")
+	if err != nil {
+		t.Fatalf("reopen: %v\n%s\n%s", err, out, stderr)
+	}
+	if !waited {
+		t.Fatal("reopen of a record naming WORK never waited on work's fetch lock")
+	}
+	if m := recordOf(t, bob, store.Inbox, "kept under another case"); m.Relay != "work" {
+		t.Errorf("the message was filed as from %q; want work", m.Relay)
+	}
+	keptGone(t, bs, "WORK", id)
+}

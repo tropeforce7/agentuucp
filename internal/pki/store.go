@@ -350,9 +350,19 @@ func (s *Store) Relays() ([]string, error) {
 	}
 	var out []string
 	for _, e := range entries {
-		if e.IsDir() {
-			out = append(out, e.Name())
+		if !e.IsDir() {
+			continue
 		}
+		// A host names its directory lower-cased (S62), so a directory in
+		// another spelling was filed by an auu-ca from before, and is
+		// refused by name: read under its lower-case name it would be
+		// another relay's, or none, and its retired intermediates lost.
+		if name := e.Name(); safeHost(name) != name {
+			return nil, fmt.Errorf("%s was filed by an auu-ca from before host names were folded to lower case; "+
+				"rename it to %s, or, if that is there too, keep the one the relay's bundle came from",
+				filepath.Join(s.dir, relaysDir, name), filepath.Join(s.dir, relaysDir, safeHost(name)))
+		}
+		out = append(out, e.Name())
 	}
 	sort.Strings(out)
 	return out, nil
@@ -380,9 +390,10 @@ func (s *Store) FindRecord(hosts []string) (string, *RelayRecord, error) {
 		if err != nil {
 			return "", nil, err
 		}
+		// A DNS name is one name in any case (S62).
 		for _, have := range rec.Hosts {
 			for _, want := range hosts {
-				if have == want {
+				if strings.EqualFold(have, want) {
 					return k, rec, nil
 				}
 			}
@@ -451,13 +462,18 @@ func (s *Store) saveRelayRecord(host string, rec *RelayRecord) error {
 
 // safeHost makes a host name into one path segment. A host has already been
 // validated as a DNS name or an address by the time it gets here; this is
-// belt and braces so nothing from a command line becomes a path.
+// belt and braces so nothing from a command line becomes a path. It is
+// lower-cased, since a DNS name is one name in any case and a filesystem
+// that folds case would otherwise take two spellings as one directory
+// while the record compared them as two relays (S62).
 func safeHost(h string) string {
 	out := make([]byte, 0, len(h))
 	for i := 0; i < len(h); i++ {
 		c := h[i]
 		switch {
-		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z', '0' <= c && c <= '9', c == '.', c == '-':
+		case 'A' <= c && c <= 'Z':
+			out = append(out, c+'a'-'A')
+		case 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == '.', c == '-':
 			out = append(out, c)
 		default:
 			out = append(out, '_')

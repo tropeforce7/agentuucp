@@ -315,12 +315,16 @@ func reopenLine(r reopenJSON) string {
 // take, or a file this home cannot write.
 func reopenOne(s *store.Store, id *identity.Identity, relays []*store.Relay, settings store.ChannelSettings, e store.DamagedEntry) (reopenJSON, error) {
 	res := reopenJSON{Relay: e.Relay, ID: e.RelayID}
-	// The relay the record names, by its exact name. A relay since removed
-	// from this home is no reason not to open what it delivered; there is
-	// then no fetch of it to wait for, and no lock to take.
+	// The relay the record names, by the rule the home's names are taken
+	// under, so a name in another case or with a trailing dot is that relay
+	// on every filesystem, with its fetch lock, and not, on one that folds
+	// case, its directory reached under a name the home does not have
+	// (S62). A relay since removed from this home is no reason not to open
+	// what it delivered; there is then no fetch of it to wait for, and no
+	// lock to take.
 	r := &store.Relay{Name: e.Relay}
 	for _, have := range relays {
-		if have.Name == e.Relay {
+		if store.SameRelayName(have.Name, e.Relay) {
 			r = have
 			// One fetch or reopen at a time per relay, as the fetch takes
 			// it: a fetch running now could meet and save the same id.

@@ -919,7 +919,11 @@ rm relay-bundle.json
 
 Machines trust the anchor, not the intermediate, so nobody re-enrols. The
 relay keeps the retired client intermediate's certificate until it expires,
-so the certificates it issued go on verifying. The retired signing key
+so the certificates it issued go on verifying. `auu-ca` finds the relay's
+record by any of its hosts, in any order and in any case, since a DNS
+name is one name however it is written, and files it under the first
+host in lower case; a record an older `auu-ca` filed under a host with
+capitals is refused by name, with the name to rename it to. The retired signing key
 mints nothing the relay will honour. A certificate with a serial it never
 recorded is refused, and one with a recorded serial must carry the key that
 row records.

@@ -256,6 +256,18 @@ func TestRelayNamesResolveLikePeerNames(t *testing.T) {
 	if len(amb.Candidates) != 2 || amb.What != "relays" {
 		t.Errorf("ambiguity names %v (%s)", amb.Candidates, amb.What)
 	}
+	// The name in another case, or with a trailing dot, is that relay by
+	// the rule the home takes its names under (S62), and it is tried
+	// before any prefix: "WORK" is a prefix of "workshop" folded, and
+	// still names work.
+	for _, q := range []string{"WORK", "Work.", "work."} {
+		if got, err := s.Relay(q); err != nil || got.Name != "work" {
+			t.Errorf("%q: %v %v; want work", q, got, err)
+		}
+	}
+	if got, err := s.Relay("PERSONAL"); err != nil || got.Name != "personal" {
+		t.Errorf("another case: %v %v", got, err)
+	}
 
 	// By URL, with the port and without one the scheme implies.
 	if got, err := s.Relay("https://work.example:9443"); err != nil || got.Name != "work" {

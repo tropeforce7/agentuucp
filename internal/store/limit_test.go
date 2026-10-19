@@ -1496,7 +1496,7 @@ func TestLimitARelayNameEndsInALetterOrDigit(t *testing.T) {
 		t.Fatal(err)
 	}
 	relays, err := s.Relays()
-	if err != nil || len(relays) != 1 || !sameRelayName(relays[0].Name, "relay.example.") {
+	if err != nil || len(relays) != 1 || !SameRelayName(relays[0].Name, "relay.example.") {
 		t.Fatalf("the older relay is not listed: %+v, %v", relays, err)
 	}
 	kept := relays[0].Name
@@ -1510,7 +1510,7 @@ func TestLimitARelayNameEndsInALetterOrDigit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sameRelayName(r.Name, kept) {
+	if SameRelayName(r.Name, kept) {
 		t.Fatalf("the relay at https://relay.example was named %q, the older relay's directory", r.Name)
 	}
 	if err := s.RenameRelay(r.Name, "relay.example"); err == nil {

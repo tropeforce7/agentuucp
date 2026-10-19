@@ -289,6 +289,14 @@ func (s *Store) Relay(query string) (*Relay, error) {
 			return r, nil
 		}
 	}
+	// The name in another case, or with a trailing dot, is the same
+	// directory on a filesystem that folds it, so it is the same relay on
+	// every filesystem, by the rule that refuses it as a new one (S62).
+	for _, r := range relays {
+		if SameRelayName(r.Name, query) {
+			return r, nil
+		}
+	}
 	if looksLikeURL(query) {
 		for _, r := range relays {
 			if SameRelayURL(r.URL, query) {
@@ -403,7 +411,7 @@ func (s *Store) AddRelay(name, rawURL string) (*Relay, error) {
 		return nil, err
 	}
 	for _, r := range relays {
-		if sameRelayName(r.Name, name) {
+		if SameRelayName(r.Name, name) {
 			return nil, fmt.Errorf("this home already has a relay called %q, at %s; "+
 				"choose another name", r.Name, r.URL)
 		}
@@ -445,7 +453,7 @@ func defaultRelayName(normalised string, existing []*Relay) (string, error) {
 	}
 	taken := func(name string) bool {
 		for _, r := range existing {
-			if sameRelayName(r.Name, name) {
+			if SameRelayName(r.Name, name) {
 				return true
 			}
 		}
@@ -496,10 +504,10 @@ func relayNameBase(host string) string {
 	return base
 }
 
-// sameRelayName says whether two relay names are one directory on every
+// SameRelayName says whether two relay names are one directory on every
 // filesystem a home may be on: case folded, and a trailing dot taken off,
 // as Windows does, so a dotted name an older home kept is still seen.
-func sameRelayName(a, b string) bool {
+func SameRelayName(a, b string) bool {
 	return strings.EqualFold(strings.TrimRight(a, "."), strings.TrimRight(b, "."))
 }
 
@@ -529,7 +537,7 @@ func (s *Store) RenameRelay(oldName, newName string) error {
 		return err
 	}
 	for _, other := range relays {
-		if other.Name != r.Name && sameRelayName(other.Name, newName) {
+		if other.Name != r.Name && SameRelayName(other.Name, newName) {
 			return fmt.Errorf("this home already has a relay called %q", other.Name)
 		}
 	}
