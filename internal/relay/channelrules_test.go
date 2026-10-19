@@ -16,7 +16,7 @@ import (
 
 // A channel's own rules, max_bytes, no_streams and no_forwards, judged by
 // channelForPost where the channel's period is, on the post, the stream's
-// open and a courier's delivery (PLAN-CHANNEL-POLICY commit 2).
+// open and a courier's delivery (the channel-policy work's commit 2).
 
 // issuer hands out directory issue times one second apart, behind the
 // real clock CheckIssued judges them by, so each push is newer than the

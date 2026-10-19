@@ -286,10 +286,10 @@ func TestTheUploadLockIsHeldNoLongerThanTheAttempt(t *testing.T) {
 // mailbox. Now identity.ValidName, the export line's rule, is applied at
 // registration and refused 400 with the rule's own sentence; a valid name
 // is taken as before, and no name at all — nothing to print — is allowed.
-// The megabyte the trace used is met since PLAN-HTTP by the route's body
-// cap first, 413 before a byte of it is read, so the rule is shown on a
-// name under the cap and over its own bound, and the megabyte stays as
-// the cap's case.
+// The megabyte the trace used is met, since the HTTP bounds were added, by
+// the route's body cap first, 413 before a byte of it is read, so the rule
+// is shown on a name under the cap and over its own bound, and the megabyte
+// stays as the cap's case.
 func TestRegisterHoldsTheNameToTheExportLinesRule(t *testing.T) {
 	h := newHarness(t, Config{})
 	for _, tc := range []struct{ what, name string }{

@@ -5,10 +5,10 @@
 // relays a person joined, and is the only caller in the tree today; a relay
 // will dial its neighbours as a courier, out of a home of its own, needing
 // the same certificate renewed on the same window by the same code, and
-// arrives with PLAN-ROUTE. A second implementation would be a second thing
-// to get wrong, and the one running unattended would be the copy nobody
-// watched. Everything here was internal/auu's and is unchanged but for what
-// the next paragraph says.
+// arrives with relay-to-relay routing. A second implementation would be a
+// second thing to get wrong, and the one running unattended would be the
+// copy nobody watched. Everything here was internal/auu's and is unchanged
+// but for what the next paragraph says.
 //
 // A Dialer carries the two things this code cannot know for itself: the name
 // of the program, for the sentences that tell a person what to run, and where
@@ -48,7 +48,7 @@ type Dialer struct {
 	// command that is a leading space. A program without one — a relay
 	// dialling a neighbour, whose operator repairs a courier's certificate
 	// by other means — wants a sentence of its own before it ever reaches
-	// that advice, which is PLAN-ROUTE commit 1's to write.
+	// that advice, which the routing work's first commit is to write.
 	Prog string
 
 	// Note takes a remark this code has no other way to deliver: the

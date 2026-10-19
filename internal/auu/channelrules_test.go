@@ -20,7 +20,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
-// The owner's side of a channel's rules (PLAN-CHANNEL-POLICY commit 3):
+// The owner's side of a channel's rules (the channel-policy work's commit 3):
 // the flags, the listing, the checks before a push, and what a sender is
 // told.
 

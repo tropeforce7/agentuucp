@@ -16,8 +16,8 @@
 #
 # dave lives on relay-c and is who mail crosses to. bob holding two relays in
 # one home would be a smaller change and the wrong one: that is
-# PLAN-MULTIRELAY's subject, one identity on several relays, where this is two
-# operators peering.
+# the multi-relay work's subject, one identity on several relays, where this
+# is two operators peering.
 name: auu-e2e
 
 services:

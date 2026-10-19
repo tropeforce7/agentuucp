@@ -388,8 +388,8 @@ CREATE INDEX IF NOT EXISTS tokens_not_after ON tokens(not_after);`
 	// certificate's serial beside it costs one indexed read.
 	//
 	// There is no column for the token that paid for it. Which token created
-	// what is enrolment lineage, which PLAN-ADMIN keeps out of the database
-	// and in the audit log the operator controls.
+	// what is enrolment lineage, which the administrators' design keeps out of
+	// the database and in the audit log the operator controls.
 	certsTable = `CREATE TABLE IF NOT EXISTS certs (
 	serial     TEXT PRIMARY KEY,
 	fp         TEXT NOT NULL REFERENCES mailboxes(fp) ON DELETE CASCADE,

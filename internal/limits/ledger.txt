@@ -665,8 +665,7 @@ internal/token/token.go Claims int Uses int = [1, 1000] shown by TestLimitClaims
 internal/token/token.go short string s[:16] = local: len(s) > 16 by the check before
 internal/vouch/vouch.go Document int V int = [1, 1] shown by TestLimitVouchV
 
-# Caps: readers bounded and header blocks capped, the HTTP layer's bounds
-# of PLAN-HTTP.
+# Caps: readers bounded and header blocks capped, the HTTP layer's bounds.
 cmd/auu-relay/main.go newHTTPServer cap MaxHeaderBytes: relayapi.MaxHeaderBytes = <= 32768 shown by TestLimitTheListenerCapsHeaders
 internal/auu/serveproxy.go (*keyProxy).ServeHTTP cap http.MaxBytesReader(r.Body, proxyMaxRequestBytes) = <= 33554432 shown by TestLimitTheProxyCapsHeadersAndBodies
 internal/auu/serveproxy.go startKeyProxy cap MaxHeaderBytes: relayapi.MaxHeaderBytes = <= 32768 shown by TestLimitTheProxyCapsHeadersAndBodies
@@ -684,7 +683,7 @@ internal/relay/streamapi.go (*Server).handlePutStream cap io.LimitReader(body, w
 internal/relay/streamapi.go (*Server).handlePutStream cap io.LimitReader(body, want) = local: want is the row's size less the offset, which Content-Length was held equal to before a byte shown by TestLimitAnAttemptRunsToTheEndOrKeepsNothing
 
 # Times: a field of a json-tagged struct of a type that holds a time, and
-# a time.Parse or time.ParseInLocation, of PLAN-TIME.
+# a time.Parse or time.ParseInLocation, under the time rules.
 cmd/auu-admin/commands.go tokenWindow time time.Parse(notAfter) = local: the operator's --not-after, which tokenWindow holds to whole seconds ahead of now
 cmd/auu-ca/main.go cmdShow.relayOut time Expires = output
 cmd/auu-ca/main.go cmdShow.relayOut time updated = output

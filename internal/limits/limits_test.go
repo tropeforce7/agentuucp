@@ -808,7 +808,7 @@ func parseIn(s string) (time.Time, error) { return time.ParseInLocation(time.RFC
 // Sub is counted with either side the field, Compare with the field its
 // receiver, and comparators handed to sort.SliceStable and slices.MinFunc
 // as well; a display row on a time.Parse, which is no field, is refused.
-// An unbounded row, a range R21 of PLAN-TIME removed, is refused as a
+// An unbounded row, a range R21 of the time rules removed, is refused as a
 // range of no known shape for every commit, 2, 3 or 4, and one with no
 // "shown by" by the reading of the ledger. A
 // deadline with no "shown by" is refused by the reading of the ledger,

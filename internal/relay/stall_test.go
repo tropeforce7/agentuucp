@@ -24,14 +24,14 @@ import (
 // wire are the test's own, and the server's answer, if any, arrives on a
 // socket the test is watching.
 //
-// Since PLAN-HTTP a request is parked in readBody only when everything the
-// relay judges before the body has passed: it carries a registered
-// identity's auth header, since the header is parsed and the identity
-// looked up before the body, and it declares a body under the route's cap,
-// since one declared over it is refused unread. The stalled request used to
-// carry no header and declare a gigabyte; either is now answered before a
-// byte, which is the property those two rules bought, and a stall must be
-// an honest request that stops.
+// Since the HTTP bounds were added, a request is parked in readBody only
+// when everything the relay judges before the body has passed: it carries a
+// registered identity's auth header, since the header is parsed and the
+// identity looked up before the body, and it declares a body under the
+// route's cap, since one declared over it is refused unread. The stalled
+// request used to carry no header and declare a gigabyte; either is now
+// answered before a byte, which is the property those two rules bought, and
+// a stall must be an honest request that stops.
 type stalled struct {
 	conn net.Conn
 	// answered goes true if the relay replies, which means this request was

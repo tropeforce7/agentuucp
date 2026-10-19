@@ -77,8 +77,9 @@ func (c *CA) Issue(req *Request, fp string, now time.Time, lifetime time.Duratio
 }
 
 // issueLeaf builds the one client-certificate template this project issues,
-// from whichever authority is signing: a self-signed one under PLAN-MTLS, or
-// a signing intermediate from an auu-ca bundle.
+// from whichever authority is signing: a self-signed one from the first
+// client-certificate design, or a signing intermediate from an auu-ca
+// bundle.
 //
 // Nothing from the request but its key reaches the certificate. In particular
 // the subject is the caller's fingerprint and never the requester's own

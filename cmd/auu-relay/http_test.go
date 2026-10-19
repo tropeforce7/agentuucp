@@ -91,13 +91,13 @@ func TestTheRelaySpeaksHTTP11Alone(t *testing.T) {
 
 // TestTheProxyKeepsTheRelaysTimeouts: serve's key-holding proxy runs under
 // the relay's body and idle timeouts, its own header timeout (ten seconds
-// since PLAN-PROXY, under the relay's fifteen), the relay's header cap,
-// and no write timeout — net/http's runs from the request header to the
-// end of the response, and the proxy's response is the model's answer,
-// silent until ready on a call that does not stream and minutes long
-// either way; the bound is Claude Code's own client timeout across the
-// loopback. The two the proxy shares are held to the relay's here so that
-// one moving without the other is a failing test.
+// since the key-holding proxy was added, under the relay's fifteen), the
+// relay's header cap, and no write timeout — net/http's runs from the
+// request header to the end of the response, and the proxy's response is
+// the model's answer, silent until ready on a call that does not stream and
+// minutes long either way; the bound is Claude Code's own client timeout
+// across the loopback. The two the proxy shares are held to the relay's
+// here so that one moving without the other is a failing test.
 func TestTheProxyKeepsTheRelaysTimeouts(t *testing.T) {
 	relay := DefaultTimeouts()
 	proxy := auu.DefaultProxyTimeouts()

@@ -189,11 +189,11 @@ learned at one token which fingerprints have a mailbox here (G12). Now a
 body of no declared length is refused `411` and one declared over the cap
 `413` before the lookup, every caller charged alike, and
 `TestAnOverCapBodyIsRefusedAlikeForAKnownAndAnUnknownFingerprint` holds
-both wrappers to one answer for both. Until PLAN-HTTP the body was read
-before the header was parsed, so a stranger with a valid certificate and a
-fingerprint no mailbox had could have sixteen megabytes accepted and
-buffered before the relay found nothing to check them against. The
-signature cannot come first: it is over the body, so the body must be read
+both wrappers to one answer for both. Until the HTTP bounds were added, the
+body was read before the header was parsed, so a stranger with a valid
+certificate and a fingerprint no mailbox had could have sixteen megabytes
+accepted and buffered before the relay found nothing to check them against.
+The signature cannot come first: it is over the body, so the body must be read
 to check it; that is the one check that belongs after the body, and the
 reason the body is read at all before the caller is known to be who they
 say. The cost of the new order is a mailbox lookup for a stranger before
@@ -1491,7 +1491,7 @@ and none is made. A relay API has no reason to
 redirect. The signed request header is not one Go strips on a redirect
 to another host, so following one would hand it to whoever the Location
 named. And the sentence the client builds about a refusal names the
-request it answered. Until PLAN-SECTIONS commit 5, the client followed
+request it answered. Until the sections work of v0.15.0, the client followed
 redirects under Go's default policy. `resp.Request` was then the last
 request, whose URL the relay chose, and `url.Parse` decodes `%1b` in a
 path to ESC itself. A relay answering `302` to `/%1b]0;x%07%1b[2J`, then

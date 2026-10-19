@@ -11,8 +11,9 @@ import (
 )
 
 // A channel's own rules on the owner's command line: --max-bytes N|none,
-// --no-streams or --streams, --no-forwards or --forwards (PLAN-CHANNEL-
-// POLICY commit 3). Any of them set makes the directory version 2.
+// --no-streams or --streams, --no-forwards or --forwards (the
+// channel-policy work's commit 3). Any of them set makes the directory
+// version 2.
 
 // ruleFlags are the rule flags of channel create and channel update.
 type ruleFlags struct {

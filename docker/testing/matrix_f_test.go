@@ -18,8 +18,8 @@ import (
 // refusal, so its row ends correctly and nothing has to travel. That is why a
 // two-relay test let a one-hop defect through in the Go suite, and it is why
 // the far end here is dave on relay-c rather than bob on a second relay of his
-// own — one identity on several relays is PLAN-MULTIRELAY's subject, where this
-// is two operators peering.
+// own — one identity on several relays is the multi-relay work's subject, where
+// this is two operators peering.
 var forwardRows = []matrixRow{
 	{"F01", "across_and_back", "alice writes to dave two relays away, and he replies along the way it came", f01},
 	{"F02", "middle_hop_down", "the middle relay is stopped, the queue waits, and it drains when it comes back", f02},
