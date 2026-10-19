@@ -81,6 +81,8 @@ type Client struct {
 	// transport is the one carrying the client certificate, kept so a
 	// renewal can drop the connections using the old one.
 	transport *http.Transport
+	// kept is the transport KeepConnections adds, nil until then.
+	kept *http.Transport
 	// certless reaches the same relay the same way, offering nothing. It is
 	// nil unless this machine holds a certificate, and it exists to answer
 	// one question: see diagnoseRefusal.
@@ -231,7 +233,9 @@ func transportFor(cert *tls.Certificate, anchor *Anchor) *http.Transport {
 // idle connection left by an unsigned call (health, keys) would be reused
 // by the next signed one, so the transport keeps none: each request has a
 // connection of its own, and one that dies is the request's failure,
-// which the caller sees and signs afresh if it asks again.
+// which the caller sees and signs afresh if it asks again. A relay's
+// courier alone keeps its connection, and only for the requests net/http
+// cannot send again (KeepConnections).
 func boundTransport(t *http.Transport) {
 	t.DisableKeepAlives = true
 	// An upload asks before it sends its body (PutStream); a relay that
@@ -297,15 +301,82 @@ func pinnedHandshakeRefused(err error) bool {
 
 // CloseIdle drops pooled connections, so the next request makes a fresh
 // handshake. A renewal must not go on using the certificate it replaced.
-// The transports keep no connection for a second request (G28), so there
-// is none to drop today; it is kept so that holds if that ever changes.
+// The transports keep no connection for a second request (G28), but for a
+// courier's (KeepConnections), whose kept connections this drops.
 func (c *Client) CloseIdle() {
 	if c.transport != nil {
 		c.transport.CloseIdleConnections()
 	}
+	if c.kept != nil {
+		c.kept.CloseIdleConnections()
+	}
 	if c.certless != nil {
 		c.certless.CloseIdleConnections()
 	}
+}
+
+// KeepConnections makes this client keep its connection between the
+// requests net/http cannot send again, for a courier draining a backlog to
+// one neighbour, which otherwise made a post-quantum handshake for every
+// row (G28's cost). It is for a relay's courier alone; every other client
+// keeps none. It is called once, before the client is used.
+func (c *Client) KeepConnections() {
+	kept := c.transport.Clone()
+	kept.DisableKeepAlives = false
+	// One worker per neighbour, one request at a time.
+	kept.MaxIdleConnsPerHost = 1
+	kept.MaxConnsPerHost = 1
+	// Under a relay's own idle timeout, two minutes, so the courier lets a
+	// connection go before the neighbour does.
+	kept.IdleConnTimeout = keptIdle
+	c.kept = kept
+	c.http = relayHTTP(&keepTransport{kept: kept, fresh: c.transport}, c.http.Timeout)
+}
+
+// keptIdle is how long a courier's kept connection may sit unused.
+const keptIdle = 30 * time.Second
+
+// keepTransport sends on a kept connection only a request net/http will
+// never send again, and every other on a connection of its own, as G28
+// has it.
+//
+// net/http sends a request again, as it was, only on a reused connection
+// and only in two cases (Go 1.27, persistConn.shouldRetryRequest): nothing
+// of it was written, when it has no body or GetBody can make the body
+// again; or the connection failed after it was written, when it is
+// replayable, a GET, HEAD, OPTIONS or TRACE or one carrying an
+// Idempotency-Key, and its body can be made again. A POST with a body,
+// GetBody taken away and no such header is neither, so whatever happens
+// to its connection it is written to the wire once, its nonce and its
+// stamp with it; a connection that fails under it is the request's
+// failure, which the caller sees and signs afresh if it asks again. A
+// courier's forward asked again after an answer that may have been lost
+// is a second post of the same envelope, which the neighbour's forward
+// hash answers with the first post's id (S50, rulings 44 and 45). Every
+// other request, the health ask and every listing among them, goes on the
+// fresh transport, which keeps nothing.
+type keepTransport struct {
+	kept, fresh http.RoundTripper
+}
+
+func (k *keepTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if !sentOnce(req) {
+		return k.fresh.RoundTrip(req)
+	}
+	once := req.WithContext(req.Context())
+	once.GetBody = nil
+	return k.kept.RoundTrip(once)
+}
+
+// sentOnce says req is one net/http will not send again once GetBody is
+// taken away: a POST with a body and no idempotency header.
+func sentOnce(req *http.Request) bool {
+	if req.Method != http.MethodPost || req.ContentLength <= 0 || req.Body == nil || req.Body == http.NoBody {
+		return false
+	}
+	_, idem := req.Header["Idempotency-Key"]
+	_, xidem := req.Header["X-Idempotency-Key"]
+	return !idem && !xidem
 }
 
 // sleep waits for d, or until the context is cancelled.

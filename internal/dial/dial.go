@@ -58,6 +58,11 @@ type Dialer struct {
 	// neither remark is a failure, and neither is worth a caller's error
 	// path.
 	Note func(string)
+
+	// KeepConnections gives the client it builds a kept connection for the
+	// requests net/http cannot send again (client.KeepConnections). A
+	// relay's courier sets it, and nothing else does.
+	KeepConnections bool
 }
 
 // note delivers a remark, if this caller takes them.
@@ -292,6 +297,9 @@ func (d Dialer) NoRenew(s *store.Store, id *identity.Identity, r *store.Relay) (
 	c, err := client.NewWithAnchor(r.URL, id, cert, anchor)
 	if err != nil {
 		return nil, err
+	}
+	if d.KeepConnections {
+		c.KeepConnections()
 	}
 	return c, nil
 }

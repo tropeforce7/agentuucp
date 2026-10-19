@@ -147,8 +147,9 @@ func newWorkers(st *Store, c *Courier, limits CourierLimits, log *slog.Logger, n
 		limits:    limits,
 		courier:   c,
 		dialer: dial.Dialer{
-			Prog: "auu",
-			Note: func(s string) { log.Warn("courier: " + s) },
+			Prog:            "auu",
+			Note:            func(s string) { log.Warn("courier: " + s) },
+			KeepConnections: true,
 		},
 	}
 	w.dial, w.post, w.reportTo = w.dialNeighbour, w.postToNeighbour, w.reportToNeighbour
@@ -308,12 +309,16 @@ func (w *workers) drain(r *store.Relay) time.Duration {
 	// this process started is written down and not remembered.
 	soonest := maxRetry
 	// One client for the turn, not one for each row: a dial reads the
-	// certificate store and builds the client's transport. Each request
-	// still makes a connection of its own, a post-quantum handshake with
-	// this courier's client certificate, since the client keeps none for a
-	// second request (G28): a signed request the transport sent again on a
-	// reused connection would be a replay the neighbour refuses. So an
-	// outage's backlog costs one handshake a row. It is dialled on the
+	// certificate store and builds the client's transport. The client keeps
+	// its connection for the turn's forwards (client.KeepConnections), the
+	// requests net/http cannot send again, so an outage's backlog costs one
+	// post-quantum handshake with this courier's certificate rather than
+	// one a row; a signed request the transport sent again on a reused
+	// connection would be a replay the neighbour refuses, which is why
+	// every other client keeps none (G28). An attempt that ends without an
+	// answer ends the turn as well (attemptBackOff), and the close below
+	// lets go of that connection with the rest, so no row after a failed
+	// one goes on it, and none outlives the turn. It is dialled on the
 	// first row rather than before the loop, so a turn that finds nothing
 	// waiting — which is most turns — dials nothing.
 	var c *client.Client
