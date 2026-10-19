@@ -382,10 +382,10 @@ func resumePending(s *store.Store, id *identity.Identity, asJSON bool, relay str
 		}
 	}
 	for _, p := range waiting {
-		// The upload was opened on one relay and holds a prefix of these
-		// exact bytes; it cannot be finished anywhere else. A record from
-		// before a home could know more than one relay names none, and the
-		// default is where it was opened.
+		// A record names the relay it was opened on, or was to be posted
+		// to, and is finished there; resumeRelay says when it may move. A
+		// record from before a home could know more than one relay names
+		// none, and the default is where it was opened.
 		r, err := resumeRelay(s, p, relay)
 		if err != nil {
 			fail(p, err)
@@ -422,7 +422,17 @@ func resumePending(s *store.Store, id *identity.Identity, asJSON bool, relay str
 	return nil
 }
 
-// resumeRelay is the relay an interrupted upload has to be finished on.
+// dropCommand is the command that gives up what p is: the message's id,
+// and for a copy of a message to several, whose copy.
+func dropCommand(p *pending) string {
+	if p.RecipientCount != 0 {
+		return fmt.Sprintf("%s outbox drop %s %s", prog, p.MessageID[:12], p.label())
+	}
+	return fmt.Sprintf("%s outbox drop %s", prog, p.MessageID[:12])
+}
+
+// resumeRelay is the relay an interrupted upload has to be finished on, or
+// an unopened record posted to.
 // Every record names it; listPending refused one that does not. The upload
 // it names was opened there and holds a prefix of these bytes there alone,
 // so a --relay that names another is refused before anything is opened
@@ -437,8 +447,18 @@ func resumeRelay(s *store.Store, p *pending, flag string) (*store.Relay, error) 
 	if err != nil && !gone {
 		return nil, err
 	}
+	// A copy posted whole, and a stream whose upload was never opened,
+	// were never opened anywhere: they are said as what was to be posted
+	// to the relay, not as an upload there (57c). The move is held to the
+	// same rule all the same, since a post whose answer was lost may be on
+	// the relay it names, and posting it to another would deliver it twice.
+	unopened := p.Upload == ""
 	if strings.TrimSpace(flag) == "" {
 		if gone {
+			if unopened {
+				return nil, fmt.Errorf("it was to be posted to %s, which this home no longer has; "+
+					"add it again, post it to another with --relay, or send the message afresh", p.Relay)
+			}
 			return nil, fmt.Errorf("it was opened on %s, which this home no longer has; "+
 				"add it again, finish it on another with --relay, or send the message afresh", p.Relay)
 		}
@@ -450,6 +470,10 @@ func resumeRelay(s *store.Store, p *pending, flag string) (*store.Relay, error) 
 	}
 	if !gone {
 		if r.Name != held.Name {
+			if unopened {
+				return nil, usageErrf("it was to be posted to %s; post it there with --relay %s, "+
+					"or give it up with '%s' and send the message afresh", p.Relay, p.Relay, dropCommand(p))
+			}
 			return nil, usageErrf("it was opened on %s; finish it there with --relay %s, "+
 				"or abandon it and send the message afresh", p.Relay, p.Relay)
 		}

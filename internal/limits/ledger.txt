@@ -462,6 +462,8 @@ internal/auu/serveproxycontrol.go (*controlSource).mint string rest[strings.Last
 internal/auu/serveproxycontrol.go parseGid int strconv.Atoi(text) = >= 0 shown by TestLimitGroupID
 internal/auu/serveproxycontrol.go proxyFile int V int = [1, 1] shown by TestLimitProxyFileV
 internal/auu/stream.go (*pending).label string p.To[:12] = local: ValidFingerprint at listPending shown by TestLimitPendingRecordShapes
+internal/auu/stream.go dropCommand string p.MessageID[:12] = local: ValidID at listPending shown by TestLimitPendingRecordShapes
+internal/auu/stream.go dropCommand string p.MessageID[:12] #2 = local: ValidID at listPending shown by TestLimitPendingRecordShapes
 internal/auu/stream.go resumePending string p.MessageID[:12] = local: ValidID at listPending shown by TestLimitPendingRecordShapes
 internal/auu/stream.go resumePending string p.MessageID[:12] #2 = local: ValidID at listPending shown by TestLimitPendingRecordShapes
 internal/auu/stream.go sealStreams string m.To[:identity.ShortIDLen] = local: ValidFingerprint at BuildManifestMany shown by TestLimitPendingRecordShapes

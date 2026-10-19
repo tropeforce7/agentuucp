@@ -77,8 +77,9 @@ import (
 // when a sent record's change said its read and its save in one warning
 // (G45), 586 when a program's line over the cap was cut and the lines after
 // it copied (G49), 588 when serve read git's version for the oldest it
-// takes (F1). A walk that finds fewer is not reaching the tree.
-const floor = 588
+// takes (F1), 590 when a resume named the drop for a record never opened
+// on a relay (57c). A walk that finds fewer is not reaching the tree.
+const floor = 590
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.

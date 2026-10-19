@@ -9,6 +9,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/tropeforce7/agentuucp/internal/message"
+	"github.com/tropeforce7/agentuucp/internal/stream"
 )
 
 // An interrupted upload is finished on the relay it was opened on (G30,
@@ -95,5 +98,114 @@ func TestAResumeOnAnotherRelayIsRefusedBeforeAnyUpload(t *testing.T) {
 	alice.run("send", "--resume")
 	if got := bob.inboxJSON("--relay", "personal").Fetch.Delivered; got != 1 {
 		t.Fatalf("the moved message delivered %d times on personal; want once", got)
+	}
+}
+
+// A copy posted whole, and a stream copy whose upload was never opened,
+// were never opened on a relay: a resume says them as what was to be
+// posted to the relay they name, not as an upload opened there (57c). The
+// move is held to the same rule, since a post whose answer was lost may be
+// on that relay: --relay naming another is refused while this home has it,
+// with the drop that gives the copy up, and once the relay is gone --relay
+// moves every copy and each is delivered once.
+func TestAnUnopenedCopyIsSaidAsWhatWasToBePosted(t *testing.T) {
+	for _, kind := range []string{"envelope", "stream"} {
+		t.Run(kind, func(t *testing.T) {
+			work, personal := startRelay(t), startRelay(t)
+			alice := onBothRelays(t, "alice", work, personal)
+			bob := onBothRelays(t, "bob", work, personal)
+			carol := onBothRelays(t, "carol", work, personal)
+			for _, u := range []*user{bob, carol} {
+				alice.run("peers", "add", u.exportLine())
+				u.run("peers", "add", alice.exportLine())
+			}
+			var id string
+			if kind == "envelope" {
+				id, _ = sealCopies(t, alice, "bob", "carol")
+			} else {
+				id = sealUnopenedStreams(t, alice, "bob", "carol")
+			}
+			for _, p := range pendingOf(t, alice) {
+				if p.Relay != "work" || p.Upload != "" {
+					t.Fatalf("a copy before the resume: %+v", p)
+				}
+			}
+
+			var err error
+			said := captureStderr(t, func() { _, err = alice.tryRun("send", "--resume", "--relay", "personal") })
+			want := id[:12] + ": it was to be posted to work; post it there with --relay work, or give it up with 'auu outbox drop " + id[:12] + " "
+			if err == nil || strings.Count(said, want) != 2 || strings.Contains(said, "opened on") {
+				t.Fatalf("a resume on another relay: %v\n%s\nwant %q for each copy", err, said, want)
+			}
+
+			alice.run("relay", "rm", "work", "--yes")
+			said = captureStderr(t, func() { _, err = alice.tryRun("send", "--resume") })
+			want = id[:12] + ": it was to be posted to work, which this home no longer has; add it again, post it to another with --relay, or send the message afresh"
+			if err == nil || strings.Count(said, want) != 2 {
+				t.Fatalf("a resume after the relay went: %v\n%s\nwant %q for each copy", err, said, want)
+			}
+
+			alice.run("send", "--resume", "--relay", "personal")
+			for _, u := range []*user{bob, carol} {
+				if got := u.inboxJSON("--relay", "personal").Fetch.Delivered; got != 1 {
+					t.Errorf("a moved copy delivered %d times on personal; want once", got)
+				}
+			}
+		})
+	}
+}
+
+// sealUnopenedStreams writes a stream to several to u's outbox on its
+// default relay, sealed and recorded and never opened as an upload, as a
+// send stopped before its first open leaves it, and answers its id.
+func sealUnopenedStreams(t *testing.T, u *user, peers ...string) string {
+	t.Helper()
+	t.Setenv("AUU_HOME", u.home)
+	s, me, err := loadIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.DefaultRelay()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var to []addressed
+	for _, name := range peers {
+		pub, err := s.Resolve(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		to = append(to, addressed{pub: pub})
+	}
+	file, _ := attachment(t, "x.bin", 10<<10)
+	body := message.Body{Type: message.TypeAsk, Thread: strings.Repeat("a", 32), Text: "x"}
+	written, _, err := sealStreams(s, me, r, to, body, []string{file}, streamSettings{threshold: stream.DefaultThreshold, chunkSize: stream.MinChunkSize}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return written[0].MessageID
+}
+
+// pendingOf is what waits in u's outbox.
+func pendingOf(t *testing.T, u *user) []*pending {
+	t.Helper()
+	pending, broken := outboxOf(t, u)
+	if len(broken) != 0 {
+		t.Fatalf("the outbox holds broken records: %v", broken)
+	}
+	return pending
+}
+
+// dropCommand names the copy for a message to several, whose id several
+// records share, and the id alone for a message to one.
+func TestTheDropCommandNamesTheCopyOnlyForSeveral(t *testing.T) {
+	id := strings.Repeat("ab", 16)
+	one := &pending{MessageID: id, To: strings.Repeat("c", 64)}
+	if got, want := dropCommand(one), "auu outbox drop "+id[:12]; got != want {
+		t.Errorf("a message to one: %q, want %q", got, want)
+	}
+	several := &pending{MessageID: id, To: strings.Repeat("c", 64), ToName: "carol", RecipientCount: 2}
+	if got, want := dropCommand(several), "auu outbox drop "+id[:12]+" carol"; got != want {
+		t.Errorf("a copy of a message to several: %q, want %q", got, want)
 	}
 }
