@@ -905,7 +905,11 @@ they can reply. Answering no prints the `auu allow push` to run later.
 
 `trust` asks the local name first, and refuses a name another peer or a
 room already has, a name the export line's rule refuses, or a peer list
-it cannot read, before anything is fetched or acknowledged. For a stream
+it cannot read, before anything is fetched or acknowledged. It then takes
+its turn with any fetch from the message's relay, as two fetches do,
+waiting up to a minute for one that is running; one still running after
+that is said as `another auu is fetching from RELAY; try again in a
+moment`, at exit 2, with nothing changed and nobody added. For a stream
 it then fetches the manifest again and holds it to the quarantined record
 before asking for any of the payload. A
 different sender, message id or channel is refused, naming the message by
@@ -955,6 +959,12 @@ auu rm MESSAGE-ID...               # from the relay and from here
 auu rm MESSAGE-ID --remote-only    # from the relay; keep the local copy
 auu rm MESSAGE-ID --local-only     # from here; leave the relay's copy
 ```
+
+`auu rm` takes its turn with any fetch from the message's relay, as
+`quarantine trust` does, so a fetch running at the same moment cannot put
+back what it removed; one still running after a minute is said as
+`another auu is fetching from RELAY; try again in a moment`, at exit 2,
+with that message and the ones after it as they were.
 
 A message you have fetched is still on the relay. A channel keeps its mail
 by default, which is what lets a second machine of yours read the same mail,

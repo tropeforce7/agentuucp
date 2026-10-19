@@ -912,7 +912,8 @@ From `auu damaged reopen`, which the person runs and you report:
 - `nothing is kept for RELAY ID; auu damaged ls lists what is` — exit 1.
 - A line beginning `another auu is fetching from RELAY; try again in a
   moment` — exit 2, after a minute's wait for that fetch; one retry later
-  is enough.
+  is enough. `auu quarantine trust` and `auu rm` say it too, with nothing
+  of that message changed.
 - `N reopened and filed before the key locked; the rest are where they
   were` on stderr beside exit 4, or `… before this stopped; …` beside
   exit 2, or exit 1 when a file could not be written — what was filed

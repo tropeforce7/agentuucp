@@ -63,9 +63,25 @@ func cmdRm(args []string) error {
 
 	// One client per relay: several ids usually came through one.
 	clients := map[string]*client.Client{}
+	// One fetch or removal at a time on a record's relay, held while that
+	// record is removed: a fetch settling a record's owed acknowledgement
+	// saved it back after it was removed. One relay's lock at a time, let
+	// go before the next id, so two removals naming two relays in either
+	// order never each hold what the other waits for.
+	locks := newFetchLocks(s)
+	defer locks.release()
 	results := make([]rmResult, 0, len(ids))
 	for _, want := range ids {
+		locks.release()
 		box, m, err := s.Find(want)
+		if err == nil && box != store.Sent {
+			// Read again under the lock, since a fetch that ran while
+			// this waited may have settled it or moved it.
+			if err := locks.take(m.Relay); err != nil {
+				return finishRm(results, *asJSON, err)
+			}
+			box, m, err = s.Find(want)
+		}
 		if err != nil {
 			// A record Load refuses is not listed and cannot be found by
 			// a prefix, but a whole id can still name it: it is removed

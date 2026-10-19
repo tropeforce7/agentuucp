@@ -112,6 +112,7 @@ internal/auu/compose.go composeIn os.WriteFile(path) = local
 internal/auu/compose.go composeTemplate os.Stat(p) = operator's absolute path
 internal/auu/compose.go keepDraft os.WriteFile(composePath(s)) = local
 internal/auu/damaged_cmds.go reopenOne lockfile.Take(filepath.Join(s.RelayDir(r), fetchLockName)) = operator: a relay name through the fetch lock's directory, ValidRelayName at AddRelay, RenameRelay and Relays shown by TestLimitRelayNameIsNotAPath
+internal/auu/fetchlock.go (*fetchLocks).take lockfile.Take(filepath.Join(l.s.RelayDir(r), fetchLockName)) = operator: a relay name through the fetch lock's directory, ValidRelayName at AddRelay, RenameRelay and Relays shown by TestLimitRelayNameIsNotAPath
 internal/auu/handler_unix.go shellCommand exec.Command("/bin/sh") = local
 internal/auu/handler_windows.go killGroup exec.Command("taskkill") = local
 internal/auu/handler_windows.go shellCommand exec.Command("cmd") = local

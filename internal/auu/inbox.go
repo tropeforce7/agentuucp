@@ -2196,6 +2196,25 @@ func cmdQuarantine(args []string) error {
 		if err := s.CheckPeer(pub); err != nil {
 			return usageErrf("%v", err)
 		}
+		// One fetch or trust at a time on the record's relay, taken once
+		// the person has answered and before anything is fetched,
+		// acknowledged or written, and held through the move and no longer,
+		// so the allow list's question below holds up no fetch: a fetch
+		// settling the owed acknowledgement of this record saved it back
+		// into the quarantine after the move, which left it in both boxes.
+		// Read again under the lock, since a fetch that ran while this
+		// waited may have settled or replaced it.
+		locks := newFetchLocks(s)
+		defer locks.release()
+		if err := locks.take(m.Relay); err != nil {
+			return err
+		}
+		if m, err = quarantined(s, m.Inner.ID); err != nil {
+			return err
+		}
+		if m.Newer != "" {
+			return usageErrf("%s", waitsForNewer(m))
+		}
 		// A quarantined stream has only its manifest: the payload is still on
 		// the relay, deliberately, so that a stranger cannot make anybody
 		// download two gigabytes. Trusting them is what fetches it.
@@ -2360,6 +2379,7 @@ func cmdQuarantine(args []string) error {
 			return err
 		}
 		fmt.Printf("trusted %s and moved message %s to the inbox\n", pub.Fingerprint()[:16], m.Inner.ID[:12])
+		locks.release()
 		return offerAllowPush(s, m)
 
 	default:
