@@ -331,7 +331,11 @@ for your own account. `auu skill ls` with the same target says whether what
 is installed matches the `auu` beside it, which is what to look at after an
 upgrade, and `auu skill show auu-connect` prints one without installing it.
 A file you have edited is never overwritten in silence: `install` names it
-and leaves it, and `--force` replaces it.
+and leaves it, and `--force` replaces it. [`docs/client.md`
+1.12](docs/client.md#112-installing-the-skills-for-a-coding-agent) says the
+whole of it, written so that a coding agent asked to install the skills can
+follow it: the targets, what each line of the output means, and moving from
+the old `connect`.
 
 | skill | for |
 |---|---|

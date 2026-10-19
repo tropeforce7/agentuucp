@@ -1768,6 +1768,121 @@ own `rooms.json`, as it has its own peer list. Copying the home to it
 copies the file as it stands. After that a room changed on one machine is
 not changed on the other.
 
+### 1.12 Installing the skills for a coding agent
+
+This section is written so that a coding agent asked to "install the auu
+skills" can do it from here alone. A skill is a directory holding a
+`SKILL.md` and its own copy of `reference.md`, which an agent reads when a
+task matches what the skill says it is for. `auu` carries three in the
+binary, `auu-connect` for mail, `auu-setup` for the user's own identity
+and keys, and `auu-relay` for running a relay, and writes them out on
+request, so the copy on a machine is the one that matches the `auu`
+beside it.
+
+Where they go is the target, and it is always given:
+
+| target | directory | read by |
+|---|---|---|
+| `--target claude` | `$CLAUDE_CONFIG_DIR/skills`, else `~/.claude/skills` | Claude Code |
+| `--target agents` | `~/.agents/skills` | Codex, and any other agent that reads `~/.agents` |
+| `--dir DIR` | `DIR/skills` | whatever reads that directory; `--dir ~/.agents` writes the same directory as `--target agents` |
+
+*Listing 1.12a*
+```
+auu skill install --target claude    # Claude Code
+auu skill install --target agents    # Codex
+auu skill ls --target claude         # what is there, against this auu
+auu skill rm connect --target claude --yes   # the old name of auu-connect, once the user agrees
+```
+
+`--dir` and `--target` together are refused, since each names a place.
+Without either, at a terminal, the command asks which, and an empty answer
+installs nothing; with no terminal, as in an agent's shell, it refuses,
+exit 1, nothing written, and names the two commands with the directory
+each would use:
+
+*Listing 1.12b*
+```
+auu: where the skills go was not said, and there is no terminal to ask at; run one of:
+  auu skill install --target claude    # Claude Code reads /home/x/.claude/skills
+  auu skill install --target agents    # Codex reads /home/x/.agents/skills
+or give the base directory with --dir DIR (the skills go in DIR/skills)
+```
+
+An agent that sees this asks the user which agent the skills are for, or
+takes the one it is, and runs that line. `--json` never asks either, and
+says `--json does not ask` in the same sentence. On Windows, and on any
+system but Linux and macOS, there is never a terminal to ask at, so the
+target is always given.
+
+An install says what it did, a line per file:
+
+*Listing 1.12c*
+```
+installed auu-connect, auu-setup and auu-relay in /home/x/.claude/skills for Claude Code (auu v0.19.0)
+  auu-connect/SKILL.md: written
+  auu-connect/reference.md: written
+  auu-setup/SKILL.md: already current
+  auu-setup/reference.md: already current
+  auu-relay/SKILL.md: kept, differs from this binary's copy; --force replaces it
+  auu-relay/reference.md: written
+connect in /home/x/.claude/skills is the old name of auu-connect, installed by an earlier auu: auu skill rm connect --target claude removes it
+restart Claude Code, or start a new session, for it to see them
+```
+
+The first line is `installed` when a file was written or replaced, `already
+installed:` when every file was this binary's already, and `not all
+installed:` when nothing was written and a file was kept. When something was
+written, the last line says what makes the agent read the skills: for Codex,
+`start a new Codex session for it to see them; an agent that reads
+~/.agents/skills sees them the same way`. A kept file also ends the command
+with exit 1 and, on standard error, `PATH differs from this binary's copy;
+kept. --force replaces it`, after everything else was written. Each word is
+something to do or not:
+
+- `written` and `replaced`: nothing; the agent sees them once restarted.
+- `already current`: nothing.
+- `kept, differs from this binary's copy`: the file is not what this
+  `auu` would write, either because the user edited it or because an
+  older `auu` wrote it. The command exits 1 naming it, after writing
+  everything else. Ask the user; if they did not edit it, run the same
+  install with `--force`, which replaces it.
+- `connect ... is the old name of auu-connect`: an earlier `auu` wrote the
+  messaging skill as `connect`, and the agent reads it beside
+  `auu-connect` until it goes. The line names the command that removes
+  it; run it, with `--yes`, when the user agrees.
+- `connect ... is not a copy auu installed, or was edited; left alone`:
+  something in it is not what `auu` wrote. `auu` will not touch it; it is
+  the user's to look at and remove by hand if they want.
+
+`auu skill ls` with the same target lists each skill as `installed`,
+`differs` or `absent`, and a `connect` row as `legacy` or `not-ours`,
+which are the two cases above. After upgrading `auu`, run `ls`, then
+`install`; a skill that `differs` is an older copy unless the user edited
+it, and `--force` replaces it.
+
+`auu skill rm NAME` removes one skill's directory, `connect` or any of the
+three, and only one `auu` wrote: every file in it must be this binary's
+copy, or, for `connect`, the pair an earlier `auu` installed. It says what
+will go and asks `Remove it? [y/N]`. An agent's shell cannot answer that
+question, so the command run there without `--yes` says `nothing was
+removed` and exits 1: an agent asks the user first and, once they agree,
+runs it with `--yes`. Anything it did not write is refused, exit 1, naming
+the file or the directory, and nothing is removed. A copy an older `auu`
+wrote of one of the three differs; `install --force` then `rm` removes it.
+Removing a skill is the user's decision.
+
+Moving from `connect`, in full:
+
+*Listing 1.12d*
+```
+auu skill install --target claude
+auu skill rm connect --target claude --yes
+```
+
+The `--json` forms, with every field, are in `skill/reference.md`, which
+each installed skill carries beside it.
+
 ## 2. Local state
 
 Everything lives in `~/.auu`, or `$AUU_HOME` if set. The directory is mode 0700
