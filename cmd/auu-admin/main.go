@@ -1,8 +1,8 @@
 // Command auu-admin administers an auu relay.
 //
 // It is a separate binary from auu on purpose. The privilege boundary is then
-// visible in what is installed where, the connect skill never documents it,
-// and an administrator can keep a dedicated identity in its own AUU_HOME
+// visible in what is installed where, the auu-connect skill never documents
+// it, and an administrator can keep a dedicated identity in its own AUU_HOME
 // without it ever touching their messaging.
 //
 // Authority comes from the relay's host: an identity may administer a relay if

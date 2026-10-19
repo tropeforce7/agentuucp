@@ -649,7 +649,7 @@ func TestAgentStartStopAndStatus(t *testing.T) {
 // TestTheSkillsExitCodeIsDocumented: the client document's table and
 // SKILL.md both name 4.
 func TestTheSkillsExitCodeIsDocumented(t *testing.T) {
-	for _, f := range []string{"../../docs/client.md", "../../skill/connect/SKILL.md"} {
+	for _, f := range []string{"../../docs/client.md", "../../skill/auu-connect/SKILL.md"} {
 		data, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -828,7 +828,7 @@ func TestALockedAgentMidCommandDiscardsNothing(t *testing.T) {
 // TestTheDamagedExitCodeIsDocumented: the client document's table and
 // SKILL.md both name 5, and the skill says whose it is to deal with.
 func TestTheDamagedExitCodeIsDocumented(t *testing.T) {
-	for _, f := range []string{"../../docs/client.md", "../../skill/connect/SKILL.md"} {
+	for _, f := range []string{"../../docs/client.md", "../../skill/auu-connect/SKILL.md"} {
 		data, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
@@ -843,7 +843,7 @@ func TestTheDamagedExitCodeIsDocumented(t *testing.T) {
 			t.Errorf("%s still says exit 2 is a message that failed to open, which never happens", f)
 		}
 	}
-	skill, err := os.ReadFile("../../skill/connect/SKILL.md")
+	skill, err := os.ReadFile("../../skill/auu-connect/SKILL.md")
 	if err != nil {
 		t.Fatal(err)
 	}

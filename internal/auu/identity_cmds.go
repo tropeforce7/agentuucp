@@ -503,7 +503,7 @@ func peersRemove(args []string) error {
 // local name with the name that came with the identity offered and
 // never taken. Without a terminal and without --yes it refuses, since
 // adding a peer is a person's decision and never an agent's, which the
-// connect skill is told. 'auu lookup' is the same look without the
+// auu-connect skill is told. 'auu lookup' is the same look without the
 // adding.
 func peersFetch(args []string) error {
 	fs := newFlagSet("peers fetch")

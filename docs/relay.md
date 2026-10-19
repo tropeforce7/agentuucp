@@ -1726,9 +1726,9 @@ keeps the set it last loaded and warns once, with the count it kept. Without
 ### 2.2 auu-admin
 
 `auu-admin` is a separate binary from `auu`, deliberately. The privilege
-boundary is visible in what is installed where, and the `connect` skill never
-touches it. It reads your identity and relay from `AUU_HOME` like `auu` does,
-so an administrator can keep a dedicated identity in its own home.
+boundary is visible in what is installed where, and the `auu-connect` skill
+never touches it. It reads your identity and relay from `AUU_HOME` like `auu`
+does, so an administrator can keep a dedicated identity in its own home.
 
 *Listing 2.2a*
 ```

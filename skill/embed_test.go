@@ -38,7 +38,7 @@ func TestEmbeddedSkillsAreTheTreesByteForByte(t *testing.T) {
 			t.Errorf("the tree has skill %q, which Names does not carry", name)
 		}
 	}
-	if want := []string{"connect", "auu-setup", "auu-relay"}; len(Names()) != 3 || Names()[0] != want[0] || Names()[1] != want[1] || Names()[2] != want[2] {
+	if want := []string{"auu-connect", "auu-setup", "auu-relay"}; len(Names()) != 3 || Names()[0] != want[0] || Names()[1] != want[1] || Names()[2] != want[2] {
 		t.Errorf("Names is %v, want %v", Names(), want)
 	}
 

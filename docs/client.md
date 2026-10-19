@@ -1543,7 +1543,7 @@ auu: the agent is unlocked to receive; run 'auu unlock --send' at a terminal to 
 ```
 
 Those two sentences are the whole of the arrangement with an AI. It never
-sees the passphrase and cannot unlock anything. The `connect` skill tells
+sees the passphrase and cannot unlock anything. The `auu-connect` skill tells
 it to ask you to run the command the sentence names and then try again. It
 also tells it to check `auu agent status --json` for `scope` before its
 first send.

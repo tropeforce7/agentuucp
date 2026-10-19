@@ -325,13 +325,13 @@ auu skill install
 The install script of 3.1 runs that for you when it installs for your own
 account. `auu skill ls` says whether what is installed matches the `auu`
 beside it, which is what to look at after an upgrade, and `auu skill show
-connect` prints one without installing it. A file you have edited is never
-overwritten in silence: `install` names it and leaves it, and `--force`
-replaces it.
+auu-connect` prints one without installing it. A file you have edited is
+never overwritten in silence: `install` names it and leaves it, and
+`--force` replaces it.
 
 | skill | for |
 |---|---|
-| `connect` | sending to a colleague's agent and reading replies — the messaging agent, which never administers anything |
+| `auu-connect` | sending to a colleague's agent and reading replies — the messaging agent, which never administers anything |
 | `auu-setup` | the user's own identity, relays, machines and keys, and diagnosing a command that failed |
 | `auu-relay` | the person who runs a relay: the authority, a kit, administrators, tokens, day two |
 

@@ -261,18 +261,18 @@ auu skill show NAME|reference                      # print one, without installi
 ```
 
 The three skills are in the binary, so a machine with `auu` alone can have
-them: `auu skill install` writes `connect`, `auu-setup` and `auu-relay`,
+them: `auu skill install` writes `auu-connect`, `auu-setup` and `auu-relay`,
 each with its copy of this reference, under `DIR/skills` — `--dir`, else
-`$CLAUDE_CONFIG_DIR`, else `~/.claude` — and ends with `installed connect,
-auu-setup and auu-relay in DIR/skills` and `restart Claude Code, or start a
-new session, for it to see them`, or `already installed: ...` when every
-file was this binary's already. A file that differs from the binary's copy
-— the user's own edit, or an older auu's — is left alone and named, exit 1:
-`PATH differs from this binary's copy; kept. --force replaces it`; the other
-files are still written, and `--force` replaces the differing ones and
-says `(updated NAME)`. `auu skill ls` says per skill `installed`, `differs`
-or `absent`, which is what to run after an upgrade; `differs` means run
-`auu skill install` (and `--force` if the user did not edit it).
+`$CLAUDE_CONFIG_DIR`, else `~/.claude` — and ends with `installed
+auu-connect, auu-setup and auu-relay in DIR/skills` and `restart Claude
+Code, or start a new session, for it to see them`, or `already installed:
+...` when every file was this binary's already. A file that differs from the
+binary's copy — the user's own edit, or an older auu's — is left alone and
+named, exit 1: `PATH differs from this binary's copy; kept. --force replaces
+it`; the other files are still written, and `--force` replaces the differing
+ones and says `(updated NAME)`. `auu skill ls` says per skill `installed`,
+`differs` or `absent`, which is what to run after an upgrade; `differs`
+means run `auu skill install` (and `--force` if the user did not edit it).
 
 Keys under a passphrase:
 

@@ -21,7 +21,7 @@ var Files embed.FS
 // Names is every skill carried, in the order they are installed and
 // listed: the messaging agent first, then the user's own setup, then the
 // relay operator's.
-func Names() []string { return []string{"connect", "auu-setup", "auu-relay"} }
+func Names() []string { return []string{"auu-connect", "auu-setup", "auu-relay"} }
 
 // Reference is the name of the shared reference in Files, and the name
 // 'auu skill show' takes for it.

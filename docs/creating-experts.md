@@ -768,7 +768,7 @@ The thread id names the asker's conversation with the expert and nobody
 else's. Another peer who sends on it, with `auu send --thread`, is not
 answered: the message is left in the expert's inbox for its owner.
 
-A reply with a `.patch` attached is a side copy's change. The connect
+A reply with a `.patch` attached is a side copy's change. The auu-connect
 skill knows all this. A Claude Code agent with it installed asks an
 expert the way it asks a colleague.
 

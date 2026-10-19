@@ -47,7 +47,7 @@ install:
 # The three skills, each in its own directory with the shared reference
 # beside it: a skill directory has to stand alone, so the reference is
 # copied rather than linked.
-SKILLS := connect auu-setup auu-relay
+SKILLS := auu-connect auu-setup auu-relay
 
 install-skill:
 	@for s in $(SKILLS); do \

@@ -210,8 +210,8 @@ func TestAKnocksTextIsHeldBeforeAnythingIsSealed(t *testing.T) {
 }
 
 // A knock is refused without a terminal unless --yes, since it adds a
-// peer, and the connect skill says an agent never runs it. The flag after
-// the positional works the same.
+// peer, and the auu-connect skill says an agent never runs it. The flag
+// after the positional works the same.
 func TestKnockRefusesWithoutATerminal(t *testing.T) {
 	relayURL := startRelay(t)
 	alice := newUser(t, "alice", relayURL)

@@ -283,7 +283,7 @@ func skillLs(args []string) error {
 		return printJSON(out)
 	}
 	for _, s := range out.Skills {
-		fmt.Printf("%-10s %-10s %s\n", s.Name, s.State, s.Path)
+		fmt.Printf("%-12s %-10s %s\n", s.Name, s.State, s.Path)
 	}
 	return nil
 }
@@ -328,6 +328,11 @@ func skillShow(args []string) error {
 		return usageErrf("usage: %s skill show %s|reference", prog, strings.Join(skill.Names(), "|"))
 	}
 	name := positional[0]
+	// The messaging skill's old name is answered with its new one rather
+	// than kept as an alias: an alias is a path nobody tests (D148).
+	if name == "connect" {
+		return usageErrf("the connect skill is now auu-connect: %s skill show auu-connect", prog)
+	}
 	var data []byte
 	if name == "reference" {
 		data, err = skill.Files.ReadFile(skill.Reference)

@@ -42,7 +42,7 @@ func TestSkillInstallWritesTheSkillsOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	skills := filepath.Join(dir, "skills")
-	want := "installed connect, auu-setup and auu-relay in " + skills + "\nrestart Claude Code, or start a new session, for it to see them\n"
+	want := "installed auu-connect, auu-setup and auu-relay in " + skills + "\nrestart Claude Code, or start a new session, for it to see them\n"
 	if out != want {
 		t.Fatalf("install said:\n%s\nwant:\n%s", out, want)
 	}
@@ -69,15 +69,15 @@ func TestSkillInstallWritesTheSkillsOnce(t *testing.T) {
 		}
 	}
 	// Nothing left over from the atomic writes.
-	entries, _ := os.ReadDir(filepath.Join(skills, "connect"))
+	entries, _ := os.ReadDir(filepath.Join(skills, "auu-connect"))
 	if len(entries) != 2 {
-		t.Errorf("connect holds %d entries, want the two files", len(entries))
+		t.Errorf("auu-connect holds %d entries, want the two files", len(entries))
 	}
 
 	// The second run: identical bytes, nothing written. The mtimes are set
 	// back an hour so that a write would show.
 	old := time.Now().Add(-time.Hour)
-	path := filepath.Join(skills, "connect", "SKILL.md")
+	path := filepath.Join(skills, "auu-connect", "SKILL.md")
 	if err := os.Chtimes(path, old, old); err != nil {
 		t.Fatal(err)
 	}
@@ -85,7 +85,7 @@ func TestSkillInstallWritesTheSkillsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "already installed: connect, auu-setup and auu-relay in "+skills+"\n" {
+	if out != "already installed: auu-connect, auu-setup and auu-relay in "+skills+"\n" {
 		t.Fatalf("the second run said:\n%s", out)
 	}
 	info, _ := os.Stat(path)
@@ -122,7 +122,7 @@ func TestSkillInstallKeepsAnEditedFileUnlessForced(t *testing.T) {
 	}
 	// And one file removed, so that the run has something to write beside
 	// the one it keeps.
-	removed := filepath.Join(skills, "connect", "reference.md")
+	removed := filepath.Join(skills, "auu-connect", "reference.md")
 	if err := os.Remove(removed); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestSkillInstallKeepsAnEditedFileUnlessForced(t *testing.T) {
 	if _, err := os.Stat(removed); err != nil {
 		t.Fatal("the missing file was not written because another was kept")
 	}
-	if !strings.Contains(out, "installed connect, auu-setup and auu-relay in "+skills+"\n") {
+	if !strings.Contains(out, "installed auu-connect, auu-setup and auu-relay in "+skills+"\n") {
 		t.Fatalf("install with a kept file said:\n%s", out)
 	}
 	// --json says the same, per file.
@@ -173,7 +173,7 @@ func TestSkillInstallKeepsAnEditedFileUnlessForced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("--force: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "installed connect, auu-setup and auu-relay in "+skills+" (updated auu-setup) (updated auu-relay)\n") {
+	if !strings.Contains(out, "installed auu-connect, auu-setup and auu-relay in "+skills+" (updated auu-setup) (updated auu-relay)\n") {
 		t.Fatalf("--force said:\n%s", out)
 	}
 	if got, _ := os.ReadFile(edited); string(got) != string(treeFile(t, "auu-setup/SKILL.md")) {
@@ -256,15 +256,15 @@ func TestSkillLsAndShow(t *testing.T) {
 			t.Errorf("%s's path is %s", s.Name, s.Path)
 		}
 	}
-	if states["connect"] != skillInstalled || states["auu-setup"] != skillDiffers || states["auu-relay"] != skillAbsent {
+	if states["auu-connect"] != skillInstalled || states["auu-setup"] != skillDiffers || states["auu-relay"] != skillAbsent {
 		t.Fatalf("ls --json: %v", states)
 	}
 	out, _ = runSkill(t, "skill", "ls", "--dir", dir)
-	if !strings.Contains(out, "connect    installed  ") || !strings.Contains(out, "auu-setup  differs    ") || !strings.Contains(out, "auu-relay  absent     ") {
+	if !strings.Contains(out, "auu-connect  installed  ") || !strings.Contains(out, "auu-setup    differs    ") || !strings.Contains(out, "auu-relay    absent     ") {
 		t.Fatalf("ls:\n%s", out)
 	}
 
-	for _, c := range []struct{ name, rel string }{{"connect", "connect/SKILL.md"}, {"auu-relay", "auu-relay/SKILL.md"}, {"reference", "reference.md"}} {
+	for _, c := range []struct{ name, rel string }{{"auu-connect", "auu-connect/SKILL.md"}, {"auu-relay", "auu-relay/SKILL.md"}, {"reference", "reference.md"}} {
 		out, err := runSkill(t, "skill", "show", c.name)
 		if err != nil {
 			t.Fatal(err)
@@ -274,14 +274,30 @@ func TestSkillLsAndShow(t *testing.T) {
 		}
 	}
 	_, err = runSkill(t, "skill", "show", "nothing")
-	if err == nil || err.Error() != `no skill "nothing"; the binary carries connect, auu-setup and auu-relay, and reference` {
+	if err == nil || err.Error() != `no skill "nothing"; the binary carries auu-connect, auu-setup and auu-relay, and reference` {
 		t.Fatalf("show of an unknown name: %v", err)
 	}
-	if _, err := runSkill(t, "skill", "show"); err == nil || !strings.Contains(err.Error(), "usage: auu skill show connect|auu-setup|auu-relay|reference") {
+	if _, err := runSkill(t, "skill", "show"); err == nil || !strings.Contains(err.Error(), "usage: auu skill show auu-connect|auu-setup|auu-relay|reference") {
 		t.Fatalf("show with no name: %v", err)
 	}
 	if _, err := runSkill(t, "skill", "frob"); err == nil || !strings.Contains(err.Error(), `unknown skill subcommand "frob"`) {
 		t.Fatalf("an unknown subcommand: %v", err)
+	}
+}
+
+// The messaging skill's old name is refused, exit 1, in one sentence that
+// names the new one, and nothing is printed from the binary.
+func TestSkillShowConnectNamesTheNewName(t *testing.T) {
+	out, err := runSkill(t, "skill", "show", "connect")
+	var e *exitError
+	if !errors.As(err, &e) || e.code != exitUsage {
+		t.Fatalf("show connect: %v, want exit %d", err, exitUsage)
+	}
+	if err.Error() != "the connect skill is now auu-connect: auu skill show auu-connect" {
+		t.Fatalf("show connect said %q", err.Error())
+	}
+	if out != "" {
+		t.Fatalf("show connect printed %q", out)
 	}
 }
 
@@ -298,7 +314,7 @@ func TestVersionNamesTheSkills(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &v); err != nil {
 		t.Fatal(err)
 	}
-	if v.Version == "" || strings.Join(v.Skills, ",") != "connect,auu-setup,auu-relay" {
+	if v.Version == "" || strings.Join(v.Skills, ",") != "auu-connect,auu-setup,auu-relay" {
 		t.Fatalf("version --json: %+v", v)
 	}
 }

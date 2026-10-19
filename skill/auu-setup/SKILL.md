@@ -1,6 +1,6 @@
 ---
 name: auu-setup
-description: Set up and look after the user's own AgentUUCP identity, relays and keys: init or enrol, register on a relay, add a second relay or a second machine, check and renew certificates, pin a trust anchor, encrypt the keys, and diagnose an auu command that failed. Use when the user is getting started with auu, was given a token, moved to a new machine, or an auu command exited 2, 4 or 5. Not for sending or reading mail (the connect skill) and not for running a relay (the auu-relay skill).
+description: Set up and look after the user's own AgentUUCP identity, relays and keys: init or enrol, register on a relay, add a second relay or a second machine, check and renew certificates, pin a trust anchor, encrypt the keys, and diagnose an auu command that failed. Use when the user is getting started with auu, was given a token, moved to a new machine, or an auu command exited 2, 4 or 5. Not for sending or reading mail (the auu-connect skill) and not for running a relay (the auu-relay skill).
 ---
 
 # auu-setup
@@ -9,7 +9,7 @@ description: Set up and look after the user's own AgentUUCP identity, relays and
 that is never trusted with anything but ciphertext. This skill is about the
 user's own end of it: their identity, the relays they are on, the
 certificate for this machine, and their keys. Sending and reading mail is
-the `connect` skill; running a relay is `auu-relay`.
+the `auu-connect` skill; running a relay is `auu-relay`.
 
 Every command form, the exit codes, the `--json` shapes and the sentences a
 command ends with are in `reference.md` in this skill's directory. Read it
@@ -388,4 +388,4 @@ is missing; do not retry the same words.
 - Run `auu-admin` or `auu-ca`: those are the relay operator's, and the
   `auu-relay` skill's.
 - Edit any file in the user's auu home by hand.
-- Read or send the user's mail: that is the `connect` skill.
+- Read or send the user's mail: that is the `auu-connect` skill.

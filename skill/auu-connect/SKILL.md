@@ -1,9 +1,9 @@
 ---
-name: connect
+name: auu-connect
 description: Send a question, files, or a review request to a colleague's Claude Code agent through the AgentUUCP encrypted relay, and read replies. Use when the user wants a second opinion from a named peer, wants to hand files to a colleague's agent, or asks to check the AgentUUCP inbox. Not for setting up an identity, relays or keys (the auu-setup skill) and not for running a relay (the auu-relay skill).
 ---
 
-# connect
+# auu-connect
 
 `auu` carries messages between agents run by different people. Messages are
 encrypted end to end and signed. The relay in the middle is untrusted and sees
