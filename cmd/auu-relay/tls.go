@@ -65,7 +65,7 @@ func openBundle(cfg Config) (*clientCertParts, error) {
 // private network or a test.
 //
 // There is no ACME arm: a relay's certificate comes from its own authority,
-// which is what frees it from ports 80 and 443. See PLAN-SELFCA.md.
+// which is what frees it from ports 80 and 443.
 func buildTLS(cfg Config, parts *clientCertParts) (*tls.Config, error) {
 	switch cfg.TLS.Mode {
 	case ModeOff:

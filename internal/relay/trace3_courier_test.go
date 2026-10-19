@@ -9,10 +9,10 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 )
 
-// The third adversarial trace (reviews/trace/trace-3-v0.17.0/), F14: a
-// courier's mailbox answered the channels route and the watch as an ordinary
-// mailbox with no directory, the one mailbox the post refused and these did
-// not, which told a stranger which relays this one peers with.
+// The third adversarial trace, at v0.17.0, F14: a courier's mailbox
+// answered the channels route and the watch as an ordinary mailbox with no
+// directory, the one mailbox the post refused and these did not, which told
+// a stranger which relays this one peers with.
 
 // TestACourierMailboxIsNotToldApartOnTheChannelsRoute: the post, the
 // channels GET and the watch answer a courier's mailbox exactly as they

@@ -18,8 +18,8 @@ const errSharingViolation = syscall.Errno(32)
 // and a file opened with none lets nobody else open it until the handle is
 // closed, which the kernel does for a process that dies. That is flock's
 // shape: held for the holder's lifetime, never stale. The project is not
-// tested on Windows by hand; CI runs the agent's tests there. See
-// IMPLEMENTATION_NOTES.md.
+// tested on Windows by hand; CI runs the agent's tests there, as the
+// implementation notes say.
 type Lock struct{ f *os.File }
 
 // Try takes the lock or reports ErrHeld at once. CreateFile carries

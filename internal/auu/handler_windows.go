@@ -19,8 +19,8 @@ import (
 // exec.Command resolves cmd.exe on the PATH; CmdLine is what is actually
 // passed, and Args is left alone.
 //
-// The project is not tested on Windows beyond what CI runs; see
-// IMPLEMENTATION_NOTES.md.
+// The project is not tested on Windows beyond what CI runs; the
+// implementation notes say so.
 func shellCommand(line string) *exec.Cmd {
 	cmd := exec.Command("cmd")
 	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: `cmd /S /C "` + line + `"`}

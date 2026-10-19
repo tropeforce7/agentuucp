@@ -14,11 +14,11 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
-// The third adversarial trace (reviews/trace/trace-3-v0.17.0/), F15: the
-// post and a courier's delivery refused an envelope over max_bytes, but a
-// forward that named a path was queued and stored whatever its size up to
-// the route's body cap of max_bytes and the framing allowance, offered to
-// the neighbour, whose delivery refused it.
+// The third adversarial trace, at v0.17.0, F15: the post and a courier's
+// delivery refused an envelope over max_bytes, but a forward that named a
+// path was queued and stored whatever its size up to the route's body cap
+// of max_bytes and the framing allowance, offered to the neighbour, whose
+// delivery refused it.
 
 // pathForward posts, as from, a forward of env padded to n bytes with a
 // path of one relay, bar. Built by hand: json.Marshal would compact the

@@ -103,11 +103,11 @@ Two switches:
   expiring, a token five minutes past its expiry.
 - `AUU_E2E_NOFAULT=1` turns every fault helper into a no-op. The rows that
   still pass are the ones whose assertion does not depend on the fault,
-  which for a row about silence is expected; `reviews/IMPLEMENTATION_NOTES.md`
-  lists them from the last run. Such a run writes `out/report-nofault.md`
-  and `out/test-nofault.log`, and its report says in its first line that
-  the faults were off: it is meant to fail, and it must never take the
-  real report's name.
+  which for a row about silence is expected; the implementation notes list
+  them from the last run. Such a run writes `out/report-nofault.md` and
+  `out/test-nofault.log`, and its report says in its first line that the
+  faults were off: it is meant to fail, and it must never take the real
+  report's name.
 
 ## The forge
 

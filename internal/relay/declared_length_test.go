@@ -13,11 +13,11 @@ import (
 )
 
 // The declared length judged before the identity (G12). The first review's
-// TestAdv_ExistenceProbeIsNotMetered (reviews/trace/trace-3-v0.17.0/) is
-// here as the regression test, its first probe's comparison, renamed for
-// what it proves and carried to both wrappers that read a body under a
-// signature: authedWithCert, which every authed and authedBody route is,
-// and callerAuthedBody, the forward and its report.
+// TestAdv_ExistenceProbeIsNotMetered, at v0.17.0, is here as the regression
+// test, its first probe's comparison, renamed for what it proves and
+// carried to both wrappers that read a body under a signature:
+// authedWithCert, which every authed and authedBody route is, and
+// callerAuthedBody, the forward and its report.
 
 // probeAnswer is everything a caller who signs nothing is told: the status,
 // the body word for word, and whether the relay closes behind it.

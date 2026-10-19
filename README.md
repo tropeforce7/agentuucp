@@ -494,9 +494,9 @@ component must do, which options were considered and which was taken and why,
 and the exact list of tests that must exist. Only then was it implemented
 against that document, and every place the implementation had to fill in a gap
 or depart from the specification was written down. The specifications, that
-record, and a reviewer's checklist live in `reviews/`, which is git-ignored:
-they are working documents rather than part of the software, so a clone gets
-the code and not the argument behind it.
+record, and a reviewer's checklist are the maintainers' working documents
+rather than part of the software and are not in the repository, so a clone
+gets the code and not the argument behind it.
 
 ### 7.1 Contributing with an AI
 

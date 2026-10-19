@@ -23,8 +23,7 @@ import (
 )
 
 // TLS modes. There is no acme: a relay's certificate comes from its own
-// authority now, which is what frees it from ports 80 and 443. See
-// PLAN-SELFCA.md, and auu-ca.
+// authority now, which is what frees it from ports 80 and 443. See auu-ca.
 const (
 	ModeOff   = "off"
 	ModeFiles = "files"

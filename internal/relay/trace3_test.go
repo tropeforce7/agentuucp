@@ -16,9 +16,9 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/stream"
 )
 
-// The third adversarial trace, at v0.17.0 (reviews/trace/trace-3-v0.17.0/):
-// what a sender's reservation of a recipient's room costs the sender. Its
-// tests are here as the regression tests, each renamed for what it proves.
+// The third adversarial trace, at v0.17.0: what a sender's reservation of a
+// recipient's room costs the sender. Its tests are here as the regression
+// tests, each renamed for what it proves.
 
 // unfedLine is the message the relay logs when an upload goes unplaced with
 // no byte held.

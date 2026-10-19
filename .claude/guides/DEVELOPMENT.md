@@ -5,9 +5,8 @@ learned by getting it wrong once. The rule comes first; what went wrong comes
 after it, so you can judge whether it applies to what you are doing.
 
 Read `CLAUDE.md` first. It is short and it wins over anything here. The
-specifications live in `reviews/`, which is git-ignored; if that directory is
-empty on your machine, ask for its contents rather than reconstructing a plan
-from the code.
+specifications are the maintainers' and are not in the repository; ask the
+maintainers for them rather than reconstructing a plan from the code.
 
 ## Before you write anything
 
@@ -15,8 +14,8 @@ from the code.
 Each piece of this project began as a prose document: threat model, what each
 component must do, which options were considered and why one was taken, and
 the exact tests that must exist. The implementation followed the document, and
-every gap it had to fill or rule it had to break went into
-`reviews/IMPLEMENTATION_NOTES.md` with the reason. That record is what makes
+every gap it had to fill or rule it had to break went into the implementation
+notes kept with the specifications, with the reason. That record is what makes
 the code reviewable by someone who was not there. A change without a plan, or
 a departure without a note, is the thing most likely to be reverted on review.
 
@@ -36,10 +35,11 @@ passphrase: the standard library has PBKDF2 and nothing memory-hard, and a
 hand-written Argon2id would mean a hand-written BLAKE2b under it, which is
 exactly what this project does not do. It brings `x/crypto/blake2b`. Nothing
 on the wire touches either. An earlier exception for
-`golang.org/x/crypto/acme/autocert` is gone: `PLAN-SELFCA.md` removed ACME and
-`x/net` and `x/text` went with it. Check `go.mod` is unchanged before
-reporting completion, and note that the CI dependency job names the allowed
-packages exactly, so widening the list is a deliberate edit in two places.
+`golang.org/x/crypto/acme/autocert` is gone: the move to the project's own
+authority removed ACME and `x/net` and `x/text` went with it. Check `go.mod`
+is unchanged before reporting completion, and note that the CI dependency job
+names the allowed packages exactly, so widening the list is a deliberate edit
+in two places.
 
 **When you say "standard library", check the import path.** The first
 implementation of the hybrid KEM was a hand-rolled X-Wing combiner in
@@ -1831,8 +1831,8 @@ change.
 
 **Commit messages are one sentence, in the project's voice, saying what
 changed and why.** Read the existing ones. No body, no bullet list, no
-trailers. The reasoning that does not fit belongs in
-`reviews/IMPLEMENTATION_NOTES.md`, where it can be as long as it needs to be.
+trailers. The reasoning that does not fit belongs in the implementation notes,
+where it can be as long as it needs to be.
 
 **No commit without the rules review.** Every one of the rules in these two
 guides was learned from a fault that shipped, and a change that reads well
@@ -1863,9 +1863,9 @@ msg)"`, runs that substitution before the commit and is refused for it:
 `git commit -F <file>` is the way to give a message from a file, and a
 here-document with a quoted delimiter the way to give one inline.
 
-**The specifications are not in the repository.** `reviews/` is git-ignored.
-Do not commit anything from it, and do not write anything there except
-`IMPLEMENTATION_NOTES.md`.
+**The specifications are not in the repository.** They are the maintainers'
+working documents, nothing from them is committed, and the implementation
+notes are the one file among them a change writes.
 
 ## Documentation
 

@@ -1,5 +1,4 @@
-# The machines of the container suite. See README.md in this directory and
-# reviews/PLAN-CONTAINERS.md.
+# The machines of the container suite. See README.md in this directory.
 #
 # relay is reachable from the others as relay.example.com, so the deployment
 # guide's commands run as written. Nothing is published to the host: the

@@ -1,10 +1,9 @@
 package relay
 
 // An upload is fed from its first ten seconds, hunk by hunk, and opens are
-// counted (D82). The first three tests are the second review's for F1
-// (reviews/mythos-review-2, adv2_f1_test.go), kept under names that say
-// what they now prove with their assertions as written; the two TestLimit
-// tests are the hunk's edge and the opens cap.
+// counted (D82). The first three tests are the second review's for F1, kept
+// under names that say what they now prove with their assertions as
+// written; the two TestLimit tests are the hunk's edge and the opens cap.
 
 import (
 	"bufio"

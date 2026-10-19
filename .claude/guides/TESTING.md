@@ -6,8 +6,8 @@ wrong reason. Read `DEVELOPMENT.md` beside this file first.
 
 The bar is: `make vet test build` clean, `make race` clean, and every
 test the specification lists exists under a name a reviewer can find with
-grep. The specifications are in `reviews/`, git-ignored; ask if it is empty.
-`make race` carries `-timeout 60m`, because `internal/auu` under the race
+grep. The specifications are the maintainers'; ask the maintainers if you lack
+one. `make race` carries `-timeout 60m`, because `internal/auu` under the race
 detector takes about ten minutes on a fast machine and longer on a CI runner,
 and `go test`'s default of ten minutes would end it in a panic that says
 nothing about the code.
@@ -543,12 +543,12 @@ exhausted the address bucket.
 
 ## What the network names
 
-The second adversarial trace (reviews/trace/report-v0.9.0.md, at v0.9.0)
-found nothing wrong with any cryptographic or authentication check and
-nine faults in what happened after one passed: a thread id joined onto a
-path, a turn count keyed on a string the sender chose, a name that two
-filesystems spell as one file, a relay's sentence printed as it came.
-Every rule here is a test that would have caught one of them.
+The second adversarial trace, at v0.9.0, found nothing wrong with any
+cryptographic or authentication check and nine faults in what happened after
+one passed: a thread id joined onto a path, a turn count keyed on a string the
+sender chose, a name that two filesystems spell as one file, a relay's
+sentence printed as it came. Every rule here is a test that would have caught
+one of them.
 
 **Nothing the network names is a path until its rule has run, and one
 test walks them all.** A fingerprint in a URL, an upload id, a token id,
@@ -1044,12 +1044,12 @@ value that breaks it. A rule at the boundary, one escaper per sink, and a
 test row per value.
 
 **A trace's test is kept under a name that says what it proves, and its
-assertion is never weakened to make it pass.** The tests under
-`reviews/trace/` fail on the code they were written against; when the fix
-lands, each becomes the regression for its commit, renamed for what it now
-proves (the refusal, the sentence, the absence of the file), with the
-assertion changed only from "this happens" to "this is refused". A test
-made to pass by asserting less proves the fix was not made.
+assertion is never weakened to make it pass.** A trace's tests fail on the
+code they were written against; when the fix lands, each becomes the
+regression for its commit, renamed for what it now proves (the refusal, the
+sentence, the absence of the file), with the assertion changed only from "this
+happens" to "this is refused". A test made to pass by asserting less proves
+the fix was not made.
 
 ## What a decision is relied on for later
 
@@ -1180,7 +1180,7 @@ upstream when its own `forward_ttl` ends, so a neighbour with a longer one
 reports to nobody, and the sender is never told (G19), which no test with
 both relays on the same settings could see. The harness and the fix are
 S43, after v0.18.0, a wire design; Codex's two tests for it are kept
-under `reviews/codex/` until then. This rule is to follow, and no test in
+with the maintainers' notes until then. This rule is to follow, and no test in
 the tree yet holds it.
 
 ## Limit tests
@@ -1811,8 +1811,8 @@ four times in 240 under `make race`, and it was the third CI failure in the
 race job. A test that wants the alert must serve the connection itself: let
 the handshake fail, drain the socket, wait for the client to close, and close
 only then, so that the close is a FIN. Read rather than send a request. The
-product still races — see `reviews/IMPLEMENTATION_NOTES.md` — and the test
-saying so in a comment is the point, not a defect in the test.
+product still races — the implementation notes say so — and the test saying so
+in a comment is the point, not a defect in the test.
 
 **Break the check, or you do not know what the test proves.** The additional
 data in `internal/keyfile` binds the file's headers into the ciphertext, and
@@ -2051,7 +2051,7 @@ do not do it in the repository.
 
 **Record what you observed, in numbers.** "100 posts at defaults: 30
 accepted, 70 refused, every `Retry-After` 2s" is a record. "Rate limiting
-works" is not. The record goes in `reviews/IMPLEMENTATION_NOTES.md`.
+works" is not. The record goes in the implementation notes.
 
 **Do not claim a test exists, a count, or a result you did not check.** Count
 tests with `go test ./... -list '.*' | grep -c '^Test'`. If manual
@@ -2088,10 +2088,10 @@ Encrypt run — say that it is outstanding and what it needs, and record it.
   `docs/client.md` and `skill/reference.md` saying a critical name this
   build reads on any path is passed over on a message; the review's own
   sweep missed them too, and they were found a commit later (R32).
-- Departures from the specification are in `reviews/IMPLEMENTATION_NOTES.md`
-  with reasons.
-- Nothing under `reviews/`, `bin/` or `.claude/settings.local.json` is
-  staged.
+- Departures from the specification are in the implementation notes with
+  reasons.
+- Nothing under `bin/` or `.claude/settings.local.json`, and nothing of the
+  maintainers' working documents, is staged.
 - The rules review has been run over the staged diff (the `rules-review`
   skill) and its record says ready: every rule the change touches named
   with its line and the test that shows the value, and a reason for each

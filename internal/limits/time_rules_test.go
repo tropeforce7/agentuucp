@@ -11,7 +11,7 @@ import (
 // format, a print, a marshal, a field whose own row is display or output,
 // or a helper that only shows it; and a bound row's test feeds the
 // grammar's values through testutil.TimeEdges. Each was a hole the second
-// review planted (reviews/mythos-review-2, D).
+// review planted (D).
 
 // TestTheWalkRefusesALocalRowOnADecodedComparedField: a field json.Unmarshal
 // fills from the wire, compared with now, is refused as display, and was

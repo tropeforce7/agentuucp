@@ -15,9 +15,9 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/stream"
 )
 
-// The second adversarial trace, at v0.9.0 (reviews/trace/): the quota
-// arithmetic, the upload lock and the purge. Its tests are here as the
-// regression tests, each renamed for what it proves.
+// The second adversarial trace, at v0.9.0: the quota arithmetic, the upload
+// lock and the purge. Its tests are here as the regression tests, each
+// renamed for what it proves.
 
 // TestAnEnvelopeIsChargedAgainstStreamReservations: OpenUpload counted what
 // other open uploads had reserved as though it were already queued, and

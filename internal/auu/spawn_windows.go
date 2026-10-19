@@ -7,7 +7,7 @@ import (
 )
 
 // spawnDetached runs exe with args detached from this console. The project
-// is not tested on Windows; see IMPLEMENTATION_NOTES.md.
+// is not tested on Windows; the implementation notes say so.
 func spawnDetached(exe string, args []string, home string, logFile *os.File) error {
 	cmd := exec.Command(exe, args...)
 	cmd.Env = agentEnviron(home)

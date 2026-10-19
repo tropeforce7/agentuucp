@@ -1,8 +1,7 @@
 package relay
 
-// The second review's tests of F8 (reviews/mythos-review-2/
-// _adversarial-tests-2/A/adv2_f8_test.go), kept as regression tests under
-// their names without the review's prefix. Since G12 the declared length is
+// The second review's tests of F8, kept as regression tests under their
+// names without the review's prefix. Since G12 the declared length is
 // judged before the claimed fingerprint is looked up, so a body declared
 // over the cap is 413 for a registered fingerprint and an unregistered one
 // alike: the 413 below no longer says a mailbox exists, and the budget the

@@ -16,9 +16,9 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 )
 
-// The adversarial trace of v0.8.1 (reviews/trace/): its stream-format
-// tests are here as the regression tests, renamed for what they prove and
-// adjusted only as far as their fixes needed.
+// The adversarial trace of v0.8.1: its stream-format tests are here as the
+// regression tests, renamed for what they prove and adjusted only as far as
+// their fixes needed.
 
 type memSource struct {
 	name string

@@ -148,7 +148,7 @@ func (v *Verifier) TLSConfig(cfg *tls.Config) *tls.Config {
 // is the one secret a reader of the relay's disk does not obtain, so an
 // impostor holding the relay's intermediates must mint a leaf of its own,
 // which is what a witness on another network path can tell apart. Nothing
-// here depends on that yet; PLAN-ATTEST.md is what will.
+// here depends on that yet; relays witnessing one another is what will.
 type Server struct {
 	int    *pki.Key
 	chain  [][]byte

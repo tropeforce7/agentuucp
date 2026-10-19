@@ -19,11 +19,11 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/stream"
 )
 
-// The adversarial trace of v0.8.1 (reviews/trace/) found six things on the
-// far side of authentication, in what an admitted peer may claim a count
-// or length for. Its tests are here as the regression tests, each renamed
-// for what it proves and adjusted only as far as its fix needed; each
-// failed on the code as shipped and passes on the fix.
+// The adversarial trace of v0.8.1 found six things on the far side of
+// authentication, in what an admitted peer may claim a count or length for.
+// Its tests are here as the regression tests, each renamed for what it
+// proves and adjusted only as far as its fix needed; each failed on the
+// code as shipped and passes on the fix.
 
 // TestOneAttemptAtATimePerUpload: the old wire's AppendUpload read the
 // row, copied onto the file, and only then added to the row, so two

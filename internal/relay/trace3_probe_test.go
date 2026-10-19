@@ -16,10 +16,9 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 )
 
-// The third adversarial trace, at v0.17.0 (reviews/trace/trace-3-v0.17.0/):
-// what a refusal made before the signature tells a caller who signs
-// nothing. Its test is here as the regression test, renamed for what it
-// proves, beside trace3_test.go's.
+// The third adversarial trace, at v0.17.0: what a refusal made before the
+// signature tells a caller who signs nothing. Its test is here as the
+// regression test, renamed for what it proves, beside trace3_test.go's.
 
 // probeBurst is the unauthenticated budget the probes run under: this
 // many answers from one address, and the next is 429.

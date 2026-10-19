@@ -720,8 +720,8 @@ func TestDescribeSaysHowLongAnExpiredTokenStillWorks(t *testing.T) {
 	}
 }
 
-// The integer review at af0d96e (reviews/trace/): three renderings of a
-// peer's number, kept as regressions.
+// The integer review at af0d96e: three renderings of a peer's number, kept
+// as regressions.
 
 // unverifiedToken builds a token string that Parse accepts without any
 // signature or claim check: a real prefix, the given claims as the payload,

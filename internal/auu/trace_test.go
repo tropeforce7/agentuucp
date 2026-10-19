@@ -19,9 +19,9 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
-// The adversarial trace of v0.8.1 (reviews/trace/): its client-side tests
-// are here as the regression tests, renamed for what they prove and
-// adjusted only as far as their fixes needed.
+// The adversarial trace of v0.8.1: its client-side tests are here as the
+// regression tests, renamed for what they prove and adjusted only as far as
+// their fixes needed.
 
 // TestAStreamWhoseManifestOverstatesItsPayloadIsKeptAndAcknowledged: the
 // receiver never compared the size a signed manifest implies with the size

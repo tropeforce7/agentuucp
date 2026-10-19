@@ -1125,12 +1125,12 @@ func TestStatusRendersAPebibyteAndAShortIssuerIsRefused(t *testing.T) {
 	}
 }
 
-// The string review at af0d96e (reviews/trace/): auu-admin printed nine
-// strings of the relay's raw. Now the enumerated fields — registration,
-// client_certs, the allow word, a token's use and state — are held to the
-// protocol's set when the answer is read, so a word outside it is a
-// malformed answer, and the free text — public_url, uptime, access_log,
-// a block's reason — goes through the escaper at the print.
+// The string review at af0d96e: auu-admin printed nine strings of the
+// relay's raw. Now the enumerated fields — registration, client_certs, the
+// allow word, a token's use and state — are held to the protocol's set when
+// the answer is read, so a word outside it is a malformed answer, and the
+// free text — public_url, uptime, access_log, a block's reason — goes
+// through the escaper at the print.
 
 // escapeSeq is a terminal command as a relay would send it: OSC 0 sets
 // the window title; the BEL ends it.

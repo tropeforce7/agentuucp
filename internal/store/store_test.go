@@ -525,8 +525,8 @@ func TestAThreadIsOrderedByArrivalNotTheSendersClock(t *testing.T) {
 	}
 }
 
-// The file-path review at af0d96e (reviews/trace/): the provenance rule
-// applied to every path the store joins, independently of the ledger.
+// The file-path review at af0d96e: the provenance rule applied to every
+// path the store joins, independently of the ledger.
 
 // reviewHome makes a home two levels below a scratch directory, with a
 // sibling directory outside it that no path built from the home should

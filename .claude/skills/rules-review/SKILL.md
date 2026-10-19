@@ -139,11 +139,10 @@ person making the change, before anyone else sees it.
    ready` and the list of what is missing; fix, re-stage, and run this
    skill again (the hash changes with the diff).
 
-7. **Send the record with the commit request.** When a reviewer is present
-   (`reviews/` exists), the commit request carries the record in full,
-   after the changed files, the commit message, the tests added and the
-   break record. The reviewer reads it against the diff and does not
-   approve without it.
+7. **Send the record with the commit request.** When a reviewer is present,
+   the commit request carries the record in full, after the changed files, the
+   commit message, the tests added and the break record. The reviewer reads it
+   against the diff and does not approve without it.
 
 ## What this is not
 
