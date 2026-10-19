@@ -263,7 +263,8 @@ jobs:
       # credential the script sealed, a machine enrolled; what the script
       # refuses; a kit without its bundle; then update — a rotation, a kit
       # that names no administrator, edited settings and administrators
-      # kept, a deleted unit put back — and the two refusals. Its own
+      # kept, a deleted unit put back, a relay that will not stop refused
+      # before anything is touched — and the two refusals. Its own
       # runner, since it and the guide's script each want a machine with
       # no relay on it.
       - name: auu-ca kit and install.sh, fresh and update, as root

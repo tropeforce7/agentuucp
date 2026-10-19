@@ -8,8 +8,9 @@
 # (a second install, a kit whose binary was changed) and what it does with a
 # kit that carries no bundle; then update, on the installed relay: a
 # rotation, a kit that names no administrator, settings and administrators
-# edited on the host and kept, a unit deleted and put back; and the two
-# refusals at the end. It installs a relay and removes it again, so it
+# edited on the host and kept, a unit deleted and put back, a relay that
+# will not stop refused before anything is touched; and the two refusals
+# at the end. It installs a relay and removes it again, so it
 # refuses a machine that already has one. CI runs it on the ubuntu runner,
 # whose systemd is PID 1; by hand it wants a throwaway Debian or Ubuntu
 # host, or a container booted with /sbin/init.
@@ -343,6 +344,45 @@ install_kit "$work/four" update
 waitfor 'bundle_source=credential'
 [ "$(systemctl is-active auu-relay)" = active ] || fail "update did not bring back a relay that had hit the start limit"
 pass "update starts a relay that had hit systemd's start limit"
+# A relay that will not stop: systemd refuses the stop, as a unit told
+# RefuseManualStop= does, and is-active still says active. Update asks the
+# relay's state whatever the stop said, and stops there, before the backup
+# and before anything is replaced: exit 1 with its sentence, neither line
+# fail adds after a stop, no new backup, the same relay still running, and
+# the six files an update replaces or keeps untouched: their bytes, and
+# their inodes and change times to the nanosecond, since this kit would
+# write the binary, the unit and the manifest again byte for byte and
+# install(1) makes a new file where it replaces one. The drop-in goes in
+# /run, where nothing of the kit's is, and goes by the trap as well, since
+# remove's stop would be refused while it is there.
+dropin=/run/systemd/system/auu-relay.service.d
+unrefuse() { rm -rf "$dropin"; systemctl daemon-reload; }
+trap 'unrefuse || true; cleanup' EXIT
+held() {
+	local files=(/usr/local/bin/auu-relay "$unit" /etc/auu/relay.json /etc/auu/admins /etc/auu/kit.manifest "$cred")
+	sha256sum "${files[@]}"
+	stat -c '%i %z %n' "${files[@]}"
+}
+before=$(held)
+invocation=$(systemctl show -p InvocationID --value auu-relay)
+backups=(/var/lib/auu/backups/*)
+count=${#backups[@]}
+mkdir -p "$dropin"
+printf '[Unit]\nRefuseManualStop=yes\n' > "$dropin/refuse-stop.conf"
+systemctl daemon-reload
+refuse "$work/four" "the relay did not stop (systemctl is-active says active); systemctl status auu-relay says why. Nothing was changed" update
+! grep -qF "the relay is stopped" "$work/four/refuse.out" || { cat "$work/four/refuse.out"; fail "a refused stop said the relay is stopped"; }
+! grep -qF "the backup is in" "$work/four/refuse.out" || { cat "$work/four/refuse.out"; fail "a refused stop named a backup"; }
+backups=(/var/lib/auu/backups/*)
+[ ${#backups[@]} -eq "$count" ] || fail "a refused stop left ${#backups[@]} backup directories, want $count"
+[ "$(systemctl is-active auu-relay || true)" = active ] || fail "the relay that refused to stop is not running"
+[ "$(systemctl show -p InvocationID --value auu-relay)" = "$invocation" ] || fail "the relay that refused to stop was started again"
+[ "$(held)" = "$before" ] || { diff <(echo "$before") <(held) || true; fail "a refused stop changed what update replaces"; }
+unrefuse
+trap cleanup EXIT
+install_kit "$work/four" update
+waitfor 'bundle_source=credential'
+pass "update refuses a relay that will not stop, before the backup, with the relay and its files as they were"
 
 # The two refusals: the fresh form on a host with a relay, and update on a
 # host with none.
