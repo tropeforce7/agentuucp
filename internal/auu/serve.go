@@ -836,7 +836,13 @@ func (r *serveRun) recordBacklog(backlog bool) (int, error) {
 // that the paths below are made from is its thread id, and that is the
 // message's: a bad one is its failure, recorded and stepped over, so that
 // nothing a peer can write in a message stops the expert for good.
-func (r *serveRun) handle(ctx context.Context, m *store.Stored) error {
+//
+// The error reaches the host's terminal, and its text may be words of
+// git's or of a hook's about a tree the handler wrote, so it leaves here
+// escaped, as a message's failure line is (S60); what it wraps is kept,
+// so the exit code it carries is the one it had.
+func (r *serveRun) handle(ctx context.Context, m *store.Stored) (err error) {
+	defer func() { err = escaped(err) }()
 	// pending decided the round's messages before any was answered, so a
 	// message it took may since have become another peer's thread, or
 	// lost its turn: two asks on one new thread in one round, or two asks
@@ -1465,3 +1471,24 @@ func itThem(n int) string {
 	}
 	return "them"
 }
+
+// printableError is an error whose words are escaped for a terminal, and
+// which unwraps to the error it escapes.
+type printableError struct{ err error }
+
+// escaped is err with its words escaped for a terminal, nil for nil. An
+// exit error stays the outermost, its code as it was, with what it says
+// escaped inside it.
+func escaped(err error) error {
+	if err == nil {
+		return nil
+	}
+	if e, ok := err.(*exitError); ok {
+		return &exitError{code: e.code, err: &printableError{e.err}}
+	}
+	return &printableError{err}
+}
+
+func (e *printableError) Error() string { return identity.PrintableText(e.err.Error()) }
+
+func (e *printableError) Unwrap() error { return e.err }

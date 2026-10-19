@@ -169,7 +169,12 @@ func existingDir(path string) string {
 // A read-only channel's worktree and channel directory are never swept:
 // they are the channel's, they hold the warm session's memory of the
 // project, and they last as long as the channel is in the file.
-func (r *serveRun) sweep() error {
+//
+// Its error, like handle's, leaves escaped (S60): a worktree that will not
+// be removed is named with the file in it that would not go, and that
+// name is the handler's.
+func (r *serveRun) sweep() (err error) {
+	defer func() { err = escaped(err) }()
 	dir := filepath.Join(r.root, "threads")
 	entries, err := os.ReadDir(dir)
 	if err != nil && !os.IsNotExist(err) {

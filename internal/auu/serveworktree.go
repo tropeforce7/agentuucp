@@ -452,7 +452,7 @@ func patchFor(ch *serveChannel, worktree, base, dir, thread string) (string, err
 		return "", err
 	}
 	if lost {
-		return "", fmt.Errorf("its worktree %s is no longer the git worktree serve made: its .git was changed, and nothing was run in it", worktree)
+		return "", fmt.Errorf("its worktree %s is no longer the git worktree serve made: its .git or its configuration was changed, and nothing was run in it", worktree)
 	}
 	// An index made from the base has no file left out of a sparse
 	// checkout, so every such file would read as deleted in the patch.
