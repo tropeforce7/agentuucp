@@ -739,6 +739,12 @@ func verifiedRoute(method, path string) bool {
 	return path != "/v1/health" && !strings.HasPrefix(path, "/v1/keys/")
 }
 
+// askFirstOver is net/http's maxPostHandlerReadBytes: the most of a body
+// its server drains after a handler that did not read it, so a request
+// whose answer comes before its body is read keeps that answer only under
+// it. A body over it asks before it is sent.
+const askFirstOver = 256 << 10
+
 // attempt is one request, signed where the relay verifies a signature.
 func (c *Client) attempt(ctx context.Context, method, path string, body []byte, out any, headers map[string]string, hold int64) error {
 	req, err := http.NewRequestWithContext(ctx, method, c.base+path, bytes.NewReader(body))
@@ -747,6 +753,18 @@ func (c *Client) attempt(ctx context.Context, method, path string, body []byte, 
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	// A relay refuses a body over its route's cap before it reads a byte,
+	// and closes the connection; Go's server drains at most askFirstOver of
+	// a body it did not read, so past that a client still writing meets a
+	// reset and the refusal is lost, and a large inline post or forward read
+	// as a dropped link (57d). Asking first, as an upload does (R42a), has
+	// the refusal arrive before the body is sent; a body the relay takes is
+	// sent when it starts to read, and one in front that ignores the ask is
+	// sent after the transport's second. Expect is HTTP/1.1's and Go's
+	// server answers it, so no relay changes for it.
+	if int64(len(body)) > askFirstOver {
+		req.Header.Set("Expect", "100-continue")
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
