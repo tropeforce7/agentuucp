@@ -550,6 +550,7 @@ internal/relay/server.go verified string fp[:16] = local: ValidFingerprint at Pa
 internal/relay/streamapi.go (*Server).handleBlob int strconv.ParseInt(r.PathValue("id")) = > 0 shown by TestLimitMessageIDInPath
 internal/relay/streamapi.go (*Server).handlePutStream int strconv.ParseInt(r.Header.Get(relayapi.UploadOffsetHeader)) = >= 0 shown by TestLimitUploadOffset
 internal/relay/streamapi.go checkStreamShape int binary.BigEndian.Uint32(header[stream.EncSize:]) = [82, 1048576] shown by TestLimitManifestChunkLength
+internal/relay/streamapi.go (*Server).lingerAfterRefusal string buf[:min(int64(len(buf)), left)] = local: buf is 32 KiB by make and left starts at lingerBytes and falls by what each read into it returned, at most its length, so the bound is at most len(buf) and above 0 inside the loop
 internal/relay/streamapi.go checkStreamShape string header[stream.EncSize:] = local: header is HeaderSize bytes by make and ReadFull
 internal/relay/watch.go (*Server).watchParams int strconv.ParseInt(issued) = open shown by TestLimitWatchIssued
 internal/relay/watch.go (*Server).watchParams int time.ParseDuration(raw) = >= 0s shown by TestLimitWaitParameter

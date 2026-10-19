@@ -519,9 +519,12 @@ func (s *Server) handlePutStream(w http.ResponseWriter, r *http.Request, callerF
 
 // lingerWait and lingerBytes bound what the relay reads of a refused
 // attempt's body after its answer (R42b): two seconds, or sixteen hunks.
+// lingerIdle is how long a stalled attempt's body may go quiet within
+// that bound before the read stops.
 const (
 	lingerWait  = 2 * time.Second
 	lingerBytes = 16 * relayapi.HunkBytes
+	lingerIdle  = 250 * time.Millisecond
 )
 
 // lingerAfterRefusal is the close of an attempt refused after its body
@@ -532,31 +535,65 @@ const (
 // it. An attempt refused before a byte of its body was read is left
 // alone: a sender that asked first (Expect) sends nothing once refused,
 // and reading would wait out the whole bound for bytes that never come.
+// One the hunk deadline ended is read on only while its body is still
+// arriving: the deadline ends a sender slower than a hunk a window as
+// well as a silent one, so the read goes on within the same bound but
+// stops at the first lingerIdle in which nothing came, and a silent
+// sender's connection is not held for bytes that are not coming. A slow
+// sender whose segments come further apart than that is read on for the
+// one gap, at least lingerIdle after its answer, not for the whole bound.
 func (s *Server) lingerAfterRefusal(rc *http.ResponseController, body *deadlineReader) {
 	if body.read == 0 {
 		return
 	}
 	rc.Flush()
-	rc.SetReadDeadline(time.Now().Add(lingerWait))
-	io.CopyN(io.Discard, body.r, lingerBytes)
+	end := time.Now().Add(lingerWait)
+	if !body.stalled {
+		rc.SetReadDeadline(end)
+		io.CopyN(io.Discard, body.r, lingerBytes)
+		return
+	}
+	buf := make([]byte, 32<<10)
+	for left := int64(lingerBytes); left > 0; {
+		now := time.Now()
+		if !now.Before(end) {
+			return
+		}
+		idle := now.Add(lingerIdle)
+		if idle.After(end) {
+			idle = end
+		}
+		rc.SetReadDeadline(idle)
+		n, err := body.r.Read(buf[:min(int64(len(buf)), left)])
+		left -= int64(n)
+		if err != nil {
+			return
+		}
+	}
 }
 
 // deadlineReader is a request body that moves the hunk deadline on each
 // time a whole hunk has been read since it last moved. What a read
 // brought past a hunk's edge counts toward the next, so a sender at the
 // pace is credited every byte; since stays under a hunk plus one read's
-// length, both the relay's own.
+// length, both the relay's own. stalled says a read ended on the
+// connection's read deadline, the relay's own window and nothing the
+// sender said.
 type deadlineReader struct {
-	r      io.Reader
-	extend func()
-	hunk   int64
-	since  int64
-	read   int64
+	r       io.Reader
+	extend  func()
+	hunk    int64
+	since   int64
+	read    int64
+	stalled bool
 }
 
 func (d *deadlineReader) Read(p []byte) (int, error) {
 	n, err := d.r.Read(p)
 	d.read += int64(n)
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		d.stalled = true
+	}
 	if d.since += int64(n); d.since >= d.hunk {
 		d.since -= d.hunk
 		d.extend()
