@@ -1,6 +1,8 @@
 package keyfile
 
 import (
+	"encoding/pem"
+	"errors"
 	"math"
 	"strconv"
 	"strings"
@@ -73,5 +75,32 @@ func TestLimitHeaderNumbers(t *testing.T) {
 		if err := memory(v); err != nil {
 			t.Errorf("memory %s: %v; want it taken", v, err)
 		}
+	}
+}
+
+// TestLimitAFileAtTheOldMemoryCeilingIsRefused: the ceiling on the memory
+// a file may name was 4 GiB, which a reader set out to allocate before the
+// passphrase could be found wrong (S58). It is 1 GiB now, and a file
+// naming the old ceiling, which only an edit by hand makes, is refused
+// with the value and the ceiling before anything is derived: the test
+// returns at once, where the derivation would allocate 4 GiB.
+func TestLimitAFileAtTheOldMemoryCeilingIsRefused(t *testing.T) {
+	file, err := Encrypt([]byte("a key"), TestPassphrase(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(file)
+	if block == nil {
+		t.Fatal("no PEM block")
+	}
+	block.Headers[hdrThreads] = "1"
+	block.Headers[hdrMemory] = strconv.Itoa(1 << 22)
+	_, err = DecryptBlock(block, []byte(secret))
+	if err == nil || errors.Is(err, ErrPassphrase) ||
+		!strings.Contains(err.Error(), hdrMemory+" must be between 8 and 1048576 KiB with 1 threads, got 4194304") {
+		t.Fatalf("a file at the old ceiling: %v; want the bounds sentence", err)
+	}
+	if MaxMemory != 1<<20 {
+		t.Fatalf("MaxMemory is %d KiB, want 1 GiB", MaxMemory)
 	}
 }

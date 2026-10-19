@@ -83,7 +83,7 @@ const (
 	MaxTime       = 1 << 16
 	MinThreads    = 1
 	MaxThreads    = 255     // argon2 takes a uint8
-	MaxMemory     = 1 << 22 // 4 GiB, twice RFC 9106's first recommendation
+	MaxMemory     = 1 << 20 // 1 GiB, sixteen times DefaultMemory (S58)
 	MinIterations = 1
 	MaxIterations = 1 << 30
 

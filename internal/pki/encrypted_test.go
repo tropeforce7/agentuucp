@@ -388,3 +388,32 @@ func copyDir(t *testing.T, from, to string) error {
 	}
 	return nil
 }
+
+// A key file whose header names Argon2 memory at the old ceiling, 4 GiB,
+// which only an edit by hand makes, is refused before anything is
+// derived, with its path, the value and the ceiling (S58): auu-ca used to
+// set out to allocate it before it could find the passphrase wrong.
+func TestOpenRefusesAKeyFileAtTheOldMemoryCeiling(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Create(dir, "Test", mldsa.MLDSA65(), keyfile.TestPassphrase(testSecret), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, anchorKeyFile)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		t.Fatal("no PEM block")
+	}
+	block.Headers["Threads"] = "1"
+	block.Headers["Memory"] = "4194304"
+	if err := os.WriteFile(path, pem.EncodeToMemory(block), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = Open(dir, []byte(testSecret))
+	if err == nil || !strings.Contains(err.Error(), path+": keyfile: Memory must be between 8 and 1048576 KiB with 1 threads, got 4194304") {
+		t.Fatalf("an authority whose anchor key names 4 GiB: %v; want the file and the bounds", err)
+	}
+}
