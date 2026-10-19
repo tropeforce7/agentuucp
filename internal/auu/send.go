@@ -568,6 +568,12 @@ type sendMode struct {
 	// which retries a reply whose post may have reached the relay with its
 	// answer lost. See sealOnce.
 	sealed string
+	// posted is where the same caller marks that an attempt at the kept
+	// seal may have reached the relay: written before the first request
+	// that could store it, and taken away again when the relay refused
+	// that request outright. Only with it is the kept form held to
+	// (keptForm).
+	posted string
 	// path is the relays an address names before the recipient, nearest
 	// first, empty for a recipient on the relay being posted to — which is
 	// every message anybody sent before relays could forward, and still
@@ -660,6 +666,44 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 	// relay with the path dropped and nothing said. One expression, so
 	// there is no between.
 	becomesStream := mode.stream || (!mode.inline && estimate > set.threshold)
+	// An answer already sealed for an earlier attempt goes again in the
+	// form it was sealed in, whatever the threshold says now: decided by
+	// the threshold at each attempt, a stream_threshold changed between two
+	// attempts sent an envelope whose post may have reached the relay again
+	// as a stream under a new id, or a kept stream again as an envelope,
+	// and the asker held two replies for one question.
+	// Only where an attempt may have reached the relay, though: a seal the
+	// relay refused outright stored nothing, and the threshold is free to
+	// choose again, as it was before the kept form decided.
+	if mode.sealed != "" && !mode.stream && !mode.inline {
+		kept, err := keptForm(mode.sealed, mode.posted, recipient, mode.channel, body, attachments)
+		if err != nil {
+			return sentJSON{}, newThread, err
+		}
+		switch kept.form {
+		case keptAsStream:
+			becomesStream = true
+		case keptAsEnvelope:
+			becomesStream = false
+		}
+		// A seal for another answer, its asker's key changed or its words
+		// made again, is not this one's, and nor is the mark that it was
+		// posted.
+		if kept.other && mode.posted != "" {
+			if err := os.Remove(mode.posted); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return sentJSON{}, newThread, err
+			}
+		}
+		// A stream kept for an answer that does not go as that stream is
+		// given up in the outbox before anything else is sealed, as outbox
+		// drop gives it up, so that a send --resume by hand cannot deliver
+		// it beside the answer that does go.
+		if kept.stream != "" && !(becomesStream && kept.streamIsThis) {
+			if err := (&pending{MessageID: kept.stream, kind: kindStream}).remove(s); err != nil {
+				return sentJSON{}, newThread, err
+			}
+		}
+	}
 	// A message that crosses a relay goes as one envelope or it does not go.
 	// A stream is an upload held open at the relay it is going to, resumed
 	// by a route that names its id, and nothing carries one to a neighbour;
@@ -721,8 +765,13 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 	if err != nil {
 		return sentJSON{}, newThread, err
 	}
+	created, err := markPosted(mode.posted)
+	if err != nil {
+		return sentJSON{}, newThread, err
+	}
 	relayID, err := postOrForward(c, env, mode)
 	if err != nil {
+		unmarkRefused(mode.posted, created, err)
 		if len(mode.path) == 0 {
 			// The channel hints first: their 404 begins "no such channel" and
 			// must not be read as a mailbox that is not there.
@@ -921,7 +970,7 @@ func sendStreamOnce(s *store.Store, id *identity.Identity, r *store.Relay, recip
 				if err != nil {
 					return sentJSON{}, err
 				}
-				return finishStream(s, id, pr, p, false)
+				return markedSend(s, mode.posted, p.MessageID, func() (sentJSON, error) { return finishStream(s, id, pr, p, false) })
 			}
 		}
 		prior, err := s.Holding(store.Sent, kept.MessageID)
@@ -934,7 +983,9 @@ func sendStreamOnce(s *store.Store, id *identity.Identity, r *store.Relay, recip
 				RelayID: prior.RelayID, InReplyTo: body.InReplyTo, Kind: "stream", Channel: kept.Channel,
 			}, nil
 		}
-		return sendStream(s, id, r, recipient, body, attachments, set, mode.channel, kept.MessageID)
+		return markedSend(s, mode.posted, kept.MessageID, func() (sentJSON, error) {
+			return sendStream(s, id, r, recipient, body, attachments, set, mode.channel, kept.MessageID)
+		})
 	}
 	messageID, err := envelope.NewID()
 	if err != nil {
@@ -951,7 +1002,169 @@ func sendStreamOnce(s *store.Store, id *identity.Identity, r *store.Relay, recip
 	if err := keepSealed(mode.sealed, data); err != nil {
 		return sentJSON{}, err
 	}
-	return sendStream(s, id, r, recipient, body, attachments, set, mode.channel, messageID)
+	return markedSend(s, mode.posted, messageID, func() (sentJSON, error) {
+		return sendStream(s, id, r, recipient, body, attachments, set, mode.channel, messageID)
+	})
+}
+
+// markedSend is a stream's send under the mark that it may have reached
+// the relay: written before it, and taken away again if this call made it
+// and the relay refused the stream outright before an upload of it was
+// opened. Once one is open, the outbox naming it, a refusal is no longer
+// proof that nothing is stored: a 404 is also what an upload the relay
+// finished answers to an attempt whose earlier answer was lost.
+func markedSend(s *store.Store, posted, messageID string, send func() (sentJSON, error)) (sentJSON, error) {
+	created, err := markPosted(posted)
+	if err != nil {
+		return sentJSON{}, err
+	}
+	out, err := send()
+	if err != nil && created {
+		opened, lerr := uploadOpened(s, messageID)
+		if lerr == nil && !opened {
+			unmarkRefused(posted, created, err)
+		}
+	}
+	return out, err
+}
+
+// uploadOpened says the outbox holds the stream under messageID with an
+// upload on a relay opened for it.
+func uploadOpened(s *store.Store, messageID string) (bool, error) {
+	waiting, _, err := listPending(s)
+	if err != nil {
+		return false, err
+	}
+	for _, p := range waiting {
+		if p.MessageID == messageID && p.kind == kindStream && p.RecipientCount == 0 && p.Upload != "" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// sealedForm is the form a kept seal holds an answer in.
+type sealedForm int
+
+const (
+	keptAsNeither sealedForm = iota
+	keptAsEnvelope
+	keptAsStream
+)
+
+// keptJudgement is what the seal kept for an answer says about this
+// attempt at it.
+type keptJudgement struct {
+	// form is the form the answer is held to: the kept seal's, when it is
+	// this answer's and an attempt at it may have reached the relay.
+	form sealedForm
+	// other says a seal is kept and is not this answer's.
+	other bool
+	// stream is the id of a stream kept, this answer's or not, and
+	// streamIsThis says it is this answer's.
+	stream       string
+	streamIsThis bool
+}
+
+// keptForm judges the seal kept at path for this answer, as the path each
+// form takes judges it: a stream as sendStreamOnce matches it, an envelope
+// by its recipient, channel, header and its files' names and digests, the
+// bytes being sealOnce's to compare once they are loaded. The form is held
+// to only while the mark at posted is there: an attempt whose request may
+// have been stored (a transport error, a 5xx, an answer lost), where the
+// other form would be a second message under a new id and the kept form
+// posted again is the same one, which the relay answers with the first
+// post's id (S50) and the recipient keeps once. A seal for another
+// recipient, channel, header, words or files is another answer; no file,
+// or one that does not decode, is no seal. One that is there and cannot be
+// read is the error, as it is to both paths, never a fresh seal.
+func keptForm(path, posted string, recipient *identity.Public, channel string, body message.Body, attachments []string) (keptJudgement, error) {
+	var j keptJudgement
+	k, err := readKeptSeal(path)
+	if err != nil || k == nil {
+		return j, err
+	}
+	files, err := keptFiles(attachments)
+	if err != nil {
+		return j, err
+	}
+	this := keptAsNeither
+	switch {
+	case k.Stream != nil:
+		j.stream = k.Stream.MessageID
+		if message.ValidID(k.Stream.MessageID) != nil {
+			// Not an id the outbox could hold a stream under.
+			j.stream = ""
+		}
+		if j.stream != "" && k.Stream.To == recipient.Fingerprint() &&
+			k.Stream.Channel == channel && sameMessage(k.Stream.Body, body) && slices.Equal(k.Stream.Files, files) {
+			this, j.streamIsThis = keptAsStream, true
+		}
+	case k.Envelope != nil && k.Inner != nil:
+		header := k.Inner.Body
+		header.Attachments = nil
+		var sealed []keptFile
+		for _, a := range k.Inner.Body.Attachments {
+			sealed = append(sealed, keptFile{Name: a.Name, SHA256: a.SHA256})
+		}
+		if k.Envelope.To == recipient.Fingerprint() && k.Envelope.Ch == channel &&
+			sameMessage(header, body) && slices.Equal(sealed, files) {
+			this = keptAsEnvelope
+		}
+	default:
+		return j, nil
+	}
+	if this == keptAsNeither {
+		j.other = true
+		return j, nil
+	}
+	if posted == "" {
+		return j, nil
+	}
+	if _, err := os.Lstat(posted); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return j, nil
+		}
+		return j, err
+	}
+	j.form = this
+	return j, nil
+}
+
+// markPosted writes the mark at path, synced, before a request that could
+// store the kept seal, and says whether this call made it. No path, as for
+// every send but serve's, is no mark.
+func markPosted(path string) (bool, error) {
+	if path == "" {
+		return false, nil
+	}
+	if _, err := os.Lstat(path); err == nil {
+		return false, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	return true, keepSealed(path, []byte("{}\n"))
+}
+
+// unmarkRefused takes away the mark this attempt made when the relay
+// refused its request outright: a 4xx other than 408 and 429, which
+// stored nothing. A transport error, a 5xx or an answer lost keeps it,
+// since the relay may have stored the attempt; and so does a mark an
+// earlier attempt made, whatever this one was told. A mark that will not
+// go stays, which holds the form where it need not, the safe way round.
+func unmarkRefused(path string, created bool, err error) {
+	if !created || !definiteRefusal(err) {
+		return
+	}
+	os.Remove(path)
+}
+
+// definiteRefusal says the relay answered a request with a refusal that
+// stored nothing.
+func definiteRefusal(err error) bool {
+	var httpErr *client.HTTPError
+	return errors.As(err, &httpErr) && httpErr.Status >= 400 && httpErr.Status < 500 &&
+		httpErr.Status != http.StatusRequestTimeout && httpErr.Status != http.StatusTooManyRequests
 }
 
 // keptFiles is each attachment's name and digest, for telling the files a

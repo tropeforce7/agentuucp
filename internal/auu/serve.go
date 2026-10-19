@@ -993,9 +993,12 @@ func (r *serveRun) handle(ctx context.Context, m *store.Stored) (err error) {
 	}
 
 	// The handler runs for this message afresh, so an envelope kept for an
-	// earlier answer to it is not this one's.
-	if err := os.Remove(sealedFile(keptDir, m.Inner.ID)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	// earlier answer to it is not this one's, and nor is the mark that it
+	// was posted.
+	for _, kept := range []string{sealedFile(keptDir, m.Inner.ID), postedFile(keptDir, m.Inner.ID)} {
+		if err := os.Remove(kept); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 
 	afterPath := runFile(keptDir, "after", m.Inner.ID)
@@ -1162,7 +1165,7 @@ func (r *serveRun) send(m *store.Stored, ch *serveChannel, text, patch string, f
 	// so that every retry posts the same envelope under the same id
 	// (sealOnce, G41, R57).
 	out, _, err := sendSealed(r.s, r.id, relay, recipient, body, attach,
-		sendMode{sealed: sealedFile(facts.keptDir, m.Inner.ID)})
+		sendMode{sealed: sealedFile(facts.keptDir, m.Inner.ID), posted: postedFile(facts.keptDir, m.Inner.ID)})
 	if err != nil {
 		if isLocked(err) {
 			// The keys went away under a running service. Nothing is
@@ -1178,7 +1181,15 @@ func (r *serveRun) send(m *store.Stored, ch *serveChannel, text, patch string, f
 		r.failed(m, ch, err.Error())
 		return nil
 	}
-	return r.settle(m, ch, out.ID)
+	if err := r.settle(m, ch, out.ID); err != nil {
+		// Not settled, so the next round sends the kept reply again, and
+		// the mark that it may be on the relay holds its form for that.
+		return err
+	}
+	// Settled: the mark has done its work, and a mark that will not go only
+	// holds a settled reply's form, which is never sent again.
+	os.Remove(postedFile(facts.keptDir, m.Inner.ID))
+	return nil
 }
 
 // settle records a message as answered and marks it read: the reply is the
@@ -1288,6 +1299,12 @@ func output(path string) (string, bool, error) {
 // between attempts to post it.
 func sealedFile(keptDir, id string) string {
 	return filepath.Join(keptDir, "sealed-"+id+".json")
+}
+
+// postedFile is where the mark that an attempt to post a message's sealed
+// reply may have reached the relay is kept (keptForm).
+func postedFile(keptDir, id string) string {
+	return filepath.Join(keptDir, "posted-"+id+".json")
 }
 
 // keptReply is a reply written by an earlier round whose send did not get
