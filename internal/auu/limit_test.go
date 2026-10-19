@@ -977,9 +977,16 @@ func TestLimitThreadIDIsNotAPathAtServe(t *testing.T) {
 	// platform. Windows refuses a colon, a drive and a device name in a
 	// directory's name, so those are planted only where the filesystem
 	// holds them; elsewhere every value but the empty name, the NUL and
-	// the long name is.
+	// the long name is. Windows drops trailing spaces from a path's last
+	// name only, so the planting's MkdirAll finds or makes "x" for "x "
+	// and then finds no "x " to make the patch's directory under: "x " is
+	// planted only off Windows. It drops a single trailing dot from every
+	// name, so "x." is planted, under "x".
 	everywhere := []string{"..", "../x", "x/../../y", "a/b", "/etc/passwd", `..\x`, ".",
-		"x.", "x ", `\\srv\share`, "é", "é", "ABCDEF0123456789ABCDEF0123456789"}
+		"x.", `\\srv\share`, "é", "é", "ABCDEF0123456789ABCDEF0123456789"}
+	if runtime.GOOS != "windows" {
+		everywhere = append(everywhere, "x ")
+	}
 	for _, v := range everywhere {
 		if !planted[v] {
 			t.Errorf("a kept reply was not planted for %q, so the test shows little for it", v)
