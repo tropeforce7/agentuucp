@@ -255,24 +255,38 @@ What this binary is, and the skills it carries:
 
 ```
 auu version [--json]                               # the version it was built from (--version is the same)
-auu skill install [--dir DIR] [--force] [--json]   # write these three skills out of the binary
-auu skill ls [--dir DIR] [--json]                  # which of them the directory holds, and whether they match
+auu skill install --target claude|agents [--force] [--json]   # write these three skills out of the binary
+auu skill install --dir DIR [--force] [--json]     # the same under DIR/skills, in place of --target
+auu skill ls --target claude|agents [--json]       # which of them the directory holds, and whether they match
+auu skill ls --dir DIR [--json]                    # the same for DIR/skills
 auu skill show NAME|reference                      # print one, without installing it
 ```
 
 The three skills are in the binary, so a machine with `auu` alone can have
 them: `auu skill install` writes `auu-connect`, `auu-setup` and `auu-relay`,
-each with its copy of this reference, under `DIR/skills` — `--dir`, else
-`$CLAUDE_CONFIG_DIR`, else `~/.claude` — and ends with `installed
-auu-connect, auu-setup and auu-relay in DIR/skills` and `restart Claude
-Code, or start a new session, for it to see them`, or `already installed:
-...` when every file was this binary's already. A file that differs from the
-binary's copy — the user's own edit, or an older auu's — is left alone and
-named, exit 1: `PATH differs from this binary's copy; kept. --force replaces
-it`; the other files are still written, and `--force` replaces the differing
-ones and says `(updated NAME)`. `auu skill ls` says per skill `installed`,
-`differs` or `absent`, which is what to run after an upgrade; `differs`
-means run `auu skill install` (and `--force` if the user did not edit it).
+each with its copy of this reference, under the target's skills directory.
+`--target claude` is Claude Code's, `$CLAUDE_CONFIG_DIR/skills`, else
+`~/.claude/skills`; `--target agents` is `~/.agents/skills`, which Codex
+reads; `--dir DIR` is `DIR/skills` and is refused beside `--target`. Give
+the target always: with neither, the command asks at a terminal, and with no
+terminal, as in an agent's shell, or with `--json`, it refuses, exit 1,
+naming the command for each target with its directory: `where the skills go
+was not said, and there is no terminal to ask at; run one of:` (or `--json
+does not ask`) and the two commands. It prints a first line, `installed
+auu-connect, auu-setup and auu-relay in DIR for Claude Code (auu VERSION)`,
+`already installed: ...` when every file was this binary's already, or `not
+all installed: ...` when nothing was written and a file was kept; then a
+line per file, `NAME/FILE: written`, `replaced`, `already current` or `kept,
+differs from this binary's copy; --force replaces it`; and, when something
+was written, what makes the agent read it: `restart Claude Code, or start a
+new session, for it to see them`, or for agents `start a new Codex session
+for it to see them; an agent that reads ~/.agents/skills sees them the same
+way`. A kept file — the user's own edit, or an older auu's — is left alone,
+exit 1, `PATH differs from this binary's copy; kept. --force replaces it`,
+and the other files are still written. `auu skill ls` names the directory on
+its first line and says per skill `installed`, `differs` or `absent`, which
+is what to run after an upgrade; `differs` means run `auu skill install`
+with the same target (and `--force` if the user did not edit it).
 
 Keys under a passphrase:
 
@@ -576,11 +590,13 @@ when set) and `present`.
 (`receive` or `send`, when unlocked), `send_expires` (when send scope has
 an end), `keys`, `socket`.
 
-`auu skill install --json`: `dir`, and `skills`, a list of every file
-written or looked at: `name` (the skill), `path`, and `state` (`new`,
-`updated`, `unchanged` or `kept`). `auu skill ls --json`: `dir`, and
-`skills` of `name`, `path` (the skill's directory) and `state`
-(`installed`, `differs` or `absent`).
+`auu skill install --json`: `target` (`claude`, `agents`, or `dir` for
+`--dir`), `dir`, `version`, and `skills`, a list of every file written or
+looked at: `name` (the skill), `path`, and `state` (`new`, `updated`,
+`unchanged` or `kept`). `auu skill ls --json`: `target`, `dir`, `version`,
+and `skills` of `name`, `path` (the skill's directory) and `state`
+(`installed`, `differs` or `absent`). `--json` needs the target given, since
+it never asks.
 
 `auu version --json`: `version`, and `skills`, the names of the skills the
 binary carries. The version is the one the binary was built from — a tag for

@@ -48,13 +48,14 @@ script's own header before you run it — it says so itself, and it is short.
 
 ## The skills
 
-The three Claude Code skills are inside the binary, so after either install:
+The three skills are inside the binary, so after either install:
 
 ```
-auu skill install
+auu skill install --target claude
 ```
 
-writes them under `~/.claude/skills`, and `make install-skill` does the same
+writes them under `~/.claude/skills` for Claude Code, `--target agents`
+under `~/.agents/skills` for Codex, and `make install-skill` does the first
 by copying them out of the tree. A skill on a machine must match the `auu`
 beside it, so run it again after an update.
 
@@ -115,7 +116,7 @@ for.
 git pull --ff-only
 make install
 auu version
-auu skill install
+auu skill install --target claude
 ```
 
 A relay is updated by stopping its unit, replacing the binary and starting it

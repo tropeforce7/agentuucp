@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/buildinfo"
 	"github.com/tropeforce7/agentuucp/skill"
 )
 
@@ -21,6 +23,61 @@ func runSkill(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 	u := &user{t: t, home: t.TempDir()}
 	return u.tryRun(args...)
+}
+
+// installLines is what install prints for a directory when every file is
+// in one state: the first line, a line per file, and the last line when
+// one is due.
+func installLines(first, skills, forWhom, word, last string) string {
+	out := first + " auu-connect, auu-setup and auu-relay in " + skills + forWhom + " " + builtAs() + "\n"
+	for _, name := range skill.Names() {
+		out += "  " + name + "/SKILL.md: " + word + "\n"
+		out += "  " + name + "/reference.md: " + word + "\n"
+	}
+	if last != "" {
+		out += last + "\n"
+	}
+	return out
+}
+
+const seeThemClaude = "restart Claude Code, or start a new session, for it to see them"
+
+// standTerminal stands a terminal in, or takes it away, for one test.
+func standTerminal(t *testing.T, is bool) {
+	t.Helper()
+	was := stdinIsTerminal
+	stdinIsTerminal = func() bool { return is }
+	t.Cleanup(func() { stdinIsTerminal = was })
+}
+
+// answerWith hands the next command a standard input carrying text.
+func answerWith(t *testing.T, text string) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WriteString(text); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	real := os.Stdin
+	os.Stdin = r
+	t.Cleanup(func() { os.Stdin = real; r.Close() })
+}
+
+// aHome gives the test a home of its own and no $CLAUDE_CONFIG_DIR, and
+// returns the home.
+func aHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	} else {
+		t.Setenv("HOME", home)
+	}
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+	return home
 }
 
 // treeFile is one of the skills as the tree has it.
@@ -42,7 +99,7 @@ func TestSkillInstallWritesTheSkillsOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	skills := filepath.Join(dir, "skills")
-	want := "installed auu-connect, auu-setup and auu-relay in " + skills + "\nrestart Claude Code, or start a new session, for it to see them\n"
+	want := installLines("installed", skills, ", given by --dir", "written", seeThemClaude)
 	if out != want {
 		t.Fatalf("install said:\n%s\nwant:\n%s", out, want)
 	}
@@ -85,8 +142,8 @@ func TestSkillInstallWritesTheSkillsOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "already installed: auu-connect, auu-setup and auu-relay in "+skills+"\n" {
-		t.Fatalf("the second run said:\n%s", out)
+	if want := installLines("already installed:", skills, ", given by --dir", "already current", ""); out != want {
+		t.Fatalf("the second run said:\n%s\nwant:\n%s", out, want)
 	}
 	info, _ := os.Stat(path)
 	if !info.ModTime().Equal(old) {
@@ -141,8 +198,16 @@ func TestSkillInstallKeepsAnEditedFileUnlessForced(t *testing.T) {
 	if _, err := os.Stat(removed); err != nil {
 		t.Fatal("the missing file was not written because another was kept")
 	}
-	if !strings.Contains(out, "installed auu-connect, auu-setup and auu-relay in "+skills+"\n") {
-		t.Fatalf("install with a kept file said:\n%s", out)
+	for _, line := range []string{
+		"installed auu-connect, auu-setup and auu-relay in " + skills + ", given by --dir " + builtAs() + "\n",
+		"  auu-setup/SKILL.md: kept, differs from this binary's copy; --force replaces it\n",
+		"  auu-connect/reference.md: written\n",
+		"  auu-connect/SKILL.md: already current\n",
+		seeThemClaude + "\n",
+	} {
+		if !strings.Contains(out, line) {
+			t.Fatalf("install with a kept file said:\n%s\nwant a line %q", out, line)
+		}
 	}
 	// --json says the same, per file.
 	out, err = runSkill(t, "skill", "install", "--dir", dir, "--json")
@@ -163,9 +228,15 @@ func TestSkillInstallKeepsAnEditedFileUnlessForced(t *testing.T) {
 	// Two edited files are named together.
 	edited2 := filepath.Join(skills, "auu-relay", "reference.md")
 	os.WriteFile(edited2, []byte("mine too\n"), 0o644)
-	_, err = runSkill(t, "skill", "install", "--dir", dir)
+	out, err = runSkill(t, "skill", "install", "--dir", dir)
 	if err == nil || err.Error() != edited+" and "+edited2+" differ from this binary's copy; kept. --force replaces them" {
 		t.Fatalf("two kept files: %v", err)
+	}
+	// Nothing was written and two files were kept: not "installed", which
+	// would be a false word, and no line about seeing them (D157).
+	if !strings.HasPrefix(out, "not all installed: auu-connect, auu-setup and auu-relay in "+skills+", given by --dir "+builtAs()+"\n") ||
+		strings.Contains(out, seeThemClaude) {
+		t.Fatalf("an install that wrote nothing and kept two said:\n%s", out)
 	}
 
 	// --force replaces them, says which skills were updated, exits 0.
@@ -173,8 +244,18 @@ func TestSkillInstallKeepsAnEditedFileUnlessForced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("--force: %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "installed auu-connect, auu-setup and auu-relay in "+skills+" (updated auu-setup) (updated auu-relay)\n") {
-		t.Fatalf("--force said:\n%s", out)
+	for _, line := range []string{
+		"installed auu-connect, auu-setup and auu-relay in " + skills + ", given by --dir " + builtAs() + "\n",
+		"  auu-setup/SKILL.md: replaced\n",
+		"  auu-relay/reference.md: replaced\n",
+		"  auu-relay/SKILL.md: already current\n",
+	} {
+		if !strings.Contains(out, line) {
+			t.Fatalf("--force said:\n%s\nwant a line %q", out, line)
+		}
+	}
+	if strings.Contains(out, "(updated") {
+		t.Fatalf("--force still says (updated NAME):\n%s", out)
 	}
 	if got, _ := os.ReadFile(edited); string(got) != string(treeFile(t, "auu-setup/SKILL.md")) {
 		t.Fatal("--force did not replace the edited file")
@@ -188,39 +269,249 @@ func TestSkillInstallKeepsAnEditedFileUnlessForced(t *testing.T) {
 	}
 }
 
-// The directory: --dir, then $CLAUDE_CONFIG_DIR, then the home's .claude,
-// in that order.
-func TestSkillDirectoryResolvesInOrder(t *testing.T) {
-	home := t.TempDir()
+// The target resolves as documented: --dir alone is DIR/skills; --target
+// claude is $CLAUDE_CONFIG_DIR's skills when it is set and the home's
+// .claude's when not; --target agents is the home's .agents/skills
+// whatever $CLAUDE_CONFIG_DIR says; --dir beside --target, and a word that
+// is neither, are refused by their sentences, exit 1. Install and ls
+// answer the same directory for each, with the flags in either order.
+func TestTheTargetResolvesAsDocumented(t *testing.T) {
+	home := aHome(t)
 	configDir := t.TempDir()
 	flagDir := t.TempDir()
-	if runtime.GOOS == "windows" {
-		t.Setenv("USERPROFILE", home)
-	} else {
-		t.Setenv("HOME", home)
-	}
-	t.Setenv("CLAUDE_CONFIG_DIR", "")
-	dirOf := func(t *testing.T, args ...string) string {
+	dirOf := func(t *testing.T, args ...string) (string, string) {
 		t.Helper()
-		var report skillLsJSON
+		var ls skillLsJSON
 		out, err := runSkill(t, append([]string{"skill", "ls", "--json"}, args...)...)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := json.Unmarshal([]byte(out), &report); err != nil {
+		if err := json.Unmarshal([]byte(out), &ls); err != nil {
 			t.Fatal(err)
 		}
-		return report.Dir
+		var install skillInstallJSON
+		out, err = runSkill(t, append(append([]string{"skill", "install"}, args...), "--json")...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal([]byte(out), &install); err != nil {
+			t.Fatal(err)
+		}
+		if install.Dir != ls.Dir || install.Target != ls.Target {
+			t.Fatalf("%v: install says %s %s and ls %s %s", args, install.Target, install.Dir, ls.Target, ls.Dir)
+		}
+		return ls.Target, ls.Dir
 	}
-	if got := dirOf(t); got != filepath.Join(home, ".claude", "skills") {
-		t.Fatalf("with nothing set: %s", got)
+	for _, tc := range []struct {
+		name, config, target, dir string
+		args                      []string
+	}{
+		{"--dir alone", "", targetDir, filepath.Join(flagDir, "skills"), []string{"--dir", flagDir}},
+		{"--dir under CLAUDE_CONFIG_DIR", configDir, targetDir, filepath.Join(flagDir, "skills"), []string{"--dir", flagDir}},
+		{"claude, nothing set", "", targetClaude, filepath.Join(home, ".claude", "skills"), []string{"--target", "claude"}},
+		{"claude under CLAUDE_CONFIG_DIR", configDir, targetClaude, filepath.Join(configDir, "skills"), []string{"--target", "claude"}},
+		{"agents under CLAUDE_CONFIG_DIR", configDir, targetAgents, filepath.Join(home, ".agents", "skills"), []string{"--target", "agents"}},
+		{"agents, nothing set", "", targetAgents, filepath.Join(home, ".agents", "skills"), []string{"--target", "agents"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CONFIG_DIR", tc.config)
+			if target, dir := dirOf(t, tc.args...); target != tc.target || dir != tc.dir {
+				t.Fatalf("%v resolved to %s %s, want %s %s", tc.args, target, dir, tc.target, tc.dir)
+			}
+		})
 	}
-	t.Setenv("CLAUDE_CONFIG_DIR", configDir)
-	if got := dirOf(t); got != filepath.Join(configDir, "skills") {
-		t.Fatalf("with CLAUDE_CONFIG_DIR: %s", got)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"--dir", flagDir, "--target", "claude"}, "--dir and --target name two places; give one"},
+		{[]string{"--target", "agents", "--dir", flagDir}, "--dir and --target name two places; give one"},
+		{[]string{"--target", "codex"}, `unknown --target "codex"; claude or agents`},
+		{[]string{"--target", "Claude"}, `unknown --target "Claude"; claude or agents`},
+	} {
+		for _, sub := range []string{"install", "ls"} {
+			_, err := runSkill(t, append([]string{"skill", sub}, tc.args...)...)
+			var e *exitError
+			if !errors.As(err, &e) || e.code != exitUsage || err.Error() != tc.want {
+				t.Errorf("skill %s %v: %v, want exit %d %q", sub, tc.args, err, exitUsage, tc.want)
+			}
+		}
 	}
-	if got := dirOf(t, "--dir", flagDir); got != filepath.Join(flagDir, "skills") {
-		t.Fatalf("with --dir: %s", got)
+	for _, d := range []string{filepath.Join(home, ".claude", "skills", "auu-connect"), filepath.Join(home, ".agents", "skills", "auu-connect")} {
+		if _, err := os.Stat(d); err != nil {
+			t.Errorf("%s was not written by the installs above: %v", d, err)
+		}
+	}
+}
+
+// With no target and no terminal to ask at, install and ls refuse, exit 1,
+// in the sentence that names the command for each target with the
+// directory each would use and the --dir form, and write nothing under
+// either; --json refuses the same at a terminal or without one, saying
+// that it does not ask, since its reader is a program and the prompt is
+// for a person.
+func TestNoTargetWithoutATerminalRefusesAndNamesTheCommands(t *testing.T) {
+	const noTerminal, noAsking = "there is no terminal to ask at", "--json does not ask"
+	for _, tc := range []struct {
+		name     string
+		terminal bool
+		args     []string
+		command  string
+		why      string
+	}{
+		{"install through a pipe", false, []string{"skill", "install"}, "skill install", noTerminal},
+		{"install --json at a terminal", true, []string{"skill", "install", "--json"}, "skill install", noAsking},
+		{"install --json through a pipe", false, []string{"skill", "install", "--json"}, "skill install", noAsking},
+		{"install --force through a pipe", false, []string{"skill", "install", "--force"}, "skill install", noTerminal},
+		{"ls through a pipe", false, []string{"skill", "ls"}, "skill ls", noTerminal},
+		{"ls --json at a terminal", true, []string{"skill", "ls", "--json"}, "skill ls", noAsking},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := aHome(t)
+			standTerminal(t, tc.terminal)
+			answerWith(t, "1\n")
+			claude := filepath.Join(home, ".claude", "skills")
+			agents := filepath.Join(home, ".agents", "skills")
+			out, err := runSkill(t, tc.args...)
+			want := "where the skills go was not said, and " + tc.why + "; run one of:\n" +
+				"  auu " + tc.command + " --target claude    # Claude Code reads " + claude + "\n" +
+				"  auu " + tc.command + " --target agents    # Codex reads " + agents + "\n" +
+				"or give the base directory with --dir DIR (the skills go in DIR/skills)"
+			var e *exitError
+			if !errors.As(err, &e) || e.code != exitUsage || err.Error() != want {
+				t.Fatalf("%v: %v\nwant exit %d:\n%s", tc.args, err, exitUsage, want)
+			}
+			if out != "" {
+				t.Fatalf("%v printed %q before refusing", tc.args, out)
+			}
+			for _, d := range []string{filepath.Join(home, ".claude"), filepath.Join(home, ".agents")} {
+				if _, err := os.Stat(d); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("%s exists after a refusal: %v", d, err)
+				}
+			}
+		})
+	}
+}
+
+// At a terminal with no target, install asks once and takes 1, 2, claude
+// or agents, a last line with no newline among them, installing under
+// that target alone; anything else, an empty line or end of file is no
+// choice, refused by its sentence, exit 1, with nothing written (D152).
+func TestTheTargetIsAskedAtATerminal(t *testing.T) {
+	for _, tc := range []struct {
+		answer, target string
+	}{
+		{"2\n", targetAgents},
+		{"claude\n", targetClaude},
+		{"1\n", targetClaude},
+		{"  AGENTS  \n", targetAgents},
+		{"2", targetAgents},
+		{"x\n", ""},
+		{"\n", ""},
+		{"", ""},
+		{"3\n", ""},
+	} {
+		t.Run(strconv.Quote(tc.answer), func(t *testing.T) {
+			home := aHome(t)
+			standTerminal(t, true)
+			answerWith(t, tc.answer)
+			claude := filepath.Join(home, ".claude", "skills")
+			agents := filepath.Join(home, ".agents", "skills")
+			out, err := runSkill(t, "skill", "install")
+			prompt := "Where should the skills go?\n" +
+				"  1  claude   " + claude + "   read by Claude Code\n" +
+				"  2  agents   " + agents + "   read by Codex, and by other agents that read ~/.agents\n" +
+				"Target [1/2]: "
+			if !strings.HasPrefix(out, prompt) || strings.Count(out, "Where should the skills go?") != 1 {
+				t.Fatalf("the prompt:\n%s\nwant it once, at the start:\n%s", out, prompt)
+			}
+			if tc.target == "" {
+				var e *exitError
+				if !errors.As(err, &e) || e.code != exitUsage || err.Error() != "no target chosen; nothing installed" {
+					t.Fatalf("answer %q: %v, want exit %d and D152's sentence", tc.answer, err, exitUsage)
+				}
+				for _, d := range []string{filepath.Join(home, ".claude"), filepath.Join(home, ".agents")} {
+					if _, err := os.Stat(d); !errors.Is(err, os.ErrNotExist) {
+						t.Fatalf("%s exists after no choice: %v", d, err)
+					}
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("answer %q: %v\n%s", tc.answer, err, out)
+			}
+			want, other := claude, agents
+			if tc.target == targetAgents {
+				want, other = agents, claude
+			}
+			if _, err := os.Stat(filepath.Join(want, "auu-connect", "SKILL.md")); err != nil {
+				t.Fatalf("answer %q: nothing under %s: %v", tc.answer, want, err)
+			}
+			if _, err := os.Stat(filepath.Dir(other)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("answer %q wrote under %s too", tc.answer, other)
+			}
+			if !strings.Contains(out, "installed auu-connect, auu-setup and auu-relay in "+want) {
+				t.Fatalf("answer %q: install said:\n%s", tc.answer, out)
+			}
+		})
+	}
+}
+
+// An install says, for each target and for --dir, its first line naming
+// the directory, whom it is for and the version, a line per file in its
+// state, and the last line for that target; --json carries the target,
+// the directory, the version and every file.
+func TestAnInstallReportsEveryFileAndTheTarget(t *testing.T) {
+	home := aHome(t)
+	flagDir := t.TempDir()
+	const seeThemAgents = "start a new Codex session for it to see them; an agent that reads ~/.agents/skills sees them the same way"
+	for _, tc := range []struct {
+		args             []string
+		dir, forWhom     string
+		last, jsonTarget string
+	}{
+		{[]string{"--target", "claude"}, filepath.Join(home, ".claude", "skills"), " for Claude Code", seeThemClaude, targetClaude},
+		{[]string{"--target", "agents"}, filepath.Join(home, ".agents", "skills"), " for Codex and other agents that read ~/.agents", seeThemAgents, targetAgents},
+		{[]string{"--dir", flagDir}, filepath.Join(flagDir, "skills"), ", given by --dir", seeThemClaude, targetDir},
+	} {
+		out, err := runSkill(t, append([]string{"skill", "install"}, tc.args...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := installLines("installed", tc.dir, tc.forWhom, "written", tc.last); out != want {
+			t.Fatalf("%v said:\n%s\nwant:\n%s", tc.args, out, want)
+		}
+		out, err = runSkill(t, append([]string{"skill", "ls"}, tc.args...)...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first := tc.dir + tc.forWhom + " " + builtAs() + "\n"; !strings.HasPrefix(out, first) {
+			t.Fatalf("ls %v said:\n%s\nwant it to begin %q", tc.args, out, first)
+		}
+		for _, sub := range []string{"install", "ls"} {
+			out, err = runSkill(t, append([]string{"skill", sub, "--json"}, tc.args...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(out), &fields); err != nil {
+				t.Fatal(err)
+			}
+			for _, k := range []string{"target", "dir", "version", "skills"} {
+				if _, ok := fields[k]; !ok {
+					t.Fatalf("%s --json %v has no %q: %s", sub, tc.args, k, out)
+				}
+			}
+			if !strings.HasPrefix(string(fields["skills"]), "[") {
+				t.Fatalf("%s --json %v: skills is not a list: %s", sub, tc.args, fields["skills"])
+			}
+		}
+		out, _ = runSkill(t, append([]string{"skill", "install", "--json"}, tc.args...)...)
+		var report skillInstallJSON
+		json.Unmarshal([]byte(out), &report)
+		if report.Target != tc.jsonTarget || report.Dir != tc.dir || report.Version != buildinfo.Version() || len(report.Skills) != 6 {
+			t.Fatalf("install --json %v: %+v", tc.args, report)
+		}
 	}
 }
 
@@ -232,6 +523,9 @@ func TestSkillLsAndShow(t *testing.T) {
 	out, err := runSkill(t, "skill", "ls", "--dir", dir)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if first := skills + ", given by --dir " + builtAs() + "\n"; !strings.HasPrefix(out, first) {
+		t.Fatalf("ls before an install:\n%s\nwant it to begin %q", out, first)
 	}
 	for _, name := range skill.Names() {
 		if !strings.Contains(out, name+" ") || !strings.Contains(out, " absent ") {

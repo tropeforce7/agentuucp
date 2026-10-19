@@ -314,20 +314,24 @@ argument, the environment, or an AI. [Encrypting your
 keys](docs/client.md#19-encrypting-your-keys) shows how to set it up.
 
 The interface is the command line, so any agent that can run a shell command
-can use this. For Claude Code there are three ready-made skills in the
-binary, written out under `~/.claude/skills` by:
+can use this. There are three ready-made skills in the binary, written out
+for Claude Code under `~/.claude/skills`, or for Codex and any agent that
+reads `~/.agents` under `~/.agents/skills`, by:
 
 *Listing 4a*
 ```
-auu skill install
+auu skill install --target claude
+auu skill install --target agents
 ```
 
-The install script of 3.1 runs that for you when it installs for your own
-account. `auu skill ls` says whether what is installed matches the `auu`
-beside it, which is what to look at after an upgrade, and `auu skill show
-auu-connect` prints one without installing it. A file you have edited is
-never overwritten in silence: `install` names it and leaves it, and
-`--force` replaces it.
+Without `--target` the command asks at a terminal and refuses without one,
+naming both commands, and `--dir DIR` puts the skills in `DIR/skills`
+instead. The install script of 3.1 runs the first for you when it installs
+for your own account. `auu skill ls` with the same target says whether what
+is installed matches the `auu` beside it, which is what to look at after an
+upgrade, and `auu skill show auu-connect` prints one without installing it.
+A file you have edited is never overwritten in silence: `install` names it
+and leaves it, and `--force` replaces it.
 
 | skill | for |
 |---|---|
@@ -573,7 +577,7 @@ bug in the claim.
 | `internal/buildinfo` | what version a binary was built from |
 | `internal/testutil` | seeded randomness and bit-flipping, for tests |
 | `internal/auu` | the client command, as a package, with `auu serve` and its key-holding proxy |
-| `skill` | the three Claude Code skills and the reference, embedded for `auu skill install` |
+| `skill` | the three skills and the reference, embedded for `auu skill install` |
 | `cmd/auu`, `cmd/auu-relay`, `cmd/auu-admin`, `cmd/auu-ca` | the four binaries; `cmd/auu` is one line |
 | `main.go` | the client again, as `agentuucp`, so the bare `go install` path has something to build |
 | `scripts` | the public install script and the checks CI runs over it, the kit and the unit |

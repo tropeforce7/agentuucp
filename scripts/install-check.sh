@@ -88,7 +88,7 @@ esac
 # repetition to grep -E.
 grep -qF "auu: $version" /tmp/first || fail "the report does not say what auu is now"
 # Root is told about the skills and given none: they are each person's.
-has /tmp/first "the Claude Code skills are in the binary; each person runs 'auu skill install' once to have them" "root was not told about the skills"
+has /tmp/first "the Claude Code skills are in the binary; each person runs 'auu skill install --target claude' once to have them" "root was not told about the skills"
 [ ! -e /root/.claude/skills ] || fail "the root install wrote skills under /root"
 
 echo "--- 3. the same again, which changes nothing --------------------------"
@@ -118,7 +118,10 @@ has /tmp/tester "/usr/local/go/bin/go is new enough" "it did not find the machin
 has /tmp/tester "is not on your PATH" "it did not say the PATH line"
 has /tmp/tester "export PATH=\"/home/tester/.local/bin:\$PATH\"" "the PATH line is not the one to paste"
 # And the skills, for that user, from the binary just installed.
-has /tmp/tester "installed auu-connect, auu-setup and auu-relay in /home/tester/.claude/skills" "the skills were not installed for the tester"
+has /tmp/tester "installed auu-connect, auu-setup and auu-relay in /home/tester/.claude/skills for Claude Code (auu $version)" "the skills were not installed for the tester"
+has /tmp/tester "  auu-connect/SKILL.md: written" "the install did not say each file"
+has /tmp/tester "for Codex, or another agent that reads ~/.agents, run 'auu skill install --target agents'" "the closing line does not name the agents command"
+[ ! -e /home/tester/.agents ] || fail "the Claude Code install wrote under ~/.agents"
 has /tmp/tester "the Claude Code skills are installed for tester under the directory above" "the closing line does not say whose skills they are"
 for s in auu-connect auu-setup auu-relay; do
 	[ -s "/home/tester/.claude/skills/$s/SKILL.md" ] || fail "no SKILL.md for $s under the tester's home"

@@ -137,8 +137,8 @@ Usage:
 
   auu version [--json]               # the version this binary was built from; --version is the same
 
-  auu skill install [--dir DIR] [--force] [--json]   # write the Claude Code skills the binary carries
-  auu skill ls [--dir DIR] [--json]  # which of them the directory holds, and whether they match
+  auu skill install [--target claude|agents | --dir DIR] [--force] [--json]   # write the skills the binary carries
+  auu skill ls [--target claude|agents | --dir DIR] [--json]  # which of them the directory holds, and whether they match
   auu skill show NAME|reference      # print one, without installing it
 
   auu completion zsh|bash            # print a completion script for your shell

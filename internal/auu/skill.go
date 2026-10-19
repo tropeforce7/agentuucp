@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/tropeforce7/agentuucp/internal/buildinfo"
 	"github.com/tropeforce7/agentuucp/skill"
 )
 
@@ -37,14 +38,18 @@ type skillFileJSON struct {
 
 // skillInstallJSON is 'skill install --json'.
 type skillInstallJSON struct {
-	Dir    string          `json:"dir"`
-	Skills []skillFileJSON `json:"skills"`
+	Target  string          `json:"target"`
+	Dir     string          `json:"dir"`
+	Version string          `json:"version"`
+	Skills  []skillFileJSON `json:"skills"`
 }
 
 // skillLsJSON is 'skill ls --json'.
 type skillLsJSON struct {
-	Dir    string          `json:"dir"`
-	Skills []skillFileJSON `json:"skills"`
+	Target  string          `json:"target"`
+	Dir     string          `json:"dir"`
+	Version string          `json:"version"`
+	Skills  []skillFileJSON `json:"skills"`
 }
 
 func cmdSkill(args []string) error {
@@ -64,14 +69,120 @@ func cmdSkill(args []string) error {
 	}
 }
 
-// skillsDir is where the skills go: --dir, else $CLAUDE_CONFIG_DIR, else
-// ~/.claude, which is the Makefile's rule in the same order. The result
-// is absolute, so that a sentence and a --json can name it plainly.
-func skillsDir(flag string) (string, error) {
-	dir := strings.TrimSpace(flag)
-	if dir == "" {
-		dir = os.Getenv("CLAUDE_CONFIG_DIR")
+// The targets a skills directory is resolved from. claude and agents are
+// what --target names; dir is how --dir is reported.
+const (
+	targetClaude = "claude"
+	targetAgents = "agents"
+	targetDir    = "dir"
+)
+
+// skillTarget is where a skill command acts: the target it was resolved
+// from and the skills directory, absolute.
+type skillTarget struct {
+	kind string
+	dir  string
+}
+
+// resolveSkillsDir is the one rule install and ls resolve their
+// directory by. --dir and --target together are refused, since each names
+// a place and one would silently cancel the other (D147). --dir is
+// DIR/skills; --target claude is $CLAUDE_CONFIG_DIR, else ~/.claude, then
+// skills; --target agents is ~/.agents/skills, whatever $CLAUDE_CONFIG_DIR
+// says. With neither the command asks at a terminal, and where it cannot
+// ask — no terminal, or --json, whose reader is a program — it refuses
+// naming the command for each target and the directory each would use,
+// so whoever ran it, a person or their agent, has the next command whole.
+// command is what the refusal names, "skill install" or "skill ls"; what
+// is the word for what an unanswered prompt leaves undone; cannotAsk is
+// why there is no asking, or empty when the command may ask.
+func resolveSkillsDir(command, what, target, dir, cannotAsk string) (skillTarget, error) {
+	target, dir = strings.TrimSpace(target), strings.TrimSpace(dir)
+	switch {
+	case dir != "" && target != "":
+		return skillTarget{}, usageErrf("--dir and --target name two places; give one")
+	case dir != "":
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return skillTarget{}, err
+		}
+		return skillTarget{kind: targetDir, dir: filepath.Join(abs, "skills")}, nil
+	case target == targetClaude:
+		d, err := claudeSkillsDir()
+		return skillTarget{kind: targetClaude, dir: d}, err
+	case target == targetAgents:
+		d, err := agentsSkillsDir()
+		return skillTarget{kind: targetAgents, dir: d}, err
+	case target != "":
+		return skillTarget{}, usageErrf("unknown --target %q; claude or agents", target)
 	}
+	claude, err := claudeSkillsDir()
+	if err != nil {
+		return skillTarget{}, err
+	}
+	agents, err := agentsSkillsDir()
+	if err != nil {
+		return skillTarget{}, err
+	}
+	if cannotAsk != "" {
+		return skillTarget{}, usageErrf("where the skills go was not said, and %[5]s; run one of:\n"+
+			"  %[1]s %[2]s --target claude    # Claude Code reads %[3]s\n"+
+			"  %[1]s %[2]s --target agents    # Codex reads %[4]s\n"+
+			"or give the base directory with --dir DIR (the skills go in DIR/skills)", prog, command, claude, agents, cannotAsk)
+	}
+	kind, err := askSkillTarget(claude, agents)
+	if err != nil {
+		return skillTarget{}, usageErrf("no target chosen; nothing %s", what)
+	}
+	if kind == targetClaude {
+		return skillTarget{kind: targetClaude, dir: claude}, nil
+	}
+	return skillTarget{kind: targetAgents, dir: agents}, nil
+}
+
+// whyNotAsk is why a skill command may not ask for its target, in the
+// words its refusal says, or empty when it may.
+func whyNotAsk(asJSON bool) string {
+	switch {
+	case asJSON:
+		return "--json does not ask"
+	case !stdinIsTerminal():
+		return "there is no terminal to ask at"
+	}
+	return ""
+}
+
+// askSkillTarget puts the one question to a person at a terminal, before
+// anything is written. 1, 2, claude or agents is an answer; anything else,
+// an empty line or end of file is none, and the command does nothing: the
+// command must not guess where a person's skills go, and Enter is not a
+// choice (D152). A last line with no newline before end of file is read
+// as an answer, as confirm reads one.
+func askSkillTarget(claude, agents string) (string, error) {
+	w := max(len(claude), len(agents))
+	fmt.Println("Where should the skills go?")
+	fmt.Printf("  1  claude   %-*s   read by Claude Code\n", w, claude)
+	fmt.Printf("  2  agents   %-*s   read by Codex, and by other agents that read ~/.agents\n", w, agents)
+	fmt.Print("Target [1/2]: ")
+	line, err := stdinLine()
+	if err != nil && line == "" {
+		fmt.Println()
+		return "", errors.New("no answer")
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "1", targetClaude:
+		return targetClaude, nil
+	case "2", targetAgents:
+		return targetAgents, nil
+	}
+	return "", errors.New("no answer")
+}
+
+// claudeSkillsDir is Claude Code's: $CLAUDE_CONFIG_DIR, else ~/.claude,
+// then skills, which is the Makefile's rule in the same order. The result
+// is absolute, so that a sentence and a --json can name it plainly.
+func claudeSkillsDir() (string, error) {
+	dir := os.Getenv("CLAUDE_CONFIG_DIR")
 	if dir == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
@@ -85,6 +196,44 @@ func skillsDir(flag string) (string, error) {
 	}
 	return filepath.Join(abs, "skills"), nil
 }
+
+// agentsSkillsDir is ~/.agents/skills, which Codex reads, and other agents
+// that read ~/.agents. $CLAUDE_CONFIG_DIR is Claude Code's alone and does
+// not move it.
+func agentsSkillsDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", usageErrf("no home directory to put the skills under (%v); pass --dir", err)
+	}
+	abs, err := filepath.Abs(home)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(abs, ".agents", "skills"), nil
+}
+
+// forWhom is the words a first line says the directory is for.
+func (t skillTarget) forWhom() string {
+	switch t.kind {
+	case targetClaude:
+		return " for Claude Code"
+	case targetAgents:
+		return " for Codex and other agents that read ~/.agents"
+	}
+	return ", given by --dir"
+}
+
+// seeThem is the last line of an install that wrote something: what to
+// do for the agent to see the skills.
+func (t skillTarget) seeThem() string {
+	if t.kind == targetAgents {
+		return "start a new Codex session for it to see them; an agent that reads ~/.agents/skills sees them the same way"
+	}
+	return "restart Claude Code, or start a new session, for it to see them"
+}
+
+// builtAs is the version a first line names: "(auu v0.19.0)".
+func builtAs() string { return "(" + prog + " " + buildinfo.Version() + ")" }
 
 // skillPaths is what one skill is on disk: its SKILL.md and its own copy
 // of the shared reference, since a skill directory has to stand alone.
@@ -111,7 +260,8 @@ func embedded(name string) (skillMD, ref []byte, err error) {
 // installed is withheld because one file was edited.
 func skillInstall(args []string) error {
 	fs := newFlagSet("skill install")
-	dirFlag := fs.String("dir", "", "the Claude Code directory to install under; $CLAUDE_CONFIG_DIR or ~/.claude when not given")
+	targetFlag := fs.String("target", "", "claude, for Claude Code's skills directory, or agents, for ~/.agents/skills; asked at a terminal when neither this nor --dir is given")
+	dirFlag := fs.String("dir", "", "the base directory to install under, the skills going in DIR/skills; in place of --target")
 	force := fs.Bool("force", false, "replace a file that differs from this binary's copy")
 	asJSON := fs.Bool("json", false, "machine readable output")
 	positional, err := parseArgs(fs, args)
@@ -121,12 +271,14 @@ func skillInstall(args []string) error {
 	if len(positional) > 0 {
 		return usageErrf("unexpected argument %q", positional[0])
 	}
-	dir, err := skillsDir(*dirFlag)
+	target, err := resolveSkillsDir("skill install", "installed", *targetFlag, *dirFlag, whyNotAsk(*asJSON))
 	if err != nil {
 		return err
 	}
-	out := skillInstallJSON{Dir: dir}
-	var kept, changed []string
+	dir := target.dir
+	out := skillInstallJSON{Target: target.kind, Dir: dir, Version: buildinfo.Version(), Skills: []skillFileJSON{}}
+	var kept []string
+	written := false
 	for _, name := range skill.Names() {
 		skillMD, ref, err := embedded(name)
 		if err != nil {
@@ -146,7 +298,7 @@ func skillInstall(args []string) error {
 			case skillKept:
 				kept = append(kept, f.path)
 			case skillNew, skillUpdated:
-				changed = append(changed, name)
+				written = true
 			}
 		}
 	}
@@ -155,7 +307,7 @@ func skillInstall(args []string) error {
 			return err
 		}
 	} else {
-		printSkillInstall(dir, out.Skills, changed)
+		printSkillInstall(target, out.Skills, written, len(kept) > 0)
 	}
 	if len(kept) > 0 {
 		return &exitError{code: exitUsage, err: fmt.Errorf("%s from this binary's copy; kept. --force replaces %s",
@@ -173,26 +325,41 @@ func differsSentence(paths []string) string {
 	return plainList(paths) + " differ"
 }
 
-// printSkillInstall is the closing lines as a person reads them.
-func printSkillInstall(dir string, files []skillFileJSON, changed []string) {
-	if len(changed) == 0 {
-		fmt.Printf("already installed: %s in %s\n", plainList(skill.Names()), dir)
-		return
+// printSkillInstall is the closing lines as a person reads them: a first
+// line saying what was done where and for whom, a line for each file
+// relative to the directory, and, when anything was written, what to do
+// for the agent to see it. The first line is "installed" only when a file
+// was written or replaced, "already installed" when every file was this
+// binary's, and "not all installed" when nothing was written and a file
+// was kept, since "installed" there would be a false word (D157).
+func printSkillInstall(target skillTarget, files []skillFileJSON, written, kept bool) {
+	first := "installed"
+	switch {
+	case written:
+	case kept:
+		first = "not all installed:"
+	default:
+		first = "already installed:"
 	}
-	var notes []string
-	seen := map[string]bool{}
+	fmt.Printf("%s %s in %s%s %s\n", first, plainList(skill.Names()), target.dir, target.forWhom(), builtAs())
 	for _, f := range files {
-		if f.State == skillUpdated && !seen[f.Name] {
-			notes = append(notes, "(updated "+f.Name+")")
-			seen[f.Name] = true
+		rel, err := filepath.Rel(target.dir, f.Path)
+		if err != nil {
+			rel = f.Path
 		}
+		fmt.Printf("  %s: %s\n", filepath.ToSlash(rel), fileWords[f.State])
 	}
-	line := fmt.Sprintf("installed %s in %s", plainList(skill.Names()), dir)
-	if len(notes) > 0 {
-		line += " " + strings.Join(notes, " ")
+	if written {
+		fmt.Println(target.seeThem())
 	}
-	fmt.Println(line)
-	fmt.Println("restart Claude Code, or start a new session, for it to see them")
+}
+
+// fileWords is a file's state as a person's line says it.
+var fileWords = map[string]string{
+	skillNew:       "written",
+	skillUpdated:   "replaced",
+	skillUnchanged: "already current",
+	skillKept:      "kept, differs from this binary's copy; --force replaces it",
 }
 
 // placeSkillFile puts one file where it goes and says what it did.
@@ -253,7 +420,8 @@ func writeSkillFile(path string, data []byte) error {
 // holds: this binary's copy, an older or edited one, or nothing.
 func skillLs(args []string) error {
 	fs := newFlagSet("skill ls")
-	dirFlag := fs.String("dir", "", "the Claude Code directory to look under; $CLAUDE_CONFIG_DIR or ~/.claude when not given")
+	targetFlag := fs.String("target", "", "claude, for Claude Code's skills directory, or agents, for ~/.agents/skills; asked at a terminal when neither this nor --dir is given")
+	dirFlag := fs.String("dir", "", "the base directory to look under, the skills being in DIR/skills; in place of --target")
 	asJSON := fs.Bool("json", false, "machine readable output")
 	positional, err := parseArgs(fs, args)
 	if err != nil {
@@ -262,11 +430,12 @@ func skillLs(args []string) error {
 	if len(positional) > 0 {
 		return usageErrf("unexpected argument %q", positional[0])
 	}
-	dir, err := skillsDir(*dirFlag)
+	target, err := resolveSkillsDir("skill ls", "listed", *targetFlag, *dirFlag, whyNotAsk(*asJSON))
 	if err != nil {
 		return err
 	}
-	out := skillLsJSON{Dir: dir}
+	dir := target.dir
+	out := skillLsJSON{Target: target.kind, Dir: dir, Version: buildinfo.Version(), Skills: []skillFileJSON{}}
 	for _, name := range skill.Names() {
 		skillMD, ref, err := embedded(name)
 		if err != nil {
@@ -282,6 +451,7 @@ func skillLs(args []string) error {
 	if *asJSON {
 		return printJSON(out)
 	}
+	fmt.Printf("%s%s %s\n", dir, target.forWhom(), builtAs())
 	for _, s := range out.Skills {
 		fmt.Printf("%-12s %-10s %s\n", s.Name, s.State, s.Path)
 	}

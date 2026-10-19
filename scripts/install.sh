@@ -23,8 +23,9 @@
 # host that builds kits does.
 #
 # The Claude Code skills are in the binary. Run as yourself, it ends by
-# writing them under your ~/.claude/skills with 'auu skill install'; run as
-# root it says that each person runs that once, since the skills belong to
+# writing them under your ~/.claude/skills with 'auu skill install --target
+# claude', and names the command for Codex's ~/.agents/skills; run as root
+# it says that each person runs that once, since the skills belong to
 # whoever runs Claude Code. --no-skills skips that either way.
 #
 # Running it again is how you update: it says what each tool was and what it
@@ -294,11 +295,14 @@ if [ -z "$skills" ]; then
 	:
 elif [ "$(id -u)" = 0 ]; then
 	say ""
-	say "the Claude Code skills are in the binary; each person runs 'auu skill install' once to have them"
+	say "the Claude Code skills are in the binary; each person runs 'auu skill install --target claude' once to have them"
 else
 	say ""
-	if "$bindir/auu" skill install; then
+	# The target is given: this is the Claude Code install, and it runs
+	# from curl | sh with no terminal to ask at.
+	if "$bindir/auu" skill install --target claude; then
 		say "the Claude Code skills are installed for $(id -un) under the directory above"
+		say "for Codex, or another agent that reads ~/.agents, run 'auu skill install --target agents'"
 	else
 		say "the Claude Code skills were not all installed; the lines above say which file and why"
 	fi
