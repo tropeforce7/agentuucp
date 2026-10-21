@@ -269,12 +269,16 @@ sentence naming the file, the route and what is wrong. A route on `default`
 is taken with a warning on stderr, and a channel `serve.json` serves cannot
 be a route's. `run --once` takes each ask on a route's channel into
 `handle/ledger.json` and runs its script with the message as files under
-`handle/jobs/ROUTE/ID/` and `AUU_` variables, never on its command line;
-no reply goes to the asker yet and the ask is not marked read. A route's
+`handle/jobs/ROUTE/ID/` and `AUU_` variables, never on its command line,
+and replies to each job once it ends, the first line saying how (`handle:
+succeeded (exit 0, attempt 1 of 1)`, `handle: failed (exit 3, attempt 1 of
+1)`) and the script's `output/reply.txt` after it, then marks the ask
+read; a reply that cannot be sent is tried again up to the route's
+`retries`. A route's
 first round leaves the asks already waiting, said in one sentence, and
 `--backlog` runs them instead. `--json` is `skipped`, how many a first
-round left, and `jobs`, each `id`, `route`, `state`, `attempt` and
-`reason`. Exit 1 when a job failed in the round, 2 when another `handle
+round left, and `jobs`, each `id`, `route`, `state`, `attempt`, `reason`
+and `reply`, the id of the reply sent for it in that round or empty. Exit 1 when a job failed in the round, 2 when another `handle
 run` holds the home.
 
 What this binary is, and the skills it carries:

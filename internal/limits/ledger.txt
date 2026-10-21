@@ -357,6 +357,7 @@ internal/auu/handleledger.go handleJob int ReplyFailures int = >= 0 shown by Tes
 internal/auu/handleledger.go handleJob int Seq int64 = >= 0 shown by TestLimitHandleLedgerIntegers
 internal/auu/handleledger.go handleLedger int NextSeq int64 = >= 0 shown by TestLimitHandleLedgerIntegers
 internal/auu/handleledger.go handleLedger int V int = [1, 1] shown by TestLimitHandleLedgerIntegers
+internal/auu/handlereply.go (*handleRun).answer string job.From[:16] = local: job.From held to identity.ValidFingerprint, 64 characters, at loadHandleLedger and at routeFor before admission
 internal/auu/identity_cmds.go cmdInit string (*anchor)[:16] = local: ValidFingerprint at cmdInit shown by TestLimitAnchorArgsOneShort
 internal/auu/identity_cmds.go idJSON int PQCategory int = output
 internal/auu/identity_cmds.go idJSON int SuiteID int = output
@@ -644,6 +645,7 @@ internal/store/anchor.go (*Store).AnchorFor string r.TrustAnchorSPKI[:16] = loca
 internal/store/cardpushed.go (*Store).CardPushed string text[:40] = local: len(text) > 40 by the check before
 internal/store/channelsettings.go ChannelSettings int V int = [1, 1] shown by TestLimitChannelSettingsV
 internal/store/damagedbox.go DamagedRecord int RelayID int64 = >= 0 shown by TestLimitDamagedRelayID
+internal/auu/handlereply.go scriptReply cap io.LimitReader(f, route.MaxReplyBytes + 1) = local: route.MaxReplyBytes is the operator's, zero or more at check, and the reader is used only from 1 to one below the type's maximum, so the bound one past it neither wraps nor is reached by a reply at the cap shown by TestLimitAScriptsReplyIsReadUnderMaxReplyBytes
 internal/store/damagedbox.go (*Store).ReadDamaged cap io.LimitReader(f, DamagedBudget + 1) = local: DamagedBudget is the most KeepDamaged ever writes, and one over it is refused by name shown by TestLimitDamagedReadIsBounded
 internal/store/damagedbox.go DamagedRecord int Size int64 = >= 0 shown by TestLimitDamagedRecordFields
 internal/store/damagedbox.go damagedID int strconv.ParseInt(stem) = >= 0 shown by TestLimitDamagedIds
@@ -738,7 +740,7 @@ internal/auu/handlejob.go handleMessage time Time = output
 internal/auu/handleledger.go handleJob time Arrived = display
 internal/auu/handleledger.go handleJob time Ended = display
 internal/auu/handleledger.go handleJob time ReplySent = display
-internal/auu/handleledger.go handleJob time ReplyTried = display
+internal/auu/handleledger.go handleJob time ReplyTried = deadline: the last send of the reply that failed, which with serve's backoff is when the next is due, compared with now at owesReply shown by TestLimitAReplyTriedAtTheExtremes
 internal/auu/handleledger.go handleJob time RetryAt = deadline: the next automatic attempt, compared with now at runnable shown by TestLimitARetryAtAtTheExtremes
 internal/auu/handleledger.go handleJob time Started = display
 internal/auu/handleledger.go handleRouteMark time FirstRound = display

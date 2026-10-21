@@ -64,6 +64,11 @@ const (
 //	say:TEXT       print TEXT to standard error
 //	args:PATH      write this program's arguments to a file, one per line
 //	remove:PATH    remove a file, as an owner taking a message back does
+//	stdin:PATH     write standard input to a file
+//	reply:TEXT     write TEXT to $AUU_OUTPUT_DIR/reply.txt, as a script's reply
+//	replylink:PATH make $AUU_OUTPUT_DIR/reply.txt a link to PATH
+//	swapoutput:DIR rename $AUU_OUTPUT_DIR aside and put a link to DIR in its place
+//	snapshot:VAR=PATH  copy the files of the directory $VAR names into PATH
 //	exit:N         stop with that status
 func TestServeHelperProcess(t *testing.T) {
 	role := "handler"
@@ -171,6 +176,36 @@ func TestServeHelperProcess(t *testing.T) {
 			fmt.Fprintln(os.Stderr, arg)
 		case "args":
 			os.WriteFile(arg, []byte(strings.Join(os.Args[1:], "\n")+"\n"), 0o600)
+		case "reply":
+			os.WriteFile(filepath.Join(os.Getenv("AUU_OUTPUT_DIR"), "reply.txt"), []byte(arg), 0o600)
+		case "replylink":
+			if err := os.Symlink(arg, filepath.Join(os.Getenv("AUU_OUTPUT_DIR"), "reply.txt")); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(9)
+			}
+		case "swapoutput":
+			out := os.Getenv("AUU_OUTPUT_DIR")
+			if err := os.Rename(out, out+"-aside"); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(9)
+			}
+			if err := os.Symlink(arg, out); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(9)
+			}
+		case "stdin":
+			data, _ := io.ReadAll(os.Stdin)
+			os.WriteFile(arg, data, 0o600)
+		case "snapshot":
+			name, to, _ := strings.Cut(arg, "=")
+			entries, _ := os.ReadDir(os.Getenv(name))
+			os.MkdirAll(to, 0o700)
+			for _, e := range entries {
+				data, err := os.ReadFile(filepath.Join(os.Getenv(name), e.Name()))
+				if err == nil {
+					os.WriteFile(filepath.Join(to, e.Name()), data, 0o600)
+				}
+			}
 		case "remove":
 			if err := os.Remove(arg); err != nil {
 				fmt.Fprintln(os.Stderr, err)

@@ -8,9 +8,7 @@ checkout, `auu handle` runs a script: an import, a conversion, a job that
 takes a file and makes another.
 
 This version runs the routes a round at a time, with `auu handle run
---once`. A job runs to its end, but no reply is sent to the asker yet, and
-the ask is not marked read: a host who runs it meanwhile sees the asks
-taken into the ledger, their scripts run, and nothing else.
+--once`, and replies to each ask it handles.
 
 ## The file
 
@@ -156,7 +154,10 @@ auu handle run --once [--backlog] [--config FILE] [--json]
 
 is one round. It reads the file, holding it to every rule `check` holds it
 to, and takes `handle/lock`, so there is one `handle run` in a home at a
-time; another is refused, exit 2. It fetches from every relay, then
+time; another is refused, exit 2. Every reply originates, so a home under
+a passphrase needs the agent unlocked to send, `auu unlock --send --ttl 0`,
+which lasts until `auu lock`; locked, or unlocked only to receive, the run
+is refused at exit 4 before anything is fetched. It fetches from every relay, then
 takes up the asks in the inbox, in the inbox's order, and runs the jobs
 that are runnable now, each to the end of its attempt, and stops.
 
@@ -253,6 +254,43 @@ written, ends the run with the job where it was. A run that stops while a
 job is being prepared leaves it `preparing`, and the next round prepares
 it afresh from the inbox; a job a run left `running` is `interrupted`.
 `--once` exits 1 when a job failed in its round.
+
+**The reply.** Each job that ends, succeeded or failed for review, gets one
+reply, on the ask's thread, to the ask's verified sender, by the relay it
+came through. Its first line is handle's, and says how the job ended and
+which attempt of how many the route allows for that kind of end; a
+started attempt on a route that is not `idempotent` is one of one:
+
+```
+handle: succeeded (exit 0, attempt 1 of 1)
+handle: failed (exit 3, attempt 1 of 1)
+handle: failed (timeout after 10m0s, attempt 1 of 1)
+handle: failed (could not prepare: the files it sent could not be unpacked: …, attempt 3 of 3)
+```
+
+When the script left `reply.txt` in its `output/` directory, a blank line
+and its text follow, with Windows line endings folded. The file is read
+once, after every process the script started has been killed, from the
+attempt's own `output/` whatever the script has done to its name, as a
+regular file and never through a link, no more than the route's
+`max_reply_bytes`, and held to the text rule a message's words are held
+to; one that fails any of these is left out, and the line `the script's
+reply.txt was not included: REASON` follows the first instead. The job's
+outcome stands whatever the script wrote. What the script printed on its
+two streams is a log, and never a reply.
+
+The reply is composed once, into handle's own directory for the job, and
+sealed once: a send that fails is tried again from what was kept, never
+from anything the script can reach, and one that may have reached the
+relay goes again as the same message under the same id, so the asker
+holds one reply. A send that fails, the asker no longer a peer or the
+relay down, is the reply's failure and not the job's: it is tried again
+at serve's backoff, up to the route's `retries`, and then given up with
+the reason written on the job. Keys that lock, or a send scope that ends,
+under the run end it at exit 4, with nothing counted. The ledger records
+the reply before the ask is marked read. A succeeded job's two
+directories go once its reply is saved; a removed job's go at once, and
+it gets no reply, since the asker's message is gone; a failed job's stay.
 
 The script runs as whoever runs handle, and `auu` finds its keys from the
 home's path rather than from anything handle could withhold. So a script

@@ -45,7 +45,7 @@ var pathArg = map[string][]int{
 	"os.MkdirAll": {0}, "os.Remove": {0}, "os.RemoveAll": {0}, "os.Rename": {0, 1},
 	"os.Stat": {0}, "os.Lstat": {0}, "os.ReadDir": {0}, "os.Chmod": {0},
 	"os.Chown": {0}, "os.Symlink": {0, 1}, "os.Link": {0, 1}, "os.Truncate": {0},
-	"os.Chdir": {0}, "os.DirFS": {0},
+	"os.Chdir": {0}, "os.DirFS": {0}, "os.OpenRoot": {0},
 	"filepath.Walk": {0}, "filepath.WalkDir": {0}, "filepath.Glob": {0}, "filepath.Abs": {0},
 	"lockfile.Take": {1}, "lockfile.Try": {0},
 	"syscall.CreateFile": {0}, "tls.LoadX509KeyPair": {0, 1},

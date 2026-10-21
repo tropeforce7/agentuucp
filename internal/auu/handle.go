@@ -16,7 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tropeforce7/agentuucp/internal/agent"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/lockfile"
 	"github.com/tropeforce7/agentuucp/internal/message"
@@ -55,6 +54,9 @@ type handleRun struct {
 	// said is the messages already said to be left in the inbox, so that
 	// each is said once per run.
 	said map[string]bool
+	// event is the round's report of the job last reported, which the
+	// reply's send fills in.
+	event *handleJobEvent
 	// resumed is the jobs the ledger had as preparing when this run read
 	// it: a run that stopped part way through unpacking, which the next
 	// prepare starts afresh (A7).
@@ -75,6 +77,9 @@ type handleJobEvent struct {
 	State   string `json:"state"`
 	Attempt int    `json:"attempt"`
 	Reason  string `json:"reason"`
+	// Reply is the id of the reply sent for it in this round, empty when
+	// none went.
+	Reply string `json:"reply"`
 }
 
 // handleRunCmd is 'auu handle run --once'.
@@ -87,13 +92,14 @@ func handleRunCmd(config string, backlog, asJSON bool) error {
 	if err != nil {
 		return err
 	}
-	// A home under a passphrase is refused at exit 4 now, before a key is
-	// asked for, rather than a person at a terminal being prompted into a
-	// service's run: a service has no terminal.
+	// Speaking for this identity, and in send scope for the whole run: every
+	// reply originates. A home under a passphrase is refused at exit 4 now,
+	// before a key is asked for, rather than a person at a terminal being
+	// prompted into a service's run: a service has no terminal.
 	if enc, err := s.Encrypted(); err != nil {
 		return err
 	} else if enc {
-		if err := handleNeedsUnlocked(s); err != nil {
+		if err := needsSend(s, "auu handle run"); err != nil {
 			return err
 		}
 	}
@@ -154,26 +160,6 @@ func handleRunCmd(config string, backlog, asJSON bool) error {
 	}
 	if r.failed {
 		return usageErrf("a job failed in this round; the failures are above")
-	}
-	return nil
-}
-
-// handleNeedsUnlocked refuses a home under a passphrase whose agent holds
-// no keys: a fetch opens every message, and a service is never prompted.
-func handleNeedsUnlocked(s *store.Store) error {
-	c, err := agent.NewClient(s.Root())
-	if err != nil {
-		return err
-	}
-	st, err := c.Status()
-	if errors.Is(err, agent.ErrNotRunning) {
-		return lockedErr()
-	}
-	if err != nil {
-		return err
-	}
-	if st.Locked {
-		return lockedErr()
 	}
 	return nil
 }
@@ -242,6 +228,11 @@ func (r *handleRun) round(ctx context.Context, backlog bool) error {
 		if _, err := r.admit(m, name, jobQueued, ""); err != nil {
 			return err
 		}
+	}
+	// Replies due from earlier rounds go first, then the jobs, each of
+	// which sends its own as it ends.
+	if err := r.replies(); err != nil {
+		return escaped(err)
 	}
 	return r.dispatch(ctx)
 }

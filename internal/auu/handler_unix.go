@@ -34,3 +34,7 @@ func killGroup(cmd *exec.Cmd) {
 		cmd.Process.Kill()
 	}
 }
+
+// openNonblock is the flag that makes an open of a FIFO return at once
+// rather than wait for a writer; on a regular file it changes nothing.
+const openNonblock = syscall.O_NONBLOCK

@@ -182,6 +182,15 @@ func (r *handleRun) runJob(ctx context.Context, id string) error {
 	}
 	defer stderr.Close()
 
+	// The directory the script's reply is read from, held from before the
+	// script runs: renaming output/ and putting a link in its place points
+	// nothing of handle's elsewhere.
+	output, err := os.OpenRoot(at.output)
+	if err != nil {
+		return err
+	}
+	defer output.Close()
+
 	job.State = jobRunning
 	job.Attempt = n
 	job.Started = handleNow()
@@ -197,6 +206,13 @@ func (r *handleRun) runJob(ctx context.Context, id string) error {
 	run, runErr := runCommand(ctx, cmd, route.Command[0], at.work, r.env(id, job, m, at), stdinFile, stdout, stderr, route.timeout)
 	stdout.Close()
 	stderr.Close()
+	// Whatever the script left running is killed before anything it wrote
+	// is read, so that nothing writes into output/ after handle has read
+	// it. Not on Windows, where a pid the script's own has exited with may
+	// be another program's by now.
+	if runtime.GOOS != "windows" && cmd.Process != nil {
+		killGroup(cmd)
+	}
 	prefixedTo(os.Stderr, errPath, job.Route+" "+shortID(id))
 	if runErr != nil && ctx.Err() != nil {
 		// Stopped: the job is left running, and the next load finds it so.
@@ -226,7 +242,10 @@ func (r *handleRun) runJob(ctx context.Context, id string) error {
 		return err
 	}
 	r.report(id, job, m)
-	return nil
+	if err := r.compose(id, job, output); err != nil {
+		return err
+	}
+	return r.answer(id)
 }
 
 // unpack writes the asker's files into original/ once, under original.tmp
@@ -525,7 +544,15 @@ func (r *handleRun) beforeLaunch(id string, route *handleRoute, why string) erro
 		return err
 	}
 	r.report(id, job, nil)
-	return nil
+	if job.State != jobFailed {
+		return nil
+	}
+	// In review without having run: the reply says so, with nothing of the
+	// script's.
+	if err := r.compose(id, job, nil); err != nil {
+		return err
+	}
+	return r.answer(id)
 }
 
 // removed is a job whose message the owner took back: written down, and
@@ -537,7 +564,8 @@ func (r *handleRun) removed(id string, m *store.Stored, why string) error {
 		return err
 	}
 	r.report(id, job, m)
-	return nil
+	// Nobody's ask is left to answer, and its files go at once.
+	return r.clean(id)
 }
 
 // report says what happened to a job, on standard output, and puts it in
@@ -547,6 +575,7 @@ func (r *handleRun) report(id string, job *handleJob, m *store.Stored) {
 		r.failed = true
 	}
 	r.out.Jobs = append(r.out.Jobs, handleJobEvent{ID: id, Route: job.Route, State: job.State, Attempt: job.Attempt, Reason: job.Reason})
+	r.event = &r.out.Jobs[len(r.out.Jobs)-1]
 	if r.asJSON {
 		return
 	}

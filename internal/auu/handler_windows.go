@@ -49,3 +49,7 @@ func killGroup(cmd *exec.Cmd) {
 		cmd.Process.Kill()
 	}
 }
+
+// openNonblock is nothing on Windows, where opening a pipe by name does
+// not wait on a writer the way a Unix FIFO does.
+const openNonblock = 0

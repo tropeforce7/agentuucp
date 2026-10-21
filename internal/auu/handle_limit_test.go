@@ -1,8 +1,10 @@
 package auu
 
 import (
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -109,5 +111,73 @@ func TestLimitARetryAtAtTheExtremes(t *testing.T) {
 	}
 	if job := (&handleJob{State: jobQueued}); !job.runnable(now) {
 		t.Error("a job with no retry_at is not runnable")
+	}
+}
+
+// TestLimitAReplyTriedAtTheExtremes: a reply whose send failed is due
+// again when its last try plus serve's backoff is now or past, and not
+// before, at every value the grammar names; one never tried is due at once,
+// and one whose sends are spent is never due.
+func TestLimitAReplyTriedAtTheExtremes(t *testing.T) {
+	route := &handleRoute{Retries: 3}
+	now := handleNow()
+	backoff := retryBackoff(1)
+	for _, e := range testutil.TimeEdges(now.Add(-backoff)) {
+		var want bool
+		switch e.Name {
+		case testutil.AtTheEdge, testutil.ASecondBefore, testutil.AYearPast, testutil.TheEarliest:
+			want = true
+		case testutil.ASecondPast, testutil.ADayAhead, testutil.AYearAhead, testutil.OnePastYear9999, testutil.TheLatest:
+			want = false
+		default:
+			t.Fatalf("no answer for %q", e.Name)
+		}
+		job := &handleJob{State: jobSucceeded, ReplyFailures: 1, ReplyTried: e.At}
+		if got := job.owesReply(route, now); got != want {
+			t.Errorf("reply_tried %s (%v): due %v, want %v", e.Name, e.At, got, want)
+		}
+	}
+	if job := (&handleJob{State: jobSucceeded}); !job.owesReply(route, now) {
+		t.Error("a reply never tried is not due")
+	}
+	if job := (&handleJob{State: jobSucceeded, ReplyFailures: 3, ReplyTried: testutil.EarliestInstant()}); job.owesReply(route, now) {
+		t.Error("a reply whose sends are spent is due")
+	}
+}
+
+// TestLimitAScriptsReplyIsReadUnderMaxReplyBytes: a script's reply.txt is
+// read through a reader that stops one byte past the route's
+// max_reply_bytes: a file at the cap is the reply, one byte over is left
+// out and said, and 0, no cap, and the type's maximum, where there is no
+// byte past to stop at, take a file of any size whole.
+func TestLimitAScriptsReplyIsReadUnderMaxReplyBytes(t *testing.T) {
+	output := t.TempDir()
+	write := func(n int) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(output, "reply.txt"), []byte(strings.Repeat("x", n)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		max   int64
+		size  int
+		taken bool
+	}{
+		{1, 1, true}, {1, 2, false}, {4096, 4096, true}, {4096, 4097, false},
+		{0, 70000, true}, {math.MaxInt64, 70000, true}, {math.MaxInt64 - 1, 70000, true},
+	} {
+		write(c.size)
+		root, err := os.OpenRoot(output)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, why := scriptReply(root, &handleRoute{MaxReplyBytes: c.max})
+		root.Close()
+		if c.taken && (why != "" || len(text) != c.size) {
+			t.Errorf("max %d, %d bytes: %d read, %q; want it whole", c.max, c.size, len(text), why)
+		}
+		if !c.taken && (text != "" || why != "it is over the route's max_reply_bytes of "+strconv.FormatInt(c.max, 10)) {
+			t.Errorf("max %d, %d bytes: %q; want it left out", c.max, c.size, why)
+		}
 	}
 }

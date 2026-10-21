@@ -135,7 +135,7 @@ func cmdServe(args []string) error {
 	if enc, err := s.Encrypted(); err != nil {
 		return err
 	} else if enc {
-		if err := serveNeedsSend(s); err != nil {
+		if err := needsSend(s, "serve"); err != nil {
 			return err
 		}
 	}
@@ -209,13 +209,15 @@ func cmdServe(args []string) error {
 	return run.long(ctx, *backlog)
 }
 
-// serveNeedsSend reads the agent's scope for a home under a passphrase and
-// refuses locked and receive scope: serve is the one accepted exception to
-// sending needing a person, and the exception is an unlock made for it. A
-// send scope with an expiry is let through with a warning that names the
-// time, because a person who ran 'auu unlock --send' without --ttl 0 may
-// have meant a short run; when it ends, serve stops with the same sentence.
-func serveNeedsSend(s *store.Store) error {
+// needsSend reads the agent's scope for a home under a passphrase and
+// refuses locked and receive scope: a service that answers, serve or
+// handle, is the one accepted exception to sending needing a person, and
+// the exception is an unlock made for it. A send scope with an expiry is
+// let through with a warning that names the time, because a person who
+// ran 'auu unlock --send' without --ttl 0 may have meant a short run; when
+// it ends, the service stops with the same sentence. what is the service,
+// as its sentences name it.
+func needsSend(s *store.Store, what string) error {
 	c, err := agent.NewClient(s.Root())
 	if err != nil {
 		return err
@@ -231,22 +233,22 @@ func serveNeedsSend(s *store.Store) error {
 		return lockedErr()
 	}
 	if st.Scope != agent.ScopeSend {
-		return serveNeedsSendErr()
+		return needsSendErr(what)
 	}
 	if !st.SendUntil.IsZero() {
-		fmt.Fprintf(os.Stderr, "%s: the agent's send scope ends at %s and serve will stop then; '%s unlock --send --ttl 0' lasts until '%s lock'\n",
-			prog, st.SendUntil.Local().Format("2006-01-02 15:04"), prog, prog)
+		fmt.Fprintf(os.Stderr, "%s: the agent's send scope ends at %s and %s will stop then; '%s unlock --send --ttl 0' lasts until '%s lock'\n",
+			prog, st.SendUntil.Local().Format("2006-01-02 15:04"), what, prog, prog)
 	}
 	return nil
 }
 
-// serveNeedsSendErr is serve's own exit 4: the agent is unlocked, but to
-// receive, and serve originates. It names the unlock an expert needs
+// needsSendErr is a service's own exit 4: the agent is unlocked, but to
+// receive, and the service originates. It names the unlock a service needs
 // rather than the ten-minute one, so it is not the agent's sentence.
-func serveNeedsSendErr() error {
+func needsSendErr(what string) error {
 	return &exitError{code: exitLocked, err: fmt.Errorf(
-		"the agent is unlocked to receive, and serve originates every reply: run '%s unlock --send --ttl 0' at a terminal, which lasts until '%s lock'",
-		prog, prog)}
+		"the agent is unlocked to receive, and %s originates every reply: run '%s unlock --send --ttl 0' at a terminal, which lasts until '%s lock'",
+		what, prog, prog)}
 }
 
 // once is one round, and the exit code that says how it went.
@@ -1176,7 +1178,7 @@ func (r *serveRun) send(m *store.Stored, ch *serveChannel, text, patch string, f
 		if isReceiveOnly(err) {
 			// Send scope ended under a running service: the same, said in
 			// serve's words, which name the unlock that would not have.
-			return serveNeedsSendErr()
+			return needsSendErr("serve")
 		}
 		r.failed(m, ch, err.Error())
 		return nil

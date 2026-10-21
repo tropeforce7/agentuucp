@@ -168,7 +168,9 @@ func TestAnAskOnARouteRunsTheScriptWithItsInput(t *testing.T) {
 		}
 	}
 	environ := filepath.Join(t.TempDir(), "environ")
-	t.Setenv(handlerScript, "cat;environ:"+environ)
+	// The script fails, so that the job's files stay to be read: a
+	// succeeded job's go with its reply.
+	t.Setenv(handlerScript, "cat;environ:"+environ+";exit:3")
 	// A credential in handle's own environment is never handed on, and an
 	// inherited value of one of handle's names is replaced.
 	t.Setenv("ANTHROPIC_API_KEY", "sk-not-for-the-script")
@@ -177,15 +179,12 @@ func TestAnAskOnARouteRunsTheScriptWithItsInput(t *testing.T) {
 	sent := alice.sendTo(t, "documents", "the invoices for March", "please import these", invoice, notes)
 	sentAsk := sent
 
-	report, err, stderr := bob.handleRound(t)
-	if err != nil {
-		t.Fatalf("handle run: %v\n%s", err, stderr)
-	}
-	if len(report.Jobs) != 1 || report.Jobs[0].ID != sent.ID || report.Jobs[0].State != jobSucceeded || report.Jobs[0].Attempt != 1 {
-		t.Fatalf("the round reported %+v", report)
+	report, _, stderr := bob.handleRound(t)
+	if len(report.Jobs) != 1 || report.Jobs[0].ID != sent.ID || report.Jobs[0].State != jobFailed || report.Jobs[0].Attempt != 1 {
+		t.Fatalf("the round reported %+v\n%s", report, stderr)
 	}
 	job := bob.ledger(t).Jobs[sent.ID]
-	if job == nil || job.State != jobSucceeded || job.Exit != 0 || job.Started.IsZero() || job.Ended.IsZero() || job.Seq < 0 {
+	if job == nil || job.State != jobFailed || job.Exit != 3 || job.Started.IsZero() || job.Ended.IsZero() || job.Seq < 0 {
 		t.Fatalf("the ledger has %+v", job)
 	}
 
@@ -298,10 +297,6 @@ func TestAnAskOnARouteRunsTheScriptWithItsInput(t *testing.T) {
 		job0.AttachmentsDir != filepath.Join(bob.jobDir("import", sent.ID), "original") {
 		t.Errorf("the job's own message.json is %+v", job0)
 	}
-	// No reply goes yet, and the read mark is not set.
-	if rec, err := storeOf(t, bob.user).Load(store.Inbox, sent.ID); err != nil || rec.Read {
-		t.Errorf("the ask's record: read %v (%v); want it left unread", rec != nil && rec.Read, err)
-	}
 }
 
 // The script is a program and its arguments, with no shell between: a
@@ -314,12 +309,10 @@ func TestNothingFromTheMessageReachesTheCommandLine(t *testing.T) {
 	environ := filepath.Join(t.TempDir(), "environ")
 	bob.routes["import"].Command = append(helperCommand(t)[:2], "%AUU_SUBJECT%", "$AUU_SUBJECT", "handler")
 	bob.write(t)
-	t.Setenv(handlerScript, "args:"+args+";environ:"+environ)
+	t.Setenv(handlerScript, "args:"+args+";environ:"+environ+";exit:3")
 	subject := "a & b | c ^ d $(touch x) `y` %PATH%"
 	sent := alice.sendTo(t, "documents", subject, "the body")
-	if _, err, stderr := bob.handleRound(t); err != nil {
-		t.Fatalf("handle run: %v\n%s", err, stderr)
-	}
+	bob.handleRound(t)
 	got := strings.Split(strings.TrimSpace(readFile(t, args)), "\n")
 	want := []string{"-test.run=TestServeHelperProcess", "%AUU_SUBJECT%", "$AUU_SUBJECT", "handler"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
@@ -329,8 +322,8 @@ func TestNothingFromTheMessageReachesTheCommandLine(t *testing.T) {
 		t.Fatal("the subject is not in the script's environment as it was sent")
 	}
 	work := filepath.Join(bob.jobDir("import", sent.ID), "attempt-1", "work")
-	if entries, _ := os.ReadDir(work); len(entries) != 0 {
-		t.Fatalf("something ran the subject: work/ holds %v", entries)
+	if entries, err := os.ReadDir(work); err != nil || len(entries) != 0 {
+		t.Fatalf("something ran the subject: work/ holds %v (%v)", entries, err)
 	}
 }
 
@@ -614,7 +607,8 @@ func TestAMessageTheOwnerRemovedWhileQueuedIsRecordedAsRemoved(t *testing.T) {
 func TestAMessageTheOwnerRemovedWhileRunningIsRecordedAsRemoved(t *testing.T) {
 	alice, bob := newHandler(t)
 	sent := alice.sendTo(t, "documents", "taken back", "while it runs")
-	t.Setenv(handlerScript, "remove:"+bob.inboxRecord(sent.ID)+";cat")
+	read := filepath.Join(t.TempDir(), "read")
+	t.Setenv(handlerScript, "remove:"+bob.inboxRecord(sent.ID)+";stdin:"+read)
 	report, err, stderr := bob.handleRound(t)
 	if err != nil {
 		t.Fatalf("handle run: %v\n%s", err, stderr)
@@ -625,8 +619,15 @@ func TestAMessageTheOwnerRemovedWhileRunningIsRecordedAsRemoved(t *testing.T) {
 	if job := bob.ledger(t).Jobs[sent.ID]; job.State != jobRemoved || job.Attempt != 1 || job.Ended.IsZero() {
 		t.Fatalf("the job is %+v", job)
 	}
-	if got := readFile(t, filepath.Join(bob.keptDir("import", sent.ID), "stdout-1.txt")); got != "while it runs" {
+	if got := readFile(t, read); got != "while it runs" {
 		t.Fatalf("the attempt read %q from its own copy", got)
+	}
+	// A removed job's files go at once, and no reply is sent for it.
+	if _, err := os.Stat(bob.jobDir("import", sent.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a removed job's directory is still there (%v)", err)
+	}
+	if job := bob.ledger(t).Jobs[sent.ID]; job.Reply != "" {
+		t.Fatalf("a reply went for a removed ask: %s", job.Reply)
 	}
 }
 
@@ -825,6 +826,8 @@ func TestAJobLeftPreparingIsPreparedAfresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	sent := alice.sendTo(t, "documents", "data", "import it", file)
+	given := filepath.Join(t.TempDir(), "given")
+	t.Setenv(handlerScript, "snapshot:AUU_ATTACHMENTS="+given)
 	// The run stops between the preparing write and the rename of the
 	// unpacked directory, with half a file in it.
 	stopped := errors.New("stopped")
@@ -857,15 +860,11 @@ func TestAJobLeftPreparingIsPreparedAfresh(t *testing.T) {
 	if err != nil || len(report.Jobs) != 1 || report.Jobs[0].State != jobSucceeded {
 		t.Fatalf("the next round: %+v, %v\n%s", report, err, stderr)
 	}
-	jobDir := bob.jobDir("import", sent.ID)
-	if _, err := os.Stat(filepath.Join(jobDir, "original.tmp")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("the partial unpack is still there")
-	}
-	if got := readFile(t, filepath.Join(jobDir, "attempt-1", "input", "attachments", "data.csv")); got != "a,b\n" {
-		t.Fatalf("the attempt's copy holds %q", got)
-	}
-	if entries, _ := os.ReadDir(filepath.Join(jobDir, "original")); len(entries) != 1 {
-		t.Fatalf("original/ holds %v", entries)
+	// The script was given the one file, whole: not the half, and not the
+	// stray of either directory.
+	entries, _ := os.ReadDir(given)
+	if len(entries) != 1 || readFile(t, filepath.Join(given, "data.csv")) != "a,b\n" {
+		t.Fatalf("the attempt was given %v", entries)
 	}
 }
 
@@ -874,7 +873,10 @@ func TestAJobLeftPreparingIsPreparedAfresh(t *testing.T) {
 func TestTheScriptsTemporaryDirectoryIsItsOwn(t *testing.T) {
 	alice, bob := newHandler(t)
 	environ := filepath.Join(t.TempDir(), "environ")
-	t.Setenv(handlerScript, "environ:"+environ)
+	bob.routes["import"].Execution = executionParallel
+	bob.write(t)
+	// The scripts fail, so that their directories stay to be compared.
+	t.Setenv(handlerScript, "environ:"+environ+";exit:3")
 	sent := alice.sendTo(t, "documents", "one", "one")
 	bob.handleRound(t)
 	vars := readFile(t, environ)
@@ -891,6 +893,17 @@ func TestTheScriptsTemporaryDirectoryIsItsOwn(t *testing.T) {
 	others, _ := filepath.Glob(filepath.Join(bob.jobDir("import", second.ID), "attempt-1", "tmp-*"))
 	if len(others) != 1 || others[0] == temps[0] {
 		t.Fatalf("two attempts' temporary directories: %v and %v", temps, others)
+	}
+	// A succeeded job's temporary directory goes with the rest of its
+	// files once its reply is saved, whatever the script left in it.
+	t.Setenv(handlerScript, "environ:"+environ)
+	third := alice.sendTo(t, "documents", "three", "three")
+	bob.handleRound(t)
+	if _, err := os.Stat(bob.jobDir("import", third.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a succeeded job's directory is still there (%v)", err)
+	}
+	if job := bob.ledger(t).Jobs[third.ID]; job.State != jobSucceeded || job.Reply == "" {
+		t.Fatalf("the third job is %+v", job)
 	}
 }
 
