@@ -183,9 +183,12 @@ no route in the file is at its first round.
 and a route's jobs run in that order whatever happens to the records
 after. A sequential route runs one job at a time: a job that failed for
 review is its head, and the jobs behind it wait until the operator moves
-it. A parallel route's failure holds nothing. This version runs one job at
-a time across every route; `max_parallel` and `workers_total` are read and
-checked, and not yet used.
+it. A parallel route's failure holds nothing, and it runs up to its
+`max_parallel` jobs at once, each in an attempt directory of its own. No
+more than `workers_total` scripts run at once across every route, and the
+routes are offered a worker in turn, in the order of their ids, one job
+each, so that a busy route does not take every worker from the others. A
+job whose retry is not yet due holds no worker.
 
 **A job's files.** A job has two directories:
 

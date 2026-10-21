@@ -30,8 +30,10 @@ type handlerHost struct {
 	path   string
 	routes map[string]*handleRoute
 	top    string
-	// reaps is the file's supervisor_reaps.
-	reaps bool
+	// reaps is the file's supervisor_reaps, and workers its workers_total,
+	// 0 for the default.
+	reaps   bool
+	workers int
 }
 
 // helperCommand is the command that runs this binary as a script.
@@ -77,6 +79,9 @@ func (h *handlerHost) write(t *testing.T) {
 	file := map[string]any{"v": 1, "routes": h.routes}
 	if h.reaps {
 		file["supervisor_reaps"] = true
+	}
+	if h.workers > 0 {
+		file["workers_total"] = h.workers
 	}
 	data, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {

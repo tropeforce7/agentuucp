@@ -69,6 +69,10 @@ const (
 //	replylink:PATH make $AUU_OUTPUT_DIR/reply.txt a link to PATH
 //	swapoutput:DIR rename $AUU_OUTPUT_DIR aside and put a link to DIR in its place
 //	into:VAR/NAME=TEXT  write TEXT to the file NAME in the directory $VAR names
+//	barrier:DIR=N  mark this run in DIR and wait until N runs have, so that
+//	               it ends only if N ran at once; exit 9 after 20s otherwise
+//	span:PATH      append this run's start, wait 300ms, append its end
+//	failsubject:S  exit 3 when $AUU_SUBJECT is S
 //	spawn:PATH     start this binary again, sleeping, and write its pid to PATH
 //	attach:NAME=TEXT  write TEXT to $AUU_OUTPUT_ATTACHMENTS/NAME
 //	attachbig:NAME=N  write N bytes there
@@ -188,6 +192,33 @@ func TestServeHelperProcess(t *testing.T) {
 			if err := os.Symlink(arg, filepath.Join(os.Getenv("AUU_OUTPUT_DIR"), "reply.txt")); err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(9)
+			}
+		case "barrier":
+			dir, count, _ := strings.Cut(arg, "=")
+			var n int
+			fmt.Sscanf(count, "%d", &n)
+			os.MkdirAll(dir, 0o700)
+			os.WriteFile(filepath.Join(dir, strconv.Itoa(os.Getpid())), nil, 0o600)
+			for deadline := time.Now().Add(20 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+				if entries, _ := os.ReadDir(dir); len(entries) >= n {
+					break
+				}
+				if time.Now().After(deadline) {
+					os.Exit(9)
+				}
+			}
+		case "span":
+			f, err := os.OpenFile(arg, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+			if err != nil {
+				os.Exit(9)
+			}
+			fmt.Fprintf(f, "S %d\n", time.Now().UnixNano())
+			time.Sleep(300 * time.Millisecond)
+			fmt.Fprintf(f, "E %d\n", time.Now().UnixNano())
+			f.Close()
+		case "failsubject":
+			if os.Getenv("AUU_SUBJECT") == arg {
+				os.Exit(3)
 			}
 		case "into":
 			where, text, _ := strings.Cut(arg, "=")

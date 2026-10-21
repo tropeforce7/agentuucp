@@ -88,8 +88,12 @@ func (r *handleRun) makeDirs(dir string) error {
 
 // runJob takes one job a step to its end: removed when its message has left
 // the inbox, prepared, run, and written down however it ended. An error is
-// the host's fault and ends the run; the job's own faults are its state.
+// the host's fault and ends the run; the job's own faults are its state. It
+// runs in a worker of its own, holding the run's lock for everything but the
+// script's run.
 func (r *handleRun) runJob(ctx context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	job := r.led.Jobs[id]
 	route := r.cfg.Routes[job.Route]
 	// A job that has run before is run again only as a retry, decided again
@@ -232,7 +236,12 @@ func (r *handleRun) runJob(ctx context.Context, id string) error {
 	// variables, never as a word on its command line. No shell is run.
 	cmd := exec.Command(program, route.Command[1:]...)
 	cmd.Args[0] = route.Command[0]
-	run, runErr := runCommand(ctx, cmd, route.Command[0], at.work, r.env(id, job, m, at), stdinFile, stdout, stderr, route.timeout)
+	env := r.env(id, job, m, at)
+	// The one step no lock is held over: the script's run, which is what
+	// the other workers run beside.
+	r.mu.Unlock()
+	run, runErr := runCommand(ctx, cmd, route.Command[0], at.work, env, stdinFile, stdout, stderr, route.timeout)
+	r.mu.Lock()
 	stdout.Close()
 	stderr.Close()
 	// Whatever the script left running is killed before anything it wrote

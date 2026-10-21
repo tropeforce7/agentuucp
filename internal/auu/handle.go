@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -63,6 +64,13 @@ type handleRun struct {
 	// unreachable says the last fetch of the long run reached no relay, so
 	// that it is said once per run of failures.
 	unreachable bool
+	// mu is the one lock over the ledger and the round's report while jobs
+	// run at once: a worker holds it for every step a job takes but the
+	// script's own run, so that each transition is saved whole and two
+	// completions in one instant write one ledger after the other.
+	mu sync.Mutex
+	// inFlight is the jobs a worker has in hand this dispatch.
+	inFlight map[string]bool
 	// resumed is the jobs the ledger had as preparing when this run read
 	// it: a run that stopped part way through unpacking, which the next
 	// prepare starts afresh (A7).
@@ -519,6 +527,14 @@ func (r *handleRun) next(name string) string {
 		if job.State == jobSucceeded || job.State == jobSkipped || job.State == jobRemoved {
 			continue
 		}
+		// A job a worker has in hand is not offered again; on a sequential
+		// route it is the head, and holds the route.
+		if r.inFlight[id] {
+			if !parallel {
+				return ""
+			}
+			continue
+		}
 		if parallel && !job.runnable(now) {
 			continue
 		}
@@ -532,29 +548,68 @@ func (r *handleRun) next(name string) string {
 	return best
 }
 
-// dispatch runs jobs, a route at a time in the file's order, until none is
-// runnable now. Each job run ends terminal, or not runnable until a retry
-// that is not yet due, so the loop ends.
+// dispatch runs jobs until none is runnable now, a worker each, at most
+// workers_total at once and a route's max_parallel of its own. Routes are
+// offered a worker round-robin in the file's order, one job at a time, so
+// that a busy route does not take every worker from the others. Each job
+// run ends terminal, or not runnable until a retry that is not yet due, so
+// the loop ends; a job whose retry is not yet due holds no worker. A fault
+// of the host's in one worker starts nothing more, and the run ends with it
+// once the workers running have finished.
 func (r *handleRun) dispatch(ctx context.Context) error {
+	type finished struct {
+		route, id string
+		err       error
+	}
+	done := make(chan finished)
+	names := r.cfg.names()
+	perRoute := map[string]int{}
+	running, turn := 0, 0
+	var fault error
+	r.mu.Lock()
+	r.inFlight = map[string]bool{}
 	for {
-		ran := false
-		for _, name := range r.cfg.names() {
-			// A stop that came during the replies or the settling starts
-			// nothing more.
-			if ctx.Err() != nil {
-				return ctx.Err()
+		// A stop that came during the replies or the settling, or one
+		// since, starts nothing more.
+		for fault == nil && ctx.Err() == nil && running < r.cfg.WorkersTotal {
+			started := false
+			for i := range names {
+				name := names[(turn+i)%len(names)]
+				if perRoute[name] >= r.cfg.Routes[name].MaxParallel {
+					continue
+				}
+				id := r.next(name)
+				if id == "" {
+					continue
+				}
+				r.inFlight[id] = true
+				perRoute[name]++
+				running++
+				turn = (turn + i + 1) % len(names)
+				started = true
+				go func() { done <- finished{name, id, r.runJob(ctx, id)} }()
+				break
 			}
-			id := r.next(name)
-			if id == "" {
-				continue
-			}
-			ran = true
-			if err := r.runJob(ctx, id); err != nil {
-				return escaped(err)
+			if !started {
+				break
 			}
 		}
-		if !ran {
-			return nil
+		if running == 0 {
+			r.inFlight = nil
+			r.mu.Unlock()
+			if fault != nil {
+				return escaped(fault)
+			}
+			return ctx.Err()
+		}
+		r.mu.Unlock()
+		f := <-done
+		r.mu.Lock()
+		running--
+		perRoute[f.route]--
+		delete(r.inFlight, f.id)
+		if f.err != nil && fault == nil && !errors.Is(f.err, context.Canceled) {
+			fault = f.err
 		}
 	}
 }
