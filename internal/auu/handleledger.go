@@ -65,12 +65,18 @@ type handleLedger struct {
 	path string
 	// existed says the file was there when this run started.
 	existed bool
+	// interrupted is the jobs the load found running and made interrupted,
+	// which the run saves before any round.
+	interrupted []string
 }
 
 // handleRouteMark is a route's own record: that it has had its first
-// round, which is its baseline, and whether the operator has paused it.
+// round, which is its baseline, the channel it was taken on, since a route
+// moved to another channel is at its first round there (A3), and whether
+// the operator has paused it.
 type handleRouteMark struct {
 	FirstRound time.Time `json:"first_round"`
+	Channel    string    `json:"channel"`
 	Paused     bool      `json:"paused"`
 }
 
@@ -171,6 +177,9 @@ func loadHandleLedger(path string) (*handleLedger, error) {
 		if err := validRouteName(name); err != nil {
 			return nil, refuse("names a route %q, which is not a route's name: %v", name, err)
 		}
+		if err := channels.ValidName(mark.Channel); err != nil {
+			return nil, refuse("names the channel of route %q as %q, which is not a channel's name: %v", name, mark.Channel, err)
+		}
 	}
 	seqs := map[int64]string{}
 	for id, job := range l.Jobs {
@@ -239,10 +248,11 @@ func loadHandleLedger(path string) (*handleLedger, error) {
 			return nil, refuse("counts attempt %d for %s with no start", job.Attempt, id)
 		}
 	}
-	for _, job := range l.Jobs {
+	for id, job := range l.Jobs {
 		if job.State == jobRunning {
 			job.State = jobInterrupted
 			job.Killed = false
+			l.interrupted = append(l.interrupted, id)
 		}
 	}
 	return l, nil

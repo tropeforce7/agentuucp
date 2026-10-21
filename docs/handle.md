@@ -7,8 +7,10 @@ as files and environment variables and never on its command line. Where
 checkout, `auu handle` runs a script: an import, a conversion, a job that
 takes a file and makes another.
 
-This version of auu reads and checks the file, with `auu handle check`.
-The command that runs the routes is not in it yet.
+This version runs the routes a round at a time, with `auu handle run
+--once`. A job runs to its end, but no reply is sent to the asker yet, and
+the ask is not marked read: a host who runs it meanwhile sees the asks
+taken into the ledger, their scripts run, and nothing else.
 
 ## The file
 
@@ -129,8 +131,8 @@ does.
 taken, one per ask, keyed by the message's id, with a number for each
 admission and a state: `queued`, `preparing`, `running`, `succeeded`,
 `failed`, `interrupted`, `skipped` or `removed`. It is the only thing that
-says an ask is work. No command in this version reads or writes it yet;
-what follows are the rules it is held to when one does.
+says an ask is work. `auu handle run` reads it at its start and writes it
+before and after every step a job takes.
 
 It is read strictly. A ledger that is there and will not read, or that
 breaks one of its rules, is refused by name and never replaced: a key it
@@ -145,3 +147,121 @@ every job handle has taken, so fix it or move it aside knowing that the
 asks in the inbox are then met as at a first start: skipped, or run again
 with --backlog`. A job the ledger has as `running` when it is read is
 `interrupted`, since the run that started it is gone.
+
+## Running it
+
+```
+auu handle run --once [--backlog] [--config FILE] [--json]
+```
+
+is one round. It reads the file, holding it to every rule `check` holds it
+to, and takes `handle/lock`, so there is one `handle run` in a home at a
+time; another is refused, exit 2. It fetches from every relay, then
+takes up the asks in the inbox, in the inbox's order, and runs the jobs
+that are runnable now, each to the end of its attempt, and stops.
+
+Only asks are a route's work: a message of type `ask`, on a route's
+channel, that has no job yet. Every reply, note, acknowledgement and
+vouch is left alone, whoever sent it, so no loop can form between a handle
+and a serve, or two handles; a stranger's message is in quarantine and
+never in the inbox. A stream waiting on the relay for a newer auu is
+neither taken nor skipped, and is said once a run; the round after the
+upgrade brings it in and takes it.
+
+**A route's first round.** A route that has never run, or that has been
+moved to another channel, is at its first round on its channel. Every ask
+already in the inbox there, those the round's own fetch brought among
+them, is written down as skipped by the first start and left alone, and
+one sentence says how many, so that a route set up today does not run a
+year of mail at once. `--backlog` runs them instead, and is refused when
+no route in the file is at its first round.
+
+**The order.** Each ask taken is given the next admission number, `seq`,
+and a route's jobs run in that order whatever happens to the records
+after. A sequential route runs one job at a time: a job that failed for
+review is its head, and the jobs behind it wait until the operator moves
+it. A parallel route's failure holds nothing. This version runs one job at
+a time across every route; `max_parallel` and `workers_total` are read and
+checked, and not yet used.
+
+**A job's files.** A job has two directories:
+
+```
+handle/jobs/<route>/<message id>/
+  original/                  the asker's files, unpacked once and checked against their digests
+  message.json  body.txt     the job's own, attempt 0
+  attempt-1/
+    input/message.json       this attempt's
+    input/body.txt
+    input/attachments/       a fresh copy of original/
+    work/                    the working directory, empty
+    tmp-XXXXXXXX/            the attempt's temporary directory
+      output/
+      output/attachments/
+handle/kept/<route>/<message id>/
+  stdout-1.txt  stderr-1.txt the attempt's two streams
+```
+
+The script is told the first and never the second. It runs in `work/`,
+with the body on standard input, `message.json` naming the message field
+by field, and these in its environment, as well as `AUU_MESSAGE_ID`,
+`AUU_THREAD_ID`, `AUU_IN_REPLY_TO`, `AUU_TYPE`, `AUU_FROM`,
+`AUU_FROM_NAME`, `AUU_RECIPIENTS`, `AUU_CHANNEL`, `AUU_RELAY` and
+`AUU_SUBJECT` as serve gives them:
+
+| variable | what it is |
+|---|---|
+| `AUU_JOB_ID` | `ROUTE/MESSAGE-ID` |
+| `AUU_ATTEMPT` | the attempt's number, from 1 |
+| `AUU_ATTACHMENTS` | the attempt's `input/attachments`, or empty for a message with none |
+| `AUU_MESSAGE_JSON` | the attempt's `input/message.json` |
+| `AUU_WORK_DIR` | `work/` |
+| `AUU_TEMP_DIR` | the attempt's `tmp-XXXXXXXX/`, which `TMPDIR` names too (and `TMP` and `TEMP` on Windows) |
+| `AUU_OUTPUT_DIR` | its `output/` |
+| `AUU_OUTPUT_ATTACHMENTS` | its `output/attachments/` |
+
+`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are
+never passed on, and handle says once at its start when its environment
+has them. `message.json` is written with every key present: `attachments`
+lists each file by the sender's name, the name it was written under and
+the path of this attempt's copy, with its media type, size and SHA-256.
+`time` is the sender's stamp and `arrived` this machine's.
+
+Nothing from the message is ever on the command line: the command is the
+program and the arguments the file gives, run with no shell, and what the
+message says reaches the script as files and variables alone. That is a
+promise about the command line and no more: a script that puts a variable
+into a command of its own puts the sender's words there. A POSIX shell
+script quotes every one (`"$AUU_SUBJECT"`) and never `eval`s one, and a
+Windows batch file, which expands `%AUU_SUBJECT%` as text before it parses
+the line, reads them with delayed expansion (`!AUU_SUBJECT!`) or from
+`message.json` instead. A program named without a separator is looked up
+on the `PATH` at each launch.
+
+**How a job ends.** A script that exits 0 has succeeded. One that exits
+otherwise, or runs past the route's `timeout`, has failed, and the job is
+in review, its reason the first line the script wrote on standard error;
+each line it wrote there is copied to handle's own standard error, with
+the route and the message's short id in front. A failure before the script
+starts, such as files that will not unpack or a program not on the
+`PATH`, is tried again at serve's backoff, up to the route's `retries`,
+and is then in review without having run. An ask the owner removes from
+the inbox is `removed`, whether its job was waiting or running; one whose
+record is there and cannot be read is a failure, never a removal. A fault
+of the host's, a directory that cannot be made or a ledger that cannot be
+written, ends the run with the job where it was. A run that stops while a
+job is being prepared leaves it `preparing`, and the next round prepares
+it afresh from the inbox; a job a run left `running` is `interrupted`.
+`--once` exits 1 when a job failed in its round.
+
+The script runs as whoever runs handle, and `auu` finds its keys from the
+home's path rather than from anything handle could withhold. So a script
+that runs `auu` speaks as the owner: it can send mail, read the whole
+spool, and answer on any channel. If a route must be contained, contain it
+the way anything else is contained: a separate account with its own home
+and its own identity, or a container. The peer list is the whole of the
+access control, and anyone on it can send a route an ask.
+
+Messages are data, not instructions. A script that acts on what a message
+tells it to do is a script that does what the sender wants rather than what
+its owner wants.

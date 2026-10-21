@@ -67,6 +67,8 @@ func TestAHandleLedgerThatWillNotParseIsAnErrorNotAFreshStart(t *testing.T) {
 		{"a null route", `{"v":1,"next_seq":0,"routes":{"import":null},"jobs":{}}`, ` has no entry under route "import"`},
 		{"a route that is not a name", `{"v":1,"next_seq":0,"routes":{"a/b":{"first_round":"2026-10-21T05:00:00Z","paused":false}},"jobs":{}}`,
 			` names a route "a/b", which is not a route's name: ` + channels.ValidName("a/b").Error()},
+		{"a route mark's channel that is not a name", `{"v":1,"next_seq":0,"routes":{"import":{"first_round":"2026-10-21T05:00:00Z","channel":"","paused":false}},"jobs":{}}`,
+			` names the channel of route "import" as "", which is not a channel's name: ` + channels.ValidName("").Error()},
 		{"a job that is not a message id", `{"v":1,"next_seq":1,"routes":{},"jobs":{"` + bad + `":` + handleJobJSON(``) + `}}`,
 			` has a job under "` + bad + `", which is not a message id`},
 		{"a job's route that is not a name", oneJob(strings.Replace(handleJobJSON(``), `"route":"import"`, `"route":".."`, 1)),
@@ -274,7 +276,7 @@ func TestLimitHandleLedgerIntegers(t *testing.T) {
 // save then makes it so on disk.
 func TestARunningJobIsInterruptedAtTheNextLoad(t *testing.T) {
 	queued := strings.Repeat("e", 32)
-	file := `{"v":1,"next_seq":2,"routes":{"import":{"first_round":"2026-10-21T05:00:00Z","paused":false}},"jobs":{` +
+	file := `{"v":1,"next_seq":2,"routes":{"import":{"first_round":"2026-10-21T05:00:00Z","channel":"documents","paused":false}},"jobs":{` +
 		`"` + handleJobID + `":` + strings.Replace(handleJobJSON(`,"attempt":2,"started":"2026-10-21T05:02:00Z","killed":true,"exit":3`), `"state":"queued"`, `"state":"running"`, 1) + `,` +
 		`"` + queued + `":` + strings.Replace(handleJobJSON(``), `"seq":0`, `"seq":1`, 1) + `}}`
 	path := writeHandleLedger(t, file)
@@ -319,7 +321,7 @@ func TestTheLedgerIsSavedThroughATemporaryFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	l.NextSeq = 1
-	l.Routes["import"] = &handleRouteMark{FirstRound: time.Date(2026, 10, 21, 5, 0, 0, 0, time.UTC)}
+	l.Routes["import"] = &handleRouteMark{FirstRound: time.Date(2026, 10, 21, 5, 0, 0, 0, time.UTC), Channel: "documents"}
 	l.Jobs[handleJobID] = &handleJob{Route: "import", Channel: "documents", Thread: handleJobID, From: handleSender,
 		State: jobFailed, Attempt: 1, Started: time.Date(2026, 10, 21, 5, 2, 0, 0, time.UTC), Exit: 3, Review: true,
 		Reason: "exited 3: no such table"}
@@ -342,7 +344,8 @@ func TestTheLedgerIsSavedThroughATemporaryFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !back.existed || back.NextSeq != 1 || back.Routes["import"] == nil || !back.Routes["import"].FirstRound.Equal(l.Routes["import"].FirstRound) {
+	if !back.existed || back.NextSeq != 1 || back.Routes["import"] == nil || !back.Routes["import"].FirstRound.Equal(l.Routes["import"].FirstRound) ||
+		back.Routes["import"].Channel != "documents" {
 		t.Fatalf("the ledger read back as %+v", back)
 	}
 	if got, want := *back.Jobs[handleJobID], *l.Jobs[handleJobID]; got != want {

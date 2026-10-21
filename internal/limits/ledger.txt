@@ -329,6 +329,9 @@ internal/auu/damaged_cmds.go damagedReopen int strconv.ParseInt(positional[1]) =
 internal/auu/damaged_cmds.go reopenJSON int ID int64 = output
 internal/auu/enrol.go fetchAnchor string got[:16] = local: SPKI writes 64 hex characters
 internal/auu/enrol.go fetchAnchor string want[:16] = local: isAnchor at Validate shown by TestLimitAnchorClaimOneShort
+internal/auu/handle.go (*handleRoute).revision string hex.EncodeToString(sum[:])[:16] = local: the hex of a SHA-256, 64 characters
+internal/auu/handle.go handleJobEvent int Attempt int = output
+internal/auu/handle.go handleRoundJSON int Skipped int = output
 internal/auu/handleconfig.go (*handleConfig).check string names[:i] = local: i is an index of names from range
 internal/auu/handleconfig.go handleConfig int V int = [1, 1] shown by TestLimitHandleConfigV
 internal/auu/handleconfig.go handleConfig int WorkersTotal int = 0 or [1, 64] shown by TestLimitWorkersTotal
@@ -340,7 +343,12 @@ internal/auu/handleconfig.go handleRoute int MaxReplyBytes int64 = >= 0 shown by
 internal/auu/handleconfig.go handleRoute int Retries int = >= 0 shown by TestLimitHandleRouteIntegers
 internal/auu/handleconfig.go handleRoute int keepFailed time.Duration = > 0s shown by TestLimitHandleDurations
 internal/auu/handleconfig.go handleRoute int timeout time.Duration = > 0s shown by TestLimitHandleDurations
-internal/auu/identity_cmds.go cmdInit string (*anchor)[:16] = local: ValidFingerprint at cmdInit shown by TestLimitAnchorArgsOneShort
+internal/auu/handlejob.go (*handleRun).report string job.From[:16] = local: job.From held to identity.ValidFingerprint, 64 characters, at loadHandleLedger and at routeFor before admission
+internal/auu/handlejob.go cutReason string why[:end] = local: end is at most maxReason, which is less than len(why), and no further back than the start of the rune it would split
+internal/auu/handlejob.go handleAttachment int Size int64 = output
+internal/auu/handlejob.go handleMessage int Attempt int = output
+internal/auu/handlejob.go handleMessage int Seq int64 = output
+internal/auu/handlejob.go handleMessage int V int = output
 internal/auu/handleledger.go handleJob int Attempt int = >= 0 shown by TestLimitHandleLedgerIntegers
 internal/auu/handleledger.go handleJob int Exit int = open shown by TestLimitHandleLedgerIntegers
 internal/auu/handleledger.go handleJob int Failures int = >= 0 shown by TestLimitHandleLedgerIntegers
@@ -349,6 +357,7 @@ internal/auu/handleledger.go handleJob int ReplyFailures int = >= 0 shown by Tes
 internal/auu/handleledger.go handleJob int Seq int64 = >= 0 shown by TestLimitHandleLedgerIntegers
 internal/auu/handleledger.go handleLedger int NextSeq int64 = >= 0 shown by TestLimitHandleLedgerIntegers
 internal/auu/handleledger.go handleLedger int V int = [1, 1] shown by TestLimitHandleLedgerIntegers
+internal/auu/identity_cmds.go cmdInit string (*anchor)[:16] = local: ValidFingerprint at cmdInit shown by TestLimitAnchorArgsOneShort
 internal/auu/identity_cmds.go idJSON int PQCategory int = output
 internal/auu/identity_cmds.go idJSON int SuiteID int = output
 internal/auu/identity_cmds.go peerJSON int PQCategory int = output
@@ -724,11 +733,13 @@ internal/auu/channel_cmds.go channelJSON time NotBefore = output
 internal/auu/channel_cmds.go channelLsJSON time Issued = output
 internal/auu/channel_cmds.go relayChannelsJSON time Issued = output
 internal/auu/damaged_cmds.go damagedJSON time Received = output
+internal/auu/handlejob.go handleMessage time Arrived = output
+internal/auu/handlejob.go handleMessage time Time = output
 internal/auu/handleledger.go handleJob time Arrived = display
 internal/auu/handleledger.go handleJob time Ended = display
 internal/auu/handleledger.go handleJob time ReplySent = display
 internal/auu/handleledger.go handleJob time ReplyTried = display
-internal/auu/handleledger.go handleJob time RetryAt = display
+internal/auu/handleledger.go handleJob time RetryAt = deadline: the next automatic attempt, compared with now at runnable shown by TestLimitARetryAtAtTheExtremes
 internal/auu/handleledger.go handleJob time Started = display
 internal/auu/handleledger.go handleRouteMark time FirstRound = display
 internal/auu/inbox.go messageJSON time Arrived = output

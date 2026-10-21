@@ -89,8 +89,10 @@ jobs:
       # else, and its tests use this binary as the handler rather than a
       # shell script so that they can. The two of them that are about Unix
       # — a pipeline in an exec line, killing a process group — skip
-      # themselves. 'auu handle check' runs here too, since what it holds a
-      # route's program and paths to is the platform's. The rest of
+      # themselves. 'auu handle' runs here too, since what it holds a
+      # route's program and paths to is the platform's, and it runs a
+      # program and its arguments with no shell, which on Windows is the
+      # point. The rest of
       # internal/auu assumes a shell and Unix file modes and is not run
       # here; the alternation names the tests that do run and is the thing
       # to extend when one is added.
@@ -110,7 +112,7 @@ jobs:
         run: go test -count=1 -v -run 'TestLimitAPlantedLinkIsRefusedOnWindows|TestLimitAReparsePointIsJudgedByItsHandle|TestLimitADeviceIsRefusedByItsHandle|TestLimitTheDeviceListAgreesWithWindows|TestLimitTheForbiddenCharactersAgreeWithWindows|TestARegularFileOpensAndReads|TestADirectoryIsRefusedByItsHandle|TestTheOpenErrorPassesThroughUnwrapped' ./internal/regular/ ./internal/channels/
 
       - name: the agent end to end, and serve, as second processes
-        run: go test -count=1 -run 'Agent|Passphrase|Unlock|Locked|PublicCommandsNeedNoAgent|InitForceRefusesAnEncryptedHome|HalfConvertedHome|SkillsExitCode|TestSkillInstall|TestSkillShowConnect|TestTheTarget|NoTargetWithoutATerminal|AnInstallReportsEveryFile|SkillRmNameIsHeldToTheSet|Serve|TestLimitExtractionWritesSafeUniqueNames|TestLimitAStreamExtractsUnderSafeUniqueNames|TestADirectoryAtTheNameIsANameThatStands|DoesNotStopTheExpert|ALinkAtAWorktreePath|TestHandleCheck|TestANullHandleRoute|TestLimitHandle|TestLimitWorkersTotal|TestLimitMaxReplyBytes|TestABareProgramName|TestHandleRouteIds|TestARouteOnDefault' ./internal/auu/
+        run: go test -count=1 -run 'Agent|Passphrase|Unlock|Locked|PublicCommandsNeedNoAgent|InitForceRefusesAnEncryptedHome|HalfConvertedHome|SkillsExitCode|TestSkillInstall|TestSkillShowConnect|TestTheTarget|NoTargetWithoutATerminal|AnInstallReportsEveryFile|SkillRmNameIsHeldToTheSet|Serve|TestLimitExtractionWritesSafeUniqueNames|TestLimitAStreamExtractsUnderSafeUniqueNames|TestADirectoryAtTheNameIsANameThatStands|DoesNotStopTheExpert|ALinkAtAWorktreePath|TestHandleCheck|TestANullHandleRoute|TestLimitHandle|TestLimitWorkersTotal|TestLimitMaxReplyBytes|TestABareProgramName|TestHandleRouteIds|TestARouteOnDefault|TestAHandleLedgerThatWillNotParse|TestARunningJobIsInterrupted|TestTheLedgerIsSavedThroughATemporaryFile|TestAnAskOnARouteRunsTheScript|TestNothingFromTheMessageReachesTheCommandLine|TestOnlyAsksFromTheRoutesChannel|TestTheFirstRound|TestARouteMovedToAnotherChannel|TestAdmissionOrderIsFrozenAtSeq|TestAJobRunsInOrder|TestAMessageTheOwnerRemoved|TestNoScriptStartsOnAnUnpackThatFails|TestAHostFaultEndsTheRun|TestAStreamWaitingForANewerAuuIsNotAdmitted|TestAJobLeftPreparing|TestTheScriptsTemporaryDirectory|TestLimitAJobsIDIsNotAPathAtHandle|TestLimitARetryAtAtTheExtremes' ./internal/auu/
 
   race:
     name: race detector

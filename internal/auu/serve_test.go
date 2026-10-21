@@ -62,6 +62,8 @@ const (
 //	plant:KIND=V   rewrite what git keeps for the worktree, as a handler
 //	               that runs git in it can (plantInWorktree)
 //	say:TEXT       print TEXT to standard error
+//	args:PATH      write this program's arguments to a file, one per line
+//	remove:PATH    remove a file, as an owner taking a message back does
 //	exit:N         stop with that status
 func TestServeHelperProcess(t *testing.T) {
 	role := "handler"
@@ -167,6 +169,13 @@ func TestServeHelperProcess(t *testing.T) {
 			}
 		case "say":
 			fmt.Fprintln(os.Stderr, arg)
+		case "args":
+			os.WriteFile(arg, []byte(strings.Join(os.Args[1:], "\n")+"\n"), 0o600)
+		case "remove":
+			if err := os.Remove(arg); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(9)
+			}
 		case "exit":
 			var code int
 			fmt.Sscanf(arg, "%d", &code)

@@ -393,15 +393,23 @@ func loadHandle(s *store.Store, config string) (*handleConfig, error) {
 func cmdHandle(args []string) error {
 	fs := newFlagSet("handle")
 	config := fs.String("config", "", "the file to read instead of handle.json in the home")
+	once := fs.Bool("once", false, "one round: fetch, take the asks, run what is runnable, and stop")
+	backlog := fs.Bool("backlog", false, "at a route's first round, run the asks already in the inbox instead of leaving them")
+	asJSON := fs.Bool("json", false, "machine readable output")
 	positional, err := parseArgs(fs, args)
 	if err != nil {
 		return err
 	}
+	usage := usageErrf("usage: %s handle check [--config FILE], or %s handle run --once [--backlog] [--config FILE] [--json]", prog, prog)
 	switch {
 	case len(positional) == 1 && positional[0] == "check":
 		return handleCheck(*config)
+	case len(positional) == 1 && positional[0] == "run" && *once:
+		return handleRunCmd(*config, *backlog, *asJSON)
+	case len(positional) == 1 && positional[0] == "run":
+		return usageErrf("this version of %s runs handle a round at a time: %s handle run --once", prog, prog)
 	default:
-		return usageErrf("usage: %s handle check [--config FILE]", prog)
+		return usage
 	}
 }
 
