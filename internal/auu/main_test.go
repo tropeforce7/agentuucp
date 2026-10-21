@@ -149,12 +149,20 @@ func (u *user) tryRun(args ...string) (string, error) {
 	if err != nil {
 		u.t.Fatal(err)
 	}
+	// The pipe is drained while the command runs: one that prints more
+	// than the pipe holds, 64 KiB on Linux and macOS and about 4 KiB on
+	// Windows, would otherwise block on its write with nobody reading.
+	read := make(chan []byte)
+	go func() {
+		data, _ := io.ReadAll(r)
+		read <- data
+	}()
 	os.Stdout = w
 	runErr := run(args)
 	w.Close()
 	os.Stdout = realStdout
 
-	data, _ := io.ReadAll(r)
+	data := <-read
 	r.Close()
 	return string(data), runErr
 }
