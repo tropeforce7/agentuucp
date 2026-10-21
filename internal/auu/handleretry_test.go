@@ -191,6 +191,11 @@ func TestAnIdempotentRouteRetriesUpToRetriesThenReviews(t *testing.T) {
 // first interval, and then not before twice it.
 func TestAPreLaunchFailureRetriesWithServesBackoff(t *testing.T) {
 	alice, bob := newHandler(t)
+	// The clock is held still, so that "a second before" is a second
+	// before whatever second the round began in: a run slow enough to
+	// cross into the next second between the round and the move would
+	// otherwise find the retry due.
+	freezeClock(t)
 	file := filepath.Join(t.TempDir(), "data.csv")
 	if err := os.WriteFile(file, []byte("a,b\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -435,4 +440,14 @@ func TestARetryQueuedAgainIsDecidedAgainToo(t *testing.T) {
 	if r := repliesOn(t, alice, sent.Thread); len(r) != 1 || strings.Contains(r[0].Text, "were not kept") {
 		t.Fatalf("the replies are %+v", r)
 	}
+}
+
+// freezeClock holds handle's clock at the second it is now for the rest of
+// the test; moveClock moves it from there.
+func freezeClock(t *testing.T) {
+	t.Helper()
+	was := handleNow
+	at := handleNow()
+	handleNow = func() time.Time { return at }
+	t.Cleanup(func() { handleNow = was })
 }
