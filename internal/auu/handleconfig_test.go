@@ -236,16 +236,12 @@ func TestHandleCheckRefusesEachBadField(t *testing.T) {
 	if err == nil || err.Error() != want {
 		t.Fatalf("a missing file: %v\nwant %s", err, want)
 	}
-	// And anything but check or run --once is the usage, run without
-	// --once its own sentence.
-	usage := "usage: auu handle check [--config FILE], or auu handle run --once [--backlog] [--config FILE] [--json]"
-	for _, args := range [][]string{{"handle"}, {"handle", "start"}, {"handle", "check", "extra"}} {
+	// And anything but check or run is the usage.
+	usage := "usage: auu handle check [--config FILE], or auu handle run [--once] [--backlog] [--config FILE] [--json]"
+	for _, args := range [][]string{{"handle"}, {"handle", "start"}, {"handle", "check", "extra"}, {"handle", "run", "extra"}} {
 		if _, err := bob.tryRun(args...); err == nil || err.Error() != usage {
 			t.Errorf("auu %s: %v; want the usage", strings.Join(args, " "), err)
 		}
-	}
-	if _, err := bob.tryRun("handle", "run"); err == nil || err.Error() != "this version of auu runs handle a round at a time: auu handle run --once" {
-		t.Errorf("auu handle run: %v", err)
 	}
 }
 

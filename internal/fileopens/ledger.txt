@@ -114,6 +114,7 @@ internal/auu/compose.go keepDraft os.WriteFile(composePath(s)) = local
 internal/auu/damaged_cmds.go reopenOne lockfile.Take(filepath.Join(s.RelayDir(r), fetchLockName)) = operator: a relay name through the fetch lock's directory, ValidRelayName at AddRelay, RenameRelay and Relays shown by TestLimitRelayNameIsNotAPath
 internal/auu/fetchlock.go (*fetchLocks).take lockfile.Take(filepath.Join(l.s.RelayDir(r), fetchLockName)) = operator: a relay name through the fetch lock's directory, ValidRelayName at AddRelay, RenameRelay and Relays shown by TestLimitRelayNameIsNotAPath
 internal/auu/handle.go openHandleRunLocked os.MkdirAll(root) = local
+internal/auu/handle.go requests os.ReadDir(ops) = local
 internal/auu/handle.go takeHandleLock lockfile.Try(path) = local
 internal/auu/handle.go takeHandleLock os.WriteFile(path) = local
 internal/auu/handleconfig.go (*handleConfig).checkAgainstServe os.Stat(path) = operator's absolute path, serve.json under the home

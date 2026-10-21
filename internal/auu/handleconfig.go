@@ -400,16 +400,13 @@ func cmdHandle(args []string) error {
 	if err != nil {
 		return err
 	}
-	usage := usageErrf("usage: %s handle check [--config FILE], or %s handle run --once [--backlog] [--config FILE] [--json]", prog, prog)
 	switch {
 	case len(positional) == 1 && positional[0] == "check":
 		return handleCheck(*config)
-	case len(positional) == 1 && positional[0] == "run" && *once:
-		return handleRunCmd(*config, *backlog, *asJSON)
 	case len(positional) == 1 && positional[0] == "run":
-		return usageErrf("this version of %s runs handle a round at a time: %s handle run --once", prog, prog)
+		return handleRunCmd(*config, *once, *backlog, *asJSON)
 	default:
-		return usage
+		return usageErrf("usage: %s handle check [--config FILE], or %s handle run [--once] [--backlog] [--config FILE] [--json]", prog, prog)
 	}
 }
 

@@ -118,6 +118,7 @@ Usage:
   auu serve ls [--config FILE] [--json]   # what is served, and the threads it is holding
   auu serve proxy [--config FILE]     # the key-holding proxy as its own process, for another account
   auu handle check [--config FILE]    # read handle.json and say what it would run
+  auu handle run [--once] [--backlog] [--config FILE] [--json]   # the host's scripts, run on the asks to their routes
 
   auu quarantine ls [--json]
   auu quarantine show MESSAGE-ID [--json]

@@ -7,8 +7,8 @@ as files and environment variables and never on its command line. Where
 checkout, `auu handle` runs a script: an import, a conversion, a job that
 takes a file and makes another.
 
-This version runs the routes a round at a time, with `auu handle run
---once`, and replies to each ask it handles.
+`auu handle run` is the service, run from a unit or by hand; `auu handle
+run --once` is one round of it, for a timer or a person.
 
 ## The file
 
@@ -149,17 +149,19 @@ with --backlog`. A job the ledger has as `running` when it is read is
 ## Running it
 
 ```
-auu handle run --once [--backlog] [--config FILE] [--json]
+auu handle run [--once] [--backlog] [--config FILE] [--json]
 ```
 
-is one round. It reads the file, holding it to every rule `check` holds it
-to, and takes `handle/lock`, so there is one `handle run` in a home at a
-time; another is refused, exit 2. Every reply originates, so a home under
-a passphrase needs the agent unlocked to send, `auu unlock --send --ttl 0`,
-which lasts until `auu lock`; locked, or unlocked only to receive, the run
-is refused at exit 4 before anything is fetched. It fetches from every relay, then
-takes up the asks in the inbox, in the inbox's order, and runs the jobs
-that are runnable now, each to the end of its attempt, and stops.
+runs rounds until it is stopped, holding on the relays between them;
+with `--once` it runs one round and stops. It reads the file first,
+holding it to every rule `check` holds it to, and takes `handle/lock`, so
+there is one `handle run` in a home at a time; another is refused, exit
+2. Every reply originates, so a home under a passphrase needs the agent
+unlocked to send, `auu unlock --send --ttl 0`, which lasts until `auu
+lock`; locked, or unlocked only to receive, the run is refused at exit 4
+before anything is fetched. A round fetches from every relay, takes up
+the asks in the inbox, in the inbox's order, and runs the jobs that are
+runnable now, each to the end of its attempt.
 
 Only asks are a route's work: a message of type `ask`, on a route's
 channel, that has no job yet. Every reply, note, acknowledgement and
@@ -281,7 +283,24 @@ child that calls `setsid` leaves the group and outlives every kill, the
 service's own stop's included. A stop that comes before a job's script
 has started leaves the job queued, with no attempt counted.
 
-`--once` exits 1 when a job failed in its round.
+**Between rounds.** The service holds on every relay for mail on its
+routes' channels, and on nothing else: an ask on a channel no route takes
+does not wake it. The hold also ends when the earliest retry, failure
+before launch or reply whose send failed falls due, counting on a
+sequential route only its head, never sooner than one of serve's
+intervals from now; and when a new operator's request, a `.json` file,
+lands in `handle/ops/`, which it looks for every two seconds. A round fetches
+first, so mail that arrived while it held is taken up whatever woke it. A
+fetch that reaches no relay is said once, and the service waits for one
+to come back; under `--once` it is the round's failure, exit 2.
+
+`--once` exits 1 when a job failed in its round. Either form exits 0 when
+stopped, 1 for a file that will not check, 2 when another `handle run`
+holds the home, and 4 when the keys are locked or unlocked only to
+receive, at the start or when that happens under the running service; in
+that last case the job's reply is kept and the next run sends it without
+running the script again. With `--json` the service writes one line for
+each round that did something, the round's `skipped` and `jobs`.
 
 **The reply.** Each job that ends, succeeded or failed for review, gets one
 reply, on the ask's thread, to the ask's verified sender, by the relay it

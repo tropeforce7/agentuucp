@@ -13,9 +13,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/lockfile"
 	"github.com/tropeforce7/agentuucp/internal/message"
@@ -57,6 +60,9 @@ type handleRun struct {
 	// event is the round's report of the job last reported, which the
 	// reply's send fills in.
 	event *handleJobEvent
+	// unreachable says the last fetch of the long run reached no relay, so
+	// that it is said once per run of failures.
+	unreachable bool
 	// resumed is the jobs the ledger had as preparing when this run read
 	// it: a run that stopped part way through unpacking, which the next
 	// prepare starts afresh (A7).
@@ -86,7 +92,7 @@ type handleJobEvent struct {
 // stopped: it ends the script that is running with everything it started,
 // and the job is written interrupted, killed by the service's own stop,
 // before the process exits; a stopped run is not a failure.
-func handleRunCmd(config string, backlog, asJSON bool) error {
+func handleRunCmd(config string, once, backlog, asJSON bool) error {
 	r, release, err := openHandleRun(config, backlog, asJSON)
 	if err != nil {
 		return err
@@ -94,7 +100,10 @@ func handleRunCmd(config string, backlog, asJSON bool) error {
 	defer release()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	return r.once(ctx, backlog)
+	if once {
+		return r.once(ctx, backlog)
+	}
+	return r.long(ctx, backlog)
 }
 
 // openHandleRun is everything a run does before its first round: the file,
@@ -176,7 +185,7 @@ func openHandleRunLocked(config string, backlog, asJSON bool) (*handleRun, *lock
 
 // once is one round and the exit code that says how it went.
 func (r *handleRun) once(ctx context.Context, backlog bool) error {
-	if err := r.round(ctx, backlog); err != nil {
+	if err := r.round(ctx, backlog, false); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
@@ -233,13 +242,27 @@ func (r *handleRun) atFirstRound(name string) bool {
 
 // round is a fetch, the first rounds, admission, and the jobs that are
 // runnable now, each to the end of its attempt.
-func (r *handleRun) round(ctx context.Context, backlog bool) error {
+//
+// In the long run a fetch that reached no relay is not the end of the
+// service: the hold that follows has its own patience with a relay that is
+// down, and it is said once per run of failures. Under --once it is this
+// run's failure, as serve's is.
+func (r *handleRun) round(ctx context.Context, backlog, longRun bool) error {
+	r.out, r.failed, r.event = handleRoundJSON{}, false, nil
 	relays, err := selectedRelays(r.s, "")
 	if err != nil {
 		return err
 	}
 	if _, _, err := fetchEvery(ctx, r.s, r.id, relays, len(relays) == 1); err != nil {
-		return err
+		if !longRun || ctx.Err() != nil {
+			return err
+		}
+		if !r.unreachable {
+			r.unreachable = true
+			fmt.Fprintf(os.Stderr, "%s: no relay could be reached; waiting for one to come back\n", prog)
+		}
+	} else {
+		r.unreachable = false
 	}
 	msgs, err := r.s.List(store.Inbox)
 	if err != nil {
@@ -534,4 +557,163 @@ func (r *handleRun) dispatch(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+// handleOpsPoll is how often the long run's hold looks in handle/ops/ for
+// an operator's request, which ends the hold so the next round applies it.
+var handleOpsPoll = 2 * time.Second
+
+// afterRound, when a test sets it, is told each time the long run has
+// finished a round, with how many it has done.
+var afterRound func(n int)
+
+// long is the service: rounds, with a hold between them on the relays for
+// mail on the routes' channels, ended early by a job's retry or reply
+// falling due or an operator's request landing. It ends when it is stopped,
+// which is not a failure, or when the hold ends for a reason no wait will
+// change, which is.
+func (r *handleRun) long(ctx context.Context, backlog bool) error {
+	for n := 1; ; n++ {
+		if err := r.round(ctx, backlog, true); err != nil {
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		backlog = false
+		if r.asJSON && (len(r.out.Jobs) > 0 || r.out.Skipped > 0) {
+			// One object per round that did something, one to a line.
+			if err := printJSONLine(r.out); err != nil {
+				return err
+			}
+		}
+		if afterRound != nil {
+			afterRound(n)
+		}
+		if err := r.hold(ctx); err != nil {
+			if errors.Is(ctx.Err(), context.Canceled) {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+// hold waits until the next round is due: mail on a route's channel, the
+// earliest retry or reply falling due, or an operator's request in
+// handle/ops/. A watch that ends at its own deadline, or one cut by a
+// request, is the cue for the next round, and is no error.
+func (r *handleRun) hold(ctx context.Context) error {
+	relays, err := selectedRelays(r.s, "")
+	if err != nil {
+		return err
+	}
+	watched := map[string]bool{}
+	for _, name := range r.cfg.names() {
+		channel := r.cfg.Routes[name].Channel
+		watched[channel] = true
+		if channel == channels.Default {
+			// A listing names the default channel by no name at all.
+			watched[""] = true
+		}
+	}
+	held, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var woken atomic.Bool
+	ops := filepath.Join(r.root, "ops")
+	// What is there as the hold begins is what the round has seen; only a
+	// request that lands after wakes it, so that one nothing has yet taken
+	// away, or a file a desktop leaves, does not end every hold.
+	seen := requests(ops)
+	// Read here, not in the goroutine, which may outlive the hold's return
+	// by a moment.
+	every := handleOpsPoll
+	go func() {
+		tick := time.NewTicker(every)
+		defer tick.Stop()
+		for {
+			select {
+			case <-held.Done():
+				return
+			case <-tick.C:
+				for name := range requests(ops) {
+					if !seen[name] {
+						woken.Store(true)
+						cancel()
+						return
+					}
+				}
+			}
+		}
+	}()
+	_, err = awaitEvents(held, r.s, r.id, relays,
+		watchOptions{messages: true, channels: watched, interval: serveInterval, deadline: r.nextDue()})
+	switch {
+	case err == nil, woken.Load(), errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
+		return nil
+	}
+	return err
+}
+
+// requests is the names in the ops directory that have a request's shape:
+// a JSON file whose name does not begin with a dot. A directory that is not
+// there holds none.
+func requests(ops string) map[string]bool {
+	out := map[string]bool{}
+	entries, err := os.ReadDir(ops)
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if name := e.Name(); e.Type().IsRegular() && strings.HasSuffix(name, ".json") && !strings.HasPrefix(name, ".") {
+			out[name] = true
+		}
+	}
+	return out
+}
+
+// nextDue is when the earliest job of a route in the file is next due
+// without new mail: a retry, a failure before launch, or a reply whose send
+// failed. A job counts only where the route would run it: on a sequential
+// route, its head alone, so that a head in review does not wake the service
+// for the jobs it holds. Zero when nothing is; never sooner than one
+// serveInterval from now, so that the long run does not spin on a job that
+// is due at once.
+func (r *handleRun) nextDue() time.Time {
+	var at time.Time
+	earliest := func(t time.Time) {
+		if !t.IsZero() && (at.IsZero() || t.Before(at)) {
+			at = t
+		}
+	}
+	heads := map[string]*handleJob{}
+	for _, job := range r.led.Jobs {
+		if job.State == jobSucceeded || job.State == jobSkipped || job.State == jobRemoved {
+			continue
+		}
+		if head := heads[job.Route]; head == nil || job.Seq < head.Seq {
+			heads[job.Route] = job
+		}
+	}
+	for _, job := range r.led.Jobs {
+		route := r.cfg.Routes[job.Route]
+		if route == nil {
+			continue
+		}
+		waits := route.Execution == executionSequential && heads[job.Route] != job
+		if !waits && (job.State == jobQueued || (job.State == jobFailed && !job.Review)) && !job.RetryAt.IsZero() {
+			earliest(job.RetryAt)
+		}
+		if job.Reply == "" && job.ReplyFailures > 0 && job.ReplyFailures < route.Retries &&
+			(job.State == jobSucceeded || (job.State == jobFailed && job.Review)) {
+			earliest(job.ReplyTried.Add(retryBackoff(job.ReplyFailures)))
+		}
+	}
+	if at.IsZero() {
+		return at
+	}
+	if floor := time.Now().Add(serveInterval); at.Before(floor) {
+		return floor
+	}
+	return at
 }

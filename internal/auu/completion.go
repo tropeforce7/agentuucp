@@ -109,7 +109,7 @@ var subcommands = []subcommand{
 	{name: "watch", describe: "return when mail arrives, or a colleague's channels change"},
 	{name: "handle", describe: "run the host's scripts on asks to a channel", subs: []subcommand{
 		{name: "check", describe: "read handle.json and say what it would run"},
-		{name: "run", describe: "one round: fetch, take the asks, run the jobs"},
+		{name: "run", describe: "the service: rounds, holding on the relays between them"},
 	}},
 	{name: "quarantine", describe: "mail from senders not on your list", subs: []subcommand{
 		{name: "ls", describe: "list held mail"},

@@ -256,6 +256,7 @@ and not something a messaging agent starts on its own:
 
 ```
 auu handle check [--config FILE]                   # read handle.json and say what it would run
+auu handle run [--backlog] [--config FILE] [--json]          # the service: rounds, holding on the relays between them
 auu handle run --once [--backlog] [--config FILE] [--json]   # one round: fetch, take the asks, run the jobs
 ```
 
@@ -281,9 +282,12 @@ by name, then marks the ask read; a reply that cannot be sent is tried again up 
 stop (`SIGTERM`) writes the running job interrupted before the run ends,
 exit 0. A route's
 first round leaves the asks already waiting, said in one sentence, and
-`--backlog` runs them instead. `--json` is `skipped`, how many a first
-round left, and `jobs`, each `id`, `route`, `state`, `attempt`, `reason`
-and `reply`, the id of the reply sent for it in that round or empty. Exit 1 when a job failed in the round, 2 when another `handle
+`--backlog` runs them instead. Without `--once` it is the service, holding
+on the relays between rounds for mail on the routes' channels, a retry or
+reply falling due, or an operator's request. `--json` is `skipped`, how
+many a first round left, and `jobs`, each `id`, `route`, `state`, `attempt`, `reason`
+and `reply`, the id of the reply sent for it in that round or empty, once
+under `--once` and one line per round that did something otherwise. Exit 1 when a job failed in the round, 2 when another `handle
 run` holds the home.
 
 What this binary is, and the skills it carries:
