@@ -277,7 +277,33 @@ regular file and never through a link, no more than the route's
 to; one that fails any of these is left out, and the line `the script's
 reply.txt was not included: REASON` follows the first instead. The job's
 outcome stands whatever the script wrote. What the script printed on its
-two streams is a log, and never a reply.
+two streams is a log, and never a reply. A run that stops between a job's
+end and the composing of its reply has kept nothing the script wrote; the
+next round sends the first line with `the script's reply.txt and files
+were not kept: the run stopped before they were`.
+
+**Files back.** Every regular file the script leaves in
+`output/attachments/` is attached to the reply, under its own name, in
+name order, so two runs agree. Each is copied into handle's own directory
+for the job when the reply is composed, and the reply is sealed from
+those copies, so nothing the script, or anything it left running, does
+afterwards changes what is sent. A file whose name the sender's rule
+would refuse (a control character, a separator, a leading dot, a Windows
+device name such as `CON`), one whose name is another's where case does
+not count, a directory, and a link are each left out, and the reply says
+so in a line of its own naming the file and why. The route's
+`max_reply_bytes` bounds the script's text and its files together: files
+are taken in name order while the whole stays within it, and one that
+would pass it is left out and said. An empty `output/attachments/`
+attaches nothing and says nothing. A reply over the stream threshold goes
+as a stream; one the asker's relay refuses, a channel that takes no
+streams or a full mailbox, is the reply's failure, tried again as any
+other.
+
+A script that puts a file of the account's into `output/attachments/` by
+a hard link sends it: a hard link is the file it names, and the script
+runs as the account. Contain a script that must not be able to send what
+the account can read, as the paragraph below says.
 
 The reply is composed once, into handle's own directory for the job, and
 sealed once: a send that fails is tried again from what was kept, never

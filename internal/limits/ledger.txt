@@ -645,6 +645,7 @@ internal/store/anchor.go (*Store).AnchorFor string r.TrustAnchorSPKI[:16] = loca
 internal/store/cardpushed.go (*Store).CardPushed string text[:40] = local: len(text) > 40 by the check before
 internal/store/channelsettings.go ChannelSettings int V int = [1, 1] shown by TestLimitChannelSettingsV
 internal/store/damagedbox.go DamagedRecord int RelayID int64 = >= 0 shown by TestLimitDamagedRelayID
+internal/auu/handlereply.go keepFile cap io.LimitReader(src, budget + 1) = local: budget is what is left of the route's max_reply_bytes after the reply's text and the files before it, zero or more, and the reader is used only below the type's maximum, so the bound one past it neither wraps nor is reached by a file at the cap shown by TestLimitMaxReplyBytesBoundsTextAndFilesTogether
 internal/auu/handlereply.go scriptReply cap io.LimitReader(f, route.MaxReplyBytes + 1) = local: route.MaxReplyBytes is the operator's, zero or more at check, and the reader is used only from 1 to one below the type's maximum, so the bound one past it neither wraps nor is reached by a reply at the cap shown by TestLimitAScriptsReplyIsReadUnderMaxReplyBytes
 internal/store/damagedbox.go (*Store).ReadDamaged cap io.LimitReader(f, DamagedBudget + 1) = local: DamagedBudget is the most KeepDamaged ever writes, and one over it is refused by name shown by TestLimitDamagedReadIsBounded
 internal/store/damagedbox.go DamagedRecord int Size int64 = >= 0 shown by TestLimitDamagedRecordFields

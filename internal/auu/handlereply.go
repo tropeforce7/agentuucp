@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -128,13 +129,36 @@ func (r *handleRun) compose(id string, job *handleJob, output *os.Root) error {
 	}
 	route := r.cfg.Routes[job.Route]
 	text := headline(job, route)
+	attach := attachDir(paths.kept, job.Attempt)
+	if err := os.RemoveAll(attach); err != nil {
+		return err
+	}
 	if output != nil {
-		switch said, why := scriptReply(output, route); {
+		said, why := scriptReply(output, route)
+		switch {
 		case why != "":
 			text += "\nthe script's reply.txt was not included: " + why
 		case said != "":
 			text += "\n\n" + said
 		}
+		// The files and the text are bounded together: what the text took
+		// is what the files cannot.
+		budget := int64(-1)
+		if route.MaxReplyBytes > 0 {
+			budget = route.MaxReplyBytes - int64(len(said))
+		}
+		left, err := keepFiles(output, attach, budget, route.MaxReplyBytes)
+		if err != nil {
+			return err
+		}
+		for _, line := range left {
+			text += "\n" + line
+		}
+	} else if job.Attempt > 0 {
+		// A job that ran, composed with nothing of its attempt's: the run
+		// that ended it stopped before what the script left was kept, and
+		// the asker is told rather than given the first line alone.
+		text += "\nthe script's reply.txt and files were not kept: the run stopped before they were"
 	}
 	// The envelope and the mark kept for an earlier reply to this job are
 	// not this one's.
@@ -227,7 +251,11 @@ func (r *handleRun) answer(id string) error {
 		InReplyTo: id,
 		Text:      string(text),
 	}
-	out, _, err := sendSealed(r.s, r.id, relay, recipient, body, nil,
+	files, err := keptAttachments(paths.kept, job.Attempt)
+	if err != nil {
+		return err
+	}
+	out, _, err := sendSealed(r.s, r.id, relay, recipient, body, files,
 		sendMode{sealed: sealedFile(paths.kept, id), posted: postedFile(paths.kept, id)})
 	if err != nil {
 		if isLocked(err) {
@@ -314,4 +342,160 @@ func (l *handleLedger) bySeq() []string {
 	// Admission numbers are unique, so the order is total.
 	slices.SortFunc(ids, func(a, b string) int { return cmp.Compare(l.Jobs[a].Seq, l.Jobs[b].Seq) })
 	return ids
+}
+
+// attachDir is where the files an attempt's reply carries are kept, under
+// handle's own directory for the job.
+func attachDir(keptDir string, attempt int) string {
+	return filepath.Join(keptDir, "attach-"+strconv.Itoa(attempt))
+}
+
+// keepFiles moves every regular file the script left in output/attachments/
+// into handle's own attach directory, by copying it through a handle, so
+// that the reply is sealed from what handle holds and nothing the script
+// or a process it left can change after (S56). output is the root held from
+// before the script ran. Each file must be a regular file there, not a link
+// or a directory, under a name a sender may use, distinct where case does
+// not count from those before it; they are taken in name order, each
+// counted against budget as it is copied, which with the text bounds the
+// reply to the route's max_reply_bytes (-1 for no cap). What is left out
+// is said, one line each, naming the file and why and no path of this
+// machine's. An empty or absent directory attaches nothing and says
+// nothing. An error is the host's.
+func keepFiles(output *os.Root, attach string, budget, max int64) ([]string, error) {
+	seen, err := output.Lstat("attachments")
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return []string{"the script's attachments directory could not be looked at, and nothing in it was sent"}, nil
+	}
+	if !seen.IsDir() {
+		return []string{"the script's attachments is not a directory, and nothing in it was sent"}, nil
+	}
+	dir, err := output.OpenRoot("attachments")
+	if err != nil {
+		return []string{"the script's attachments directory could not be opened, and nothing in it was sent"}, nil
+	}
+	defer dir.Close()
+	listing, err := dir.Open(".")
+	if err != nil {
+		return []string{"the script's attachments directory could not be listed, and nothing in it was sent"}, nil
+	}
+	entries, err := listing.ReadDir(-1)
+	listing.Close()
+	if err != nil {
+		return []string{"the script's attachments directory could not be listed, and nothing in it was sent"}, nil
+	}
+	slices.SortFunc(entries, func(a, b os.DirEntry) int { return cmp.Compare(a.Name(), b.Name()) })
+	var left, taken []string
+	made := false
+	leave := func(name, why string) {
+		left = append(left, fmt.Sprintf("the script's file %q was left out: %s", name, why))
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if err := message.ValidAttachmentName(name); err != nil {
+			leave(name, "its name is not one a sender may use")
+			continue
+		}
+		if err := message.DistinctAttachmentNames(append(slices.Clone(taken), name)); err != nil {
+			leave(name, "its name is another file's where case does not count")
+			continue
+		}
+		info, err := dir.Lstat(name)
+		if err != nil {
+			leave(name, "it could not be looked at")
+			continue
+		}
+		if info.IsDir() {
+			leave(name, "it is a directory")
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			leave(name, "it is not a regular file")
+			continue
+		}
+		if !made {
+			if err := os.Mkdir(attach, 0o700); err != nil {
+				return nil, err
+			}
+			made = true
+		}
+		n, why, err := keepFile(dir, name, info, filepath.Join(attach, name), budget)
+		if err != nil {
+			return nil, err
+		}
+		if why == "over" {
+			why = fmt.Sprintf("with the reply's text and the files before it, it is over the route's max_reply_bytes of %d", max)
+		}
+		if why != "" {
+			leave(name, why)
+			continue
+		}
+		if budget >= 0 {
+			budget -= n
+		}
+		taken = append(taken, name)
+	}
+	return left, nil
+}
+
+// keepFile copies one of the script's files into handle's directory: opened
+// through the root by its name, not blocking, and only if it is the file
+// looked at; read no more than budget, the rest of the reply's allowance
+// (-1 for none). A file over it is "over"; one that cannot be read is said
+// why. The copy is created exclusively and removed again on any failure.
+func keepFile(dir *os.Root, name string, seen os.FileInfo, to string, budget int64) (int64, string, error) {
+	src, err := dir.OpenFile(name, os.O_RDONLY|openNonblock, 0)
+	if err != nil {
+		return 0, "it could not be opened", nil
+	}
+	defer src.Close()
+	if opened, err := src.Stat(); err != nil || !os.SameFile(seen, opened) {
+		return 0, "it changed as it was opened", nil
+	}
+	dst, err := regular.Create(to, 0o600)
+	if err != nil {
+		return 0, "", err
+	}
+	var r io.Reader = src
+	if budget >= 0 && budget < math.MaxInt64 {
+		r = io.LimitReader(src, budget+1)
+	}
+	n, err := io.Copy(dst, r)
+	if cerr := dst.Close(); err == nil {
+		err = cerr
+	}
+	switch {
+	case err != nil:
+		os.Remove(to)
+		return 0, "it could not be read", nil
+	case budget >= 0 && n > budget:
+		os.Remove(to)
+		return 0, "over", nil
+	}
+	return n, "", nil
+}
+
+// keptAttachments is the files a reply carries, in name order: the attempt's
+// attach directory in handle's own, which keepFiles wrote, each name held
+// to the sender's rule again before it is joined.
+func keptAttachments(keptDir string, attempt int) ([]string, error) {
+	dir := attachDir(keptDir, attempt)
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, e := range entries {
+		if message.ValidAttachmentName(e.Name()) != nil || !e.Type().IsRegular() {
+			return nil, fmt.Errorf("%s holds %q, which handle did not write there", dir, e.Name())
+		}
+		out = append(out, filepath.Join(dir, e.Name()))
+	}
+	return out, nil
 }

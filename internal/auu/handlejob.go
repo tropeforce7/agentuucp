@@ -242,11 +242,21 @@ func (r *handleRun) runJob(ctx context.Context, id string) error {
 		return err
 	}
 	r.report(id, job, m)
+	if beforeCompose != nil {
+		if err := beforeCompose(); err != nil {
+			return err
+		}
+	}
 	if err := r.compose(id, job, output); err != nil {
 		return err
 	}
 	return r.answer(id)
 }
+
+// beforeCompose, when a test sets it, runs between a job's end being saved
+// and its reply being composed, and an error from it ends the run there, as
+// a run that stops between the two stops.
+var beforeCompose func() error
 
 // unpack writes the asker's files into original/ once, under original.tmp
 // until every one is there, as serve's in/<id> is, so that a run stopped

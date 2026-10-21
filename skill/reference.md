@@ -272,8 +272,10 @@ be a route's. `run --once` takes each ask on a route's channel into
 `handle/jobs/ROUTE/ID/` and `AUU_` variables, never on its command line,
 and replies to each job once it ends, the first line saying how (`handle:
 succeeded (exit 0, attempt 1 of 1)`, `handle: failed (exit 3, attempt 1 of
-1)`) and the script's `output/reply.txt` after it, then marks the ask
-read; a reply that cannot be sent is tried again up to the route's
+1)`) and the script's `output/reply.txt` after it, with every regular file
+it left in `output/attachments/` attached in name order, text and files
+held together to the route's `max_reply_bytes` and a file left out said
+by name, then marks the ask read; a reply that cannot be sent is tried again up to the route's
 `retries`. A route's
 first round leaves the asks already waiting, said in one sentence, and
 `--backlog` runs them instead. `--json` is `skipped`, how many a first

@@ -68,6 +68,10 @@ const (
 //	reply:TEXT     write TEXT to $AUU_OUTPUT_DIR/reply.txt, as a script's reply
 //	replylink:PATH make $AUU_OUTPUT_DIR/reply.txt a link to PATH
 //	swapoutput:DIR rename $AUU_OUTPUT_DIR aside and put a link to DIR in its place
+//	attach:NAME=TEXT  write TEXT to $AUU_OUTPUT_ATTACHMENTS/NAME
+//	attachbig:NAME=N  write N bytes there
+//	attachdir:NAME    make a directory there
+//	attachlink:NAME=PATH  make a link there to PATH
 //	snapshot:VAR=PATH  copy the files of the directory $VAR names into PATH
 //	exit:N         stop with that status
 func TestServeHelperProcess(t *testing.T) {
@@ -180,6 +184,26 @@ func TestServeHelperProcess(t *testing.T) {
 			os.WriteFile(filepath.Join(os.Getenv("AUU_OUTPUT_DIR"), "reply.txt"), []byte(arg), 0o600)
 		case "replylink":
 			if err := os.Symlink(arg, filepath.Join(os.Getenv("AUU_OUTPUT_DIR"), "reply.txt")); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(9)
+			}
+		case "attach", "attachbig", "attachdir", "attachlink":
+			name, value, _ := strings.Cut(arg, "=")
+			path := filepath.Join(os.Getenv("AUU_OUTPUT_ATTACHMENTS"), name)
+			var err error
+			switch verb {
+			case "attach":
+				err = os.WriteFile(path, []byte(value), 0o600)
+			case "attachbig":
+				var n int
+				fmt.Sscanf(value, "%d", &n)
+				err = os.WriteFile(path, []byte(strings.Repeat("x", n)), 0o600)
+			case "attachdir":
+				err = os.Mkdir(path, 0o700)
+			case "attachlink":
+				err = os.Symlink(value, path)
+			}
+			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(9)
 			}
