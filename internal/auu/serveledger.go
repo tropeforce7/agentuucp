@@ -217,12 +217,24 @@ func loadLedger(path string) (*ledger, error) {
 // a rule about the first round of the service and not about every round of
 // it: the long run loads the ledger once and keeps it.
 func (l *ledger) save() error {
-	data, err := json.MarshalIndent(l, "", "  ")
+	if err := saveThrough(l.path, l); err != nil {
+		return err
+	}
+	l.existed = true
+	return nil
+}
+
+// saveThrough writes v as indented JSON to path through a temporary file
+// in the same directory, synced, then renamed over the old one, so that a
+// crash leaves the last complete file rather than half of one. Serve's
+// ledger and handle's are both written this way.
+func saveThrough(path string, v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	tmp, err := os.CreateTemp(filepath.Dir(l.path), filepath.Base(l.path)+".tmp*")
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp*")
 	if err != nil {
 		return err
 	}
@@ -243,11 +255,7 @@ func (l *ledger) save() error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(name, l.path); err != nil {
-		return err
-	}
-	l.existed = true
-	return nil
+	return os.Rename(name, path)
 }
 
 // entry is a message's record, made if it has none.

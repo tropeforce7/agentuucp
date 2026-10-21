@@ -341,6 +341,14 @@ internal/auu/handleconfig.go handleRoute int Retries int = >= 0 shown by TestLim
 internal/auu/handleconfig.go handleRoute int keepFailed time.Duration = > 0s shown by TestLimitHandleDurations
 internal/auu/handleconfig.go handleRoute int timeout time.Duration = > 0s shown by TestLimitHandleDurations
 internal/auu/identity_cmds.go cmdInit string (*anchor)[:16] = local: ValidFingerprint at cmdInit shown by TestLimitAnchorArgsOneShort
+internal/auu/handleledger.go handleJob int Attempt int = >= 0 shown by TestLimitHandleLedgerIntegers
+internal/auu/handleledger.go handleJob int Exit int = open shown by TestLimitHandleLedgerIntegers
+internal/auu/handleledger.go handleJob int Failures int = >= 0 shown by TestLimitHandleLedgerIntegers
+internal/auu/handleledger.go handleJob int RelayID int64 = >= 0 shown by TestLimitHandleLedgerIntegers
+internal/auu/handleledger.go handleJob int ReplyFailures int = >= 0 shown by TestLimitHandleLedgerIntegers
+internal/auu/handleledger.go handleJob int Seq int64 = >= 0 shown by TestLimitHandleLedgerIntegers
+internal/auu/handleledger.go handleLedger int NextSeq int64 = >= 0 shown by TestLimitHandleLedgerIntegers
+internal/auu/handleledger.go handleLedger int V int = [1, 1] shown by TestLimitHandleLedgerIntegers
 internal/auu/identity_cmds.go idJSON int PQCategory int = output
 internal/auu/identity_cmds.go idJSON int SuiteID int = output
 internal/auu/identity_cmds.go peerJSON int PQCategory int = output
@@ -716,6 +724,13 @@ internal/auu/channel_cmds.go channelJSON time NotBefore = output
 internal/auu/channel_cmds.go channelLsJSON time Issued = output
 internal/auu/channel_cmds.go relayChannelsJSON time Issued = output
 internal/auu/damaged_cmds.go damagedJSON time Received = output
+internal/auu/handleledger.go handleJob time Arrived = display
+internal/auu/handleledger.go handleJob time Ended = display
+internal/auu/handleledger.go handleJob time ReplySent = display
+internal/auu/handleledger.go handleJob time ReplyTried = display
+internal/auu/handleledger.go handleJob time RetryAt = display
+internal/auu/handleledger.go handleJob time Started = display
+internal/auu/handleledger.go handleRouteMark time FirstRound = display
 internal/auu/inbox.go messageJSON time Arrived = output
 internal/auu/inbox.go messageJSON time Received = output
 internal/auu/inbox.go messageJSON time Time = output

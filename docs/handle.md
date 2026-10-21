@@ -122,3 +122,26 @@ output. On standard error, check says which routes' channels keep their
 mail on the relay, which every channel does unless its owner says
 otherwise, and names `auu channel keep NAME off`, as `auu serve check`
 does.
+
+## What it keeps
+
+`handle/ledger.json` in the home is handle's record of every job it has
+taken, one per ask, keyed by the message's id, with a number for each
+admission and a state: `queued`, `preparing`, `running`, `succeeded`,
+`failed`, `interrupted`, `skipped` or `removed`. It is the only thing that
+says an ask is work. No command in this version reads or writes it yet;
+what follows are the rules it is held to when one does.
+
+It is read strictly. A ledger that is there and will not read, or that
+breaks one of its rules, is refused by name and never replaced: a key it
+does not know, a job that is not under a message's id, a route that is not
+a route's name, a channel that is not a channel's, a thread or a reply
+that is not a message's id, a state outside the eight, a sender that is
+not a fingerprint, a job said to be skipped by anyone but `first-start`
+or `operator`, or by either when it is not skipped, a count below zero,
+an admission's number spent twice or not below `next_seq`, or an attempt
+counted with no start. The sentence ends `it is the record of
+every job handle has taken, so fix it or move it aside knowing that the
+asks in the inbox are then met as at a first start: skipped, or run again
+with --backlog`. A job the ledger has as `running` when it is read is
+`interrupted`, since the run that started it is gone.

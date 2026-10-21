@@ -80,9 +80,9 @@ import (
 // takes (F1), 590 when a resume named the drop for a record never opened
 // on a relay (57c), 591 when a stalled attempt was read on after its
 // answer only while its body arrived (58e), 602 when handle.json's
-// numbers and durations were read. A walk that finds fewer is not
-// reaching the tree.
-const floor = 602
+// numbers and durations were read, 617 when handle's ledger was. A walk
+// that finds fewer is not reaching the tree.
+const floor = 617
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.
