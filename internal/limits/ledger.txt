@@ -349,6 +349,7 @@ internal/auu/handlejob.go handleAttachment int Size int64 = output
 internal/auu/handlejob.go handleMessage int Attempt int = output
 internal/auu/handlejob.go handleMessage int Seq int64 = output
 internal/auu/handlejob.go handleMessage int V int = output
+internal/auu/handleledger.go handleJob int Bytes int64 = >= 0 shown by TestLimitHandleLedgerIntegers
 internal/auu/handleledger.go handleJob int Attempt int = >= 0 shown by TestLimitHandleLedgerIntegers
 internal/auu/handleledger.go handleJob int Exit int = open shown by TestLimitHandleLedgerIntegers
 internal/auu/handleledger.go handleJob int Failures int = >= 0 shown by TestLimitHandleLedgerIntegers
@@ -360,6 +361,7 @@ internal/auu/handleledger.go handleLedger int V int = [1, 1] shown by TestLimitH
 internal/auu/handleops.go handleRequest int V int = [1, 1] shown by TestLimitHandleRequestV
 internal/auu/handleops.go handleRouteStatus int Counts map[string]int = output
 internal/auu/handleops.go handleRouteStatus int Unsent int = output
+internal/auu/handleops.go handleRouteStatus int QueuedBytes int64 = output
 internal/auu/handleops.go handleRunning int Attempt int = output
 internal/auu/handlereply.go (*handleRun).answer string job.From[:16] = local: job.From held to identity.ValidFingerprint, 64 characters, at loadHandleLedger and at routeFor before admission
 internal/auu/handleops.go handleInspect string job.From[:16] = local: job.From held to identity.ValidFingerprint, 64 characters, at loadHandleLedger and at routeFor before admission
@@ -745,7 +747,7 @@ internal/auu/damaged_cmds.go damagedJSON time Received = output
 internal/auu/handlejob.go handleMessage time Arrived = output
 internal/auu/handlejob.go handleMessage time Time = output
 internal/auu/handleledger.go handleJob time Arrived = display
-internal/auu/handleledger.go handleJob time Ended = display
+internal/auu/handleledger.go handleJob time Ended = deadline: when the job ended, which with the route's keep_failed is when its directories go, compared with now at sweepable shown by TestLimitAnEndedAtTheExtremes
 internal/auu/handleledger.go handleJob time ReplySent = display
 internal/auu/handleledger.go handleJob time ReplyTried = deadline: the last send of the reply that failed, which with serve's backoff is when the next is due, compared with now at owesReply shown by TestLimitAReplyTriedAtTheExtremes
 internal/auu/handleledger.go handleJob time RetryAt = deadline: the next automatic attempt, compared with now at runnable shown by TestLimitARetryAtAtTheExtremes

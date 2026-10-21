@@ -160,7 +160,7 @@ func TestAHandleLedgerThatWillNotParseIsAnErrorNotAFreshStart(t *testing.T) {
 }
 
 // TestLimitHandleLedgerIntegers: the ledger's v is 1; next_seq, and each
-// job's seq, attempt, failures, reply_failures and relay_id, are zero or
+// job's seq, attempt, failures, reply_failures, bytes and relay_id, are zero or
 // more; a seq is spent once and is below next_seq; an attempt counted has a
 // start. A negative and the type's minimum are refused naming the field and
 // the job, as is a seq repeated, a seq at next_seq, and an attempt with no
@@ -266,6 +266,15 @@ func TestLimitHandleLedgerIntegers(t *testing.T) {
 	refused(t, job(`,"seq":0,"attempt":1`), " counts attempt 1 for "+handleJobID+" with no start")
 	refused(t, job(`,"seq":0,"attempt":1,"started":"0001-01-01T00:00:00Z"`), " counts attempt 1 for "+handleJobID+" with no start")
 
+	for _, n := range []string{"-1", minInt64} {
+		refused(t, job(`,"seq":0,"bytes":`+n), " has bytes "+n+" for "+handleJobID+", which is not a count")
+	}
+	for _, n := range []string{"0", "1", maxInt64} {
+		if l := read(t, job(`,"seq":0,"bytes":`+n)); l != nil && strconv.FormatInt(l.Jobs[handleJobID].Bytes, 10) != n {
+			t.Errorf("bytes %s read as %d", n, l.Jobs[handleJobID].Bytes)
+		}
+	}
+	decodeRefused(t, job(`,"seq":0,"bytes":9223372036854775808`))
 	for _, n := range []string{"-1", minInt64} {
 		refused(t, job(`,"seq":0,"relay_id":`+n), " has relay id "+n+" for "+handleJobID+", which is not a relay's counter")
 	}

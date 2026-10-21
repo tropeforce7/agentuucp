@@ -376,7 +376,34 @@ the reason written on the job. Keys that lock, or a send scope that ends,
 under the run end it at exit 4, with nothing counted. The ledger records
 the reply before the ask is marked read. A succeeded job's two
 directories go once its reply is saved; a removed job's go at once, and
-it gets no reply, since the asker's message is gone; a failed job's stay.
+it gets no reply, since the asker's message is gone; a failed job's, and a
+skipped one's, stay for the route's `keep_failed` from when it ended, so
+that its attempts and logs can be read, and go at the first sweep after.
+A job whose reply has not gone keeps them whatever its age, since the
+reply is sent from them, and so does a job whose route is no longer in the
+file.
+
+**Limits and cleanup.** A route takes asks into its queue in the order
+they arrived while its jobs that are queued, preparing or running number
+fewer than `max_queued` and their bytes, the size the relay listed each
+ask at, leave room under `max_queued_bytes`. The first ask that does not
+fit, and every ask after it on that route, waits in the inbox, so that a
+small ask never passes a large one, and the round says `route R is at its
+cap; N asks wait in the inbox`; an ask larger than `max_queued_bytes` by
+itself is named, since it waits until the cap is raised. The asks left at
+a cap are taken within the same round as the jobs before them end, and a
+first round's `--backlog` is taken under the caps too. `handle status`
+shows the bytes queued. A script's two logs are cut to `max_log_bytes`
+after its run, their first lines kept and their ends a mark naming the cap
+and how much the script wrote, and the cut is said; while the script runs
+its timeout is what bounds them. The sweep runs when the service starts
+and after every round. It removes only the directories of the jobs the
+ledger names, by the route and message ids it holds; anything else under
+`handle/jobs/` or `handle/kept/`, a directory no job owns, a file, a link,
+is said once a run by its path and left alone. A directory a script left
+that its account may read and not write is made writable and removed; one
+that still will not go is said once a run and tried again at the next
+sweep, and never stops the service.
 
 The script runs as whoever runs handle, and `auu` finds its keys from the
 home's path rather than from anything handle could withhold. So a script

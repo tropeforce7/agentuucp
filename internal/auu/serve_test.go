@@ -1,6 +1,7 @@
 package auu
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -184,6 +185,19 @@ func TestServeHelperProcess(t *testing.T) {
 			}
 		case "say":
 			fmt.Fprintln(os.Stderr, arg)
+		case "rodir":
+			// rodir:NAME leaves a directory in the working directory with a
+			// file in it, the directory the account's to read and not to
+			// write, as an unpacked archive may.
+			os.MkdirAll(arg, 0o700)
+			os.WriteFile(filepath.Join(arg, "f"), []byte("kept"), 0o600)
+			os.Chmod(arg, 0o555)
+		case "spew":
+			// spew:N writes N bytes to standard error, a first line and
+			// then x to the count.
+			n, _ := strconv.Atoi(arg)
+			line := []byte("the first line\n")
+			os.Stderr.Write(append(line, bytes.Repeat([]byte("x"), max(n-len(line), 0))...)[:n])
 		case "args":
 			os.WriteFile(arg, []byte(strings.Join(os.Args[1:], "\n")+"\n"), 0o600)
 		case "reply":

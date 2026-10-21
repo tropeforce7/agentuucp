@@ -237,6 +237,7 @@ func (r *handleRun) applyRequest(op, target string) (string, error) {
 			return "", usageErrf("skip %s: its script is running; skip it once it has ended", target)
 		}
 		job.State, job.By, job.Review, job.RetryAt = jobSkipped, skippedByOperator, false, time.Time{}
+		endedNow(job)
 		if job.Reply != "" {
 			return fmt.Sprintf("skip %s: skipped; its reply went already, and nothing more is sent", target), nil
 		}
@@ -352,8 +353,10 @@ type handleRouteStatus struct {
 	// reason.
 	BlockedBy string `json:"blocked_by,omitempty"`
 	Blocked   string `json:"blocked,omitempty"`
-	// Unsent counts the replies whose sends are spent.
-	Unsent int `json:"unsent_replies"`
+	// Unsent counts the replies whose sends are spent, and QueuedBytes the
+	// bytes of the jobs counted against max_queued_bytes.
+	Unsent      int   `json:"unsent_replies"`
+	QueuedBytes int64 `json:"queued_bytes"`
 }
 
 // handleRunning is an attempt running, as status says it.
@@ -431,6 +434,7 @@ func handleStatus(config string, asJSON bool) error {
 				head, headID = job, id
 			}
 		}
+		_, st.QueuedBytes = (&handleRun{cfg: cfg, led: led}).queued(name)
 		if route.Execution == executionSequential && head != nil && head.State == jobFailed && head.Review {
 			st.BlockedBy, st.Blocked = headID, head.Reason
 		}
@@ -463,6 +467,9 @@ func handleStatus(config string, asJSON bool) error {
 			counts = []string{"no jobs"}
 		}
 		fmt.Printf("  jobs:     %s\n", strings.Join(counts, ", "))
+		if st.QueuedBytes > 0 {
+			fmt.Printf("  queued:   %d bytes of max_queued_bytes %d\n", st.QueuedBytes, cfg.Routes[st.Route].MaxQueuedBytes)
+		}
 		if !st.OldestQueued.IsZero() {
 			fmt.Printf("  oldest queued: arrived %s\n", st.OldestQueued.Local().Format(time.DateTime))
 		}

@@ -341,7 +341,8 @@ func (r *handleRun) answer(id string) error {
 			orNone(identity.Printable(m.SenderName)), again, shortID(out.ID))
 	}
 	if job.State == jobSucceeded {
-		return r.clean(id)
+		r.cleanOrSay(id)
+		return nil
 	}
 	return nil
 }
@@ -383,7 +384,7 @@ func (r *handleRun) clean(id string) error {
 		return err
 	}
 	for _, dir := range []string{paths.job, paths.kept} {
-		if err := os.RemoveAll(dir); err != nil {
+		if err := removeTree(dir); err != nil {
 			return err
 		}
 	}

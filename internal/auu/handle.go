@@ -178,6 +178,8 @@ func openHandleRunLocked(config string, backlog, asJSON bool) (*handleRun, *lock
 			return nil, lock, err
 		}
 	}
+	// What an earlier run left to clean goes before anything is taken.
+	r.sweep()
 	if backlog && !r.anyFirstRound() {
 		return nil, lock, usageErrf("--backlog runs the asks already in the inbox for a route at its first round, "+
 			"and every route in %s has had one; there is no backlog to run", cfg.path)
@@ -289,14 +291,9 @@ func (r *handleRun) round(ctx context.Context, backlog, longRun bool) error {
 			}
 		}
 	}
-	for _, m := range msgs {
-		name := r.routeFor(m)
-		if name == "" {
-			continue
-		}
-		if _, err := r.admit(m, name, jobQueued, ""); err != nil {
-			return err
-		}
+	waiting, first, _, err := r.take(msgs)
+	if err != nil {
+		return err
 	}
 	// Replies due from earlier rounds go first, then the jobs, each of
 	// which sends its own as it ends.
@@ -309,7 +306,59 @@ func (r *handleRun) round(ctx context.Context, backlog, longRun bool) error {
 	if err := r.replies(); err != nil {
 		return escaped(err)
 	}
-	return r.dispatch(ctx)
+	if err := r.dispatch(ctx); err != nil {
+		return err
+	}
+	// Asks left at a route's cap are taken as the jobs before them end,
+	// within this round: nothing else would wake the service for them,
+	// since they are fetched already. Each pass takes one or more, or the
+	// round goes on.
+	for len(waiting) > 0 && ctx.Err() == nil {
+		var took int
+		if waiting, first, took, err = r.take(msgs); err != nil {
+			return err
+		}
+		if took == 0 {
+			break
+		}
+		if err := r.dispatch(ctx); err != nil {
+			return err
+		}
+	}
+	for _, name := range r.cfg.names() {
+		if n := waiting[name]; n > 0 {
+			r.atCap(name, n, first[name])
+		}
+	}
+	r.sweep()
+	return nil
+}
+
+// take admits the asks of the round's listing that have no job yet, each
+// route in arrival order up to its caps: the first that does not fit, and
+// every ask after it on that route, waits in the inbox, so that a small
+// ask never passes a large one. It gives how many wait on each route, the
+// first of them, and how many it took.
+func (r *handleRun) take(msgs []*store.Stored) (map[string]int, map[string]*store.Stored, int, error) {
+	waiting, first, took := map[string]int{}, map[string]*store.Stored{}, 0
+	for _, m := range msgs {
+		name := r.routeFor(m)
+		if name == "" {
+			continue
+		}
+		if waiting[name] > 0 || !r.fits(name, askBytes(m)) {
+			if waiting[name] == 0 {
+				first[name] = m
+			}
+			waiting[name]++
+			continue
+		}
+		if _, err := r.admit(m, name, jobQueued, ""); err != nil {
+			return nil, nil, 0, err
+		}
+		took++
+	}
+	return waiting, first, took, nil
 }
 
 // routeFor is the route whose work a message is, or "" for one that is
@@ -373,12 +422,19 @@ func (r *handleRun) baseline(name string, msgs []*store.Stored, backlog bool) er
 		fmt.Fprintf(os.Stderr, "%s: route %q moved from channel %q to %q, and takes a new baseline there\n",
 			prog, name, mark.Channel, route.Channel)
 	}
-	skipped := 0
+	skipped, full := 0, false
 	for _, m := range msgs {
 		if r.routeFor(m) != name {
 			continue
 		}
 		if backlog {
+			// The backlog is admitted under the route's caps as any ask
+			// is: the first that does not fit, and those after it, are
+			// left in the inbox for the round's admission to say and to
+			// take when there is room.
+			if full = full || !r.fits(name, askBytes(m)); full {
+				continue
+			}
 			if _, err := r.admit(m, name, jobQueued, ""); err != nil {
 				return err
 			}
@@ -415,7 +471,7 @@ func (r *handleRun) admit(m *store.Stored, name, state, by string) (*handleJob, 
 	job := &handleJob{
 		Route: name, Revision: route.revision(), Channel: route.Channel,
 		Thread: m.Inner.Body.Thread, From: m.Inner.From, Arrived: m.Arrived.UTC(), RelayID: m.RelayID,
-		Seq: r.led.NextSeq, State: state, By: by,
+		Seq: r.led.NextSeq, State: state, By: by, Bytes: askBytes(m),
 	}
 	r.led.NextSeq++
 	r.led.Jobs[m.Inner.ID] = job
@@ -499,6 +555,7 @@ func (r *handleRun) settleInterrupted() error {
 			job.Reason = "interrupted, and its attempts are spent"
 		}
 		job.State, job.Review = jobFailed, true
+		endedNow(job)
 		if err := r.led.save(); err != nil {
 			return err
 		}

@@ -292,7 +292,8 @@ and `reply`, the id of the reply sent for it in that round or empty, once
 under `--once` and one line per round that did something otherwise. Exit 1 when a job failed in the round, 2 when another `handle
 run` holds the home. `status`, `jobs` and `inspect` only read; `retry`, `skip`, `pause` and
 `resume` change the ledger, at once or queued under `handle/ops/` for a
-running service, and are the host's decisions.
+running service, and are the host's decisions. A route at its `max_queued` or `max_queued_bytes` leaves
+later asks in the inbox, said once a round.
 
 What this binary is, and the skills it carries:
 

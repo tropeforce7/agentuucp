@@ -254,6 +254,17 @@ func (r *handleRun) runJob(ctx context.Context, id string) error {
 	if runtime.GOOS != "windows" && cmd.Process != nil {
 		killGroup(cmd)
 	}
+	// The logs are bounded after the run, not during it (D7): a file
+	// handed to a child cannot be bounded while it writes, and the
+	// attempt's timeout is what bounds the disk meanwhile.
+	for _, path := range []string{outPath, errPath} {
+		if wrote, err := cutLog(path, route.MaxLogBytes); err != nil {
+			return err
+		} else if wrote > 0 {
+			fmt.Fprintf(os.Stderr, "%s: %s's %s was cut at max_log_bytes of %d; the script wrote %d bytes\n",
+				job.Route, shortID(id), filepath.Base(path), route.MaxLogBytes, wrote)
+		}
+	}
 	prefixedTo(os.Stderr, errPath, job.Route+" "+shortID(id))
 	if runErr != nil && ctx.Err() != nil {
 		// Stopped: the group is killed and its leader waited for, and that
@@ -619,6 +630,7 @@ func (r *handleRun) beforeLaunch(id string, route *handleRoute, why string) erro
 	job.BeforeLaunch, job.Interrupted, job.TimedOut, job.Exit = true, false, false, 0
 	if job.Failures >= route.Retries {
 		job.State, job.Review, job.RetryAt = jobFailed, true, time.Time{}
+		endedNow(job)
 	} else {
 		job.State, job.RetryAt = jobQueued, handleNow().Add(retryBackoff(job.Failures))
 	}
@@ -635,6 +647,15 @@ func (r *handleRun) beforeLaunch(id string, route *handleRoute, why string) erro
 		return err
 	}
 	return r.answer(id)
+}
+
+// endedNow gives a job that ends without an attempt having ended, never
+// run or found running after a crash, the time it ended, which keep_failed
+// counts from.
+func endedNow(job *handleJob) {
+	if job.Ended.IsZero() {
+		job.Ended = handleNow()
+	}
 }
 
 // pathFree is why with the home's path, as given and as the links under
@@ -657,7 +678,8 @@ func (r *handleRun) removed(id string, m *store.Stored, why string) error {
 	}
 	r.report(id, job, m)
 	// Nobody's ask is left to answer, and its files go at once.
-	return r.clean(id)
+	r.cleanOrSay(id)
+	return nil
 }
 
 // report says what happened to a job, on standard output, and puts it in

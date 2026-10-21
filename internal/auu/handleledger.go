@@ -93,6 +93,9 @@ type handleJob struct {
 	From     string    `json:"from"`
 	Arrived  time.Time `json:"arrived"`
 	RelayID  int64     `json:"relay_id"`
+	// Bytes is the ask's size as admission counted it against the route's
+	// max_queued_bytes: the relay's size, or the text and the files.
+	Bytes int64 `json:"bytes"`
 	// Seq is the admission's number, frozen at admission: the order every
 	// queue is read in.
 	Seq   int64  `json:"seq"`
@@ -264,7 +267,7 @@ func loadHandleLedger(path string) (*handleLedger, error) {
 			n    int64
 		}{
 			{"seq", job.Seq}, {"attempt", int64(job.Attempt)}, {"failures", int64(job.Failures)},
-			{"reply_failures", int64(job.ReplyFailures)},
+			{"reply_failures", int64(job.ReplyFailures)}, {"bytes", job.Bytes},
 		} {
 			if count.n < 0 {
 				return nil, refuse("has %s %d for %s, which is not a count", count.name, count.n, id)
