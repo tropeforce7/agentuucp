@@ -45,6 +45,7 @@ const (
 	sentDir       = "sent"
 	quarantineDir = "quarantine"
 	serveDir      = "serve"
+	handleDir     = "handle"
 
 	// minPrefix is the shortest fingerprint prefix accepted for lookups.
 	minPrefix = 8
@@ -1445,6 +1446,11 @@ func (s *Store) SentLockPath() string { return s.path("sent.lock") }
 // to name, as the relays' directory is, and serve's to fill; nothing is
 // created here.
 func (s *Store) ServeDir() string { return s.path(serveDir) }
+
+// HandleDir is where 'auu handle' keeps its state: its lock, its ledger,
+// and a directory apiece for each job's files. As with ServeDir, nothing is
+// created here.
+func (s *Store) HandleDir() string { return s.path(handleDir) }
 
 // Find looks a message up in the inbox, then sent, then quarantine, accepting a
 // unique id prefix of at least 4 characters.

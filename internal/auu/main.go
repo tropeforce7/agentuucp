@@ -117,6 +117,7 @@ Usage:
   auu serve check [--config FILE]     # read serve.json and say what it would serve
   auu serve ls [--config FILE] [--json]   # what is served, and the threads it is holding
   auu serve proxy [--config FILE]     # the key-holding proxy as its own process, for another account
+  auu handle check [--config FILE]    # read handle.json and say what it would run
 
   auu quarantine ls [--json]
   auu quarantine show MESSAGE-ID [--json]
@@ -388,6 +389,8 @@ func dispatch(args []string) error {
 		return cmdWatch(rest)
 	case "serve":
 		return cmdServe(rest)
+	case "handle":
+		return cmdHandle(rest)
 	case "quarantine":
 		return cmdQuarantine(rest)
 	case "passphrase":

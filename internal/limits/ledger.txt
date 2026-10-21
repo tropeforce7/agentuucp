@@ -329,6 +329,17 @@ internal/auu/damaged_cmds.go damagedReopen int strconv.ParseInt(positional[1]) =
 internal/auu/damaged_cmds.go reopenJSON int ID int64 = output
 internal/auu/enrol.go fetchAnchor string got[:16] = local: SPKI writes 64 hex characters
 internal/auu/enrol.go fetchAnchor string want[:16] = local: isAnchor at Validate shown by TestLimitAnchorClaimOneShort
+internal/auu/handleconfig.go (*handleConfig).check string names[:i] = local: i is an index of names from range
+internal/auu/handleconfig.go handleConfig int V int = [1, 1] shown by TestLimitHandleConfigV
+internal/auu/handleconfig.go handleConfig int WorkersTotal int = 0 or [1, 64] shown by TestLimitWorkersTotal
+internal/auu/handleconfig.go handleRoute int MaxLogBytes int64 = 0 or >= 4096 shown by TestLimitHandleRouteIntegers
+internal/auu/handleconfig.go handleRoute int MaxParallel int = 0 or [1, 64] shown by TestLimitHandleRouteIntegers
+internal/auu/handleconfig.go handleRoute int MaxQueued int = >= 0 shown by TestLimitHandleRouteIntegers
+internal/auu/handleconfig.go handleRoute int MaxQueuedBytes int64 = >= 0 shown by TestLimitHandleRouteIntegers
+internal/auu/handleconfig.go handleRoute int MaxReplyBytes int64 = >= 0 shown by TestLimitMaxReplyBytes
+internal/auu/handleconfig.go handleRoute int Retries int = >= 0 shown by TestLimitHandleRouteIntegers
+internal/auu/handleconfig.go handleRoute int keepFailed time.Duration = > 0s shown by TestLimitHandleDurations
+internal/auu/handleconfig.go handleRoute int timeout time.Duration = > 0s shown by TestLimitHandleDurations
 internal/auu/identity_cmds.go cmdInit string (*anchor)[:16] = local: ValidFingerprint at cmdInit shown by TestLimitAnchorArgsOneShort
 internal/auu/identity_cmds.go idJSON int PQCategory int = output
 internal/auu/identity_cmds.go idJSON int SuiteID int = output

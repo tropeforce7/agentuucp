@@ -167,7 +167,7 @@ func cmdServe(args []string) error {
 		return usageErrf("--backlog answers the mail that was in the inbox before serve ever ran here, " +
 			"and this home has a ledger already; there is no backlog to answer")
 	}
-	warnKept(s, cfg)
+	warnKept(s, cfg.names())
 	warnCredentials(cfg)
 
 	// A signal is how a service is stopped, and the only way the long run
@@ -1480,7 +1480,7 @@ func serveCheck(config string) error {
 			cfg.Proxy.KeyFile, len(key), cfg.Proxy.Listen, cfg.Proxy.Upstream)
 	}
 	fmt.Printf("\n%s is good for %s\n", path, plural(len(cfg.Channels), "channel"))
-	warnKept(s, cfg)
+	warnKept(s, cfg.names())
 	warnCredentials(cfg)
 	return nil
 }

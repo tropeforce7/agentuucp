@@ -251,6 +251,23 @@ a message failing with `the proxy's control socket PATH: ...` is the proxy
 down or refusing serve's uid, retried next round, and the proxy's own
 journal is where its mints, requests and refusals are.
 
+Running a host's scripts on asks to a channel, which is the host's service
+and not something a messaging agent starts on its own:
+
+```
+auu handle check [--config FILE]                   # read handle.json and say what it would run
+```
+
+`handle` runs, for each ask on a route's channel, the program `handle.json`
+in the home names for that route, with the message as files and
+environment variables; see `docs/handle.md`. `check` holds the file to its
+rules and prints each route, its command, its program as resolved, its jobs'
+directory and its limits, then `FILE is good for N routes`, touching no key,
+relay or network; a file that breaks a rule is refused, exit 1, in one
+sentence naming the file, the route and what is wrong. A route on `default`
+is taken with a warning on stderr, and a channel `serve.json` serves cannot
+be a route's.
+
 What this binary is, and the skills it carries:
 
 ```

@@ -127,11 +127,12 @@ func loadServeConfig(path string) (*serveConfig, error) {
 		if ch.Retries == 0 {
 			ch.Retries = defaultRetries
 		}
-		ch.timeout, err = duration(cfg, name, "timeout", ch.Timeout, defaultTimeout)
+		errf := func(format string, a ...any) error { return cfg.errf(name, format, a...) }
+		ch.timeout, err = duration(errf, "timeout", ch.Timeout, defaultTimeout)
 		if err != nil {
 			return nil, err
 		}
-		ch.threadTTL, err = duration(cfg, name, "thread_ttl", ch.ThreadTTL, defaultThreadTTL)
+		ch.threadTTL, err = duration(errf, "thread_ttl", ch.ThreadTTL, defaultThreadTTL)
 		if err != nil {
 			return nil, err
 		}
@@ -154,17 +155,19 @@ func resolveAgainst(base, value string) string {
 	return filepath.Join(base, value)
 }
 
-// duration parses one of the file's durations, or gives the default.
-func duration(cfg *serveConfig, channel, field, text string, fallback time.Duration) (time.Duration, error) {
+// duration parses one of a file's durations, or gives the default. errf
+// is the file's refusal for the row the duration is in, serve.json's for
+// a channel and handle.json's for a route.
+func duration(errf func(format string, a ...any) error, field, text string, fallback time.Duration) (time.Duration, error) {
 	if strings.TrimSpace(text) == "" {
 		return fallback, nil
 	}
 	d, err := time.ParseDuration(text)
 	if err != nil {
-		return 0, cfg.errf(channel, "%s %q is not a length of time (30m, 2h, 168h)", field, text)
+		return 0, errf("%s %q is not a length of time (30m, 2h, 168h)", field, text)
 	}
 	if d <= 0 {
-		return 0, cfg.errf(channel, "%s is %s; it must be more than nothing", field, text)
+		return 0, errf("%s is %s; it must be more than nothing", field, text)
 	}
 	return d, nil
 }
@@ -190,39 +193,52 @@ func (cfg *serveConfig) errf(channel, format string, a ...any) error {
 // names as one directory, which check, comparing case alone, cannot see: a
 // filesystem that folds Unicode normalisation, as APFS does, takes é
 // composed and é decomposed as one name, and the standard library has no
-// table to say so (S63). It makes a directory of its own under serveDir,
-// on the filesystem serve's channels and worktrees are on, so a running
-// serve's directories are never touched and two checks never meet; makes
-// each channel's name in it in order, a name the disk answers as already
-// there being one it folds onto an earlier; and removes the directory
-// whatever happened. It runs after check, whose rule every name has met
+// table to say so (S63). It runs after check, whose rule every name has met
 // before it is joined onto anything.
 func (cfg *serveConfig) checkFolds(serveDir string) error {
-	if err := os.MkdirAll(serveDir, 0o700); err != nil {
-		return err
+	earlier, name, err := checkFolds(serveDir, "channel", cfg.names())
+	if earlier != "" {
+		return cfg.errf(name, "channels %q and %q are one directory on this filesystem, which takes them as one name; rename one", earlier, name)
 	}
-	probe, err := os.MkdirTemp(serveDir, ".channel-names-")
+	return err
+}
+
+// checkFolds is the probe both services' files are held to, serve's
+// channels under serve/ and handle's routes under handle/: what names the
+// kind of name, for the probe's directory and the sentence. It makes a
+// directory of its own under dir, on the filesystem the names' directories
+// are on, so a running service's directories are never touched and two
+// checks never meet; makes each name in it in order, a name the disk
+// answers as already there being one it folds onto an earlier; and removes
+// the directory whatever happened. Two names the disk takes as one come
+// back as earlier and name, for the caller's sentence; every name has met
+// its file's rule before it is given here.
+func checkFolds(dir, what string, names []string) (earlier, name string, err error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", "", err
+	}
+	probe, err := os.MkdirTemp(dir, "."+what+"-names-")
 	if err != nil {
-		return fmt.Errorf("asking the disk under %s whether it folds the channels' names: %w", serveDir, err)
+		return "", "", fmt.Errorf("asking the disk under %s whether it folds the %ss' names: %w", dir, what, err)
 	}
 	defer os.RemoveAll(probe)
 	var made []string
-	for _, name := range cfg.names() {
-		dir := filepath.Join(probe, name)
-		err := os.Mkdir(dir, 0o700)
+	for _, name := range names {
+		path := filepath.Join(probe, name)
+		err := os.Mkdir(path, 0o700)
 		if errors.Is(err, fs.ErrExist) {
 			for _, earlier := range made {
-				if sameDir(filepath.Join(probe, earlier), dir) {
-					return cfg.errf(name, "channels %q and %q are one directory on this filesystem, which takes them as one name; rename one", earlier, name)
+				if sameDir(filepath.Join(probe, earlier), path) {
+					return earlier, name, nil
 				}
 			}
 		}
 		if err != nil {
-			return fmt.Errorf("asking the disk under %s whether it folds the channels' names: %w", serveDir, err)
+			return "", "", fmt.Errorf("asking the disk under %s whether it folds the %ss' names: %w", dir, what, err)
 		}
 		made = append(made, name)
 	}
-	return nil
+	return "", "", nil
 }
 
 // check is every rule the file must satisfy, over every channel, without
@@ -339,12 +355,13 @@ func gitRepository(dir string) error {
 	return nil
 }
 
-// warnKept says which served channels keep their mail on the relay. Keep is
-// on for every channel unless its owner turned it off, so a message serve
-// answers stays queued until the owner removes it, and an expert answering
+// warnKept says which of the channels a service reads keep their mail on
+// the relay: serve's channels, or handle's routes' channels. Keep is on for
+// every channel unless its owner turned it off, so a message a service
+// answers stays queued until the owner removes it, and a service answering
 // all year would fill its own mailbox and refuse its askers. Said by name,
-// at the start of every run, and by 'serve check'.
-func warnKept(s *store.Store, cfg *serveConfig) {
+// at the start of every run, and by 'serve check' and 'handle check'.
+func warnKept(s *store.Store, names []string) {
 	settings, err := s.ChannelSettings()
 	if err != nil {
 		// A file that will not read is said by the fetch, which is about to
@@ -352,7 +369,7 @@ func warnKept(s *store.Store, cfg *serveConfig) {
 		return
 	}
 	var kept []string
-	for _, name := range cfg.names() {
+	for _, name := range names {
 		// Absent is kept, which is the default for every channel.
 		if one, ok := settings.Channels[name]; !ok || one.Keep {
 			kept = append(kept, name)

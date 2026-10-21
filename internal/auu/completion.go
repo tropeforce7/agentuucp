@@ -107,6 +107,9 @@ var subcommands = []subcommand{
 	}},
 	{name: "wait", describe: "wait for a reply on a thread"},
 	{name: "watch", describe: "return when mail arrives, or a colleague's channels change"},
+	{name: "handle", describe: "run the host's scripts on asks to a channel", subs: []subcommand{
+		{name: "check", describe: "read handle.json and say what it would run"},
+	}},
 	{name: "quarantine", describe: "mail from senders not on your list", subs: []subcommand{
 		{name: "ls", describe: "list held mail"},
 		{name: "show", describe: "show a held message"},

@@ -71,7 +71,8 @@ func TestServeCheckRefusesChannelsTheDiskTakesAsOne(t *testing.T) {
 // name under its probe directory, and every value of the traversal set is
 // refused by channels.ValidName at check before checkFolds is reached, so
 // nothing of the set becomes a directory anywhere. A name that check takes
-// makes nothing beside the probe, and the probe goes.
+// makes nothing beside the probe, and the probe goes. The same holds for a
+// route id in handle.json, whose check and probe are handle's.
 func TestLimitAChannelNameIsNotAPathAtCheckFolds(t *testing.T) {
 	dir := repo(t)
 	for _, v := range pathSet() {
@@ -92,6 +93,7 @@ func TestLimitAChannelNameIsNotAPathAtCheckFolds(t *testing.T) {
 			}
 		}
 	}
+	routeIdsAreNotPathsAtCheckFolds(t)
 }
 
 // The same at a serve start: auu serve refuses a file whose channels the

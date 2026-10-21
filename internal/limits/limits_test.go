@@ -79,9 +79,10 @@ import (
 // it copied (G49), 588 when serve read git's version for the oldest it
 // takes (F1), 590 when a resume named the drop for a record never opened
 // on a relay (57c), 591 when a stalled attempt was read on after its
-// answer only while its body arrived (58e). A walk that finds fewer is not
+// answer only while its body arrived (58e), 602 when handle.json's
+// numbers and durations were read. A walk that finds fewer is not
 // reaching the tree.
-const floor = 591
+const floor = 602
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.
