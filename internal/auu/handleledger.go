@@ -108,6 +108,15 @@ type handleJob struct {
 	Exit     int       `json:"exit"`
 	TimedOut bool      `json:"timed_out"`
 	Killed   bool      `json:"killed"`
+	// Interrupted says the last attempt did not end of itself: the
+	// service's stop killed it, or the run that started it went away.
+	Interrupted bool `json:"interrupted"`
+	// BeforeLaunch says the job's last failure came before its script
+	// started: unpacking, the copy, the program not found.
+	BeforeLaunch bool `json:"before_launch"`
+	// Redecided says a job that had run was put in review when it was due
+	// to run again, its retry decided again under the file as it then was.
+	Redecided bool `json:"redecided"`
 	// Review says no automatic retry follows: the operator's retry or skip
 	// is what moves the job.
 	Review bool `json:"review"`
@@ -252,6 +261,7 @@ func loadHandleLedger(path string) (*handleLedger, error) {
 		if job.State == jobRunning {
 			job.State = jobInterrupted
 			job.Killed = false
+			job.Interrupted = true
 			l.interrupted = append(l.interrupted, id)
 		}
 	}

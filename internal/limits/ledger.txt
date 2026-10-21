@@ -344,7 +344,7 @@ internal/auu/handleconfig.go handleRoute int Retries int = >= 0 shown by TestLim
 internal/auu/handleconfig.go handleRoute int keepFailed time.Duration = > 0s shown by TestLimitHandleDurations
 internal/auu/handleconfig.go handleRoute int timeout time.Duration = > 0s shown by TestLimitHandleDurations
 internal/auu/handlejob.go (*handleRun).report string job.From[:16] = local: job.From held to identity.ValidFingerprint, 64 characters, at loadHandleLedger and at routeFor before admission
-internal/auu/handlejob.go cutReason string why[:end] = local: end is at most maxReason, which is less than len(why), and no further back than the start of the rune it would split
+internal/auu/handlejob.go cutTo string why[:end] = local: end is at most n, which is less than len(why), and no further back than the start of the rune it would split and never below zero
 internal/auu/handlejob.go handleAttachment int Size int64 = output
 internal/auu/handlejob.go handleMessage int Attempt int = output
 internal/auu/handlejob.go handleMessage int Seq int64 = output

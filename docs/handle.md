@@ -240,10 +240,17 @@ the line, reads them with delayed expansion (`!AUU_SUBJECT!`) or from
 on the `PATH` at each launch.
 
 **How a job ends.** A script that exits 0 has succeeded. One that exits
-otherwise, or runs past the route's `timeout`, has failed, and the job is
-in review, its reason the first line the script wrote on standard error;
-each line it wrote there is copied to handle's own standard error, with
-the route and the message's short id in front. A failure before the script
+otherwise, or runs past the route's `timeout`, has failed, its reason the
+first line the script wrote on standard error; each line it wrote there is
+copied to handle's own standard error, with the route and the message's
+short id in front. A started attempt may have done its work before it
+failed, so on a route that is not `idempotent` a failed job is in review
+at once and never run again. On an `idempotent` route it is run again at
+serve's backoff, a fresh copy of the asker's files given to each attempt,
+up to the route's `retries` attempts in all, and the last is in review. A
+retry is decided again when it is due, under the file as it is then: a
+route made not `idempotent`, or given fewer `retries`, since the failure
+does not run the job again, and it is in review. A failure before the script
 starts, such as files that will not unpack or a program not on the
 `PATH`, is tried again at serve's backoff, up to the route's `retries`,
 and is then in review without having run. An ask the owner removes from
@@ -252,7 +259,28 @@ record is there and cannot be read is a failure, never a removal. A fault
 of the host's, a directory that cannot be made or a ledger that cannot be
 written, ends the run with the job where it was. A run that stops while a
 job is being prepared leaves it `preparing`, and the next round prepares
-it afresh from the inbox; a job a run left `running` is `interrupted`.
+it afresh from the inbox.
+
+**Interruption and the stop.** `SIGTERM` or an interrupt stops a run: the
+script that is running is killed with everything it started, handle waits
+for them, and the job is written `interrupted`, killed by the service's
+own stop, before the run ends, exit 0. There is no grace period: a script
+that needs to finish what it began has its route's `timeout` for that. A
+run that went away without stopping, killed from outside or with its
+machine, leaves its job `running`, and the next start finds it and writes
+it `interrupted`, not killed by the service. At the next round an
+interrupted job on an `idempotent` route with attempts left is queued
+again only when its script is known gone: the service's own stop killed
+it, or `supervisor_reaps` is set, the host's word that the service manager
+ends every process of the service with it, as systemd's default
+`KillMode=control-group` does. `supervisor_reaps` is read from the file
+as it is at that round, and is the host's word about the service as it
+ran: set it only for a service whose manager ended the group when it
+went. Every other interrupted job is in review, its reason saying why. A
+child that calls `setsid` leaves the group and outlives every kill, the
+service's own stop's included. A stop that comes before a job's script
+has started leaves the job queued, with no attempt counted.
+
 `--once` exits 1 when a job failed in its round.
 
 **The reply.** Each job that ends, succeeded or failed for review, gets one
@@ -265,6 +293,7 @@ started attempt on a route that is not `idempotent` is one of one:
 handle: succeeded (exit 0, attempt 1 of 1)
 handle: failed (exit 3, attempt 1 of 1)
 handle: failed (timeout after 10m0s, attempt 1 of 1)
+handle: failed (interrupted, attempt 1 of 1)
 handle: failed (could not prepare: the files it sent could not be unpacked: …, attempt 3 of 3)
 ```
 

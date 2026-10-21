@@ -49,7 +49,9 @@ func headline(job *handleJob, route *handleRoute) string {
 	switch {
 	case job.State == jobSucceeded:
 		return fmt.Sprintf("handle: succeeded (exit 0, attempt %d of %d)", job.Attempt, attemptsAllowed(route))
-	case job.Attempt == 0:
+	case job.Interrupted:
+		return fmt.Sprintf("handle: failed (interrupted, attempt %d of %d)", job.Attempt, attemptsAllowed(route))
+	case job.Attempt == 0 || job.BeforeLaunch:
 		// It never started: the failures before launch are counted against
 		// the route's retries.
 		return fmt.Sprintf("handle: failed (could not prepare: %s, attempt %d of %d)", job.Reason, job.Failures, route.Retries)
@@ -154,7 +156,7 @@ func (r *handleRun) compose(id string, job *handleJob, output *os.Root) error {
 		for _, line := range left {
 			text += "\n" + line
 		}
-	} else if job.Attempt > 0 {
+	} else if job.Attempt > 0 && !job.Interrupted && !job.BeforeLaunch && !job.Redecided {
 		// A job that ran, composed with nothing of its attempt's: the run
 		// that ended it stopped before what the script left was kept, and
 		// the asker is told rather than given the first line alone.
@@ -211,6 +213,10 @@ func (r *handleRun) replies() error {
 // outcome will call to send the second (D162).
 func (r *handleRun) answer(id string) error {
 	job := r.led.Jobs[id]
+	// One reply per job: a job whose reply has gone gets no other here.
+	if job.Reply != "" {
+		return nil
+	}
 	paths, err := r.pathsFor(job.Route, id)
 	if err != nil {
 		return err

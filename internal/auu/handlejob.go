@@ -92,6 +92,25 @@ func (r *handleRun) makeDirs(dir string) error {
 func (r *handleRun) runJob(ctx context.Context, id string) error {
 	job := r.led.Jobs[id]
 	route := r.cfg.Routes[job.Route]
+	// A job that has run before is run again only as a retry, decided again
+	// under the file as it is now, whatever state the way back left it in:
+	// a failed retry, one queued again after a failure before launch or a
+	// stop while preparing, or one a crash left preparing. A route made not
+	// idempotent, or given fewer retries, since does not run the job a
+	// second time (point 7).
+	if job.Attempt > 0 && !(route.Idempotent && job.Attempt < route.Retries) {
+		const notAgain = "; not run again: the route is no longer idempotent, or its attempts are spent"
+		job.State, job.Review, job.RetryAt, job.Redecided = jobFailed, true, time.Time{}, true
+		job.Reason = cutTo(job.Reason, maxReason-len(notAgain)) + notAgain
+		if err := r.led.save(); err != nil {
+			return err
+		}
+		r.report(id, job, nil)
+		if err := r.compose(id, job, nil); err != nil {
+			return err
+		}
+		return r.answer(id)
+	}
 	paths, err := r.pathsFor(job.Route, id)
 	if err != nil {
 		return err
@@ -191,10 +210,20 @@ func (r *handleRun) runJob(ctx context.Context, id string) error {
 	}
 	defer output.Close()
 
+	// A stop that came while the job was being prepared leaves it to be
+	// prepared again; no attempt is started only to be killed.
+	if ctx.Err() != nil {
+		job.State = jobQueued
+		if err := r.led.save(); err != nil {
+			return err
+		}
+		return ctx.Err()
+	}
 	job.State = jobRunning
 	job.Attempt = n
 	job.Started = handleNow()
-	job.Ended, job.Exit, job.TimedOut, job.Killed = time.Time{}, 0, false, false
+	job.Ended, job.Exit, job.TimedOut, job.Killed, job.Interrupted = time.Time{}, 0, false, false, false
+	job.Review, job.RetryAt, job.BeforeLaunch, job.Redecided = false, time.Time{}, false, false
 	if err := r.led.save(); err != nil {
 		return err
 	}
@@ -215,7 +244,16 @@ func (r *handleRun) runJob(ctx context.Context, id string) error {
 	}
 	prefixedTo(os.Stderr, errPath, job.Route+" "+shortID(id))
 	if runErr != nil && ctx.Err() != nil {
-		// Stopped: the job is left running, and the next load finds it so.
+		// Stopped: the group is killed and its leader waited for, and that
+		// is written before the run ends. A child that left the group, by
+		// setsid or its own process group, outlives the kill, which the
+		// guide says beside supervisor_reaps.
+		job.State, job.Killed, job.Interrupted = jobInterrupted, true, true
+		job.Ended = handleNow()
+		job.Reason = "the service was stopped while it ran"
+		if err := r.led.save(); err != nil {
+			return err
+		}
 		return runErr
 	}
 	job.Ended = handleNow()
@@ -232,16 +270,29 @@ func (r *handleRun) runJob(ctx context.Context, id string) error {
 	}
 	switch {
 	case runErr != nil:
-		job.State, job.Review, job.Reason = jobFailed, true, cutReason(runErr.Error())
+		job.State, job.Reason = jobFailed, cutReason(runErr.Error())
 	case run.ok():
-		job.State, job.Review, job.Reason = jobSucceeded, false, ""
+		job.State, job.Reason = jobSucceeded, ""
 	default:
-		job.State, job.Review, job.Reason = jobFailed, true, cutReason(said(run, errPath))
+		job.State, job.Reason = jobFailed, cutReason(said(run, errPath))
+	}
+	// A started attempt that failed is run again only on an idempotent
+	// route with attempts left, at serve's backoff; on any other it may
+	// have done its work, and is for review at once (point 7).
+	if job.State == jobFailed {
+		if route.Idempotent && job.Attempt < route.Retries {
+			job.Review, job.RetryAt = false, handleNow().Add(retryBackoff(job.Attempt))
+		} else {
+			job.Review = true
+		}
 	}
 	if err := r.led.save(); err != nil {
 		return err
 	}
 	r.report(id, job, m)
+	if job.State == jobFailed && !job.Review {
+		return nil
+	}
 	if beforeCompose != nil {
 		if err := beforeCompose(); err != nil {
 			return err
@@ -545,6 +596,9 @@ func (r *handleRun) beforeLaunch(id string, route *handleRoute, why string) erro
 	job := r.led.Jobs[id]
 	job.Failures++
 	job.Reason = cutReason(why)
+	// The last attempt the reply would be about never started: what an
+	// earlier one left is not this failure's.
+	job.BeforeLaunch, job.Interrupted, job.TimedOut, job.Exit = true, false, false, 0
 	if job.Failures >= route.Retries {
 		job.State, job.Review, job.RetryAt = jobFailed, true, time.Time{}
 	} else {
@@ -602,6 +656,8 @@ func (r *handleRun) report(id string, job *handleJob, m *store.Stored) {
 			job.Reason, job.Failures, r.cfg.Routes[job.Route].Retries)
 	case job.State == jobFailed && job.Attempt == 0:
 		what = fmt.Sprintf("failed for review, never run: %s", job.Reason)
+	case job.State == jobFailed && !job.Review:
+		what = fmt.Sprintf("failed, and is run again: %s (attempt %d of %d)", job.Reason, job.Attempt, r.cfg.Routes[job.Route].Retries)
 	case job.State == jobFailed:
 		what = fmt.Sprintf("failed for review: %s (attempt %d)", job.Reason, job.Attempt)
 	default:
@@ -614,15 +670,18 @@ func (r *handleRun) report(id string, job *handleJob, m *store.Stored) {
 
 // cutReason is a failure's words as the ledger keeps them: the first line,
 // at most maxReason bytes, cut on a rune.
-func cutReason(why string) string {
+func cutReason(why string) string { return cutTo(why, maxReason) }
+
+// cutTo is the first line of why in at most n bytes, n zero or more, cut
+// where a rune starts, so a rune is never split; bytes that were never a
+// rune are the reason's own, and are escaped where it is shown.
+func cutTo(why string, n int) string {
 	why, _, _ = strings.Cut(why, "\n")
-	if len(why) <= maxReason {
+	if len(why) <= n {
 		return why
 	}
-	// Cut where a rune starts, so a rune is never split; bytes that were
-	// never a rune are the reason's own, and are escaped where it is shown.
-	end := maxReason
-	for end > maxReason-utf8.UTFMax && !utf8.RuneStart(why[end]) {
+	end := n
+	for end > 0 && end > n-utf8.UTFMax && !utf8.RuneStart(why[end]) {
 		end--
 	}
 	return why[:end]

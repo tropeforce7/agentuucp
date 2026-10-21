@@ -68,6 +68,8 @@ const (
 //	reply:TEXT     write TEXT to $AUU_OUTPUT_DIR/reply.txt, as a script's reply
 //	replylink:PATH make $AUU_OUTPUT_DIR/reply.txt a link to PATH
 //	swapoutput:DIR rename $AUU_OUTPUT_DIR aside and put a link to DIR in its place
+//	into:VAR/NAME=TEXT  write TEXT to the file NAME in the directory $VAR names
+//	spawn:PATH     start this binary again, sleeping, and write its pid to PATH
 //	attach:NAME=TEXT  write TEXT to $AUU_OUTPUT_ATTACHMENTS/NAME
 //	attachbig:NAME=N  write N bytes there
 //	attachdir:NAME    make a directory there
@@ -187,6 +189,21 @@ func TestServeHelperProcess(t *testing.T) {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(9)
 			}
+		case "into":
+			where, text, _ := strings.Cut(arg, "=")
+			name, file, _ := strings.Cut(where, "/")
+			if err := os.WriteFile(filepath.Join(os.Getenv(name), file), []byte(text), 0o600); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(9)
+			}
+		case "spawn":
+			child := exec.Command(os.Args[0], "-test.run=TestServeHelperProcess", "handler")
+			child.Env = append(os.Environ(), handlerScript+"=sleep:60s")
+			if err := child.Start(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(9)
+			}
+			os.WriteFile(arg, []byte(strconv.Itoa(child.Process.Pid)+"\n"), 0o600)
 		case "attach", "attachbig", "attachdir", "attachlink":
 			name, value, _ := strings.Cut(arg, "=")
 			path := filepath.Join(os.Getenv("AUU_OUTPUT_ATTACHMENTS"), name)

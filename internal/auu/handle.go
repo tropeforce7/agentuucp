@@ -82,43 +82,70 @@ type handleJobEvent struct {
 	Reply string `json:"reply"`
 }
 
-// handleRunCmd is 'auu handle run --once'.
+// handleRunCmd is 'auu handle run --once'. A signal is how a run is
+// stopped: it ends the script that is running with everything it started,
+// and the job is written interrupted, killed by the service's own stop,
+// before the process exits; a stopped run is not a failure.
 func handleRunCmd(config string, backlog, asJSON bool) error {
-	s, err := openStore()
+	r, release, err := openHandleRun(config, backlog, asJSON)
 	if err != nil {
 		return err
 	}
+	defer release()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return r.once(ctx, backlog)
+}
+
+// openHandleRun is everything a run does before its first round: the file,
+// the scope, the keys, the lock and the ledger. release gives the lock
+// back.
+func openHandleRun(config string, backlog, asJSON bool) (*handleRun, func(), error) {
+	r, lock, err := openHandleRunLocked(config, backlog, asJSON)
+	if err != nil {
+		if lock != nil {
+			lock.Release()
+		}
+		return nil, nil, err
+	}
+	return r, func() { lock.Release() }, nil
+}
+
+func openHandleRunLocked(config string, backlog, asJSON bool) (*handleRun, *lockfile.Lock, error) {
+	s, err := openStore()
+	if err != nil {
+		return nil, nil, err
+	}
 	cfg, err := loadHandle(s, config)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	// Speaking for this identity, and in send scope for the whole run: every
 	// reply originates. A home under a passphrase is refused at exit 4 now,
 	// before a key is asked for, rather than a person at a terminal being
 	// prompted into a service's run: a service has no terminal.
 	if enc, err := s.Encrypted(); err != nil {
-		return err
+		return nil, nil, err
 	} else if enc {
 		if err := needsSend(s, "auu handle run"); err != nil {
-			return err
+			return nil, nil, err
 		}
 	}
 	s, id, err := loadIdentity()
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	root := s.HandleDir()
 	if err := os.MkdirAll(root, 0o700); err != nil {
-		return err
+		return nil, nil, err
 	}
 	lock, err := takeHandleLock(root)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	defer lock.Release()
 	led, err := loadHandleLedger(filepath.Join(root, handleLedgerFile))
 	if err != nil {
-		return err
+		return nil, lock, err
 	}
 	r := &handleRun{s: s, id: id, cfg: cfg, led: led, root: root, asJSON: asJSON,
 		said: map[string]bool{}, resumed: map[string]bool{}}
@@ -131,11 +158,11 @@ func handleRunCmd(config string, backlog, asJSON bool) error {
 	// before any round.
 	if len(led.interrupted) > 0 {
 		if err := led.save(); err != nil {
-			return err
+			return nil, lock, err
 		}
 	}
 	if backlog && !r.anyFirstRound() {
-		return usageErrf("--backlog runs the asks already in the inbox for a route at its first round, "+
+		return nil, lock, usageErrf("--backlog runs the asks already in the inbox for a route at its first round, "+
 			"and every route in %s has had one; there is no backlog to run", cfg.path)
 	}
 	warnKept(s, cfg.channels())
@@ -144,9 +171,15 @@ func handleRunCmd(config string, backlog, asJSON bool) error {
 		fmt.Fprintf(os.Stderr, "%s: %s %s set in handle's environment and %s not passed to the scripts\n",
 			prog, plainList(found), isAre(len(found)), isAre(len(found)))
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	return r, lock, nil
+}
+
+// once is one round and the exit code that says how it went.
+func (r *handleRun) once(ctx context.Context, backlog bool) error {
 	if err := r.round(ctx, backlog); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
 		return err
 	}
 	if r.asJSON {
@@ -231,6 +264,12 @@ func (r *handleRun) round(ctx context.Context, backlog bool) error {
 	}
 	// Replies due from earlier rounds go first, then the jobs, each of
 	// which sends its own as it ends.
+	// A job interrupted by a stop, or found running at the load, is
+	// settled before anything else runs: queued again where that is safe,
+	// in review otherwise.
+	if err := r.settleInterrupted(); err != nil {
+		return escaped(err)
+	}
 	if err := r.replies(); err != nil {
 		return escaped(err)
 	}
@@ -378,14 +417,64 @@ func (job *handleJob) terminal() bool {
 	return false
 }
 
-// runnable says a job may start its next step now: queued, or preparing
-// when the run that began it stopped, and not before its retry is due.
+// runnable says a job may start its next step now: queued, preparing
+// when the run that began it stopped, or failed without review on an
+// idempotent route with attempts left, and not before its retry is due.
 func (job *handleJob) runnable(now time.Time) bool {
 	switch job.State {
 	case jobQueued, jobPreparing:
-		return job.RetryAt.IsZero() || !job.RetryAt.After(now)
+	case jobFailed:
+		if job.Review {
+			return false
+		}
+	default:
+		return false
 	}
-	return false
+	return job.RetryAt.IsZero() || !job.RetryAt.After(now)
+}
+
+// settleInterrupted decides every interrupted job of a route in the file.
+// A started attempt's effect may have been committed (point 7), so it is
+// run again only on an idempotent route with attempts left, and then only
+// when the process is known gone: killed by the service's own stop, which
+// waited for it, or supervisor_reaps set, the host's word that the service
+// manager ends the whole group with the service (D6). Every other is
+// failed for review, saying why, and gets its reply.
+func (r *handleRun) settleInterrupted() error {
+	for _, id := range r.led.bySeq() {
+		job := r.led.Jobs[id]
+		route := r.cfg.Routes[job.Route]
+		if job.State != jobInterrupted || route == nil {
+			continue
+		}
+		gone := job.Killed || r.cfg.SupervisorReap
+		switch {
+		case route.Idempotent && job.Attempt < route.Retries && gone:
+			job.State, job.Review, job.RetryAt = jobQueued, false, time.Time{}
+			if err := r.led.save(); err != nil {
+				return err
+			}
+			continue
+		case !route.Idempotent:
+			job.Reason = "interrupted on a route that is not idempotent, so it is not run again"
+		case !gone:
+			job.Reason = "interrupted, and nothing says its script is gone: the service did not stop it and supervisor_reaps is not set"
+		default:
+			job.Reason = "interrupted, and its attempts are spent"
+		}
+		job.State, job.Review = jobFailed, true
+		if err := r.led.save(); err != nil {
+			return err
+		}
+		r.report(id, job, nil)
+		if err := r.compose(id, job, nil); err != nil {
+			return err
+		}
+		if err := r.answer(id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // next is the job of a route to run now, or "": a sequential route's head,
@@ -427,6 +516,11 @@ func (r *handleRun) dispatch(ctx context.Context) error {
 	for {
 		ran := false
 		for _, name := range r.cfg.names() {
+			// A stop that came during the replies or the settling starts
+			// nothing more.
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			id := r.next(name)
 			if id == "" {
 				continue

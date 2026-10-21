@@ -276,7 +276,10 @@ succeeded (exit 0, attempt 1 of 1)`, `handle: failed (exit 3, attempt 1 of
 it left in `output/attachments/` attached in name order, text and files
 held together to the route's `max_reply_bytes` and a file left out said
 by name, then marks the ask read; a reply that cannot be sent is tried again up to the route's
-`retries`. A route's
+`retries`. A failed job is in review at once on a route that is not
+`idempotent`, and run again up to `retries` attempts on one that is; a
+stop (`SIGTERM`) writes the running job interrupted before the run ends,
+exit 0. A route's
 first round leaves the asks already waiting, said in one sentence, and
 `--backlog` runs them instead. `--json` is `skipped`, how many a first
 round left, and `jobs`, each `id`, `route`, `state`, `attempt`, `reason`

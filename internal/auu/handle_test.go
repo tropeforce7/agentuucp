@@ -30,6 +30,8 @@ type handlerHost struct {
 	path   string
 	routes map[string]*handleRoute
 	top    string
+	// reaps is the file's supervisor_reaps.
+	reaps bool
 }
 
 // helperCommand is the command that runs this binary as a script.
@@ -72,7 +74,11 @@ func newHandler(t *testing.T) (alice *user, bob *handlerHost) {
 // write puts handle.json in bob's home as it stands.
 func (h *handlerHost) write(t *testing.T) {
 	t.Helper()
-	data, err := json.MarshalIndent(map[string]any{"v": 1, "routes": h.routes}, "", "  ")
+	file := map[string]any{"v": 1, "routes": h.routes}
+	if h.reaps {
+		file["supervisor_reaps"] = true
+	}
+	data, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
