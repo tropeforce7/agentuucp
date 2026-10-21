@@ -47,20 +47,51 @@ func attemptsAllowed(route *handleRoute) int {
 // it ended, and which attempt of how many the reply is about.
 func headline(job *handleJob, route *handleRoute) string {
 	switch {
+	case job.State == jobSkipped:
+		return "handle: skipped by the operator (" + lastAttempt(job, route) + ")"
 	case job.State == jobSucceeded:
-		return fmt.Sprintf("handle: succeeded (exit 0, attempt %d of %d)", job.Attempt, attemptsAllowed(route))
+		return fmt.Sprintf("handle: succeeded (exit 0, %s)", ofAllowed(job, route))
 	case job.Interrupted:
-		return fmt.Sprintf("handle: failed (interrupted, attempt %d of %d)", job.Attempt, attemptsAllowed(route))
+		return fmt.Sprintf("handle: failed (interrupted, %s)", ofAllowed(job, route))
 	case job.Attempt == 0 || job.BeforeLaunch:
 		// It never started: the failures before launch are counted against
 		// the route's retries.
 		return fmt.Sprintf("handle: failed (could not prepare: %s, attempt %d of %d)", job.Reason, job.Failures, route.Retries)
 	case job.TimedOut:
-		return fmt.Sprintf("handle: failed (timeout after %s, attempt %d of %d)", route.timeout, job.Attempt, attemptsAllowed(route))
+		return fmt.Sprintf("handle: failed (timeout after %s, %s)", route.timeout, ofAllowed(job, route))
 	case job.Exit < 0:
-		return fmt.Sprintf("handle: failed (could not start: %s, attempt %d of %d)", job.Reason, job.Attempt, attemptsAllowed(route))
+		return fmt.Sprintf("handle: failed (could not start: %s, %s)", job.Reason, ofAllowed(job, route))
 	default:
-		return fmt.Sprintf("handle: failed (exit %d, attempt %d of %d)", job.Exit, job.Attempt, attemptsAllowed(route))
+		return fmt.Sprintf("handle: failed (exit %d, %s)", job.Exit, ofAllowed(job, route))
+	}
+}
+
+// ofAllowed is "attempt N of M" for the attempt a job's state is about,
+// M the most the route allows; an attempt past that is the operator's
+// retry, and says so rather than counting past the route's own number.
+func ofAllowed(job *handleJob, route *handleRoute) string {
+	if job.Attempt > attemptsAllowed(route) {
+		return fmt.Sprintf("attempt %d, run again by the operator", job.Attempt)
+	}
+	return fmt.Sprintf("attempt %d of %d", job.Attempt, attemptsAllowed(route))
+}
+
+// lastAttempt is how a skipped job's last attempt ended, as its first line
+// says it: "not run" when none started.
+func lastAttempt(job *handleJob, route *handleRoute) string {
+	switch {
+	case job.Attempt == 0:
+		return "not run"
+	case job.BeforeLaunch:
+		// Its last try never started: what an earlier attempt did is not
+		// what ended it.
+		return fmt.Sprintf("could not prepare: %s, after attempt %d", job.Reason, job.Attempt)
+	case job.Interrupted:
+		return fmt.Sprintf("interrupted, %s", ofAllowed(job, route))
+	case job.TimedOut:
+		return fmt.Sprintf("timeout after %s, %s", route.timeout, ofAllowed(job, route))
+	default:
+		return fmt.Sprintf("exit %d, %s", job.Exit, ofAllowed(job, route))
 	}
 }
 
@@ -156,7 +187,7 @@ func (r *handleRun) compose(id string, job *handleJob, output *os.Root) error {
 		for _, line := range left {
 			text += "\n" + line
 		}
-	} else if job.Attempt > 0 && !job.Interrupted && !job.BeforeLaunch && !job.Redecided {
+	} else if job.Attempt > 0 && !job.Interrupted && !job.BeforeLaunch && !job.Redecided && job.State != jobSkipped {
 		// A job that ran, composed with nothing of its attempt's: the run
 		// that ended it stopped before what the script left was kept, and
 		// the asker is told rather than given the first line alone.
@@ -172,11 +203,22 @@ func (r *handleRun) compose(id string, job *handleJob, output *os.Root) error {
 	return writeNew(replyText(paths.kept), []byte(text))
 }
 
-// owesReply says a job's reply is due and unsent: it ended succeeded or in
-// review, has no reply yet, has sends left, and the last one that failed is
-// behind its backoff.
+// awaitsReply says a job is where a reply is owed and none has gone: it
+// ended succeeded, in review or skipped by the operator with no reply yet,
+// or an operator's retry of a job whose reply had gone ended succeeded
+// with its one more reply unsent (D162).
+func (job *handleJob) awaitsReply() bool {
+	if job.Reply != "" {
+		return job.SecondOwed && job.SecondReply == "" && job.State == jobSucceeded
+	}
+	return job.State == jobSucceeded || job.State == jobFailed && job.Review ||
+		job.State == jobSkipped && job.By == skippedByOperator
+}
+
+// owesReply says a job's reply is due and unsent: awaitsReply, with sends
+// left, and the last one that failed behind its backoff.
 func (job *handleJob) owesReply(route *handleRoute, now time.Time) bool {
-	if job.Reply != "" || !(job.State == jobSucceeded || (job.State == jobFailed && job.Review)) {
+	if !job.awaitsReply() {
 		return false
 	}
 	if job.ReplyFailures >= route.Retries {
@@ -209,14 +251,15 @@ func (r *handleRun) replies() error {
 // send that fails is the reply's failure, counted against the route's
 // retries with the job's state left as it is; keys that lock or a scope
 // that ends under the run end the run, with nothing counted. It is the one
-// place a reply is sent, and what an operator's retry that changes the
-// outcome will call to send the second (D162).
+// place a reply is sent, the second of D162 among them.
 func (r *handleRun) answer(id string) error {
 	job := r.led.Jobs[id]
-	// One reply per job: a job whose reply has gone gets no other here.
-	if job.Reply != "" {
+	// One reply per job, and one more only when an operator's retry of a
+	// job whose reply had gone ended succeeded (D162).
+	if !job.awaitsReply() {
 		return nil
 	}
+	second := job.Reply != ""
 	paths, err := r.pathsFor(job.Route, id)
 	if err != nil {
 		return err
@@ -272,7 +315,11 @@ func (r *handleRun) answer(id string) error {
 		}
 		return r.replyFailed(id, err.Error())
 	}
-	job.Reply = out.ID
+	if second {
+		job.SecondReply = out.ID
+	} else {
+		job.Reply = out.ID
+	}
 	job.ReplySent = handleNow()
 	if r.event != nil && r.event.ID == id {
 		r.event.Reply = out.ID
@@ -286,8 +333,12 @@ func (r *handleRun) answer(id string) error {
 	// Sent: the mark has done its work.
 	os.Remove(postedFile(paths.kept, id))
 	if !r.asJSON {
-		fmt.Printf("%s: replied to %s from %s (reply %s)\n", job.Route, shortID(id),
-			orNone(identity.Printable(m.SenderName)), shortID(out.ID))
+		again := ""
+		if second {
+			again = " again, after the operator's retry"
+		}
+		fmt.Printf("%s: replied to %s from %s%s (reply %s)\n", job.Route, shortID(id),
+			orNone(identity.Printable(m.SenderName)), again, shortID(out.ID))
 	}
 	if job.State == jobSucceeded {
 		return r.clean(id)

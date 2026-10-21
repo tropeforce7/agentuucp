@@ -24,7 +24,7 @@ var (
 // after its own; a later key is a second key, which the strict decode
 // refuses, so a field given here is one the job does not have.
 func handleJobJSON(fields string) string {
-	return `{"route":"import","channel":"documents","thread":"` + handleJobID + `","from":"` + handleSender +
+	return `{"route":"import","revision":"0123456789abcdef","channel":"documents","thread":"` + handleJobID + `","from":"` + handleSender +
 		`","seq":0,"state":"queued"` + fields + `}`
 }
 
@@ -91,6 +91,18 @@ func TestAHandleLedgerThatWillNotParseIsAnErrorNotAFreshStart(t *testing.T) {
 			` names the thread of ` + handleJobID + ` as "../x", which is not a message id`},
 		{"a reply that is not a message id", oneJob(handleJobJSON(`,"reply":"` + bad + `"`)),
 			` names the reply to ` + handleJobID + ` as "` + bad + `", which is not a message id`},
+		{"a revision short of sixteen", oneJob(strings.Replace(handleJobJSON(``), `"revision":"0123456789abcdef"`, `"revision":"0123456789abcde"`, 1)),
+			` has the revision of ` + handleJobID + ` as "0123456789abcde", which is not sixteen hex characters`},
+		{"a revision one past sixteen", oneJob(strings.Replace(handleJobJSON(``), `"revision":"0123456789abcdef"`, `"revision":"0123456789abcdef0"`, 1)),
+			` has the revision of ` + handleJobID + ` as "0123456789abcdef0", which is not sixteen hex characters`},
+		{"a revision in capitals", oneJob(strings.Replace(handleJobJSON(``), `"revision":"0123456789abcdef"`, `"revision":"0123456789ABCDEF"`, 1)),
+			` has the revision of ` + handleJobID + ` as "0123456789ABCDEF", which is not sixteen hex characters`},
+		{"a revision that would move the terminal", oneJob(strings.Replace(handleJobJSON(``), `"revision":"0123456789abcdef"`, `"revision":"\u001b[2J456789abcdef"`, 1)),
+			` has the revision of ` + handleJobID + ` as "\x1b[2J456789abcdef", which is not sixteen hex characters`},
+		{"no revision", oneJob(strings.Replace(handleJobJSON(``), `"revision":"0123456789abcdef",`, ``, 1)),
+			` has the revision of ` + handleJobID + ` as "", which is not sixteen hex characters`},
+		{"a second reply that is not a message id", oneJob(handleJobJSON(`,"second_reply":"` + bad + `"`)),
+			` names the second reply to ` + handleJobID + ` as "` + bad + `", which is not a message id`},
 		{"a skipper outside the set", oneJob(strings.Replace(handleJobJSON(`,"by":"cron"`), `"state":"queued"`, `"state":"skipped"`, 1)),
 			` says ` + handleJobID + ` was skipped by "cron", which is neither first-start nor operator`},
 		{"a skipper on a job not skipped", oneJob(handleJobJSON(`,"by":"operator"`)),
@@ -322,7 +334,7 @@ func TestTheLedgerIsSavedThroughATemporaryFile(t *testing.T) {
 	}
 	l.NextSeq = 1
 	l.Routes["import"] = &handleRouteMark{FirstRound: time.Date(2026, 10, 21, 5, 0, 0, 0, time.UTC), Channel: "documents"}
-	l.Jobs[handleJobID] = &handleJob{Route: "import", Channel: "documents", Thread: handleJobID, From: handleSender,
+	l.Jobs[handleJobID] = &handleJob{Route: "import", Revision: "0123456789abcdef", Channel: "documents", Thread: handleJobID, From: handleSender,
 		State: jobFailed, Attempt: 1, Started: time.Date(2026, 10, 21, 5, 2, 0, 0, time.UTC), Exit: 3, Review: true,
 		Reason: "exited 3: no such table"}
 	if err := l.save(); err != nil {

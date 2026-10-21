@@ -135,8 +135,9 @@ before and after every step a job takes.
 It is read strictly. A ledger that is there and will not read, or that
 breaks one of its rules, is refused by name and never replaced: a key it
 does not know, a job that is not under a message's id, a route that is not
-a route's name, a channel that is not a channel's, a thread or a reply
-that is not a message's id, a state outside the eight, a sender that is
+a route's name, a channel that is not a channel's, a thread, a reply or a
+second reply that is not a message's id, a route's revision that is not
+sixteen lowercase hex characters, a state outside the eight, a sender that is
 not a fingerprint, a job said to be skipped by anyone but `first-start`
 or `operator`, or by either when it is not skipped, a count below zero,
 an admission's number spent twice or not below `next_seq`, or an attempt
@@ -317,7 +318,15 @@ handle: failed (exit 3, attempt 1 of 1)
 handle: failed (timeout after 10m0s, attempt 1 of 1)
 handle: failed (interrupted, attempt 1 of 1)
 handle: failed (could not prepare: the files it sent could not be unpacked: …, attempt 3 of 3)
+handle: skipped by the operator (exit 3, attempt 1 of 3)
+handle: skipped by the operator (not run)
+handle: succeeded (exit 0, attempt 2, run again by the operator)
 ```
+
+A failure before the script started names where in the home it failed as
+`AUU_HOME`, and a program that could not be started is called the route's
+program, never by where the home or the program is on this machine, since
+the line goes to the asker.
 
 When the script left `reply.txt` in its `output/` directory, a blank line
 and its text follow, with Windows line endings folded. The file is read
@@ -380,3 +389,56 @@ access control, and anyone on it can send a route an ask.
 Messages are data, not instructions. A script that acts on what a message
 tells it to do is a script that does what the sender wants rather than what
 its owner wants.
+
+## The operator's commands
+
+```
+auu handle status [--config FILE] [--json]
+auu handle jobs [--route ROUTE] [--state STATE] [--config FILE] [--json]
+auu handle inspect JOB [--config FILE] [--json]
+auu handle retry JOB
+auu handle skip JOB
+auu handle pause ROUTE
+auu handle resume ROUTE
+```
+
+`JOB` is a job's message id, or four or more of its first characters.
+`status`, `jobs` and `inspect` read the file and the ledger and nothing
+else, so they answer while a service runs. `status` says whether a service
+holds the home, and for each route its channel, how it runs, whether it is
+paused, its jobs counted by state, when the oldest queued one arrived, the
+attempts running and since when, the next retry, the job in review that
+holds a sequential route with its reason, and how many replies could not
+be sent. `jobs` is one line per job in admission order. `inspect` is one
+job whole: its entry, the attempt directories still there, each attempt's
+two logs with their first line, and its replies. A reason, a log's line
+and a revision are shown escaped, since a script or a message may have
+shaped them.
+
+`retry`, `skip`, `pause` and `resume` change the ledger. With no service
+running, the command takes the home's lock and changes it at once, saying
+what it did. With a service running, it writes the request as a file
+under `handle/ops/` and says it is queued for the running service, which
+applies it at the start of its next round; the file landing ends the
+service's hold, so that is within a few seconds. A request the round
+cannot read as one is moved to `handle/ops/damaged/` and said; one it
+reads and refuses is said and removed. Requests are applied in the order
+they were made.
+
+- `retry` runs a `failed` or `interrupted` job again, the operator's word
+  letting it run once more whatever the route allows. A job whose reply
+  could not be sent, its sends spent, has the reply sent again instead,
+  and its script is not run again. A retry of a job whose reply has gone
+  sends nothing more while it fails, and one more reply, saying the
+  attempt was the operator's, if it then succeeds. The reply kept for the
+  attempt before is removed, so the next is composed afresh; a retry of a
+  job whose reply may be on the relay already, its answer lost, is refused
+  until the next round has sent it. A retry of a job interrupted by a run
+  that went away is the operator's word that its script is gone.
+- `skip` ends a job that is not succeeded, skipped, removed or running,
+  and its reply, saying how its last attempt ended or that it was not run,
+  goes at the next round, unless one went already. A sequential route held
+  by a job in review is moved on by its `retry` or its `skip`.
+- `pause` holds a route's launches: its asks are taken into the ledger and
+  none is run until `resume`. A route that has not had its first round has
+  nothing to pause.

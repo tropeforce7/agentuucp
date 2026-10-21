@@ -117,6 +117,14 @@ type handleJob struct {
 	// Redecided says a job that had run was put in review when it was due
 	// to run again, its retry decided again under the file as it then was.
 	Redecided bool `json:"redecided"`
+	// OperatorRetry says the operator's retry put the job back: their word
+	// that it may run once more whatever the route allows.
+	OperatorRetry bool `json:"operator_retry"`
+	// SecondOwed says an operator's retry put back a job whose reply had
+	// gone, so that one more reply goes if it then succeeds (D162), and
+	// SecondReply is that reply's id once sent.
+	SecondOwed  bool   `json:"second_owed"`
+	SecondReply string `json:"second_reply"`
 	// Review says no automatic retry follows: the operator's retry or skip
 	// is what moves the job.
 	Review bool `json:"review"`
@@ -140,6 +148,20 @@ type handleJob struct {
 // what it is, and what moving it aside costs.
 const handleLedgerRefusal = "it is the record of every job handle has taken, so fix it or move it aside knowing " +
 	"that the asks in the inbox are then met as at a first start: skipped, or run again with --backlog"
+
+// validRevision says a route revision is the sixteen lowercase hex
+// characters revision writes.
+func validRevision(rev string) bool {
+	if len(rev) != 16 {
+		return false
+	}
+	for _, c := range rev {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
 
 // loadHandleLedger reads the ledger, or gives an empty one that knows it is
 // new. A file that is there and will not read is refused rather than
@@ -212,6 +234,14 @@ func loadHandleLedger(path string) (*handleLedger, error) {
 		if job.Reply != "" && message.ValidID(job.Reply) != nil {
 			return nil, refuse("names the reply to %s as %q, which is not a message id", id, job.Reply)
 		}
+		if job.SecondReply != "" && message.ValidID(job.SecondReply) != nil {
+			return nil, refuse("names the second reply to %s as %q, which is not a message id", id, job.SecondReply)
+		}
+		// A revision is sixteen hex characters, the route's at admission;
+		// it is shown by status and inspect.
+		if !validRevision(job.Revision) {
+			return nil, refuse("has the revision of %s as %q, which is not sixteen hex characters", id, job.Revision)
+		}
 		if !jobStates[job.State] {
 			return nil, refuse("has %s in state %q, which is not a job's state", id, job.State)
 		}
@@ -265,6 +295,21 @@ func loadHandleLedger(path string) (*handleLedger, error) {
 			l.interrupted = append(l.interrupted, id)
 		}
 	}
+	return l, nil
+}
+
+// readHandleLedger is the ledger as it is, held to every rule but with a
+// job a running service has running left so: what the commands that only
+// look read, without the lock. Nothing read so is saved.
+func readHandleLedger(path string) (*handleLedger, error) {
+	l, err := loadHandleLedger(path)
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range l.interrupted {
+		l.Jobs[id].State, l.Jobs[id].Interrupted = jobRunning, false
+	}
+	l.interrupted = nil
 	return l, nil
 }
 

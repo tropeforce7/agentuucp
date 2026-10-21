@@ -257,6 +257,11 @@ func (r *handleRun) atFirstRound(name string) bool {
 // run's failure, as serve's is.
 func (r *handleRun) round(ctx context.Context, backlog, longRun bool) error {
 	r.out, r.failed, r.event = handleRoundJSON{}, false, nil
+	// The operator's requests first, so that a retry, a skip or a pause
+	// made while the service held is this round's (A6).
+	if err := r.applyOps(); err != nil {
+		return escaped(err)
+	}
 	relays, err := selectedRelays(r.s, "")
 	if err != nil {
 		return err
@@ -548,6 +553,13 @@ func (r *handleRun) next(name string) string {
 	return best
 }
 
+// paused says the operator has paused a route: it takes its asks and
+// launches none.
+func (r *handleRun) paused(name string) bool {
+	mark := r.led.Routes[name]
+	return mark != nil && mark.Paused
+}
+
 // dispatch runs jobs until none is runnable now, a worker each, at most
 // workers_total at once and a route's max_parallel of its own. Routes are
 // offered a worker round-robin in the file's order, one job at a time, so
@@ -575,7 +587,7 @@ func (r *handleRun) dispatch(ctx context.Context) error {
 			started := false
 			for i := range names {
 				name := names[(turn+i)%len(names)]
-				if perRoute[name] >= r.cfg.Routes[name].MaxParallel {
+				if perRoute[name] >= r.cfg.Routes[name].MaxParallel || r.paused(name) {
 					continue
 				}
 				id := r.next(name)
@@ -711,8 +723,10 @@ func (r *handleRun) hold(ctx context.Context) error {
 }
 
 // requests is the names in the ops directory that have a request's shape:
-// a JSON file whose name does not begin with a dot. A directory that is not
-// there holds none.
+// a JSON name that does not begin with a dot and is not a directory. A
+// link or anything else that is not a regular file is listed too, so that
+// the round that reads it moves it aside and says so rather than leaving
+// it unsaid. A directory that is not there holds none.
 func requests(ops string) map[string]bool {
 	out := map[string]bool{}
 	entries, err := os.ReadDir(ops)
@@ -720,7 +734,7 @@ func requests(ops string) map[string]bool {
 		return out
 	}
 	for _, e := range entries {
-		if name := e.Name(); e.Type().IsRegular() && strings.HasSuffix(name, ".json") && !strings.HasPrefix(name, ".") {
+		if name := e.Name(); !e.IsDir() && strings.HasSuffix(name, ".json") && !strings.HasPrefix(name, ".") {
 			out[name] = true
 		}
 	}
@@ -755,12 +769,11 @@ func (r *handleRun) nextDue() time.Time {
 		if route == nil {
 			continue
 		}
-		waits := route.Execution == executionSequential && heads[job.Route] != job
+		waits := route.Execution == executionSequential && heads[job.Route] != job || r.paused(job.Route)
 		if !waits && (job.State == jobQueued || (job.State == jobFailed && !job.Review)) && !job.RetryAt.IsZero() {
 			earliest(job.RetryAt)
 		}
-		if job.Reply == "" && job.ReplyFailures > 0 && job.ReplyFailures < route.Retries &&
-			(job.State == jobSucceeded || (job.State == jobFailed && job.Review)) {
+		if job.awaitsReply() && job.ReplyFailures > 0 && job.ReplyFailures < route.Retries {
 			earliest(job.ReplyTried.Add(retryBackoff(job.ReplyFailures)))
 		}
 	}

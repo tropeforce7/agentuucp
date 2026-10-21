@@ -181,3 +181,20 @@ func TestLimitAScriptsReplyIsReadUnderMaxReplyBytes(t *testing.T) {
 		}
 	}
 }
+
+// An operator's request is version 1 and nothing else, at the edges and
+// the type's extremes: any other is moved aside as not a request.
+func TestLimitHandleRequestV(t *testing.T) {
+	dir := t.TempDir()
+	for _, v := range []string{"1", "0", "2", "-1", "9223372036854775807", "-9223372036854775808"} {
+		path := filepath.Join(dir, "request.json")
+		data := `{"v":` + v + `,"op":"pause","target":"import"}`
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, why := readRequest(path)
+		if v == "1" && why != "" || v != "1" && why != "is not version 1" {
+			t.Errorf("v %s: %q", v, why)
+		}
+	}
+}

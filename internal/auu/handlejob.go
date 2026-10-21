@@ -102,7 +102,8 @@ func (r *handleRun) runJob(ctx context.Context, id string) error {
 	// stop while preparing, or one a crash left preparing. A route made not
 	// idempotent, or given fewer retries, since does not run the job a
 	// second time (point 7).
-	if job.Attempt > 0 && !(route.Idempotent && job.Attempt < route.Retries) {
+	// The operator's retry is their word that it runs once more.
+	if job.Attempt > 0 && !job.OperatorRetry && !(route.Idempotent && job.Attempt < route.Retries) {
 		const notAgain = "; not run again: the route is no longer idempotent, or its attempts are spent"
 		job.State, job.Review, job.RetryAt, job.Redecided = jobFailed, true, time.Time{}, true
 		job.Reason = cutTo(job.Reason, maxReason-len(notAgain)) + notAgain
@@ -228,6 +229,8 @@ func (r *handleRun) runJob(ctx context.Context, id string) error {
 	job.Started = handleNow()
 	job.Ended, job.Exit, job.TimedOut, job.Killed, job.Interrupted = time.Time{}, 0, false, false, false
 	job.Review, job.RetryAt, job.BeforeLaunch, job.Redecided = false, time.Time{}, false, false
+	// The operator's word was for this attempt, and is spent on it.
+	job.OperatorRetry = false
 	if err := r.led.save(); err != nil {
 		return err
 	}
@@ -279,7 +282,10 @@ func (r *handleRun) runJob(ctx context.Context, id string) error {
 	}
 	switch {
 	case runErr != nil:
-		job.State, job.Reason = jobFailed, cutReason(runErr.Error())
+		// Said to the asker as could not start: neither the home nor the
+		// program's place on this machine is named (S81).
+		why := strings.ReplaceAll(runErr.Error(), program, "the route's program")
+		job.State, job.Reason = jobFailed, cutReason(r.pathFree(why))
 	case run.ok():
 		job.State, job.Reason = jobSucceeded, ""
 	default:
@@ -604,7 +610,10 @@ func (r *handleRun) env(id string, job *handleJob, m *store.Stored, at attemptPa
 func (r *handleRun) beforeLaunch(id string, route *handleRoute, why string) error {
 	job := r.led.Jobs[id]
 	job.Failures++
-	job.Reason = cutReason(why)
+	// The reason goes to the asker in the reply's first line, and an
+	// error from the filesystem names the path it failed on: the home is
+	// said by its name and never by where it is on this machine (S81).
+	job.Reason = cutReason(r.pathFree(why))
 	// The last attempt the reply would be about never started: what an
 	// earlier one left is not this failure's.
 	job.BeforeLaunch, job.Interrupted, job.TimedOut, job.Exit = true, false, false, 0
@@ -626,6 +635,16 @@ func (r *handleRun) beforeLaunch(id string, route *handleRoute, why string) erro
 		return err
 	}
 	return r.answer(id)
+}
+
+// pathFree is why with the home's path, as given and as the links under
+// it resolve, said as AUU_HOME.
+func (r *handleRun) pathFree(why string) string {
+	home := r.s.Root()
+	if real, err := filepath.EvalSymlinks(home); err == nil && real != home {
+		why = strings.ReplaceAll(why, real, "AUU_HOME")
+	}
+	return strings.ReplaceAll(why, home, "AUU_HOME")
 }
 
 // removed is a job whose message the owner took back: written down, and

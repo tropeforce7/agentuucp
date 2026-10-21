@@ -119,6 +119,10 @@ Usage:
   auu serve proxy [--config FILE]     # the key-holding proxy as its own process, for another account
   auu handle check [--config FILE]    # read handle.json and say what it would run
   auu handle run [--once] [--backlog] [--config FILE] [--json]   # the host's scripts, run on the asks to their routes
+  auu handle status [--config FILE] [--json]   # each route's jobs, and whether a service runs
+  auu handle jobs [--route ROUTE] [--state STATE] [--config FILE] [--json]
+  auu handle inspect JOB [--config FILE] [--json]   # one job whole: attempts, logs, replies
+  auu handle retry JOB | skip JOB | pause ROUTE | resume ROUTE [--config FILE]
 
   auu quarantine ls [--json]
   auu quarantine show MESSAGE-ID [--json]

@@ -258,6 +258,8 @@ and not something a messaging agent starts on its own:
 auu handle check [--config FILE]                   # read handle.json and say what it would run
 auu handle run [--backlog] [--config FILE] [--json]          # the service: rounds, holding on the relays between them
 auu handle run --once [--backlog] [--config FILE] [--json]   # one round: fetch, take the asks, run the jobs
+auu handle status|jobs [--route R] [--state S]|inspect JOB [--json]   # what the ledger holds
+auu handle retry JOB | skip JOB | pause ROUTE | resume ROUTE     # the operator's, never yours
 ```
 
 `handle` runs, for each ask on a route's channel, the program `handle.json`
@@ -288,7 +290,9 @@ reply falling due, or an operator's request. `--json` is `skipped`, how
 many a first round left, and `jobs`, each `id`, `route`, `state`, `attempt`, `reason`
 and `reply`, the id of the reply sent for it in that round or empty, once
 under `--once` and one line per round that did something otherwise. Exit 1 when a job failed in the round, 2 when another `handle
-run` holds the home.
+run` holds the home. `status`, `jobs` and `inspect` only read; `retry`, `skip`, `pause` and
+`resume` change the ledger, at once or queued under `handle/ops/` for a
+running service, and are the host's decisions.
 
 What this binary is, and the skills it carries:
 

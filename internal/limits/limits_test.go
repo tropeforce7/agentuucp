@@ -82,8 +82,9 @@ import (
 // answer only while its body arrived (58e), 602 when handle.json's
 // numbers and durations were read, 617 when handle's ledger was, 628 when
 // handle ran its first jobs, 630 when it replied to them, 631 when the
-// replies carried files. A walk that finds fewer is not reaching the tree.
-const floor = 631
+// replies carried files, 640 when the operator's commands read the ledger.
+// A walk that finds fewer is not reaching the tree.
+const floor = 640
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.

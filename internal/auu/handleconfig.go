@@ -396,6 +396,8 @@ func cmdHandle(args []string) error {
 	once := fs.Bool("once", false, "one round: fetch, take the asks, run what is runnable, and stop")
 	backlog := fs.Bool("backlog", false, "at a route's first round, run the asks already in the inbox instead of leaving them")
 	asJSON := fs.Bool("json", false, "machine readable output")
+	route := fs.String("route", "", "jobs: list the jobs of this route only")
+	state := fs.String("state", "", "jobs: list the jobs in this state only")
 	positional, err := parseArgs(fs, args)
 	if err != nil {
 		return err
@@ -405,10 +407,29 @@ func cmdHandle(args []string) error {
 		return handleCheck(*config)
 	case len(positional) == 1 && positional[0] == "run":
 		return handleRunCmd(*config, *once, *backlog, *asJSON)
+	case len(positional) == 1 && positional[0] == "status":
+		return handleStatus(*config, *asJSON)
+	case len(positional) == 1 && positional[0] == "jobs":
+		return handleJobsCmd(*config, *route, *state, *asJSON)
+	case len(positional) == 2 && positional[0] == "inspect":
+		return handleInspect(*config, positional[1], *asJSON)
+	case len(positional) == 2 && (positional[0] == opRetry || positional[0] == opSkip ||
+		positional[0] == opPause || positional[0] == opResume):
+		return handleOperate(*config, positional[0], positional[1])
 	default:
-		return usageErrf("usage: %s handle check [--config FILE], or %s handle run [--once] [--backlog] [--config FILE] [--json]", prog, prog)
+		return usageErrf("usage: %s", handleUsage)
 	}
 }
+
+// handleUsage is every form of the command.
+var handleUsage = strings.Join([]string{
+	prog + " handle check [--config FILE]",
+	prog + " handle run [--once] [--backlog] [--config FILE] [--json]",
+	prog + " handle status [--config FILE] [--json]",
+	prog + " handle jobs [--route ROUTE] [--state STATE] [--config FILE] [--json]",
+	prog + " handle inspect JOB [--config FILE] [--json]",
+	prog + " handle retry JOB | skip JOB | pause ROUTE | resume ROUTE [--config FILE]",
+}, "\n       ")
 
 // handleCheck reads the file and says what it would run, without touching
 // a key, a relay or the network: it is what a host runs after editing it.

@@ -110,6 +110,13 @@ var subcommands = []subcommand{
 	{name: "handle", describe: "run the host's scripts on asks to a channel", subs: []subcommand{
 		{name: "check", describe: "read handle.json and say what it would run"},
 		{name: "run", describe: "the service: rounds, holding on the relays between them"},
+		{name: "status", describe: "each route's jobs, and whether a service runs"},
+		{name: "jobs", describe: "one line per job, in admission order"},
+		{name: "inspect", describe: "one job whole: its attempts, logs and replies"},
+		{name: "retry", describe: "run a failed job again, or send its reply again"},
+		{name: "skip", describe: "skip a job, and send the asker its reply"},
+		{name: "pause", describe: "hold a route's launches"},
+		{name: "resume", describe: "release a paused route"},
 	}},
 	{name: "quarantine", describe: "mail from senders not on your list", subs: []subcommand{
 		{name: "ls", describe: "list held mail"},

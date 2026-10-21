@@ -131,8 +131,8 @@ func TestTheHoldEndsAtRetryAt(t *testing.T) {
 // An operator's request landing in handle/ops/ ends the hold, so that the
 // next round, which applies it, comes within a poll and not at the next
 // mail; a file that is not a request's shape, as a desktop leaves, wakes
-// nothing, and a request still there at the next hold, which nothing in
-// this version takes away, does not end that hold too.
+// nothing, and a request the round has taken away, here moved aside as
+// malformed, does not end the next hold too.
 func TestAnOperatorRequestWakesTheHold(t *testing.T) {
 	_, bob := newHandler(t)
 	was := handleOpsPoll
@@ -175,7 +175,7 @@ func TestAnOperatorRequestWakesTheHold(t *testing.T) {
 
 // The hold is not woken for a job its route would not run: behind a
 // sequential route's head in review, a job whose retry is past is not due,
-// so nothing is; on a parallel route it is.
+// so nothing is; on a parallel route it is, unless the route is paused.
 func TestTheHoldIsNotWokenForAJobItsHeadHolds(t *testing.T) {
 	past := handleNow().Add(-time.Hour)
 	r := &handleRun{
@@ -191,6 +191,11 @@ func TestTheHoldIsNotWokenForAJobItsHeadHolds(t *testing.T) {
 	r.cfg.Routes["import"].Execution = executionParallel
 	if due := r.nextDue(); due.IsZero() {
 		t.Fatal("a parallel route's due job did not make the hold due")
+	}
+	// A paused route runs nothing, so nothing of its is due.
+	r.led.Routes = map[string]*handleRouteMark{"import": {Paused: true}}
+	if due := r.nextDue(); !due.IsZero() {
+		t.Fatalf("a paused route's job made the hold due at %v", due)
 	}
 }
 
