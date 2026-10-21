@@ -161,7 +161,16 @@ func sortedKeys(m map[string]string) []string {
 // handler killed that way leaves the message exactly as it was. A program
 // that ran and failed is not an error: it is a status the caller acts on.
 func runProgram(ctx context.Context, line, dir string, env []string, stdin, stdout, stderr *os.File, timeout time.Duration) (programRun, error) {
-	cmd := shellCommand(line)
+	return runCommand(ctx, shellCommand(line), line, dir, env, stdin, stdout, stderr, timeout)
+}
+
+// runCommand is runProgram for a command already built: the shell's line
+// for serve, a program and its arguments for handle. name is what its
+// sentences call it. Its directory, environment and three streams are set
+// here, over anything the caller set, since where and with what a program
+// runs is the runner's. The process group, the timer, the kill and the
+// wait are this one piece of code for both.
+func runCommand(ctx context.Context, cmd *exec.Cmd, name, dir string, env []string, stdin, stdout, stderr *os.File, timeout time.Duration) (programRun, error) {
 	cmd.Dir = dir
 	cmd.Env = env
 	cmd.Stdin = stdin
@@ -169,7 +178,7 @@ func runProgram(ctx context.Context, line, dir string, env []string, stdin, stdo
 	cmd.Stderr = stderr
 	ownProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
-		return programRun{}, fmt.Errorf("could not start %q: %v", line, err)
+		return programRun{}, fmt.Errorf("could not start %q: %v", name, err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -180,12 +189,12 @@ func runProgram(ctx context.Context, line, dir string, env []string, stdin, stdo
 	case err := <-done:
 		run.exit = exitStatus(err)
 		if run.exit < 0 {
-			return run, fmt.Errorf("waiting for %q: %v", line, err)
+			return run, fmt.Errorf("waiting for %q: %v", name, err)
 		}
 	case <-timer.C:
 		killGroup(cmd)
-		// Nothing holds a pipe, so the wait returns as soon as the shell
-		// itself is gone.
+		// Nothing holds a pipe, so the wait returns as soon as the program
+		// it started is gone.
 		<-done
 		run.timedOut = true
 	case <-ctx.Done():

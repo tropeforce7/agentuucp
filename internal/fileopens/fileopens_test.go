@@ -167,6 +167,26 @@ func (b *Box) Take(name string) error {
 	}
 }
 
+// TestALedgerFindsTheDirOfACommandParameter plants a function that is
+// given an *exec.Cmd and sets its Dir, the shape runCommand has: the Dir
+// is the directory the program runs in, and the assignment is a site.
+func TestALedgerFindsTheDirOfACommandParameter(t *testing.T) {
+	root := plantModule(t, `package planted
+
+import "os/exec"
+
+func run(cmd *exec.Cmd, where string) error {
+	cmd.Dir = where
+	return cmd.Run()
+}
+`)
+	problems, _ := check(root, "")
+	want := "internal/planted/planted.go run exec.Cmd.Dir(where) has no row in ledger.txt; add one saying where the path comes from"
+	if len(problems) != 1 || problems[0] != want {
+		t.Fatalf("problems %q, want the one sentence %q", problems, want)
+	}
+}
+
 // TestALedgerRefusesARuleThatIsNotInTheTree plants a network row whose
 // rule is not a function anywhere, which names no test either, and a row
 // for a site that is gone.
@@ -522,11 +542,13 @@ func sitesIn(fset *token.FileSet, f *ast.File, rel string) []site {
 	// Command and which makes one (shellCommand, gitCommand), whose Dir is
 	// the directory the program runs in and so a path of its own: an
 	// assignment to it is a site, keyed as a call of exec.Cmd.Dir with
-	// the value assigned. It sees the one shape the tree uses, a name
-	// bound by := or = and its Dir assigned after; a var declaration, a
-	// command from a call that also returns an error, a field or a
-	// parameter, an exec.Cmd literal's Dir, or a maker named otherwise
-	// would go unseen, and is to be added here when the tree first uses it.
+	// the value assigned. It sees the two shapes the tree uses, a name
+	// bound by := or = and its Dir assigned after, and a parameter of type
+	// *exec.Cmd whose Dir the function assigns (runCommand); a var
+	// declaration, a command from a call that also returns an error, a
+	// field, a func literal's parameter, an exec.Cmd taken by value, an
+	// exec.Cmd literal's Dir, or a maker named otherwise would go unseen,
+	// and is to be added here when the tree first uses it.
 	commands := map[string]bool{}
 	var walk func(n ast.Node) bool
 	walk = func(n ast.Node) bool {
@@ -594,6 +616,17 @@ func sitesIn(fset *token.FileSet, f *ast.File, rel string) []site {
 		if fd, ok := decl.(*ast.FuncDecl); ok {
 			enclosing = funcName(fd)
 			commands = map[string]bool{}
+			for _, field := range fd.Type.Params.List {
+				if star, ok := field.Type.(*ast.StarExpr); ok {
+					if sel, ok := star.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "Cmd" {
+						if id, ok := sel.X.(*ast.Ident); ok && alias[id.Name] == "exec" {
+							for _, name := range field.Names {
+								commands[name.Name] = true
+							}
+						}
+					}
+				}
+			}
 			ast.Inspect(fd, walk)
 			enclosing = "<package>"
 			continue
