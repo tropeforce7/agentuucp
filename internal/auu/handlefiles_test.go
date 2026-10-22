@@ -94,9 +94,19 @@ func TestFilesInTheAttachmentsDirectoryComeBackWithTheReply(t *testing.T) {
 // rest go. An empty directory attaches nothing and says nothing.
 func TestAFileNamedPastTheSendersRuleIsLeftOutAndSaid(t *testing.T) {
 	alice, bob := newHandler(t)
-	script := "attach:fine.txt=fine;attach:a\x01b=control;attach:CON=device;attach:.hidden=hidden;attach:FINE.TXT=folds;attachdir:sub"
+	// Windows will not create a file named with a control character or a
+	// device's name, nor a link here, so on Windows the rule for those two
+	// names is shown by the limits walk instead.
+	script := "attach:fine.txt=fine;attach:.hidden=hidden;attach:FINE.TXT=folds;attachdir:sub"
+	wants := []string{
+		`the script's file ".hidden" was left out: its name is not one a sender may use`,
+		`the script's file "sub" was left out: it is a directory`,
+	}
 	if runtime.GOOS != "windows" {
-		script += ";attachlink:link=" + bob.path
+		script += ";attach:a\x01b=control;attach:CON=device;attachlink:link=" + bob.path
+		wants = append(wants,
+			`the script's file "a\x01b" was left out: its name is not one a sender may use`,
+			`the script's file "CON" was left out: its name is not one a sender may use`)
 	}
 	t.Setenv(handlerScript, script)
 	sent := alice.sendTo(t, "documents", "convert these", "please")
@@ -109,12 +119,7 @@ func TestAFileNamedPastTheSendersRuleIsLeftOutAndSaid(t *testing.T) {
 	if len(reply.Attachments) != 1 || !strings.EqualFold(reply.Attachments[0].Name, "fine.txt") {
 		t.Fatalf("the reply carries %+v", reply.Attachments)
 	}
-	for _, want := range []string{
-		`the script's file "a\x01b" was left out: its name is not one a sender may use`,
-		`the script's file "CON" was left out: its name is not one a sender may use`,
-		`the script's file ".hidden" was left out: its name is not one a sender may use`,
-		`the script's file "sub" was left out: it is a directory`,
-	} {
+	for _, want := range wants {
 		if !strings.Contains(reply.Text, want) {
 			t.Errorf("the reply does not say %q:\n%s", want, reply.Text)
 		}

@@ -490,16 +490,25 @@ func captureStderr(t *testing.T, fn func()) string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Read as fn runs: a pipe holds little, 4 KiB on Windows, and a write
+	// past it waits for a reader.
+	var data []byte
+	read := make(chan error, 1)
+	go func() {
+		var err error
+		data, err = io.ReadAll(r)
+		read <- err
+	}()
 	real := os.Stderr
 	os.Stderr = w
 	fn()
 	w.Close()
+	err = <-read
 	os.Stderr = real
-	data, err := io.ReadAll(r)
+	r.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.Close()
 	return string(data)
 }
 

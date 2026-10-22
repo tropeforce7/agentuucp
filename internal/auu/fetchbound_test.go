@@ -560,7 +560,7 @@ func moreOf(t *testing.T, out string) (fetch, firstRelay *bool) {
 
 // stderrWhile runs fn with standard error read as it is written, so that a
 // fetch keeping a hundred rows under damaged/, a line each, cannot fill the
-// pipe and stop; captureStderr reads only once fn has returned.
+// pipe and stop.
 func stderrWhile(t *testing.T, fn func()) string {
 	t.Helper()
 	r, w, err := os.Pipe()
