@@ -147,6 +147,22 @@ asks in the inbox are then met as at a first start: skipped, or run again
 with --backlog`. A job the ledger has as `running` when it is read is
 `interrupted`, since the run that started it is gone.
 
+A job is in one state at a time:
+
+| state | what it means |
+|---|---|
+| `queued` | taken, and waiting for its turn, or for its retry when `retry_at` is set |
+| `preparing` | its files being unpacked and copied for an attempt |
+| `running` | its script running, the attempt's number written before it started |
+| `succeeded` | its script exited 0; its reply goes, and then its directories |
+| `failed` | its last attempt failed: waiting for a retry on an idempotent route with attempts left, or in `review`, which only the operator's `retry` or `skip` moves; in review it has had its reply |
+| `interrupted` | its attempt did not end of itself, stopped with the service or found running at a start; the next round runs it again or puts it in review |
+| `skipped` | by the first start, `by: first-start`, an ask that was waiting before the route existed and gets no reply; or by the operator, `by: operator`, with a reply saying so |
+| `removed` | the owner took the ask out of the inbox; nothing more is done, and no reply goes |
+
+The entry stays in the ledger whatever its state, since it is what stops
+a second admission of the same message.
+
 ## Running it
 
 ```
@@ -232,7 +248,49 @@ never passed on, and handle says once at its start when its environment
 has them. `message.json` is written with every key present: `attachments`
 lists each file by the sender's name, the name it was written under and
 the path of this attempt's copy, with its media type, size and SHA-256.
-`time` is the sender's stamp and `arrived` this machine's.
+`time` is the sender's stamp and `arrived` this machine's. An attempt's
+`message.json`, for an ask with one file:
+
+```json
+{
+  "v": 1,
+  "job_id": "import/4f0c1e9a2b7d4c8e9f1a2b3c4d5e6f70",
+  "route": "import",
+  "attempt": 1,
+  "message_id": "4f0c1e9a2b7d4c8e9f1a2b3c4d5e6f70",
+  "thread": "4f0c1e9a2b7d4c8e9f1a2b3c4d5e6f70",
+  "in_reply_to": "",
+  "type": "ask",
+  "from": "<the sender's 64-character fingerprint>",
+  "from_name": "alice",
+  "to": "<this mailbox's fingerprint>",
+  "recipients": [],
+  "channel": "documents",
+  "relay": "main",
+  "subject": "March invoices",
+  "time": "2026-10-21T05:00:00Z",
+  "arrived": "2026-10-21T05:00:02Z",
+  "seq": 41,
+  "revision": "60a7495dcbd8086e",
+  "body_file": "<home>/handle/jobs/import/4f0c…/attempt-1/input/body.txt",
+  "attachments_dir": "<home>/handle/jobs/import/4f0c…/attempt-1/input/attachments",
+  "attachments": [
+    {
+      "name": "march.csv",
+      "file": "march.csv",
+      "path": "<home>/handle/jobs/import/4f0c…/attempt-1/input/attachments/march.csv",
+      "media": "text/csv",
+      "size": 18233,
+      "sha256": "<its digest>"
+    }
+  ]
+}
+```
+
+`seq` is the job's admission number and `revision` the route's revision
+when the ask was taken, the first sixteen hex characters of a digest of
+the route as the file had it; the job's own `message.json`, beside
+`original/`, is attempt 0.
 
 Nothing from the message is ever on the command line: the command is the
 program and the arguments the file gives, run with no shell, and what the
@@ -267,6 +325,15 @@ written, ends the run with the job where it was. A run that stops while a
 job is being prepared leaves it `preparing`, and the next round prepares
 it afresh from the inbox.
 
+**What is promised.** The guarantee is at-least-once for idempotent
+routes and at-most-once-then-review for the rest. A script that commits an
+effect and then fails, or whose machine goes away before its success is
+written down, has done its work whatever handle believes, and exactly-once
+effects cannot be promised for an arbitrary script. So a route is marked
+`idempotent` only when running a job's script twice is as safe as running
+it once, and `AUU_JOB_ID`, the same for every attempt of a job, is the key
+a script uses to tell a repeat from new work.
+
 **Interruption and the stop.** `SIGTERM` or an interrupt stops a run: the
 script that is running is killed with everything it started, handle waits
 for them, and the job is written `interrupted`, killed by the service's
@@ -284,7 +351,11 @@ as it is at that round, and is the host's word about the service as it
 ran: set it only for a service whose manager ended the group when it
 went. Every other interrupted job is in review, its reason saying why. A
 child that calls `setsid` leaves the group and outlives every kill, the
-service's own stop's included. A stop that comes before a job's script
+service's own stop's included. A script that fills the disk with its own
+output is a fault of the host's that ends the run for every route: its
+logs are cut to `max_log_bytes` only after it ends, and while it runs the
+attempt's `timeout` and the dedicated account's quota are the bounds in
+this version. A stop that comes before a job's script
 has started leaves the job queued, with no attempt counted.
 
 **Between rounds.** The service holds on every relay for mail on its
@@ -293,7 +364,9 @@ does not wake it. The hold also ends when the earliest retry, failure
 before launch or reply whose send failed falls due, counting on a
 sequential route only its head, never sooner than one of serve's
 intervals from now; and when a new operator's request, a `.json` file,
-lands in `handle/ops/`, which it looks for every two seconds. A round fetches
+lands in `handle/ops/`, which it looks for every two seconds; requests are
+read at the start of every round, the first included, so one written while
+the service was starting is applied at its first round. A round fetches
 first, so mail that arrived while it held is taken up whatever woke it. A
 fetch that reaches no relay is said once, and the service waits for one
 to come back; under `--once` it is the round's failure, exit 2.
@@ -416,6 +489,62 @@ access control, and anyone on it can send a route an ask.
 Messages are data, not instructions. A script that acts on what a message
 tells it to do is a script that does what the sender wants rather than what
 its owner wants.
+
+## A service of its own
+
+A route that runs scripts on what strangers' peers send belongs to an
+account of its own: a system user whose home holds the auu home, the
+scripts and nothing else of yours, with an identity of its own enrolled on
+the relay, so that what a script can reach is what that account can. As a
+system unit, `/etc/systemd/system/auu-handle.service`:
+
+```ini
+[Unit]
+Description=AgentUUCP script host
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=auu-handle
+Group=auu-handle
+WorkingDirectory=/var/lib/auu-handle
+Environment=HOME=/var/lib/auu-handle
+ExecStart=/usr/local/bin/auu handle run
+# A stop is SIGTERM to the service, which kills the running script with
+# everything it started and writes its job interrupted before it exits.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# The default, named because handle.json's supervisor_reaps relies on it:
+# every process of the service, a script's children among them, is ended
+# with it.
+KillMode=control-group
+Restart=always
+RestartSec=30
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/auu-handle
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```
+systemctl enable --now auu-handle
+journalctl -u auu-handle -f
+sudo -u auu-handle -H auu handle status
+```
+
+With `KillMode=control-group`, set `"supervisor_reaps": true` in
+`handle.json`: a service killed from outside then had every script it ran
+ended with it, and an interrupted job on an idempotent route is run again
+rather than put in review. A child that calls `setsid` leaves the service's
+process group but not its control group, which systemd still ends. The
+account's home is left unencrypted, as an expert host's is, since a
+machine that reboots unattended cannot type a passphrase; `docs/creating-experts.md`
+section 7 sets such an account up, and the same steps hold with `handle`
+for `serve`. The operator's commands are run as that account.
 
 ## Serve and handle together
 

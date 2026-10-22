@@ -264,36 +264,40 @@ auu handle retry JOB | skip JOB | pause ROUTE | resume ROUTE     # the operator'
 
 `handle` runs, for each ask on a route's channel, the program `handle.json`
 in the home names for that route, with the message as files and
-environment variables; see `docs/handle.md`. `check` holds the file to its
-rules and prints each route, its command, its program as resolved, its jobs'
-directory and its limits, then `FILE is good for N routes`, touching no key,
-relay or network; a file that breaks a rule is refused, exit 1, in one
-sentence naming the file, the route and what is wrong. A route on `default`
-is taken with a warning on stderr, and a channel `serve.json` serves cannot
-be a route's, nor can `serve` serve a channel a route takes. `run --once` takes each ask on a route's channel into
-`handle/ledger.json` and runs its script with the message as files under
-`handle/jobs/ROUTE/ID/` and `AUU_` variables, never on its command line,
-and replies to each job once it ends, the first line saying how (`handle:
-succeeded (exit 0, attempt 1 of 1)`, `handle: failed (exit 3, attempt 1 of
-1)`) and the script's `output/reply.txt` after it, with every regular file
-it left in `output/attachments/` attached in name order, text and files
-held together to the route's `max_reply_bytes` and a file left out said
-by name, then marks the ask read; a reply that cannot be sent is tried again up to the route's
-`retries`. A failed job is in review at once on a route that is not
-`idempotent`, and run again up to `retries` attempts on one that is; a
-stop (`SIGTERM`) writes the running job interrupted before the run ends,
-exit 0. A route's
-first round leaves the asks already waiting, said in one sentence, and
-`--backlog` runs them instead. Without `--once` it is the service, holding
-on the relays between rounds for mail on the routes' channels, a retry or
-reply falling due, or an operator's request. `--json` is `skipped`, how
-many a first round left, and `jobs`, each `id`, `route`, `state`, `attempt`, `reason`
-and `reply`, the id of the reply sent for it in that round or empty, once
-under `--once` and one line per round that did something otherwise. Exit 1 when a job failed in the round, 2 when another `handle
-run` holds the home. `status`, `jobs` and `inspect` only read; `retry`, `skip`, `pause` and
-`resume` change the ledger, at once or queued under `handle/ops/` for a
-running service, and are the host's decisions. A route at its `max_queued` or `max_queued_bytes` leaves
-later asks in the inbox, said once a round.
+environment variables, never on its command line; see `docs/handle.md`.
+`check` holds the file to its rules and prints each route, its command, its
+program as resolved, its jobs' directory and its limits, then `FILE is good
+for N routes`, touching no key, relay or network; a file that breaks a rule
+is refused, exit 1, in one sentence naming the file, the route and what is
+wrong. A route on `default` is taken with a warning on stderr, a channel
+`serve.json` serves cannot be a route's, and `serve` refuses a channel a
+route takes.
+
+`run` takes each ask on a route's channel into `handle/ledger.json`, in
+arrival order up to the route's `max_queued` and `max_queued_bytes` (the
+rest wait in the inbox, said once a round), and runs its script under
+`handle/jobs/ROUTE/ID/` with `AUU_` variables. Each job's reply goes once
+it ends, its first line saying how (`handle: succeeded (exit 0, attempt 1
+of 1)`, `handle: failed (exit 3, attempt 1 of 1)`, `handle: skipped by the
+operator (not run)`), then the script's `output/reply.txt` and every
+regular file in `output/attachments/`, in name order, held together to
+`max_reply_bytes`, a file left out said by name; then the ask is marked
+read. A reply that cannot be sent is tried again up to the route's
+`retries`. The guarantee is at-least-once for idempotent routes and
+at-most-once-then-review for the rest: a failed job is in review at once
+on a route that is not `idempotent`, and run again up to `retries`
+attempts on one that is. `SIGTERM` writes the running job interrupted
+before the run ends, exit 0. A route's first round leaves the asks already
+waiting, said in one sentence, and `--backlog` runs them instead. Without
+`--once` it is the service, holding on the relays between rounds. `--json`
+is `skipped`, how many a first round left, and `jobs`, each `id`, `route`,
+`state`, `attempt`, `reason` and `reply`, once under `--once` and one line
+per round that did something otherwise. Exit 1 when a job failed in the
+round, 2 when another `handle run` holds the home, 4 when the keys are
+locked or unlocked only to receive. `status`, `jobs` and `inspect` only
+read; `retry`, `skip`, `pause` and `resume` change the ledger, at once or
+queued under `handle/ops/` for a running service, and are the host's
+decisions, never an agent's.
 
 What this binary is, and the skills it carries:
 

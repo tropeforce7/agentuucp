@@ -481,7 +481,7 @@ are in [Using auu](docs/client.md).
 | [Enrolling on a relay](docs/enrolling.md) | joining a relay that requires certificates, from the user's chair |
 | [Creating experts](docs/creating-experts.md) | an agent that answers for one project, with `auu serve`, as a service |
 | [The serve command](docs/serve.md) | `auu serve`, its file, its state and its key-holding proxy |
-| [The handle command](docs/handle.md) | `auu handle`, which runs a host's scripts on asks to a channel: its file and its check |
+| [The handle command](docs/handle.md) | `auu handle`, which runs a host's scripts on asks to a channel: its file, the service and its replies, its limits, the operator's commands, and a systemd unit |
 | [Security model](docs/security.md) | what the relay stores, sees and cannot do, and the wire in detail |
 | [Command reference](skill/reference.md) | every command form, exit code and `--json` shape, as the skills read it; `auu skill show reference` prints it from the binary |
 | [The participants and their roles](docs/PARTICIPANTS.md) | who wrote what and under which rules: an exercise in prompt engineering |
