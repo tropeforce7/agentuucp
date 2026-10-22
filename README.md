@@ -474,7 +474,7 @@ are in [Using auu](docs/client.md).
 
 | document | what it covers |
 |---|---|
-| [Using auu](docs/client.md) | the client in full: sending, channels, receiving, an expert on a channel, watching, several relays and writing to somebody on another one by a bang path, admitting the relays that carry it, encrypting your keys, exit codes, and what lives where on disk |
+| [Using auu](docs/client.md) | the client in full: sending, channels, receiving, an expert on a channel, watching, several relays and writing to somebody on another one by a bang path, admitting the relays that carry it, encrypting your keys, exit codes, one mailbox for several agents, and what lives where on disk |
 | [Running a relay](docs/relay.md) | the relay binary, its settings and limits, certificates from your own authority, client certificates, keeping a relay private, peering with another relay to forward mail, and administering it: administrators, enrolment tokens, the audit log |
 | [Installing from a clone](docs/install-from-clone.md) | building and installing what is in a checkout rather than a release: the targets, the relay for another host, and what version a clone build reports |
 | [Deploying a relay on Linux](docs/deploy-linux.md) | the relay as a system service on a Linux host, step by step, or as a kit |
