@@ -244,22 +244,38 @@ func TestAMalformedRequestIsMovedAsideAndSaid(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := map[string]string{
-		"1-version.json":   `{"v":2,"op":"retry","target":"` + done.ID + `"}`,
-		"2-op.json":        `{"v":1,"op":"delete","target":"` + done.ID + `"}`,
-		"3-target.json":    `{"v":1,"op":"retry","target":"../x"}`,
-		"4-route.json":     `{"v":1,"op":"pause","target":"a/b"}`,
-		"5-extra.json":     `{"v":1,"op":"skip","target":"` + done.ID + `","force":true}`,
-		"6-cut.json":       `{"v":1,"op":"sk`,
-		"7-\x1b[2J-x.json": `{}`,
+		"1-version.json": `{"v":2,"op":"retry","target":"` + done.ID + `"}`,
+		"2-op.json":      `{"v":1,"op":"delete","target":"` + done.ID + `"}`,
+		"3-target.json":  `{"v":1,"op":"retry","target":"../x"}`,
+		"4-route.json":   `{"v":1,"op":"pause","target":"a/b"}`,
+		"5-extra.json":   `{"v":1,"op":"skip","target":"` + done.ID + `","force":true}`,
+		"6-cut.json":     `{"v":1,"op":"sk`,
+	}
+	wants := []string{
+		"the request 1-version.json is not version 1",
+		"the request 2-op.json names no operator's request",
+		"the request 3-target.json does not name a job by its id",
+		"the request 4-route.json does not name a route",
+		"the request 5-extra.json will not read as a request",
+		"the request 6-cut.json will not read as a request",
+	}
+	// Windows will not create a name with an escape in it, so there the
+	// escaped name is not tried and the refused request goes under a plain
+	// one; the link below is left out too.
+	refused, said := "8-retry-"+done.ID+".json", "8-retry-"+done.ID+".json"
+	if runtime.GOOS != "windows" {
+		bad["7-\x1b[2J-x.json"] = `{}`
+		wants = append(wants, `the request 7-\x1b[2J-x.json is not version 1`)
+		refused, said = "8-retry-\x1b[2J"+done.ID+".json", "8-retry-\\x1b[2J"+done.ID+".json"
+	}
+	wants = append(wants, "the request "+said+" was not applied: retry "+done.ID+": it is succeeded")
+	if err := os.WriteFile(filepath.Join(ops, refused), []byte(`{"v":1,"op":"retry","target":"`+done.ID+`"}`), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	for name, data := range bad {
 		if err := os.WriteFile(filepath.Join(ops, name), []byte(data), 0o600); err != nil {
 			t.Fatal(err)
 		}
-	}
-	refused := "8-retry-\x1b[2J" + done.ID + ".json"
-	if err := os.WriteFile(filepath.Join(ops, refused), []byte(`{"v":1,"op":"retry","target":"`+done.ID+`"}`), 0o600); err != nil {
-		t.Fatal(err)
 	}
 	if runtime.GOOS != "windows" {
 		target := filepath.Join(t.TempDir(), "elsewhere.json")
@@ -278,16 +294,7 @@ func TestAMalformedRequestIsMovedAsideAndSaid(t *testing.T) {
 			t.Errorf("%q was not moved aside: %v", name, err)
 		}
 	}
-	for _, want := range []string{
-		"the request 1-version.json is not version 1",
-		"the request 2-op.json names no operator's request",
-		"the request 3-target.json does not name a job by its id",
-		"the request 4-route.json does not name a route",
-		"the request 5-extra.json will not read as a request",
-		"the request 6-cut.json will not read as a request",
-		`the request 7-\x1b[2J-x.json is not version 1`,
-		"the request 8-retry-\\x1b[2J" + done.ID + ".json was not applied: retry " + done.ID + ": it is succeeded",
-	} {
+	for _, want := range wants {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("the round said\n%s\nwant %q", stderr, want)
 		}
