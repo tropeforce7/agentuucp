@@ -431,8 +431,9 @@ page chunked under 3 times allocated and 2.25 live, 2.10 measured
 (`TestAPageAtTheHoldIsTakenUnderThreeTimesTheHold`); a page of envelopes
 through a real relay in a process of its own, under 2.5 times live read
 either way: 2.00 at the decode's end, about 2.15 chunked from
-io.ReadAll's final copy, and up to 2.29 in a sample that counts garbage
-its own forced collection had not yet freed, under 3 times allocated declared and 4 chunked, since the
+io.ReadAll's final copy, and up to 2.29 here and 2.67 on a loaded CI
+runner in a sample that counts garbage its own forced collection had not
+yet freed, so the figure is the least of three runs, under 3 times allocated declared and 4 chunked, since the
 decoded values hold a copy of each envelope beside the buffer
 (`TestARealRelaysPageIsTakenWithinR13asBounds`); and a relay over the
 hold on every ask costs one listing eight asks, 200 rows halved to one,
