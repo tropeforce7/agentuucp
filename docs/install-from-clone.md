@@ -6,6 +6,17 @@ repository, or been given a clone, and want to build what is in it. That is
 what a contributor does, what a reviewer does to run a branch, and what
 anyone does whose relay runs a build ahead of the last tag.
 
+<!-- contents -->
+- [What you need](#what-you-need)
+- [Build into the tree](#build-into-the-tree)
+- [Install onto your PATH](#install-onto-your-path)
+- [The skills](#the-skills)
+- [What version a clone build reports](#what-version-a-clone-build-reports)
+- [The relay for another machine](#the-relay-for-another-machine)
+- [Checking the build](#checking-the-build)
+- [Keeping a clone current](#keeping-a-clone-current)
+<!-- /contents -->
+
 ## What you need
 
 Go 1.27 or later — `go.mod`'s floor, and `go version` says what you have —

@@ -7,6 +7,12 @@ decided every step that mattered: what was built and in what order, what
 was landed, what was tagged and pushed. How the agents were instructed is
 as much the point as the code. This document says who did what.
 
+<!-- contents -->
+- [The participants](#the-participants)
+- [The rules](#the-rules)
+- [How the work flows](#how-the-work-flows)
+<!-- /contents -->
+
 ## The participants
 
 - **Meat Bag, the maintainer.** The only human. Decides every construction,

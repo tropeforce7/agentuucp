@@ -26,6 +26,22 @@ Where things end up:
 The two files under `docs/systemd/` are the unit and the settings as used
 below, ready to copy.
 
+<!-- contents -->
+- [0. Install Go 1.27 or later, on the host](#0-install-go-127-or-later-on-the-host)
+- [1. Build the relay, on the host](#1-build-the-relay-on-the-host)
+- [The short way: a kit](#the-short-way-a-kit)
+- [2. Create the user and the directories](#2-create-the-user-and-the-directories)
+- [3. Install the binary](#3-install-the-binary)
+- [3a. Make the certificate authority, on your own machine](#3a-make-the-certificate-authority-on-your-own-machine)
+- [4. Write the settings](#4-write-the-settings)
+- [5. Name the first administrator](#5-name-the-first-administrator)
+- [6. Install the unit and start it](#6-install-the-unit-and-start-it)
+- [7. Check it](#7-check-it)
+- [8. Invite the first user](#8-invite-the-first-user)
+- [Client certificates](#client-certificates)
+- [Day two](#day-two)
+<!-- /contents -->
+
 ## 0. Install Go 1.27 or later, on the host
 
 Everything in this guide happens on the host, logged in as yourself, except

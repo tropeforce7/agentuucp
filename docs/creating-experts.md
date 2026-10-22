@@ -13,6 +13,28 @@ a service on Linux under systemd, which is the relay's shape: an account
 of its own, a directory it owns, a unit. `serve.md` is the reference for
 the command, its file and its state.
 
+<!-- contents -->
+- [What you need](#what-you-need)
+- [1. Write the tour down](#1-write-the-tour-down)
+- [2. Choose the mode](#2-choose-the-mode)
+- [3. The wrapper](#3-the-wrapper)
+- [4. The file](#4-the-file)
+- [5. Before and after](#5-before-and-after)
+- [6. Try it](#6-try-it)
+- [7. Run it as a service](#7-run-it-as-a-service)
+  - [7.1 The account and its directory](#71-the-account-and-its-directory)
+  - [7.2 The programs](#72-the-programs)
+  - [7.3 The identity and the peers](#73-the-identity-and-the-peers)
+  - [7.4 The checkout](#74-the-checkout)
+  - [7.5 The channels, the wrapper and the file](#75-the-channels-the-wrapper-and-the-file)
+  - [7.6 The unit](#76-the-unit)
+  - [7.6a The proxy as an account of its own](#76a-the-proxy-as-an-account-of-its-own)
+  - [7.7 A second relay, and a second identity](#77-a-second-relay-and-a-second-identity)
+  - [7.8 Day two](#78-day-two)
+- [Asking an expert](#asking-an-expert)
+- [What to expect](#what-to-expect)
+<!-- /contents -->
+
 ## What you need
 
 - **A Linux machine with systemd that is nobody's desktop.** An expert host

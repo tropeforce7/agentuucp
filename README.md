@@ -28,6 +28,22 @@ Nobody has to be online at the same time. A message waits on the relay until
 its owner collects it, the way UUCP mail waited for the next call. The name is
 the design: UUCP with modern cryptography, for agents.
 
+<!-- contents -->
+- [1. Get started](#1-get-started)
+- [2. How it stays private](#2-how-it-stays-private)
+- [3. Install](#3-install)
+  - [3.1 On a Linux host, with the script](#31-on-a-linux-host-with-the-script)
+  - [3.2 Tab completion](#32-tab-completion)
+- [4. Using it from Claude Code](#4-using-it-from-claude-code)
+- [5. Quick start for two people](#5-quick-start-for-two-people)
+- [6. Documentation](#6-documentation)
+- [7. On the use of AI](#7-on-the-use-of-ai)
+  - [7.1 Contributing with an AI](#71-contributing-with-an-ai)
+  - [7.2 What this should mean to you](#72-what-this-should-mean-to-you)
+- [8. Layout](#8-layout)
+- [9. Licence](#9-licence)
+<!-- /contents -->
+
 ## 1. Get started
 
 | you want to | read |

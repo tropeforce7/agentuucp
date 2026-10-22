@@ -13,6 +13,20 @@ check.
 `auu serve` runs until it is stopped, holding on the relay between rounds.
 `auu serve --once` is one round, for a timer or a person.
 
+<!-- contents -->
+- [The file](#the-file)
+- [The two modes](#the-two-modes)
+- [What the handler is given](#what-the-handler-is-given)
+- [Which messages are answered](#which-messages-are-answered)
+- [Running it](#running-it)
+  - [Under systemd](#under-systemd)
+- [What it is holding](#what-it-is-holding)
+- [Making a good expert](#making-a-good-expert)
+- [The proxy](#the-proxy)
+  - [The split proxy](#the-split-proxy)
+- [Serve cannot sandbox the handler](#serve-cannot-sandbox-the-handler)
+<!-- /contents -->
+
 ## The file
 
 `serve.json`, in the home beside `config.json`, hand-written by the owner:

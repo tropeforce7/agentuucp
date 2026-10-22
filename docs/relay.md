@@ -2,6 +2,26 @@
 
 The relay binary, its settings and limits, its certificates, and how it is administered. `deploy-linux.md` is the same relay as a system service on a Linux host, step by step. This is the reference behind it.
 
+<!-- contents -->
+- [1. Running a relay](#1-running-a-relay)
+  - [1.1 Where the mail lives](#11-where-the-mail-lives)
+  - [1.2 Large messages](#12-large-messages)
+  - [1.3 Config file](#13-config-file)
+  - [1.4 Limits](#14-limits)
+  - [1.5 Certificates without a public CA](#15-certificates-without-a-public-ca)
+  - [1.6 Your own certificate](#16-your-own-certificate)
+  - [1.7 Running under systemd](#17-running-under-systemd)
+  - [1.8 Client certificates](#18-client-certificates)
+  - [1.9 Keeping a relay private](#19-keeping-a-relay-private)
+  - [1.10 Forwarding to another relay](#110-forwarding-to-another-relay)
+- [2. Administering a relay](#2-administering-a-relay)
+  - [2.1 Who is an administrator](#21-who-is-an-administrator)
+  - [2.2 auu-admin](#22-auu-admin)
+  - [2.3 Enrolment tokens](#23-enrolment-tokens)
+  - [2.4 Getting onto a relay from a second machine](#24-getting-onto-a-relay-from-a-second-machine)
+  - [2.5 The audit log](#25-the-audit-log)
+<!-- /contents -->
+
 ## 1. Running a relay
 
 The short way onto a Linux host with systemd is a kit. `auu-ca kit` packs the relay

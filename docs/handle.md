@@ -10,6 +10,16 @@ takes a file and makes another.
 `auu handle run` is the service, run from a unit or by hand; `auu handle
 run --once` is one round of it, for a timer or a person.
 
+<!-- contents -->
+- [The file](#the-file)
+- [Checking it](#checking-it)
+- [What it keeps](#what-it-keeps)
+- [Running it](#running-it)
+- [A service of its own](#a-service-of-its-own)
+- [Serve and handle together](#serve-and-handle-together)
+- [The operator's commands](#the-operators-commands)
+<!-- /contents -->
+
 ## The file
 
 `handle.json`, in the home beside `config.json`, hand-written by the host

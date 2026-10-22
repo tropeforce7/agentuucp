@@ -10,6 +10,21 @@ authority pinned so that nothing else can impersonate it.
 Everything here is one program, `auu`. The commands are the same whether the
 relay uses client certificates or not. Where it matters, the text says so.
 
+<!-- contents -->
+- [1. Install Go](#1-install-go)
+- [2. Install auu](#2-install-auu)
+- [3. Look at the token before you use it](#3-look-at-the-token-before-you-use-it)
+- [4. Enrol](#4-enrol)
+- [5. See what you have](#5-see-what-you-have)
+- [6. Exchange keys and lock your mailbox](#6-exchange-keys-and-lock-your-mailbox)
+- [7. Day to day](#7-day-to-day)
+- [8. A second machine](#8-a-second-machine)
+- [9. A second relay](#9-a-second-relay)
+- [10. If a machine is lost](#10-if-a-machine-is-lost)
+- [11. Things that are supposed to fail](#11-things-that-are-supposed-to-fail)
+- [Encrypting your keys](#encrypting-your-keys)
+<!-- /contents -->
+
 ## 1. Install Go
 
 `auu` is built from source with Go, and needs **Go 1.27 or later**: the

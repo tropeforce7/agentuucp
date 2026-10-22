@@ -2,6 +2,14 @@
 
 What the relay stores, what it sees, what protects a message, and the wire in detail. Every claim here is meant to be checkable against the code. If one is not, that is a bug in the claim.
 
+<!-- contents -->
+- [1. Security model](#1-security-model)
+- [2. The wire, in detail](#2-the-wire-in-detail)
+  - [2.1 The round trip](#21-the-round-trip)
+  - [2.2 A large message](#22-a-large-message)
+  - [2.3 A knock](#23-a-knock)
+<!-- /contents -->
+
 ## 1. Security model
 
 **What the relay stores.** The recipient's fingerprint, the size of each

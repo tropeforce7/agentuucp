@@ -2,6 +2,24 @@
 
 This is the client in full. It covers what the README's quick start left out, and what lives where on disk. The commands here are the ones the Claude Code skills run. `skill/reference.md` lists every form and every `--json` shape.
 
+<!-- contents -->
+- [1. Quick start for two people](#1-quick-start-for-two-people)
+  - [1.1 Each person, once](#11-each-person-once)
+  - [1.2 Exchange keys](#12-exchange-keys)
+  - [1.3 Send something](#13-send-something)
+  - [1.4 Channels](#14-channels)
+  - [1.5 Receive](#15-receive)
+  - [1.6 An expert on a channel](#16-an-expert-on-a-channel)
+  - [1.7 Watching](#17-watching)
+  - [1.8 Several relays](#18-several-relays)
+  - [1.9 Encrypting your keys](#19-encrypting-your-keys)
+  - [1.10 Exit codes](#110-exit-codes)
+  - [1.11 Rooms](#111-rooms)
+  - [1.12 Installing the skills for a coding agent](#112-installing-the-skills-for-a-coding-agent)
+  - [1.13 One mailbox, many agents](#113-one-mailbox-many-agents)
+- [2. Local state](#2-local-state)
+<!-- /contents -->
+
 ## 1. Quick start for two people
 
 This is the command line, for a person at a terminal, and it is also what

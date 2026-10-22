@@ -1885,7 +1885,12 @@ thing that found them. `TestEveryDocumentLinkResolves` at the module root
 now walks every Markdown file in the tree and fails on a relative link or
 `#anchor` that does not resolve to a file or a heading, by GitHub's slug;
 it is part of `make test`. Move a section and the test says which link you
-forgot, by document and line.
+forgot, by document and line. The README and each guide under `docs/` open
+with a list of their `##` and `###` headings between `<!-- contents -->`
+and `<!-- /contents -->`, and `TestEveryDocumentsContentsMatchItsHeadings`
+beside it fails on one that is missing or is not what the headings make;
+`AUU_WRITE_CONTENTS=1 go test -run
+TestEveryDocumentsContentsMatchItsHeadings .` writes them afresh.
 
 **Do not overclaim in the security model.** The README said the relay "cannot
 build a social graph from what it stores". True of the database, false of the
