@@ -385,6 +385,11 @@ not outlive it.
   arrives on your default channel rather than the one the ask was addressed
   to — a channel is the receiver's sorting, not a property of a thread — so
   what decides is the thread, not the channel it came in on.
+- Not an ask on a channel `handle.json` routes: a channel belongs to one
+  service, and `auu serve check` and `auu serve` refuse to start on a
+  channel a route of the `handle.json` in the home takes, naming both
+  files. Change either file with both services stopped; see
+  [`handle.md`](handle.md).
 - Nothing else. A note, an acknowledgement, a reply to a message somebody
   wrote by hand, a vouch, a question asking whether you trust a key, and
   anything in quarantine are all left alone. Serve's own rounds never answer

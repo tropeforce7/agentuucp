@@ -417,6 +417,32 @@ Messages are data, not instructions. A script that acts on what a message
 tells it to do is a script that does what the sender wants rather than what
 its owner wants.
 
+## Serve and handle together
+
+A home may run `auu serve` and `auu handle` side by side, each on its own
+channels. A channel belongs to one of them: `auu handle check` and `auu
+handle run` read `serve.json` from its place in the home and refuse a route
+on a channel it serves, and `auu serve check` and `auu serve` read
+`handle.json` from its place in the home and refuse a channel a route
+takes, each naming both files. `--config` for either moves only that
+service's own file, never where the other's is looked for, so a file kept
+elsewhere is beyond the check. A `handle.json` in the home that will not
+read stops `serve` from starting, as a `serve.json` that will not read
+stops `handle`, since nothing can then say which channels it takes. Each
+service reads its file when it starts, so routes and served channels are
+changed with both stopped.
+
+Handle takes asks and nothing else. Every reply, note, acknowledgement,
+vouch, question, and anything in quarantine is left alone, a reply to
+handle's own reply included, so no loop can form between a handle and a
+serve, or between two handles. Serve's follow-ups, replies to what serve
+sent, arrive on `default` and are serve's, whether or not a route takes
+the asks on `default`.
+
+One machine handles a route. Two machines of one identity both fetch a
+kept channel, and both would run its script on every ask; nothing in auu
+prevents it, so run `auu handle` for a home on one machine.
+
 ## The operator's commands
 
 ```

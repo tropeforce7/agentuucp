@@ -125,6 +125,9 @@ func cmdServe(args []string) error {
 	if err := cfg.checkFolds(s.ServeDir()); err != nil {
 		return err
 	}
+	if err := cfg.checkAgainstHandle(s); err != nil {
+		return err
+	}
 	// Speaking for this identity from here on, and in send scope for the
 	// whole run: every reply originates, and an expert answers unattended
 	// by design. A home under a passphrase says so now, at exit 4, rather
@@ -1447,6 +1450,9 @@ func serveCheck(config string) error {
 		return err
 	}
 	if err := cfg.checkFolds(s.ServeDir()); err != nil {
+		return err
+	}
+	if err := cfg.checkAgainstHandle(s); err != nil {
 		return err
 	}
 	for _, name := range cfg.names() {

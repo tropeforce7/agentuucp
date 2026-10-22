@@ -189,6 +189,31 @@ func (cfg *serveConfig) errf(channel, format string, a ...any) error {
 	return usageErrf("%s: channel %q: %s", cfg.path, channel, fmt.Sprintf(format, a...))
 }
 
+// checkAgainstHandle refuses a channel a route of handle.json takes,
+// naming both files, the converse of handle's checkAgainstServe. handle.json
+// is read from its place in the home whatever --config named for serve,
+// since that is the one handle.json either side can see. A handle.json that
+// will not read is refused here too, since nothing can then say which
+// channels its routes take.
+func (cfg *serveConfig) checkAgainstHandle(s *store.Store) error {
+	path := filepath.Join(s.Root(), handleFile)
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	handled, err := loadHandleConfig(path)
+	if err != nil {
+		return usageErrf("%s: its channels are checked against %s, which will not read: %v", cfg.path, path, err)
+	}
+	for _, name := range cfg.names() {
+		for _, route := range handled.names() {
+			if handled.Routes[route].Channel == name {
+				return cfg.errf(name, "route %q of %s takes it; a channel belongs to one service, serve's or handle's", route, path)
+			}
+		}
+	}
+	return nil
+}
+
 // checkFolds asks the disk under serveDir whether it takes two channel
 // names as one directory, which check, comparing case alone, cannot see: a
 // filesystem that folds Unicode normalisation, as APFS does, takes é

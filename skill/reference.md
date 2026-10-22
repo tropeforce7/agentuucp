@@ -270,7 +270,7 @@ directory and its limits, then `FILE is good for N routes`, touching no key,
 relay or network; a file that breaks a rule is refused, exit 1, in one
 sentence naming the file, the route and what is wrong. A route on `default`
 is taken with a warning on stderr, and a channel `serve.json` serves cannot
-be a route's. `run --once` takes each ask on a route's channel into
+be a route's, nor can `serve` serve a channel a route takes. `run --once` takes each ask on a route's channel into
 `handle/ledger.json` and runs its script with the message as files under
 `handle/jobs/ROUTE/ID/` and `AUU_` variables, never on its command line,
 and replies to each job once it ends, the first line saying how (`handle:
