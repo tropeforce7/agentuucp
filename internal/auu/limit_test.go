@@ -1972,3 +1972,62 @@ func TestAServeFileThatReadsTwoWaysIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// TestLimitMessageIDIsNotAPathAtUnserved: an ask's message id names the
+// directory its telling's envelope is kept in, serve/unserved/<id>
+// (D178). Every record in the spool has met message.ValidID at
+// envelope.Open and Store.Load, so only a record written by hand breaks
+// it, and unserved holds it to the rule again before the join: an ask
+// from a peer on a channel nobody serves, under each id of the
+// traversal set, is not to be told, and nothing is made under the serve
+// directory or beside the home; the same ask under a message id is.
+func TestLimitMessageIDIsNotAPathAtUnserved(t *testing.T) {
+	alice, bob := newExpert(t, modeReadOnly)
+	s, id, relays := bob.opened()
+	cfg, err := loadServeConfig(bob.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveDir := filepath.Join(bob.home, "serve")
+	led, err := loadLedger(filepath.Join(serveDir, ledgerFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &serveRun{s: s, id: id, cfg: cfg, led: led, root: serveDir, telling: true}
+	ask := func(msgID string) *store.Stored {
+		return &store.Stored{Relay: relays[0].Name, Inner: &envelope.Inner{
+			From: alice.fingerprint(), ID: msgID,
+			Body: message.Body{Type: message.TypeAsk, Thread: strings.Repeat("b", 32), Subject: "s", Text: "t"},
+		}}
+	}
+	beside, err := os.ReadDir(filepath.Dir(bob.home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range pathSet() {
+		if got := run.unserved(ask(v)); got != "" {
+			t.Errorf("an ask under message id %q is to be told on %q", v, got)
+		}
+	}
+	if under, err := os.ReadDir(filepath.Join(serveDir, unservedDir)); err != nil || len(under) != 0 {
+		t.Errorf("a refused message id left %d entries in the unserved directory (%v)", len(under), err)
+	}
+	after, err := os.ReadDir(filepath.Dir(bob.home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(beside) {
+		t.Errorf("a refused message id made %d entries beside the home", len(after)-len(beside))
+	}
+	if got := run.unserved(ask(strings.Repeat("a", 32))); got != "default" {
+		t.Fatalf("the same ask under a message id is to be told on %q; want default", got)
+	}
+	// A channel that breaks the channel rule, which only a record written
+	// by hand holds, is not told either: it would go into the ledger, and
+	// the ledger's loader refuse it at the next start.
+	bad := ask(strings.Repeat("a", 32))
+	bad.Channel = "a\x01b"
+	if got := run.unserved(bad); got != "" {
+		t.Fatalf("an ask on channel %q is to be told", got)
+	}
+}

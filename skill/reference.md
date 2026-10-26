@@ -494,9 +494,12 @@ goes as one stream to each, and a stream copy the relay refuses waits in
 the outbox, the whole payload on disk, until `--resume` or `auu outbox
 drop ID PEER`.
 
-`auu serve --json`: one object of `answered`, `failed` and `skipped`, each
-a list of `id`, `channel` and `thread`. A message in `failed` is tried
-again on the next round until the channel's `retries` run out. Under
+`auu serve --json`: one object of `answered`, `failed`, `skipped` and
+`unserved`, each a list of `id`, `channel` and `thread`. A message in
+`failed` is tried again on the next round until the channel's `retries`
+run out. `unserved` is the peers' asks on a channel serve does not serve,
+each under the channel it came on, told in one reply which channels it
+does; a follow-up to that reply is left alone. Under
 `--once` the object is always printed; running long, one is printed on its
 own line for each round that did something, and nothing for a quiet one.
 

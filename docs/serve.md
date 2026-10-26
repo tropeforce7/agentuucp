@@ -395,6 +395,25 @@ not outlive it.
 ## Which messages are answered
 
 - An **ask** on a served channel.
+- An **ask on a channel serve does not serve** gets one reply, and only
+  that. An ask sent without `--channel` lands on your `default`, which
+  `serve.json` need not name, and left there unanswered it would look to
+  its sender like an expert that is gone. So a peer's ask on a channel
+  that neither `serve.json` nor a route of the `handle.json` in the home
+  names is told, on its own thread, which channels this home answers on
+  and, with a `handle.json`, which take jobs, and to send again on one of
+  them with `--channel`. Nothing of it is read and no handler runs: it is
+  marked read, written in the ledger under `unserved`, and is no turn on
+  any thread. The owner's own asks, which agents under one identity send
+  one another on the mailbox's channels, are left alone, and so is
+  anything not an ask, a reply to the telling among them, so two serves
+  pointed at each other send one each way at most. While the
+  `handle.json` will not read, serve says so once and tells nobody, since
+  it cannot then tell which asks are handle's. On a home serve ran on
+  before v0.21.0, the asks already in the inbox are written down as
+  skipped at the first round after the upgrade, with a sentence saying how
+  many, rather than told all at once; `serve/unserved/` is the mark that
+  this has been done.
 - A **reply to something serve itself sent**, which is a follow-up. A reply
   arrives on your default channel rather than the one the ask was addressed
   to — a channel is the receiver's sorting, not a property of a thread — so
@@ -404,8 +423,8 @@ not outlive it.
   channel a route of the `handle.json` in the home takes, naming both
   files. Change either file with both services stopped; see
   [`handle.md`](handle.md).
-- Nothing else. A note, an acknowledgement, a reply to a message somebody
-  wrote by hand, a vouch, a question asking whether you trust a key, and
+- Nothing else. Apart from the telling above, a note, an acknowledgement,
+  a reply to a message somebody wrote by hand, a vouch, a question asking whether you trust a key, and
   anything in quarantine are all left alone. Serve's own rounds never answer
   a question, even with `auu vouch answer on`: a vouch is the person's
   word, and the rounds are the expert's. A handler that runs `auu inbox`

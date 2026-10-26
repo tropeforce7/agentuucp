@@ -74,6 +74,14 @@ type serveRun struct {
 	// failed and has retries left, zero when there is none: the hold
 	// between rounds ends there if no mail has ended it first (G48, R63).
 	retryAt time.Time
+	// handled is the channels handle.json's routes take, read once a round
+	// by handleChannels: handleRead says it has been this round, handleOK
+	// that the file read, and handleBad that its not reading has been said
+	// in this run of not reading.
+	handled                         []string
+	handleRead, handleOK, handleBad bool
+	// telling says asks on unserved channels are told (startTelling).
+	telling bool
 }
 
 // roundJSON is one round as --json gives it.
@@ -81,6 +89,9 @@ type roundJSON struct {
 	Answered []handledJSON `json:"answered"`
 	Failed   []handledJSON `json:"failed"`
 	Skipped  []handledJSON `json:"skipped"`
+	// Unserved is the asks told that this expert does not answer on their
+	// channel, each under the channel it came on (D178).
+	Unserved []handledJSON `json:"unserved"`
 }
 
 // handledJSON is one message in a round's report.
@@ -321,6 +332,7 @@ func (r *serveRun) long(ctx context.Context, backlog bool) error {
 // else this run was going to do.
 func (r *serveRun) round(ctx context.Context, backlog, longRun bool) error {
 	r.out, r.writeErr = roundJSON{}, nil
+	r.handleRead = false
 	relays, err := selectedRelays(r.s, "")
 	if err != nil {
 		return err
@@ -354,6 +366,9 @@ func (r *serveRun) round(ctx context.Context, backlog, longRun bool) error {
 	// round and a file across two runs, and a change to either should not
 	// rest on the other.
 	first := !r.led.existed
+	if err := r.startTelling(first); err != nil {
+		return err
+	}
 	pending, err := r.pending()
 	if err != nil {
 		return err
@@ -377,6 +392,12 @@ func (r *serveRun) round(ctx context.Context, backlog, longRun bool) error {
 		}
 	}
 	for _, m := range pending {
+		if channel := r.unserved(m); channel != "" {
+			if err := r.tell(m, channel); err != nil {
+				return escaped(err)
+			}
+			continue
+		}
 		if err := r.handle(ctx, m); err != nil {
 			return err
 		}
@@ -399,7 +420,7 @@ func (r *serveRun) round(ctx context.Context, backlog, longRun bool) error {
 
 // did says this round had something to report.
 func (r *serveRun) did() bool {
-	return len(r.out.Answered)+len(r.out.Failed)+len(r.out.Skipped) > 0
+	return len(r.out.Answered)+len(r.out.Failed)+len(r.out.Skipped)+len(r.out.Unserved) > 0
 }
 
 // hold waits on the relays for the next message.
@@ -481,7 +502,8 @@ func (r *serveRun) nextRetry(pending []*store.Stored) time.Time {
 
 // pending is every message this run is to answer, oldest first: on a served
 // channel, admitted by the rule that stops two experts talking for ever,
-// and not settled in the ledger.
+// and not settled in the ledger; and every peer's ask on a channel this
+// home does not answer on, which is told so (unserved).
 //
 // Oldest is the inbox's order, store.ArrivalOrder: by when each record
 // arrived here, then the relay's own counter, the relay's received, the
@@ -501,8 +523,15 @@ func (r *serveRun) pending() ([]*store.Stored, error) {
 		}
 		if e, ok := r.led.Messages[m.Inner.ID]; ok && e.settled() {
 			continue
+		} else if ok && e.Unserved != "" && r.untellable(m) {
+			if err := r.forgetUnserved(m); err != nil {
+				return nil, err
+			}
 		}
 		if r.channelFor(m) == nil {
+			if r.unserved(m) != "" {
+				out = append(out, m)
+			}
 			continue
 		}
 		if !r.answerable(m) {
@@ -832,7 +861,7 @@ func (r *serveRun) recordBacklog(backlog bool) (int, error) {
 		if m.Newer != "" {
 			continue
 		}
-		if backlog && r.answerable(m) {
+		if backlog && (r.answerable(m) || r.unserved(m) != "") {
 			continue
 		}
 		e := r.entry(m, channelOf(m))

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/tropeforce7/agentuucp/internal/channels"
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/wire"
 )
@@ -105,6 +106,13 @@ type ledgerEntry struct {
 	// set to that attempt, serve's own clock, and on a thread with any
 	// entry carried over and tried, only those open it (openerEntry).
 	Carried bool `json:"carried,omitempty"`
+	// Unserved is the channel an ask came on that this home does not
+	// answer on, for an entry whose reply told its sender which channels it
+	// does (D178). Such an entry has no thread and no channel, so that no
+	// count or lookup by either finds it: it is nobody's turn, opens no
+	// thread, and is in no channel's listing. A v0.20.0 serve refuses a
+	// ledger with one, by its strict reader.
+	Unserved string `json:"unserved,omitempty"`
 }
 
 // triedHere says serve tried or answered this entry.
@@ -195,6 +203,20 @@ func loadLedger(path string) (*ledger, error) {
 				"what has been answered, so fix it or move it aside knowing that everything in the inbox becomes "+
 				"new mail", path, e.RelayID, id)
 		}
+		// An unserved entry names the channel the ask came on, by the
+		// channel rule, and is on no channel of serve's.
+		if e.Unserved != "" {
+			if err := channels.ValidName(e.Unserved); err != nil {
+				return nil, fmt.Errorf("%s has unserved channel %q for %s, which is not a channel's name (%v); it is the record of "+
+					"what has been answered, so fix it or move it aside knowing that everything in the inbox becomes new mail",
+					path, e.Unserved, id, err)
+			}
+			if e.Channel != "" || e.Thread != "" {
+				return nil, fmt.Errorf("%s has %s told it was on a channel this expert does not answer on, and on a thread or channel "+
+					"of serve's as well; it is the record of what has been answered, so fix it or move it aside knowing that "+
+					"everything in the inbox becomes new mail", path, id)
+			}
+		}
 		// An attempt has a time. An entry that counts one and has none
 		// was written before there were timestamps, and nothing on this
 		// machine is from before.
@@ -271,13 +293,15 @@ func (l *ledger) entry(id, thread, channel string) *ledgerEntry {
 // repliedWith finds the message serve answered with the given reply, which
 // is what makes a reply to that reply a follow-up rather than a stranger's
 // message on a thread of its own. Nothing is what a message serve never
-// sent gets.
+// sent gets, and what a reply telling an ask which channels serve answers
+// on gets (D178): a reply to that is none of serve's business, said
+// nowhere, so that two serves pointed at each other stop.
 func (l *ledger) repliedWith(id string) *ledgerEntry {
 	if id == "" {
 		return nil
 	}
 	for _, e := range l.Messages {
-		if e.Reply == id {
+		if e.Reply == id && e.Unserved == "" {
 			return e
 		}
 	}

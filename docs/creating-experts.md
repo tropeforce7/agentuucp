@@ -786,6 +786,12 @@ auu send --to jostle-host --channel jostle --subject "where is the retry logic?"
 auu wait --thread THREAD-ID --timeout 30m
 ```
 
+The ask must name the channel. One sent without `--channel` lands on the
+host's `default`, which the expert does not answer on unless `serve.json`
+names it, and comes back as one reply on the thread saying so and naming
+the channels it does answer on; send the ask again on one of them. `auu
+channel ls jostle-host` lists them, with their descriptions.
+
 The thread id names the asker's conversation with the expert and nobody
 else's. Another peer who sends on it, with `auu send --thread`, is not
 answered: the message is left in the expert's inbox for its owner.

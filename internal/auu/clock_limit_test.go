@@ -2,8 +2,13 @@ package auu
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -235,4 +240,46 @@ func TestLimitTheServeLedgerTimesAreThisMachinesClock(t *testing.T) {
 		t.Fatal(err)
 	}
 	carry(t, "from the inbox record")
+	// An ask on a channel bob does not serve, told which he does (D178):
+	// a failed telling writes Tried, untold's, and the telling Handled and
+	// Tried, tell's, each this machine's clock. A fresh pair, since the
+	// records above were rewritten by hand.
+	alice, bob = newExpert(t, modeReadOnly)
+	other := alice.run("send", "--to", "bob", "--subject", "on default", "--json", "where is it")
+	var asked sentJSON
+	if err := json.Unmarshal([]byte(other), &asked); err != nil {
+		t.Fatal(err)
+	}
+	bob.run("inbox")
+	_, _, relays := bob.opened()
+	target, err := url.Parse(relays[0].URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	refusing := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		if r.Method == "POST" && strings.HasPrefix(r.URL.Path, "/v1/mailbox/") {
+			http.Error(rw, "not now", http.StatusBadRequest)
+			return
+		}
+		httputil.NewSingleHostReverseProxy(target).ServeHTTP(rw, r)
+	}))
+	defer refusing.Close()
+	repointRelay(t, bob.user, refusing.URL)
+	w = clockFrom()
+	captureStderr(t, func() { bob.tryRun("serve", "--once", "--json") })
+	w = w.closed()
+	e = bob.ledgerOf(t).Messages[asked.ID]
+	if e == nil || e.Unserved == "" || e.Failures != 1 || !w.holds(e.Tried) || !e.Handled.IsZero() {
+		t.Fatalf("a failed telling wrote %+v; want tried this machine's clock between %v and %v, handled none", e, w.from, w.to)
+	}
+	repointRelay(t, bob.user, target.String())
+	w = clockFrom()
+	if report := bob.round(t); len(report.Unserved) != 1 {
+		t.Fatalf("the telling: %+v", report)
+	}
+	w = w.closed()
+	e = bob.ledgerOf(t).Messages[asked.ID]
+	if !w.holds(e.Handled) || !e.Tried.Equal(e.Handled) {
+		t.Fatalf("the telling: handled %v, tried %v; want both this machine's clock between %v and %v", e.Handled, e.Tried, w.from, w.to)
+	}
 }

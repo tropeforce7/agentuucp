@@ -1252,7 +1252,9 @@ apply`. Serve never opens a thread and never answers a reply to anything
 but its own, so two experts pointed at each other stop. It answers only
 peers, since quarantine is never read. `docs/serve.md` is the command, its
 file and its state. `docs/creating-experts.md` is how to set one up well,
-and `docs/serve-claude.sh` is the wrapper the guide starts from.
+and `docs/serve-claude.sh` is the wrapper the guide starts from. Ask an
+expert on its channel, with `--channel`: an ask on one it does not serve,
+your default among them, is told in one reply which channels it does.
 
 ### 1.7 Watching
 

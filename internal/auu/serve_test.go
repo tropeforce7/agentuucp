@@ -597,8 +597,12 @@ func TestServeLeavesWhatItMayNotAnswer(t *testing.T) {
 	if led.Messages[sentNote.ID] != nil {
 		t.Error("a note was written down as work")
 	}
-	if led.Messages[unserved.ID] != nil {
-		t.Error("a message on an unserved channel was written down")
+	// It is told which channels are served, and is nobody's turn (D178).
+	if e := led.Messages[unserved.ID]; e == nil || e.Unserved != "elsewhere" || e.Thread != "" || e.Channel != "" {
+		t.Errorf("an ask on an unserved channel was written down as %+v", e)
+	}
+	if len(report.Unserved) != 1 || report.Unserved[0].ID != unserved.ID {
+		t.Errorf("the round told %+v", report.Unserved)
 	}
 
 	// bob writes to alice by hand, and alice answers him on the served
