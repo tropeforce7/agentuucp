@@ -14,9 +14,10 @@ import (
 // ErrHeld is a lock another process holds.
 var ErrHeld = errors.New("held by another process")
 
-// pollInterval is how often a waiting Take asks again. The kernel offers no
-// bounded wait on either platform, so waiting is asking.
-const pollInterval = 100 * time.Millisecond
+// PollInterval is how often a waiting Take asks again, and a caller that
+// waits as Take does asks as often. The kernel offers no bounded wait on
+// either platform, so waiting is asking.
+const PollInterval = 100 * time.Millisecond
 
 // Take takes the lock at path, waiting up to wait for whoever holds it, and
 // reports ErrHeld when the wait is over. A zero wait asks once. It stops
@@ -36,7 +37,7 @@ func Take(ctx context.Context, path string, wait time.Duration, sleep func(time.
 			return l, waited, err
 		}
 		waited = true
-		sleep(pollInterval)
+		sleep(PollInterval)
 		if err := ctx.Err(); err != nil {
 			return nil, waited, err
 		}

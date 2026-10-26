@@ -35,15 +35,10 @@ var spoolLockWait = 30 * time.Second
 // saves the record with save, under the home's spool lock. fill is given a
 // path that does not exist and must create it whole or not at all.
 func replaceSpool(ctx context.Context, s *store.Store, dir string, fill func(target string) error, save func() error) error {
-	var tag [8]byte
-	if _, err := rand.Read(tag[:]); err != nil {
-		return err
-	}
-	staged := dir + ".new-" + hex.EncodeToString(tag[:])
 	// The staged copy is held by a lock of its own for as long as this
 	// delivery runs, so a later swap tells one being written from one a
 	// process left behind when it died (sweepStaged).
-	own, err := lockfile.Try(staged + stagedLockSuffix)
+	staged, own, err := takeStaged(ctx, dir)
 	if err != nil {
 		return err
 	}
@@ -110,6 +105,41 @@ func replaceSpool(ctx context.Context, s *store.Store, dir string, fill func(tar
 		os.RemoveAll(aside)
 	}
 	return nil
+}
+
+// newStagedTag names a staged copy: eight fresh random bytes, so no other
+// swap has the name. A test replaces it.
+var newStagedTag = func() (string, error) {
+	var tag [8]byte
+	if _, err := rand.Read(tag[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(tag[:]), nil
+}
+
+// takeStaged names a staged copy of dir and takes its lock. Try creates the
+// lock file and then locks it, and a sweep of another swap could list the
+// file between the two and hold it for the instant before it removed it, so
+// the delivery failed as held for nothing (S86). The name is fresh, so a
+// lock held can only be a sweep's: a fresh name is tried, as a waiting Take
+// asks again, until spoolLockWait is over, and then the ErrHeld is said.
+func takeStaged(ctx context.Context, dir string) (string, *lockfile.Lock, error) {
+	deadline := time.Now().Add(spoolLockWait)
+	for {
+		tag, err := newStagedTag()
+		if err != nil {
+			return "", nil, err
+		}
+		staged := dir + ".new-" + tag
+		own, err := lockfile.Try(staged + stagedLockSuffix)
+		if !errors.Is(err, lockfile.ErrHeld) || !time.Now().Before(deadline) {
+			return staged, own, err
+		}
+		time.Sleep(lockfile.PollInterval)
+		if err := ctx.Err(); err != nil {
+			return "", nil, err
+		}
+	}
 }
 
 // stagedLockSuffix names the lock beside a staged copy.

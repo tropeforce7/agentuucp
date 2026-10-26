@@ -3,6 +3,7 @@ package auu
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -208,6 +209,101 @@ func TestASpoolIsSwappedOnlyWhenTheCopyIsWhole(t *testing.T) {
 	}
 	if left, _ := filepath.Glob(dir + ".*"); len(left) != 0 {
 		t.Fatalf("left beside the spool after two swaps: %v", left)
+	}
+}
+
+// A swap's staged lock that a sweep of another swap won, in the instant
+// between Try's creating the file and its locking it, failed the delivery
+// as held at once (S86, seen on macOS in TestASpoolIsSwappedOnlyWhenTheCopyIsWhole).
+// The test holds the first name's lock as such a sweep would: the swap goes
+// through under a second name and leaves the held lock alone; and with every
+// name held it gives up as held once spoolLockWait is over, leaving nothing.
+func TestASwapWhoseStagedLockASweepHoldsTakesAFreshName(t *testing.T) {
+	s, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := s.AttachmentDir(store.Inbox, strings.Repeat("b", 32))
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fresh := newStagedTag
+	t.Cleanup(func() { newStagedTag = fresh })
+	var tags []string
+	newStagedTag = func() (string, error) {
+		if len(tags) == 0 {
+			tags = append(tags, "held")
+			return "held", nil
+		}
+		tag, err := fresh()
+		tags = append(tags, tag)
+		return tag, err
+	}
+	heldLock := dir + ".new-held" + stagedLockSuffix
+	held, err := lockfile.Try(heldLock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var filled []string
+	fill := func(target string) error {
+		filled = append(filled, target)
+		if err := os.Mkdir(target, 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(target, "0"), []byte("new"), 0o600)
+	}
+	if err := replaceSpool(context.Background(), s, dir, fill, func() error { return nil }); err != nil {
+		t.Fatalf("a swap whose first staged lock was held: %v", err)
+	}
+	if len(tags) != 2 || len(filled) != 1 || filled[0] != dir+".new-"+tags[1] {
+		t.Fatalf("tags %v, filled %v; want the second tag filled", tags, filled)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "0")); err != nil || string(got) != "new" {
+		t.Fatalf("the spool holds %q, %v", got, err)
+	}
+	if _, err := os.Lstat(heldLock); err != nil {
+		t.Fatalf("the swap touched the lock it found held: %v", err)
+	}
+	if _, err := lockfile.Try(heldLock); !errors.Is(err, lockfile.ErrHeld) {
+		t.Fatalf("the held lock is not held after the swap: %v", err)
+	}
+	held.Release()
+	if err := os.Remove(heldLock); err != nil {
+		t.Fatal(err)
+	}
+	if left, _ := filepath.Glob(dir + ".*"); len(left) != 0 {
+		t.Fatalf("left beside the spool: %v", left)
+	}
+
+	// Every name held: the swap asks again until spoolLockWait is over and
+	// then says ErrHeld, filling nothing and leaving nothing of its own.
+	wait := spoolLockWait
+	t.Cleanup(func() { spoolLockWait = wait })
+	spoolLockWait = 3 * lockfile.PollInterval
+	asked := 0
+	newStagedTag = func() (string, error) { asked++; return "held", nil }
+	held, err = lockfile.Try(heldLock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filled = nil
+	start := time.Now()
+	err = replaceSpool(context.Background(), s, dir, fill, func() error { return nil })
+	if !errors.Is(err, lockfile.ErrHeld) {
+		t.Fatalf("a swap whose every staged lock was held: %v; want ErrHeld", err)
+	}
+	if took := time.Since(start); took < spoolLockWait {
+		t.Fatalf("the swap gave up after %v, before spoolLockWait %v", took, spoolLockWait)
+	}
+	if asked < 2 || len(filled) != 0 {
+		t.Fatalf("asked %d times, filled %v; want asked again and nothing filled", asked, filled)
+	}
+	held.Release()
+	if left, _ := filepath.Glob(dir + ".*"); len(left) != 1 || left[0] != heldLock {
+		t.Fatalf("beside the spool: %v; want the test's own lock alone", left)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "0")); err != nil || string(got) != "new" {
+		t.Fatalf("a swap that gave up changed the spool: %q, %v", got, err)
 	}
 }
 
