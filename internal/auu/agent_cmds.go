@@ -531,9 +531,13 @@ func agentStop(args []string) error {
 }
 
 type agentStatusJSON struct {
-	Running bool   `json:"running"`
-	Locked  bool   `json:"locked"`
-	Until   string `json:"until,omitempty"`
+	Running bool `json:"running"`
+	// Encrypted says whether this home's keys are under a passphrase at
+	// all. On a plain home nothing is locked and every command may send,
+	// so Locked is false there whatever the agent is doing.
+	Encrypted bool   `json:"encrypted"`
+	Locked    bool   `json:"locked"`
+	Until     string `json:"until,omitempty"`
 	// Scope is receive or send while unlocked, and SendExpires is when
 	// send scope ends, RFC 3339; absent when send scope lasts until lock,
 	// and when the scope is receive. The skill reads Scope before its
@@ -554,20 +558,34 @@ func agentStatus(args []string) error {
 	if len(positional) > 0 {
 		return usageErrf("unexpected argument %q", positional[0])
 	}
-	s, err := openStore()
+	// A home whose keys were never encrypted has nothing to lock: the
+	// status said locked there, from its starting value, and the skill
+	// that reads it told the person to run an unlock that refuses on a
+	// plain home.
+	s, enc, err := encryptedHome()
 	if err != nil {
 		return err
+	}
+	// A home with no identity is not a plain one: it has no keys at all,
+	// and 'auu id' refuses it, so this says what id says rather than that
+	// every command may send.
+	if !enc {
+		if _, err := s.Self(); err != nil {
+			return err
+		}
 	}
 	c, err := agent.NewClient(s.Root())
 	if err != nil {
 		return err
 	}
-	out := agentStatusJSON{Keys: []string{}, Socket: c.Socket(), Locked: true}
+	out := agentStatusJSON{Keys: []string{}, Socket: c.Socket(), Encrypted: enc, Locked: enc}
 	st, err := c.Status()
 	switch {
 	case errors.Is(err, agent.ErrNotRunning):
 	case err != nil:
 		return err
+	case !enc:
+		out.Running = true
 	default:
 		out.Running, out.Locked = true, st.Locked
 		if !st.Until.IsZero() {
@@ -583,6 +601,16 @@ func agentStatus(args []string) error {
 	}
 	if *asJSON {
 		return printJSON(out)
+	}
+	if !enc {
+		if out.Running {
+			fmt.Printf("agent:  running\n")
+		} else {
+			fmt.Printf("agent:  not running\n")
+		}
+		fmt.Printf("keys:   not encrypted; nothing to unlock, and every command may send\n")
+		fmt.Printf("socket: %s\n", out.Socket)
+		return nil
 	}
 	if !out.Running {
 		fmt.Printf("agent:  not running\n")

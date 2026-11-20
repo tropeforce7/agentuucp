@@ -664,9 +664,10 @@ when set) and `present`.
 `label`, `spki`, `not_before`, `not_after`, `revoked`, `reason` (when set),
 `current` (when set).
 
-`auu agent status --json`: `running`, `locked`, `until` (when set), `scope`
-(`receive` or `send`, when unlocked), `send_expires` (when send scope has
-an end), `keys`, `socket`.
+`auu agent status --json`: `running`, `encrypted`, `locked` (always
+false when `encrypted` is false), `until` (when set), `scope` (`receive`
+or `send`, when unlocked), `send_expires` (when send scope has an end),
+`keys`, `socket`.
 
 `auu skill install --json`: `target` (`claude`, `agents`, or `dir` for
 `--dir`), `dir`, `version`, and `skills`, a list of every file written or

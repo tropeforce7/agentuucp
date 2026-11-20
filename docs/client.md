@@ -1590,7 +1590,10 @@ Commands that need only your public half, `auu id`, `auu id export`,
 the keys locked. `auu id` says `secrets: encrypted, unlocked to receive until
 17:04`, `encrypted, unlocked to send until 17:14 (receive until 01:04)`,
 `encrypted, locked`, or `not encrypted`. `auu id --json` carries
-`encrypted`, `locked` and `scope` for a script to check before it starts.
+`encrypted`, `locked` and `scope` for a script to check before it starts,
+and `auu agent status --json` carries `encrypted` and `locked` too: on a
+home whose keys are not encrypted both say false, since there is nothing
+to unlock and every command may send.
 
 What this protects, said plainly. At rest, every private key is ciphertext
 under a passphrase that is stored nowhere. `home.key` is a random key

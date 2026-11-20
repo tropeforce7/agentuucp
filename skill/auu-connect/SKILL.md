@@ -277,6 +277,12 @@ large; removing it is the user's decision, not housekeeping.
 
 ## 5. Locked keys, and keys unlocked only to receive: exit code 4
 
+Run `auu id --json` first. When `"encrypted"` is false the keys are not
+under a passphrase: there is nothing to unlock, every command may send,
+exit code 4 does not happen, and the rest of this section does not apply;
+`auu agent status --json` says `"encrypted": false` and `"locked": false`
+there too.
+
 The user may have encrypted their keys. Then an agent process holds them
 unlocked for a while after the user types the passphrase, and there are
 two things an unlock can be. A plain `auu unlock` lets the agent
@@ -293,10 +299,10 @@ and no reading you do can stand in for that.
 So, before the first `auu send` or `auu reply` of a session, run
 `auu agent status --json`. If `"scope"` is `"receive"`, tell the user in
 one sentence to run `auu unlock --send` in their own terminal, and wait
-for them to say it is done before you send. If the agent is not running
-or `"locked"` is true, the sentence is `auu unlock --send` too. Exit code 4
-from any `auu` command is one of these two states, and the message says
-which:
+for them to say it is done before you send. If `"encrypted"` is true and
+the agent is not running or `"locked"` is true, the sentence is
+`auu unlock --send` too. Exit code 4 from any `auu` command is one of
+these two states, and the message says which:
 
 ```
 auu: your identity is locked: run 'auu unlock' in your own terminal

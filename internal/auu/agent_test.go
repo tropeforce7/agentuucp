@@ -620,6 +620,8 @@ func TestAgentStartStopAndStatus(t *testing.T) {
 	}
 	if st := alice.agentStatus(); st.Running {
 		t.Fatal("still running after stop")
+	} else if !st.Encrypted || !st.Locked {
+		t.Errorf("an encrypted home with no agent says %+v, want encrypted and locked", st)
 	}
 	if out := alice.run("agent", "stop"); !strings.Contains(out, "no agent is running") {
 		t.Errorf("a second stop said %q", out)
@@ -643,6 +645,72 @@ func TestAgentStartStopAndStatus(t *testing.T) {
 	bob := newUser(t, "bob", relayURL)
 	if _, err := bob.tryRun("agent", "start"); err == nil || !strings.Contains(err.Error(), "not encrypted") {
 		t.Errorf("agent start on a plain home gave %v", err)
+	}
+}
+
+// TestAgentStatusOnAPlainHomeSaysNothingIsLocked: a home whose keys were
+// never encrypted has nothing to unlock. agent status started from locked
+// and kept it when no agent answered, while id said not locked, and the
+// skill that reads the status before a send told the person to run an
+// unlock that refuses on a plain home.
+func TestAgentStatusOnAPlainHomeSaysNothingIsLocked(t *testing.T) {
+	relayURL := startRelay(t)
+	bob := newUser(t, "bob", relayURL)
+	if id := bob.idStatus(); id.Encrypted || id.Locked {
+		t.Fatalf("id on a plain home says %+v", id)
+	}
+	paths, err := agent.PathsFor(bob.home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := bob.agentStatus()
+	if st.Running || st.Encrypted || st.Locked || st.Scope != "" || st.Socket != paths.Socket {
+		t.Errorf("agent status on a plain home says %+v, want not running, not encrypted, not locked, no scope", st)
+	}
+	raw := bob.run("agent", "status", "--json")
+	if !strings.Contains(raw, `"encrypted": false`) || !strings.Contains(raw, `"locked": false`) {
+		t.Errorf("the JSON does not say encrypted and locked false:\n%s", raw)
+	}
+	want := "agent:  not running\nkeys:   not encrypted; nothing to unlock, and every command may send\nsocket: " + paths.Socket + "\n"
+	if text := bob.run("agent", "status"); text != want {
+		t.Errorf("status text on a plain home:\n%s\nwant:\n%s", text, want)
+	}
+	// A home with no identity has no keys, and is refused as id refuses
+	// it, not told that every command may send.
+	empty := &user{t: t, home: t.TempDir()}
+	_, idErr := empty.tryRun("id", "--json")
+	out, err := empty.tryRun("agent", "status", "--json")
+	if err == nil || idErr == nil || err.Error() != idErr.Error() {
+		t.Errorf("agent status on a home with no identity gave %v, %q; id gave %v", err, out, idErr)
+	}
+}
+
+// TestTheSkillsNameEncryptedWhereTheyNameAgentStatus: each skill that
+// tells an agent to read "locked" from agent status says "encrypted" in
+// every paragraph that does, so a plain home is never sent to an unlock
+// that refuses.
+func TestTheSkillsNameEncryptedWhereTheyNameAgentStatus(t *testing.T) {
+	for _, f := range []string{"../../skill/auu-connect/SKILL.md", "../../skill/auu-setup/SKILL.md"} {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Every paragraph that reads "locked" out of agent status says
+		// "encrypted" beside it, so no instruction to unlock stands
+		// without the condition that there is something to unlock.
+		named := 0
+		for _, para := range strings.Split(string(data), "\n\n") {
+			if !strings.Contains(para, "agent status") || !strings.Contains(para, `"locked"`) {
+				continue
+			}
+			named++
+			if !strings.Contains(para, `"encrypted"`) {
+				t.Errorf("%s reads \"locked\" from agent status without \"encrypted\" in:\n%s", f, para)
+			}
+		}
+		if named == 0 {
+			t.Errorf("%s does not read \"locked\" from agent status", f)
+		}
 	}
 }
 

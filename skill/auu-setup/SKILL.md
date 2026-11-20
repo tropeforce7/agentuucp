@@ -264,7 +264,9 @@ the next 10 minutes`. Tell them exactly that and retry the command after
 they have. `auu id --json` and `auu agent status --json` say `"locked"`
 and `"scope"` (`receive` or `send`); check them before starting a long
 task rather than finding out at the end, and `"scope"` before one that
-ends in a send.
+ends in a send. Both say `"encrypted"` as well, and when it is false the
+keys are not under a passphrase: nothing is locked, there is nothing to
+unlock, and every command may send.
 
 ## 8. Setting up an expert host
 
