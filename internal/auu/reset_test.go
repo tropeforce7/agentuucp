@@ -239,7 +239,7 @@ func TestRemovingTheNewestMailIsNotAReset(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := r.st.Put(bob.exportFingerprint(), "default", relayapi.KindEnvelope, "", raw, relay.Quotas{}, relay.Forwarded{}); err != nil {
+		if _, err := r.st.Put(bob.exportFingerprint(), "default", relayapi.KindEnvelope, "", "", raw, relay.Quotas{}, relay.Forwarded{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -402,11 +402,11 @@ func TestMailLetGoThatComesBackIsLetGoAgain(t *testing.T) {
 	r.renumber(t, fp)
 	// Something for somebody else first, as a busy relay would have, so
 	// that neither comes back under the id it had.
-	if _, err := r.st.Put(alice.exportFingerprint(), "default", relayapi.KindEnvelope, "", removedBytes, relay.Quotas{}, relay.Forwarded{}); err != nil {
+	if _, err := r.st.Put(alice.exportFingerprint(), "default", relayapi.KindEnvelope, "", "", removedBytes, relay.Quotas{}, relay.Forwarded{}); err != nil {
 		t.Fatal(err)
 	}
 	for _, env := range [][]byte{notKeptBytes, removedBytes} {
-		if _, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", env, relay.Quotas{}, relay.Forwarded{}); err != nil {
+		if _, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", "", env, relay.Quotas{}, relay.Forwarded{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -659,7 +659,7 @@ func TestACopyRestoredLaterIsMetNotMatched(t *testing.T) {
 	r.renumber(t, fp)
 	// Received at least a second later, which is the relay's resolution.
 	time.Sleep(time.Until(before.Received.Add(1100 * time.Millisecond)))
-	id, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{})
+	id, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{})
 	if err != nil || id != before.RelayID {
 		t.Fatalf("restored as %d (%v), want the same id %d", id, err, before.RelayID)
 	}
@@ -757,7 +757,7 @@ func TestAMessageServedAgainIsMet(t *testing.T) {
 	bob.run("inbox")
 	first := recordOf(t, bob, store.Inbox, "once")
 	bob.run("read", first.Inner.ID[:12])
-	again, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{})
+	again, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -820,7 +820,7 @@ func TestAMessageHeldFromAnotherRelayIsSavedAsBefore(t *testing.T) {
 		t.Fatalf("work holds %d (%v)", len(rows), err)
 	}
 	bob.run("inbox", "--relay", "work")
-	if _, err := personalSt.Put(bob.exportFingerprint(), "default", relayapi.KindEnvelope, "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{}); err != nil {
+	if _, err := personalSt.Put(bob.exportFingerprint(), "default", relayapi.KindEnvelope, "", "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{}); err != nil {
 		t.Fatal(err)
 	}
 	if in := bob.inboxJSON("--relay", "personal"); in.Fetch.Delivered != 1 {
@@ -853,7 +853,7 @@ func TestALeftBehindMessageServedAgainMoves(t *testing.T) {
 	if ok, err := r.st.Delete(fp, m.RelayID); err != nil || !ok {
 		t.Fatal(err)
 	}
-	again, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{})
+	again, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -920,7 +920,7 @@ func TestABrokenRecordIsSavedOverWhenServedAgain(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bob.home, "inbox", m.Inner.ID+".json"), []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{}); err != nil {
+	if _, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{}); err != nil {
 		t.Fatal(err)
 	}
 	if in, _ := fetchSaying(t, bob); in.Fetch.Delivered != 1 {
@@ -984,7 +984,7 @@ func TestAnotherSendersMessageUnderAHeldIDIsKeptBesideIt(t *testing.T) {
 	bob.run("rm", "--local-only", removed.Inner.ID[:12])
 
 	for _, victim := range []*store.Stored{real, waiting, removed} {
-		id, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", sealAs(t, malloryID, bobID.Public(), victim.Inner.ID, "forged"),
+		id, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", "", sealAs(t, malloryID, bobID.Public(), victim.Inner.ID, "forged"),
 			relay.Quotas{}, relay.Forwarded{})
 		if err != nil {
 			t.Fatal(err)
@@ -1031,7 +1031,7 @@ func TestAResetThatFindsOnlyACollisionSaysSo(t *testing.T) {
 	alice.run("send", "--to", "bob", "--subject", "real", "x")
 	bob.run("inbox")
 	real := recordOf(t, bob, store.Inbox, "real")
-	if _, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", sealAs(t, malloryID, bobID.Public(), real.Inner.ID, "forged"),
+	if _, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", "", sealAs(t, malloryID, bobID.Public(), real.Inner.ID, "forged"),
 		relay.Quotas{}, relay.Forwarded{}); err != nil {
 		t.Fatal(err)
 	}

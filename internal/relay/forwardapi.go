@@ -292,7 +292,7 @@ func (s *Server) deliver(w http.ResponseWriter, r *http.Request, env *relayapi.C
 		return
 	}
 	put := func() (int64, error) {
-		return s.store.Put(fp, channel, relayapi.KindEnvelope, "", raw, s.cfg.Limits.Quotas(),
+		return s.store.Put(fp, channel, relayapi.KindEnvelope, "", "", raw, s.cfg.Limits.Quotas(),
 			Forwarded{
 				Via:     via,
 				Hash:    hash,

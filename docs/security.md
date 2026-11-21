@@ -13,8 +13,9 @@ What the relay stores, what it sees, what protects a message, and the wire in de
 ## 1. Security model
 
 **What the relay stores.** The recipient's fingerprint, the size of each
-message, when it arrived, the channel it was posted to, and its kind. That
-is all. The sender's identity is inside the ciphertext, so the stored rows
+message, when it arrived, the channel it was posted to, its kind, and for
+a message posted or a stream placed there, a hash of its withdrawal key.
+That is all. The sender's identity is inside the ciphertext, so the stored rows
 do not say who wrote anything. The channel is one label per message, from
 a list the owner wrote and published to every sender they admit. It is
 there because the relay routes by it. The name, the period and the rules
@@ -37,6 +38,19 @@ the route the message arrived by and said beside the row in every
 listing. A knock is a stranger's one message, taken past the allow list
 only where the recipient's signed card says `knocks`. It says nothing
 about who knocked, since that is inside the ciphertext like every sender.
+
+The withdrawal key is what a sender will withdraw a message by. It is
+derived from the sealed bytes, never minted: SHA-256 under the domain
+`ccx-withdraw-v1` over the recipient's fingerprint and the ciphertext, or
+a stream's first 4,096 bytes. The sender computes it from the copy it
+sealed. The relay keeps only the SHA-256 of the key, which it computes
+from the copy it stores. That hash names nobody and cannot be tested
+against a candidate sender. Whoever can make the key holds the sealed bytes:
+the sender, the recipient once they have fetched them, and whoever holds
+the relay's message files. Each of the last two can remove the message
+already. The database alone does not give it. A knock, a message delivered
+by another relay's courier, whose ciphertext every relay it crossed
+holds, and every message stored before v0.22.0 keep none.
 
 Beside the rows, per mailbox, the three documents an owner signs and
 pushes: the channel directory, the allow list, and the card, which says

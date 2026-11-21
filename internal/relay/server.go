@@ -19,6 +19,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/token"
 	"github.com/tropeforce7/agentuucp/internal/wire"
+	"github.com/tropeforce7/agentuucp/internal/withdraw"
 )
 
 // Config configures a relay server.
@@ -1449,6 +1450,11 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 	// decides.
 	now := s.cfg.Now()
 	hash := CarriedHash(env)
+	// What the row keeps of the key its sender may withdraw it by: from
+	// the recipient and the ciphertext, which are what the sender sealed,
+	// so the sender's own copy gives the same key (withdraw.EnvelopeKey).
+	// Never logged; nothing reads it until the withdrawal route.
+	stored := withdraw.Stored(withdraw.EnvelopeKey(env.To, env.CT))
 	var wrote Forwarded
 	if first, ok, err := s.store.deliveredAs(hash, now); err != nil {
 		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
@@ -1469,7 +1475,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 		}()
 	}
 	put := func(f Forwarded) (int64, error) {
-		id, err := s.store.Put(fp, channel, relayapi.KindEnvelope, "", body, s.cfg.Limits.Quotas(), f)
+		id, err := s.store.Put(fp, channel, relayapi.KindEnvelope, "", stored, body, s.cfg.Limits.Quotas(), f)
 		if err == nil {
 			wrote = f
 		}

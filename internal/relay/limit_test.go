@@ -316,7 +316,7 @@ func TestLimitSweepFileNames(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	id, err := s.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", sealed(t, alice, bob.Public(), "x"), Quotas{}, Forwarded{})
+	id, err := s.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", "", sealed(t, alice, bob.Public(), "x"), Quotas{}, Forwarded{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -435,7 +435,7 @@ func TestLimitMessageDirectoryEntries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	id, err := s.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", sealed(t, alice, bob.Public(), "x"), Quotas{}, Forwarded{})
+	id, err := s.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", "", sealed(t, alice, bob.Public(), "x"), Quotas{}, Forwarded{})
 	if err != nil {
 		t.Fatal(err)
 	}

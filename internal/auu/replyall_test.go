@@ -535,11 +535,11 @@ func TestKeptMailUnderANewNumberingIsNotACopy(t *testing.T) {
 		t.Fatal("the two rows cannot be told apart")
 	}
 	r.renumber(t, fp)
-	otherID, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", other.Envelope, relay.Quotas{}, relay.Forwarded{})
+	otherID, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", "", other.Envelope, relay.Quotas{}, relay.Forwarded{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	keptID, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", kept.Envelope, relay.Quotas{}, relay.Forwarded{})
+	keptID, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", "", kept.Envelope, relay.Quotas{}, relay.Forwarded{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -641,12 +641,12 @@ func TestALeftEntryMovedThenMetAgain(t *testing.T) {
 	bob.run("rm", "--local-only", id[:12])
 	r.renumber(t, fp)
 	// Somebody else's mail takes the entry's old id.
-	if _, err := r.st.Put(alice.exportFingerprint(), "default", relayapi.KindEnvelope, "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{}); err != nil {
+	if _, err := r.st.Put(alice.exportFingerprint(), "default", relayapi.KindEnvelope, "", "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{}); err != nil {
 		t.Fatal(err)
 	}
 	var restored []int64
 	for range 2 {
-		n, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{})
+		n, err := r.st.Put(fp, "default", relayapi.KindEnvelope, "", "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{})
 		if err != nil {
 			t.Fatal(err)
 		}

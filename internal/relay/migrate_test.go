@@ -77,7 +77,7 @@ func oldDatabase(t *testing.T, v int, later string) planted {
 	if err := src.Register(p.bob.Fingerprint(), p.bob.Public().Bundle(), p.bob.Name, RegisterOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := src.Put(p.alice.Fingerprint(), "default", relayapi.KindEnvelope, "", p.envelope, Quotas{}, Forwarded{}); err != nil {
+	if _, err := src.Put(p.alice.Fingerprint(), "default", relayapi.KindEnvelope, "", "", p.envelope, Quotas{}, Forwarded{}); err != nil {
 		t.Fatal(err)
 	}
 	p.tokenID = strings.Repeat("7c", 16)
@@ -124,6 +124,8 @@ func oldDatabase(t *testing.T, v int, later string) planted {
 		text = schemahistory.SchemaAt11
 	case 12:
 		text = schemahistory.SchemaAt12
+	case 13:
+		text = schemahistory.SchemaAt13
 	default:
 		t.Fatalf("no schema text for version %d", v)
 	}
@@ -353,6 +355,12 @@ func TestADatabaseAtEachKeptVersionIsCarriedForward(t *testing.T) {
 			}
 			if rows[0].Via != "" || !bytes.Equal(rows[0].Envelope, p.envelope) {
 				t.Errorf("the message from before lists via %q and %q, want no via and the envelope", rows[0].Via, rows[0].Envelope)
+			}
+			// A row from before schema 14 keeps no withdrawal key, and so
+			// is not withdrawable.
+			var stored string
+			if err := s.db.QueryRow(`SELECT withdraw FROM messages WHERE id = ?`, rows[0].ID).Scan(&stored); err != nil || stored != "" {
+				t.Errorf("the message from before has withdraw %q (%v), want empty", stored, err)
 			}
 			if _, err := s.Token(p.tokenID); err != nil {
 				t.Errorf("the token from before: %v", err)

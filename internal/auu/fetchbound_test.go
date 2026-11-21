@@ -320,7 +320,7 @@ func sealed(t *testing.T, alice, bob *identity.Identity, subject string) []byte 
 // route would meet its posts-per-minute limit.
 func (h *hookedRelay) put(t *testing.T, alice, bob *identity.Identity, subject string) int64 {
 	t.Helper()
-	id, err := h.st.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", sealed(t, alice, bob, subject), relay.Quotas{}, relay.Forwarded{})
+	id, err := h.st.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", "", sealed(t, alice, bob, subject), relay.Quotas{}, relay.Forwarded{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +336,7 @@ func (h *hookedRelay) putDuring(t *testing.T, alice, bob *identity.Identity, sub
 	var id atomic.Int64
 	var failed atomic.Pointer[error]
 	hook := func() {
-		got, err := h.st.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", raw, relay.Quotas{}, relay.Forwarded{})
+		got, err := h.st.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", "", raw, relay.Quotas{}, relay.Forwarded{})
 		if err != nil {
 			failed.Store(&err)
 		}
@@ -836,7 +836,7 @@ func TestAStoppedFetchWritesWhatItMet(t *testing.T) {
 	if ok, err := h.st.Delete(fp, first); err != nil || !ok {
 		t.Fatal(err)
 	}
-	again, err := h.st.Put(fp, "default", relayapi.KindEnvelope, "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{})
+	again, err := h.st.Put(fp, "default", relayapi.KindEnvelope, "", "", rows[0].Envelope, relay.Quotas{}, relay.Forwarded{})
 	if err != nil {
 		t.Fatal(err)
 	}

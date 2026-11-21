@@ -83,6 +83,13 @@ CREATE INDEX IF NOT EXISTS outbound_purge ON outbound(state, last_try);
 CREATE INDEX IF NOT EXISTS outbound_share ON outbound(poster_fp, state, size);
 `
 
+// stepTo14 is what the withdrawal's first commit added: the column that
+// holds the stored form of a message's withdrawal key. A row from before
+// holds the empty string, which is a message that is not withdrawable.
+const stepTo14 = `
+ALTER TABLE messages ADD COLUMN withdraw TEXT NOT NULL DEFAULT '';
+`
+
 // migrateStep runs the step to version to inside tx. A version with no
 // case is errNoStep.
 func migrateStep(tx *sql.Tx, to int) error {
@@ -92,6 +99,9 @@ func migrateStep(tx *sql.Tx, to int) error {
 		return err
 	case 13:
 		_, err := tx.Exec(stepTo13)
+		return err
+	case 14:
+		_, err := tx.Exec(stepTo14)
 		return err
 	}
 	return errNoStep

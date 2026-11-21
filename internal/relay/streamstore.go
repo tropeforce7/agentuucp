@@ -17,6 +17,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/withdraw"
 )
 
 // Uploads in progress. A stream arrives in pieces, so the relay holds a
@@ -522,6 +523,14 @@ func (s *Store) placeUpload(u *Upload) (int64, error) {
 	if !identity.ValidFingerprint(u.To) || !ValidUploadID(u.ID) {
 		return 0, fmt.Errorf("relay: upload row names a recipient or an id that is not one: %w", ErrForm)
 	}
+	// The row keeps what its sender may withdraw it by, from the bytes
+	// that are about to be the message, read before anything is written:
+	// a file that will not give them is the placement's failure, with
+	// the upload left where it was.
+	stored, err := s.uploadKey(u)
+	if err != nil {
+		return 0, err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, err
@@ -529,8 +538,8 @@ func (s *Store) placeUpload(u *Upload) (int64, error) {
 	defer tx.Rollback()
 
 	res, err := tx.Exec(
-		`INSERT INTO messages (to_fp, received, size, kind, channel) VALUES (?, ?, ?, 'stream', ?)`,
-		u.To, time.Now().UTC().Format(time.RFC3339), u.Size, u.Channel)
+		`INSERT INTO messages (to_fp, received, size, kind, channel, withdraw) VALUES (?, ?, ?, 'stream', ?, ?)`,
+		u.To, time.Now().UTC().Format(time.RFC3339), u.Size, u.Channel, stored)
 	if err != nil {
 		return 0, err
 	}
@@ -553,6 +562,24 @@ func (s *Store) placeUpload(u *Upload) (int64, error) {
 		return 0, err
 	}
 	return messageID, nil
+}
+
+// uploadKey is withdraw.Stored of a finished upload's withdrawal key: the
+// stream key over the first bytes of the upload's file, for the recipient
+// the row names, both held to their rules by placeUpload before this
+// runs. The file is the relay's own, named by an id it allocated, and is
+// read by its handle, under the upload's lock the caller holds.
+func (s *Store) uploadKey(u *Upload) (string, error) {
+	f, err := regular.Open(s.uploadPath(u.ID))
+	if err != nil {
+		return "", s.fault(s.uploadPath(u.ID), err)
+	}
+	defer f.Close()
+	k, err := withdraw.StreamKey(u.To, f, u.Size)
+	if err != nil {
+		return "", s.fault(s.uploadPath(u.ID), err)
+	}
+	return withdraw.Stored(k), nil
 }
 
 // AbortUpload drops an upload and releases its reservation, and hands

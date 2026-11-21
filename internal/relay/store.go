@@ -14,6 +14,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
+	"github.com/tropeforce7/agentuucp/internal/withdraw"
 
 	_ "modernc.org/sqlite"
 )
@@ -65,7 +66,7 @@ var (
 // is refused as written by a newer release. A change to any table
 // constant, a column or an index, is a new version with a step: a file
 // that exists never runs the constant again.
-const schemaVersion = 13
+const schemaVersion = 14
 
 // SchemaVersion is schemaVersion for the version line and the container
 // suite.
@@ -235,7 +236,14 @@ CREATE INDEX IF NOT EXISTS cards_listed ON cards(listed, fp);`
 	-- mailbox, which is all of it until a relay delivers what it carried;
 	-- the column is here because the schema is one text and one version,
 	-- and what writes it is the delivery two commits from this one.
-	via      TEXT NOT NULL DEFAULT ''
+	via      TEXT NOT NULL DEFAULT '',
+	-- withdraw is withdraw.Stored of the key a sender withdraws this
+	-- message by: a hash of a hash of the sealed bytes the row's file
+	-- already holds, which names nobody and goes with the row. Written for
+	-- a message posted here and for a stream placed here; empty for a
+	-- knock, a courier's delivery and every row from before schema 14,
+	-- none of which is withdrawable.
+	withdraw TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS messages_to ON messages(to_fp, id);
 CREATE INDEX IF NOT EXISTS messages_knocker ON messages(to_fp, kind, knocker);`
@@ -883,15 +891,27 @@ func (s *Store) Exists(fp string) (bool, error) {
 // f is what a delivery at the last hop carries beside the envelope and a
 // message posted here does not: see Forwarded.
 //
+// stored is withdraw.Stored of the envelope's withdrawal key, written
+// into the row's column: the post route's to give, from the envelope it
+// parsed, and empty from the knock and the forward routes, whose rows are
+// not withdrawable. A stored key on any row but an envelope posted here
+// is a programming fault, refused as a knocker on the wrong kind is.
+//
 // The body is written to a temporary file and fsynced, then the row is
 // inserted and the file renamed into place, all before the transaction
 // commits. That ordering is what makes the invariant hold: after a commit
 // there is always a file, and every crash leaves at most an unreferenced file
 // for the sweep, never a row promising a message that is not there.
-func (s *Store) Put(toFP, channel, kind, knocker string, raw []byte, q Quotas, f Forwarded) (int64, error) {
+func (s *Store) Put(toFP, channel, kind, knocker, stored string, raw []byte, q Quotas, f Forwarded) (int64, error) {
 	if (kind == relayapi.KindKnock) != (knocker != "") {
 		return 0, fmt.Errorf("relay: a %s row carries knocker %q: a knock names its knocker and nothing else does",
 			kind, knocker)
+	}
+	if stored != "" && (kind != relayapi.KindEnvelope || f.Via != "" || !withdraw.Valid(stored)) {
+		// The value is left out of the sentence: it is a credential's
+		// hash, and an error may reach a log line.
+		return 0, fmt.Errorf("relay: a %s row with via %q carries a withdrawal key: only an envelope posted here has one, "+
+			"and it has a key's shape", kind, f.Via)
 	}
 	size := int64(len(raw))
 	tmp, err := s.writeTemp(raw)
@@ -935,9 +955,9 @@ func (s *Store) Put(toFP, channel, kind, knocker string, raw []byte, q Quotas, f
 		}
 	}
 
-	res, err := tx.Exec(`INSERT INTO messages (to_fp, received, size, kind, channel, knocker, via)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		toFP, time.Now().UTC().Format(time.RFC3339), size, kind, channel, knocker, f.Via)
+	res, err := tx.Exec(`INSERT INTO messages (to_fp, received, size, kind, channel, knocker, via, withdraw)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		toFP, time.Now().UTC().Format(time.RFC3339), size, kind, channel, knocker, f.Via, stored)
 	if err != nil {
 		return 0, err
 	}

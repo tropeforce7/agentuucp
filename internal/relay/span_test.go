@@ -24,7 +24,7 @@ func TestAListingSaysTheSpanOfIdsHeld(t *testing.T) {
 	}
 	put := func(to string) int64 {
 		t.Helper()
-		id, err := s.Put(to, "default", relayapi.KindEnvelope, "", sealed(t, alice, bob.Public(), "x"), Quotas{}, Forwarded{})
+		id, err := s.Put(to, "default", relayapi.KindEnvelope, "", "", sealed(t, alice, bob.Public(), "x"), Quotas{}, Forwarded{})
 		if err != nil {
 			t.Fatal(err)
 		}

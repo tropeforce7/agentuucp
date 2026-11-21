@@ -358,7 +358,7 @@ func TestAListingPageIsCutAtMaxPageBytes(t *testing.T) {
 	env := sealed(t, alice, bob.Public(), strings.Repeat("m", 5<<20))
 	const count = 12
 	for range count {
-		if _, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", env, Quotas{}, Forwarded{}); err != nil {
+		if _, err := h.store.Put(bob.Fingerprint(), "default", relayapi.KindEnvelope, "", "", env, Quotas{}, Forwarded{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -407,7 +407,7 @@ func TestAListingPageIsCutAtMaxPageBytes(t *testing.T) {
 	}
 	small := sealed(t, alice, carol.Public(), "small")
 	for _, raw := range [][]byte{big, small} {
-		if _, err := h.store.Put(carol.Fingerprint(), "default", relayapi.KindEnvelope, "", raw, Quotas{}, Forwarded{}); err != nil {
+		if _, err := h.store.Put(carol.Fingerprint(), "default", relayapi.KindEnvelope, "", "", raw, Quotas{}, Forwarded{}); err != nil {
 			t.Fatal(err)
 		}
 	}

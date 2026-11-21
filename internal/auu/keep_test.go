@@ -35,7 +35,7 @@ func queuedOn(t *testing.T, st *relay.Store, fp string) []int64 {
 // share: what a client meets as the same message on two rows.
 func storedAgain(t *testing.T, st *relay.Store, fp string, row relay.Row) {
 	t.Helper()
-	if _, err := st.Put(fp, row.Channel, row.Kind, "", row.Envelope, relay.DefaultLimits().Quotas(), relay.Forwarded{}); err != nil {
+	if _, err := st.Put(fp, row.Channel, row.Kind, "", "", row.Envelope, relay.DefaultLimits().Quotas(), relay.Forwarded{}); err != nil {
 		t.Fatal(err)
 	}
 }
