@@ -997,7 +997,20 @@ quarantined stream is marked ` body not fetched` instead. Its body was
 deliberately left on the relay rather than downloaded for a stranger. That
 stays true of this machine whether or not the relay still has it.
 `auu quarantine trust` says `its body is no longer on the relay; ask the
-sender to send it again` when it has gone. The marks are checked against
+sender to send it again` when it has gone.
+
+A sender may withdraw a message, and a short note of type `note`, in
+reply to it, takes its place on the relay. If you had already fetched the
+message you keep it: when the note arrives from the message's own sender,
+the message is marked withdrawn, `auu inbox` and `auu quarantine ls` end
+its line with ` withdrawn`, `auu read` says `!! WITHDRAWN by its sender
+on DATE` and the reason they gave at the top, and `--json` carries
+`withdrawn`, `withdrawn_by` and `withdrawn_reason`. Nothing else about
+the message changes, and nothing is removed from your machine. A note
+from anybody else for that message marks nothing and is said once. A
+quarantined stream whose sender withdrew it is not fetched: `auu
+quarantine trust` says so and adds nobody. A message marked
+withdrawn is refused by name by an `auu` before v0.22.0. The marks are checked against
 the relay on every fetch, so mail another machine of yours removed stops
 being marked here. A check that cannot be made says so once and changes
 nothing. `auu channel keep NAME off` is the other choice for one

@@ -204,7 +204,7 @@ func deliverStream(ctx context.Context, s *store.Store, id *identity.Identity, c
 	inner, dropped := innerFromManifest(m)
 	fill := func(target string) error { return opened.ToDirectory(body, target) }
 	return replaceSpool(ctx, s, dir, fill, func() error {
-		return s.Save(box, &store.Stored{
+		rec := &store.Stored{
 			RelayID:         relayID,
 			Relay:           r.Name,
 			Received:        listed.Received,
@@ -217,8 +217,24 @@ func deliverStream(ctx context.Context, s *store.Store, id *identity.Identity, c
 			OnRelay:         true,
 			AckOwed:         !keep,
 			DroppedSections: dropped,
-		})
+		}
+		carryWithdrawal(s, box, rec)
+		return s.Save(box, rec)
 	})
+}
+
+// carryWithdrawal gives a record rebuilt from the wire the withdrawal mark
+// the record it replaces carries (R146 P11): a stream fetched whole once a
+// newer build can read it, or a message met again through another relay
+// and saved afresh, is the same message, and the mark its sender's note
+// made is not lost by building it again. A record that is not there, will
+// not read, or is another sender's has no mark to carry.
+func carryWithdrawal(s *store.Store, box store.Box, rec *store.Stored) {
+	prior, err := s.Holding(box, rec.Inner.ID)
+	if err != nil || prior == nil || prior.Withdrawn.IsZero() || prior.Inner.From != rec.Inner.From {
+		return
+	}
+	rec.Withdrawn, rec.WithdrawnBy, rec.WithdrawnReason = prior.Withdrawn, prior.WithdrawnBy, prior.WithdrawnReason
 }
 
 // quarantineStream records a stream from somebody unknown without fetching it.
@@ -242,7 +258,7 @@ func waitingStream(s *store.Store, box store.Box, r *store.Relay, listed relayCo
 	if box == store.Inbox {
 		name = s.PeerName(m.From)
 	}
-	return s.Save(box, &store.Stored{
+	rec := &store.Stored{
 		RelayID:         listed.ID,
 		Relay:           r.Name,
 		Received:        listed.Received,
@@ -254,7 +270,9 @@ func waitingStream(s *store.Store, box store.Box, r *store.Relay, listed relayCo
 		Channel:         storedChannel(m.Channel),
 		Newer:           newer,
 		DroppedSections: dropped,
-	})
+	}
+	carryWithdrawal(s, box, rec)
+	return s.Save(box, rec)
 }
 
 // storedChannel is a manifest's channel as the record keeps it: nothing

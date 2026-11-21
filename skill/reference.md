@@ -550,7 +550,11 @@ critical on a message
 needs a newer auu as an unknown critical one does; a message an earlier
 release kept with such a section over 16 KiB still loads, and the cap holds
 what is fetched from now on) and `dropped_sections` (when set: how many
-such sections were over 16 KiB and not kept), and `vouch` (on a message of
+such sections were over 16 KiB and not kept), `withdrawn`,
+`withdrawn_by` and `withdrawn_reason` (when its sender withdrew it: when
+this machine marked it so, the id of the withdrawal note that did, and the
+sender's reason, absent for none; the message itself is as it came), and
+`vouch` (on a message of
 type `vouch` alone: `counts`, and when it does not, `why`; when it does,
 `voucher` and `subject` (fingerprints), `name` (the voucher's label for the
 subject, a suggestion and never a label here), `issued`, `known_as` (when

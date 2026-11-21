@@ -409,6 +409,15 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 				if meeting == metAgain {
 					res.Duplicate++
 				}
+				// A note met again, as the row it was filed from or as
+				// another, marks its original again, which changes nothing
+				// when the mark is there and puts back one a writer racing
+				// the first mark saved over.
+				if meeting == metHeld || meeting == metAgain {
+					if err := remarkHeld(s, inner.ID); err != nil {
+						return res, said, err
+					}
+				}
 				if meeting != notHeld {
 					cursor = m.ID
 					if err := s.SetCursorFor(r, cursor); err != nil {
@@ -445,6 +454,14 @@ func fetch(ctx context.Context, s *store.Store, id *identity.Identity, c *client
 					return res, said, err
 				}
 				continue
+			}
+			// A record saved afresh over one held from another relay keeps
+			// the mark its sender's note made. A withdrawal note marks its
+			// original before it is saved itself (R146 P10), so a crash
+			// between the two is put right by the note's next fetch.
+			carryWithdrawal(s, o.box, o.stored)
+			if err := markWithdrawn(s, o.stored); err != nil {
+				return res, said, err
 			}
 			if err := s.Save(o.box, o.stored); err != nil {
 				return res, said, fmt.Errorf("saving message locally: %w", err)
@@ -666,6 +683,12 @@ type messageJSON struct {
 	// listed them, each by fingerprint and the name this machine has for
 	// them, the reader's own among them; absent for a message to one.
 	Recipients []recipientNameJSON `json:"recipients,omitempty"`
+	// Withdrawn, WithdrawnBy and WithdrawnReason are a message its sender
+	// withdrew: when this machine marked it, the note that did, and the
+	// reason, empty for none. Absent on every other message.
+	Withdrawn       time.Time `json:"withdrawn,omitzero"`
+	WithdrawnBy     string    `json:"withdrawn_by,omitempty"`
+	WithdrawnReason string    `json:"withdrawn_reason,omitempty"`
 }
 
 // recipientNameJSON is one recipient of a message to several, the shape an
@@ -779,6 +802,10 @@ func toJSON(s *store.Store, box store.Box, m *store.Stored, includeText bool) me
 
 		OnRelay:        m.OnRelay,
 		PayloadOnRelay: m.PayloadOnRelay,
+
+		Withdrawn:       m.Withdrawn,
+		WithdrawnBy:     m.WithdrawnBy,
+		WithdrawnReason: m.WithdrawnReason,
 	}
 	for _, fp := range recipientsOf(m) {
 		name := ""
@@ -1089,13 +1116,22 @@ func printQuarantineLine(s *store.Store, m *store.Stored) {
 		if s != nil {
 			vouched = knockVouchLine(judgeKnockVouches(s, m, time.Now()))
 		}
-		fmt.Printf("%s  knock  from %s  %s  %s%s%s\n", m.Inner.ID[:12], m.Inner.From[:16],
+		fmt.Printf("%s  knock  from %s  %s  %s%s%s%s\n", m.Inner.ID[:12], m.Inner.From[:16],
 			truncate(orNone(identity.Printable(m.Inner.Body.Name)), 20),
-			truncate(identity.PrintableText(m.Inner.Body.Text), 40), vouched, whereElse(m))
+			truncate(identity.PrintableText(m.Inner.Body.Text), 40), vouched, whereElse(m), withdrawnMark(m))
 		return
 	}
-	fmt.Printf("%s  from %s  %s%s\n", m.Inner.ID[:12], m.Inner.From[:16],
-		truncate(orNone(identity.PrintableText(m.Inner.Body.Subject)), 40), whereElse(m))
+	fmt.Printf("%s  from %s  %s%s%s\n", m.Inner.ID[:12], m.Inner.From[:16],
+		truncate(orNone(identity.PrintableText(m.Inner.Body.Subject)), 40), whereElse(m), withdrawnMark(m))
+}
+
+// withdrawnMark is what a listing line says of a message its sender
+// withdrew: the word, and nothing of the reason, which read shows.
+func withdrawnMark(m *store.Stored) string {
+	if m.Withdrawn.IsZero() {
+		return ""
+	}
+	return "  withdrawn"
 }
 
 // printInboxLine is one message as the inbox lists it: unread flag, the
@@ -1128,14 +1164,14 @@ func printInboxLine(s *store.Store, m *store.Stored) {
 	if m.Inner.Body.Type == message.TypeVouchAsk && s != nil {
 		what = askLine(s, m)
 	}
-	fmt.Printf("%s %s  %-14s %-8s %-32s %s%s%s%s\n",
+	fmt.Printf("%s %s  %-14s %-8s %-32s %s%s%s%s%s\n",
 		flag,
 		m.Inner.ID[:12],
 		truncate(orNone(identity.Printable(m.SenderName)), 14),
 		m.Inner.Body.Type,
 		what,
 		m.Received.Local().Format("2006-01-02 15:04"),
-		att, ch, whereElse(m))
+		att, ch, whereElse(m), withdrawnMark(m))
 }
 
 // whereElse says what of a message is not here: the message itself still
@@ -1312,6 +1348,16 @@ func roomOfMessage(s *store.Store, m *store.Stored) string {
 func printMessage(s *store.Store, box store.Box, m *store.Stored) {
 	if box == store.Quarantine {
 		fmt.Println("!! QUARANTINED: this sender is not in your peer list.")
+	}
+	// Above the message, since it changes how the rest is read: its sender
+	// withdrew it, when this machine learned so, and the reason, escaped
+	// as a subject is. The message itself is below, as it came.
+	if !m.Withdrawn.IsZero() {
+		line := fmt.Sprintf("!! WITHDRAWN by its sender on %s", m.Withdrawn.Local().Format(time.RFC1123))
+		if m.WithdrawnReason != "" {
+			line += ": " + identity.PrintableText(m.WithdrawnReason)
+		}
+		fmt.Println(line)
 	}
 	// Everything the sender wrote goes through an escaper here, though the
 	// rule at Validate has refused what would need one: a record from
@@ -2140,6 +2186,17 @@ func cmdQuarantine(args []string) error {
 		}
 		if m.Newer != "" {
 			return usageErrf("%s", waitsForNewer(m))
+		}
+		// A stream whose sender withdrew it while its body waited on the
+		// relay: the relay put the note in its place, or the note went by
+		// the ordinary route and the body may be there still, and either
+		// way the sender has asked that it not be read. Its body is not
+		// fetched, neither the relay nor the person is asked anything, and
+		// nobody is added; it is the person's answer and not a transport
+		// fault, exit 1.
+		if m.PayloadOnRelay && !m.Withdrawn.IsZero() {
+			return fmt.Errorf("%s: its sender withdrew it on %s; its body is not fetched, and nobody was added",
+				m.Inner.ID[:12], m.Withdrawn.Local().Format("2006-01-02 15:04"))
 		}
 		pub, err := identity.ParseBundle(m.Inner.FromBundle)
 		if err != nil {

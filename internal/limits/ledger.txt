@@ -382,9 +382,11 @@ internal/auu/inbox.go cmdQuarantine string m.Inner.ID[:12] #2 = local: ValidID a
 internal/auu/inbox.go cmdQuarantine string m.Inner.ID[:12] #3 = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go cmdQuarantine string m.Inner.ID[:12] #4 = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go cmdQuarantine string m.Inner.ID[:12] = local: ValidID at Load shown by TestLimitStoredRecordShapes
+internal/auu/inbox.go cmdQuarantine string m.Inner.ID[:12] #5 = local: ValidID at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go cmdQuarantine string pub.Fingerprint()[:16] = local: Fingerprint writes 64 hex characters
 internal/auu/inbox.go copyJSON int RelayID int64 = output
 internal/auu/inbox.go messageJSON int DroppedSections int = output
+internal/auu/inbox.go messageJSON time Withdrawn = output
 internal/auu/inbox.go printCopies string c.Fingerprint[:16] = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go printRecipients string fp[:16] = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
 internal/auu/inbox.go printQuarantineLine string m.Inner.From[:16] #2 = local: ValidFingerprint at Load shown by TestLimitStoredRecordShapes
@@ -529,6 +531,8 @@ internal/auu/watch.go messageEvent int ID int64 = output
 internal/auu/watch.go messageEvent int Size int64 = output
 internal/auu/watch_cmds.go cmdWatch int fs.Duration("interval") = >= 5s shown by TestLimitWaitAndWatchFlags
 internal/auu/watch_cmds.go cmdWatch int fs.Duration("timeout") = >= 0s shown by TestLimitWaitAndWatchFlags
+internal/auu/withdrawmark.go markWithdrawn string note.Inner.ID[:12] = local: ValidID at Open, the note being one this fetch opened, shown by TestLimitStoredRecordShapes
+internal/auu/withdrawmark.go markWithdrawn string note.Inner.ID[:12] #2 = local: ValidID at Open, the note being one this fetch opened, shown by TestLimitStoredRecordShapes
 internal/card/card.go Document int V int = [1, 1] shown by TestLimitCardV
 # A channel's max_bytes sizes the wire bytes of an envelope, or of a sealed
 # stream with its manifest, whichever way the message comes.
@@ -829,6 +833,7 @@ internal/store/relay.go Relay time Added = display
 internal/store/relay.go Relay time ServerIntNotBefore = local: held by Store.SeenIntermediateFor at the client's OnSeen, the NotBefore of the server intermediate the client verified against the pinned anchor; Store.SaveAnchorFor and Store.RemoveAnchorFor clear it shown by TestLimitTheSeenIntermediatesNotBeforeRoundTrips
 internal/store/store.go Stored time Arrived = local: held by Store.Save at the record's first save, this machine's clock when it has none; auu.deliverStream saves a held record's own earlier Arrived again, and Store.Load lends a record an earlier release kept the relay's received when relayapi.Writable holds it and it is not after this machine's clock plus relayapi.MaxSkew, otherwise the file's time held to both, otherwise this machine's clock (D80, G9) shown by TestLimitAStoredArrivalIsThisMachinesClock
 internal/store/store.go Stored time Received = local: held by Client.checkListing at the fetch, written by auu.openOne, auu.deliverStream, auu.waitingStream and meeter.meet from the listing; auu.cmdKnock, auu.sendSealed, auu.sendToSeveral and auu.finishStream write this machine's clock for a sent copy, and a record an earlier release kept is read as it is shown by TestLimitARelaysStampsAreHeldToTheSkew
+internal/store/store.go Stored time Withdrawn = [relayapi.EarliestWritable, relayapi.LatestWritable] shown by TestLimitAWithdrawalMarkIsAWritableTime
 internal/stream/stream.go Manifest time Time = <= now + 42m shown by TestLimitAManifestTimeIsHeldToTheSkew
 internal/vouch/vouch.go Document time Issued = <= now + 42m shown by TestLimitAVouchIssuedIsHeldToTheSkew
 

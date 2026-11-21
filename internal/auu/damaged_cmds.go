@@ -416,6 +416,10 @@ func reopenOne(s *store.Store, id *identity.Identity, relays []*store.Relay, set
 	// The fetch acknowledged it when it kept it, so nothing of it is left
 	// on the relay to keep.
 	o.stored.OnRelay = false
+	// A withdrawal note reopened marks its original as a fetched one does.
+	if err := markWithdrawn(s, o.stored); err != nil {
+		return res, err
+	}
 	if err := s.Save(o.box, o.stored); err != nil {
 		return res, fmt.Errorf("saving message locally: %w", err)
 	}

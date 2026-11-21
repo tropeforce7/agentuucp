@@ -30,6 +30,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/regular"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/wire"
+	"github.com/tropeforce7/agentuucp/internal/withdraw"
 )
 
 const (
@@ -849,6 +850,18 @@ type Stored struct {
 	// since the copies differ only in their to and their signature. Empty,
 	// the value the key is left out for, is every other record.
 	Copies []SentCopy `json:"copies,omitempty"`
+	// Withdrawn is this machine's clock when the message was marked
+	// withdrawn: a withdrawal note from its own verified sender, naming it,
+	// was filed here (D193). WithdrawnBy is that note's id and
+	// WithdrawnReason the reason it gave, empty for none. The text, the
+	// attachments and everything else the record says are as they were: a
+	// withdrawal removes nothing from this machine (D188 a). All three are
+	// left out when the message was never withdrawn, so a record nobody
+	// withdrew is byte for byte what v0.21.1 wrote; an auu before v0.22.0
+	// refuses a record that carries one, by name, its decode being strict.
+	Withdrawn       time.Time `json:"withdrawn,omitzero"`
+	WithdrawnBy     string    `json:"withdrawn_by,omitempty"`
+	WithdrawnReason string    `json:"withdrawn_reason,omitempty"`
 }
 
 // SentCopy is one copy of a sent message to several.
@@ -1072,6 +1085,12 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	if m.DroppedSections < 0 {
 		return nil, fmt.Errorf("the record's dropped section count %d is negative", m.DroppedSections)
 	}
+	// The withdrawal mark, as the mark writes it: a time with the note's
+	// id, the reason held to the reason's rule, and neither id nor reason
+	// without the time. Each is shown, the reason on a terminal.
+	if err := validWithdrawn(m.Withdrawn, m.WithdrawnBy, m.WithdrawnReason); err != nil {
+		return nil, fmt.Errorf("the record's withdrawal: %v", err)
+	}
 	if m.Newer != "" {
 		if err := wire.ValidName(m.Newer); err != nil {
 			return nil, fmt.Errorf("the record's newer section: %v", err)
@@ -1081,6 +1100,26 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 		}
 	}
 	return &m, nil
+}
+
+// validWithdrawn holds a withdrawal mark to what the mark writes: nothing
+// at all, or a time and the id of the note that made it, with a reason
+// that is the reason's rule's. An id or a reason without a time, or a time
+// without an id, was not written by this program.
+func validWithdrawn(at time.Time, by, reason string) error {
+	if at.IsZero() {
+		if by != "" || reason != "" {
+			return errors.New("it names a note or a reason but no time")
+		}
+		return nil
+	}
+	// The time is this machine's clock when the mark was made, shown and
+	// never ordered by. The strict decode holds it to what RFC 3339 can
+	// write, relayapi.EarliestWritable to LatestWritable, before this runs.
+	if err := message.ValidID(by); err != nil {
+		return errors.New("the note that withdrew it is not a message id")
+	}
+	return withdraw.ValidReason(reason)
 }
 
 // validCopies holds a sent record's copies to what the sender wrote: only
