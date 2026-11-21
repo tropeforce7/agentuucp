@@ -85,6 +85,6 @@ func (s *Server) handleWithdraw(w http.ResponseWriter, r *http.Request, body []b
 		noteStored = withdraw.Stored(withdraw.EnvelopeKey(env.To, env.CT))
 	}
 	s.storeOnce(w, fp, callerFP, env, func(f Forwarded) (int64, error) {
-		return s.store.Replace(fp, id, key, noteStored, channel, note, s.cfg.Limits.Quotas(), f)
+		return s.store.Replace(fp, id, key, noteStored, channel, open, note, s.cfg.Limits.Quotas(), f)
 	})
 }

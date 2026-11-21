@@ -568,7 +568,16 @@ const (
 	// about the mailbox. A sender acts on it by posting the note by the
 	// ordinary route.
 	CodeNotWithdrawable = "not-withdrawable"
+	// CodeNoteTooLarge is a withdrawal note on a channel outside its
+	// period larger than both the message it takes the place of and
+	// WithdrawFloorBytes (D198), 400 with MsgNoteTooLarge. A sender acts on
+	// it by sealing the note again without its reason, which fits wherever
+	// the channel takes a note at all.
+	CodeNoteTooLarge = "note-too-large"
 )
+
+// MsgNoteTooLarge is CodeNoteTooLarge's sentence.
+const MsgNoteTooLarge = "the note is larger than the message it takes the place of, and the channel is closed"
 
 // MsgNotWithdrawable is CodeNotWithdrawable's sentence.
 const MsgNotWithdrawable = "no message here can be withdrawn with that key"
@@ -614,6 +623,7 @@ var (
 	RefusalNoAdministrators = Refusal{CodeNoAdministrators, MsgNoAdministrators}
 	RefusalCourierClock     = Refusal{CodeCourierClock, MsgCourierClock}
 	RefusalNotWithdrawable  = Refusal{CodeNotWithdrawable, MsgNotWithdrawable}
+	RefusalNoteTooLarge     = Refusal{CodeNoteTooLarge, MsgNoteTooLarge}
 )
 
 const (
@@ -1077,6 +1087,18 @@ const FramingAllowance = 1 << 16
 // It is under DefaultMaxBytes and MaxPageBytes, so a note is a row like
 // any other.
 const MaxWithdrawBytes = 70_335
+
+// WithdrawFloorBytes is the largest withdrawal note with no reason, as this
+// client seals one: measured at every other maximum, a 64-byte channel name
+// inside the seal and on the outer field. The measured figure is 4,795
+// bytes, and a test seals that note and holds it to this number exactly.
+// On a channel outside its period a note may be no larger than the larger
+// of the message it takes the place of and this floor (D198), so a
+// withdrawal with no reason fits there unless the channel's own max_bytes
+// refuses every note, and one with a reason fits wherever the message it
+// withdraws was as large. The floor is measured for a note to one
+// recipient, sealed with SealSections, which is how every note is sealed.
+const WithdrawFloorBytes = 4_795
 
 // MaxPageBytes is the most a relay puts in one listing page of envelopes,
 // whatever its max_bytes: the page ends before an envelope that would take

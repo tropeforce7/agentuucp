@@ -742,6 +742,7 @@ status and the request. The codes this release writes:
 | `courier-clock` | 503 | a neighbour's courier whose clock is more than a minute and at most five from this relay's (past five its request is a `401`, as anyone's is): `this relay's clock and yours differ by more than a minute; relays keep to the minute`, with `Retry-After: 60` |
 | `too-many-recipients` | 413 | a copy of a message to more recipients than `max_recipients`, naming both numbers |
 | `not-withdrawable` | 404 | a withdrawal whose key opens no row of that mailbox: `no message here can be withdrawn with that key` |
+| `note-too-large` | 400 | a withdrawal note on a closed channel larger than both its message and 4,795 bytes: `the note is larger than the message it takes the place of, and the channel is closed` |
 
 An owner document, the allow list, the card or the channel directory,
 is refused `400` with no code when it was issued more than five minutes
@@ -1757,23 +1758,31 @@ step refusing before the next, and each refusal is the post's own:
    mailbox, so a message posted while its channel was open can be
    withdrawn after it closes. A note stored on a channel outside its
    period keeps no withdrawal key of its own and cannot be withdrawn in
-   turn, so the period is spared once for each message and a message is
-   never a way to deliver new mail to a closed channel. A channel whose
-   `max_bytes` is under the note's size took the message and refuses its
-   note.
+   turn, so the period is spared once for each message, and step 6 holds
+   the one note it admits to that message's size or the floor. A channel
+   whose `max_bytes` is under the note's size took the message and
+   refuses its note.
 6. The store, in one transaction. The row must be that mailbox's, not a
    knock, and keep the stored form of the key shown. Every row the key
    does not open is the one answer, `404` with `not-withdrawable`, so
    nobody without the key learns anything about a mailbox. Then the note
    must be on the row's own channel, refused `400` otherwise, so the
-   period it is spared is that channel's alone. The row goes with its
-   count and its bytes, and the note is stored as a post is, under a new
-   id above the message's, with room judged after the message has gone:
-   a mailbox at its message count takes the note, and a note larger
-   than its message into a mailbox with no room for the difference is
-   `507` with nothing changed. The message's file is removed after the
-   commit; a crash before that leaves a file no row names, which the
-   sweep at the next start takes.
+   period it is spared is that channel's alone. On a channel outside its
+   period the note may be no larger than the larger of the message it
+   takes the place of and 4,795 bytes, the largest note with no reason,
+   refused `400` with `note-too-large` otherwise: the relay cannot tell a
+   note from any other envelope, and this keeps what the exemption admits
+   to a closed channel to what was already there, or the floor where that
+   was smaller. Because the floor is the largest note with no reason, the
+   same withdrawal without its reason always fits, unless the channel's
+   own `max_bytes` is under it, which refuses any note, open or closed.
+   The row goes with its count and its bytes, and the note is stored as a
+   post is, under a new id above the message's, with room judged after
+   the message has gone: a mailbox at its message count takes the note,
+   and a note larger than its message into a mailbox with no room for the
+   difference is `507` with nothing changed. The message's file is
+   removed after the commit; a crash before that leaves a file no row
+   names, which the sweep at the next start takes.
 
 A withdrawal is stored once by its note, as a post is by its envelope: one
 whose answer was lost and is asked again, or whose note is then posted by

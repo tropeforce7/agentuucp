@@ -436,7 +436,7 @@ func TestReplaceRefusesAKeyOfAnotherShape(t *testing.T) {
 		"an uppercase key":       {strings.ToUpper(withdraw.Stored(key)), ""},
 		"a note's key misshapen": {withdraw.Stored(key), "x"},
 	} {
-		if _, err := h.store.Replace(fp, id, c.key, c.own, channels.Default, note, Quotas{}, Forwarded{}); !errors.Is(err, ErrNotWithdrawable) {
+		if _, err := h.store.Replace(fp, id, c.key, c.own, channels.Default, true, note, Quotas{}, Forwarded{}); !errors.Is(err, ErrNotWithdrawable) {
 			t.Errorf("%s: %v; want ErrNotWithdrawable", name, err)
 		}
 	}
@@ -599,6 +599,149 @@ func TestAWithdrawalIsOnItsMessagesOwnChannel(t *testing.T) {
 	status, body = h.withdrawAs(alice, fp, answer.ID, keyOf(t, rows[0].Envelope), sealedTo(t, alice, bob.Public(), "and again", "bugs"))
 	wantRefusal(t, "the note withdrawn in turn", status, body, http.StatusNotFound, relayapi.CodeNotWithdrawable, relayapi.MsgNotWithdrawable)
 	h.unchanged("the note withdrawn in turn", fp, before)
+}
+
+// On a channel outside its period a note is held to the larger of the
+// message it takes the place of and WithdrawFloorBytes (D198), since the
+// relay cannot tell a note from any other envelope: over a message smaller
+// than the floor, a note one byte over the floor is refused 400 with
+// note-too-large and nothing changed, and one at the floor is taken; over
+// a message larger than the floor, a note one byte over the message is
+// refused and one its size is taken; on the channel while it is open the
+// same over-size note is taken; and a stream, a large row, takes the
+// largest note there is. The rule is asked after the key and the channel.
+func TestANoteOnAClosedChannelIsNoLargerThanItsMessage(t *testing.T) {
+	type world struct {
+		h          *harness
+		alice, bob *identity.Identity
+		fp         string
+	}
+	open := func(t *testing.T) world {
+		h := newHarness(t, Config{})
+		alice, bob := neighbourID(t, "alice"), neighbourID(t, "bob")
+		h.enroll(alice, bob)
+		h.pushRules(bob, h.clock.Now(), channels.Channel{Name: "bugs"})
+		return world{h, alice, bob, bob.Fingerprint()}
+	}
+	closeBugs := func(w world) {
+		closed := w.h.clock.Now().Add(-time.Minute)
+		w.h.pushRules(w.bob, w.h.clock.Now().Add(time.Second), channels.Channel{Name: "bugs", NotAfter: &closed})
+	}
+	post := func(w world, text string) (int64, string, int) {
+		body := sealedTo(w.h.t, w.alice, w.bob.Public(), text, "bugs")
+		status, id := w.h.postOnce(w.alice, w.bob, body)
+		if status != http.StatusOK {
+			w.h.t.Fatalf("the post: %d", status)
+		}
+		return id, keyOf(w.h.t, body), len(body)
+	}
+	note := func(w world, n int) []byte {
+		return padded(w.h.t, sealedTo(w.h.t, w.alice, w.bob.Public(), "withdrawn", "bugs"), n)
+	}
+	floor := relayapi.WithdrawFloorBytes
+	big := strings.Repeat("x", 3*floor)
+
+	t.Run("over a message smaller than the floor", func(t *testing.T) {
+		w := open(t)
+		id, key, size := post(w, "small")
+		if size >= floor {
+			t.Fatalf("the small message is %d bytes, not under the floor of %d", size, floor)
+		}
+		closeBugs(w)
+		before := w.h.withdrawState(w.fp)
+		status, body := w.h.withdrawAs(w.alice, w.fp, id, key, note(w, floor+1))
+		wantRefusal(t, "one byte over the floor", status, body, http.StatusBadRequest, relayapi.CodeNoteTooLarge, relayapi.MsgNoteTooLarge)
+		w.h.unchanged("one byte over the floor", w.fp, before)
+		if status, body := w.h.withdrawAs(w.alice, w.fp, id, key, note(w, floor)); status != http.StatusOK {
+			t.Fatalf("a note at the floor: %d %s", status, body)
+		}
+	})
+	t.Run("over a message larger than the floor", func(t *testing.T) {
+		w := open(t)
+		id, key, size := post(w, big)
+		if size <= floor {
+			t.Fatalf("the large message is %d bytes, not over the floor of %d", size, floor)
+		}
+		closeBugs(w)
+		before := w.h.withdrawState(w.fp)
+		status, body := w.h.withdrawAs(w.alice, w.fp, id, key, note(w, size+1))
+		wantRefusal(t, "one byte over the message", status, body, http.StatusBadRequest, relayapi.CodeNoteTooLarge, relayapi.MsgNoteTooLarge)
+		w.h.unchanged("one byte over the message", w.fp, before)
+		if status, body := w.h.withdrawAs(w.alice, w.fp, id, key, note(w, size)); status != http.StatusOK {
+			t.Fatalf("a note the message's size: %d %s", status, body)
+		}
+	})
+	t.Run("on the channel while it is open", func(t *testing.T) {
+		w := open(t)
+		id, key, _ := post(w, "small")
+		if status, body := w.h.withdrawAs(w.alice, w.fp, id, key, note(w, floor+1)); status != http.StatusOK {
+			t.Fatalf("a note over the floor on an open channel: %d %s", status, body)
+		}
+	})
+	// The rule is asked only after the key and the channel, so an
+	// oversized note tells nobody without the key that a row is there or
+	// how large it is: a wrong key and a row that keeps no key are the one
+	// 404, and the right key with a note on another closed channel is the
+	// other-channel 400, each with nothing changed.
+	t.Run("after the key and the channel", func(t *testing.T) {
+		w := open(t)
+		w.h.pushRules(w.bob, w.h.clock.Now().Add(time.Second), channels.Channel{Name: "bugs"}, channels.Channel{Name: "cfp"})
+		id, key, _ := post(w, "small")
+		bare, _, _ := post(w, "small too")
+		if _, err := w.h.store.db.Exec(`UPDATE messages SET withdraw = '' WHERE id = ?`, bare); err != nil {
+			t.Fatal(err)
+		}
+		closed := w.h.clock.Now().Add(-time.Minute)
+		w.h.pushRules(w.bob, w.h.clock.Now().Add(2*time.Second),
+			channels.Channel{Name: "bugs", NotAfter: &closed}, channels.Channel{Name: "cfp", NotAfter: &closed})
+		over := note(w, floor+1)
+		for _, c := range []struct {
+			name string
+			id   int64
+			key  string
+		}{
+			{"a wrong key", id, strings.Repeat("a", 64)},
+			{"a row that keeps no key", bare, key},
+			{"no such row", id + 1000, key},
+		} {
+			before := w.h.withdrawState(w.fp)
+			status, body := w.h.withdrawAs(w.alice, w.fp, c.id, c.key, over)
+			wantRefusal(t, c.name, status, body, http.StatusNotFound, relayapi.CodeNotWithdrawable, relayapi.MsgNotWithdrawable)
+			w.h.unchanged(c.name, w.fp, before)
+		}
+		elsewhere := padded(t, sealedTo(t, w.alice, w.bob.Public(), "withdrawn", "cfp"), floor+1)
+		before := w.h.withdrawState(w.fp)
+		status, body := w.h.withdrawAs(w.alice, w.fp, id, key, elsewhere)
+		wantRefusal(t, "the right key on another closed channel", status, body, http.StatusBadRequest, "",
+			"the note is not on the channel of the message it takes the place of")
+		w.h.unchanged("the right key on another closed channel", w.fp, before)
+	})
+	t.Run("over a stream", func(t *testing.T) {
+		w := open(t)
+		blob := fakeStream(200, relayapi.MaxWithdrawBytes)
+		blob[0] = 1
+		status, opened, body := w.h.openStreamTo(w.alice, w.fp, int64(len(blob)), "bugs")
+		if status != http.StatusCreated {
+			t.Fatalf("open: %d %s", status, body)
+		}
+		status, body, _ = w.h.putStream(w.alice, opened.Upload, blob, 0)
+		if status != http.StatusCreated {
+			t.Fatalf("put: %d %s", status, body)
+		}
+		var done relayapi.PutStreamResponse
+		if err := json.Unmarshal(body, &done); err != nil {
+			t.Fatal(err)
+		}
+		key, err := withdraw.StreamKey(w.fp, bytes.NewReader(blob), int64(len(blob)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		closeBugs(w)
+		if status, body := w.h.withdrawAs(w.alice, w.fp, done.ID, key, note(w, relayapi.MaxWithdrawBytes)); status != http.StatusOK {
+			t.Fatalf("the largest note over a stream on a closed channel: %d %s", status, body)
+		}
+		w.h.assertCountersAgree()
+	})
 }
 
 // The budgets: a refused withdrawal spends a post's token as a refused
@@ -802,7 +945,6 @@ func TestTheColumnIsWhatTheRelayHolds(t *testing.T) {
 // past it; and the figure is under what a relay of this release stores
 // inline and lists in a page.
 func TestMaxWithdrawBytesIsTheLargestNote(t *testing.T) {
-	from, to := neighbourID(t, "alice"), neighbourID(t, "bob")
 	reason := strings.Repeat("<", 4096)
 	if err := message.ValidSubject(reason); err != nil {
 		t.Fatalf("a reason at the subject's cap: %v", err)
@@ -810,6 +952,34 @@ func TestMaxWithdrawBytesIsTheLargestNote(t *testing.T) {
 	if err := message.ValidSubject(reason + "<"); err == nil {
 		t.Fatal("a reason one byte past the subject's cap is taken")
 	}
+	if got := len(largestNote(t, reason)); got != relayapi.MaxWithdrawBytes {
+		t.Fatalf("the largest note is %d bytes; MaxWithdrawBytes says %d", got, relayapi.MaxWithdrawBytes)
+	}
+	if relayapi.MaxWithdrawBytes > relayapi.DefaultMaxBytes || relayapi.MaxWithdrawBytes > relayapi.MaxPageBytes {
+		t.Fatal("a note at MaxWithdrawBytes is over what a relay stores inline")
+	}
+}
+
+// WithdrawFloorBytes is the measured largest note with no reason: the
+// same note at every other maximum, a 64-byte channel name inside the seal
+// and on the outer field, and the reason empty. It is what a note may come
+// to on a closed channel whatever the message it takes the place of
+// (D198), so a withdrawal with no reason always fits there.
+func TestWithdrawFloorBytesIsTheLargestNoteWithNoReason(t *testing.T) {
+	if got := len(largestNote(t, "")); got != relayapi.WithdrawFloorBytes {
+		t.Fatalf("the largest note with no reason is %d bytes; WithdrawFloorBytes says %d", got, relayapi.WithdrawFloorBytes)
+	}
+	if relayapi.WithdrawFloorBytes >= relayapi.MaxWithdrawBytes {
+		t.Fatal("the floor is not under the largest note")
+	}
+}
+
+// largestNote is a withdrawal note at every maximum but its reason, built
+// by the section's own NoteBody and Section and sealed, a 64-byte channel
+// name inside the seal and on the outer field, as the bytes a post carries.
+func largestNote(t *testing.T, reason string) []byte {
+	t.Helper()
+	from, to := neighbourID(t, "alice"), neighbourID(t, "bob")
 	id := strings.Repeat("a", 32)
 	sec, err := withdraw.Section(id, reason)
 	if err != nil {
@@ -825,10 +995,5 @@ func TestMaxWithdrawBytesIsTheLargestNote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(raw) != relayapi.MaxWithdrawBytes {
-		t.Fatalf("the largest note is %d bytes; MaxWithdrawBytes says %d", len(raw), relayapi.MaxWithdrawBytes)
-	}
-	if relayapi.MaxWithdrawBytes > relayapi.DefaultMaxBytes || relayapi.MaxWithdrawBytes > relayapi.MaxPageBytes {
-		t.Fatal("a note at MaxWithdrawBytes is over what a relay stores inline")
-	}
+	return raw
 }

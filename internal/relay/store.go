@@ -50,6 +50,9 @@ var (
 	ErrNotWithdrawable = errors.New("relay: no message here can be withdrawn with that key")
 	// ErrNoteChannel is a note whose channel is not its message's.
 	ErrNoteChannel = errors.New("relay: the note is not on the channel of the message it takes the place of")
+	// ErrNoteTooLarge is a note on a channel outside its period larger than
+	// both the message it takes the place of and relayapi.WithdrawFloorBytes.
+	ErrNoteTooLarge = errors.New("relay: the note is larger than the message it takes the place of, and the channel is closed")
 )
 
 // Enrolment failures. Each becomes its own message, because "your token did
@@ -1045,14 +1048,17 @@ func (s *Store) storeRow(toFP string, r newRow, raw []byte, q Quotas, f Forwarde
 //
 // ErrNotWithdrawable is every row the key does not open, alike;
 // ErrNoteChannel is a note whose channel is not the row's own, asked
-// only once the key has matched. Either way nothing is written. The
-// room and the relay's other refusals are Put's.
-func (s *Store) Replace(toFP string, id int64, key, noteStored, channel string, raw []byte, q Quotas, f Forwarded) (int64, error) {
+// only once the key has matched; and ErrNoteTooLarge is a note on a
+// channel that is not open, open false, larger than both the row and
+// relayapi.WithdrawFloorBytes, asked after the channel. Each way nothing is
+// written. The room and the relay's other refusals are Put's.
+func (s *Store) Replace(toFP string, id int64, key, noteStored, channel string, open bool, raw []byte, q Quotas, f Forwarded) (int64, error) {
 	if !withdraw.Valid(key) || (noteStored != "" && !withdraw.Valid(noteStored)) {
 		return 0, ErrNotWithdrawable
 	}
+	size := int64(len(raw))
 	return s.storeRow(toFP, newRow{channel: channel, kind: relayapi.KindEnvelope, stored: noteStored}, raw, q, f,
-		func(tx *sql.Tx) (int64, error) { return replaceRow(tx, toFP, id, key, channel) })
+		func(tx *sql.Tx) (int64, error) { return replaceRow(tx, toFP, id, key, channel, open, size) })
 }
 
 // replaceRow is Replace's removal of the row the note takes the place of,
@@ -1066,7 +1072,14 @@ func (s *Store) Replace(toFP string, id int64, key, noteStored, channel string, 
 // (to_fp, id), which messages_to serves, so a row two copies of one post
 // left, each with the same column (D134), is withdrawn by its own id and
 // the other stays.
-func replaceRow(tx *sql.Tx, toFP string, id int64, key, channel string) (int64, error) {
+//
+// On a channel outside its period, open false, the note is held to the
+// larger of the row's size and relayapi.WithdrawFloorBytes (D198): the relay
+// cannot tell a note from any other envelope, so the period's exemption
+// would otherwise let one envelope of any size onto a closed channel for
+// each message posted there before it closed. Asked after the key and the
+// channel, before anything is removed.
+func replaceRow(tx *sql.Tx, toFP string, id int64, key, channel string, open bool, noteSize int64) (int64, error) {
 	var size int64
 	var kind, rowChannel, column string
 	err := tx.QueryRow(`SELECT size, kind, channel, withdraw FROM messages WHERE to_fp = ? AND id = ?`, toFP, id).
@@ -1082,6 +1095,9 @@ func replaceRow(tx *sql.Tx, toFP string, id int64, key, channel string) (int64, 
 	}
 	if rowChannel != channel {
 		return 0, ErrNoteChannel
+	}
+	if !open && noteSize > max(size, relayapi.WithdrawFloorBytes) {
+		return 0, ErrNoteTooLarge
 	}
 	if _, err := tx.Exec(`DELETE FROM messages WHERE to_fp = ? AND id = ?`, toFP, id); err != nil {
 		return 0, err

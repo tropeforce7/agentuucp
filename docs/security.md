@@ -69,6 +69,14 @@ recipient whose channel does not keep, that says whether they have
 fetched it. It is accepted so that the sender can be told what happened.
 A withdrawal removes nothing from a recipient's machine.
 
+One more residual, on a channel outside its period. The relay cannot
+verify that a note is a note: it is a sealed envelope like any other. So
+the period's exemption rests on the sender's own client sealing a note,
+and what an admitted sender can put on a closed channel by it is one
+envelope, once for each message they had already posted there, no larger
+than that message or 4,795 bytes, the largest note with no reason. A note
+stored there keeps no withdrawal key and cannot be withdrawn in turn.
+
 The note itself is an ordinary message, sealed and signed like any other:
 of type `note`, on the withdrawn message's thread and in reply to it, with
 a `withdrawal` section under the signature naming the message and the

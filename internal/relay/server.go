@@ -1568,6 +1568,11 @@ func (s *Server) storeOnce(w http.ResponseWriter, fp, callerFP string, env *rela
 	case errors.Is(err, ErrNoteChannel):
 		s.fail(w, http.StatusBadRequest, "the note is not on the channel of the message it takes the place of")
 		return
+	case errors.Is(err, ErrNoteTooLarge):
+		// With its code, since the sender acts on it: the same note
+		// without its reason fits (D198).
+		s.refuse(w, http.StatusBadRequest, relayapi.RefusalNoteTooLarge)
+		return
 	case err != nil:
 		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
 		return
