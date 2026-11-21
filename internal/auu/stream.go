@@ -18,6 +18,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
 	"github.com/tropeforce7/agentuucp/internal/term"
+	"github.com/tropeforce7/agentuucp/internal/wire"
 )
 
 // Sending a stream.
@@ -260,7 +261,7 @@ func sealStreams(s *store.Store, id *identity.Identity, r *store.Relay, to []add
 		ID: messageID, From: id.Fingerprint(), FromBundle: id.Public().Bundle(),
 		To: manifests[0].To, Time: manifests[0].Time, Body: body, Channel: channel,
 	}
-	first.Sections, _ = keptSections(manifests[0].Sections)
+	first.Sections, _ = keptSections(manifests[0].Sections, wire.OnManifest)
 	return written, first, nil
 }
 

@@ -794,8 +794,8 @@ func TestTheColumnIsWhatTheRelayHolds(t *testing.T) {
 	}
 }
 
-// MaxWithdrawBytes is the measured worst case: a note sealed as this
-// client seals one, a 64-byte channel name inside the seal and on the
+// MaxWithdrawBytes is the measured worst case: a note built by the
+// withdrawal section's own NoteBody and Section and sealed, a 64-byte channel name inside the seal and on the
 // outer field, and a reason at the subject's cap of 4,096 bytes, each a
 // "<", in the text and in the withdrawal section, is exactly that many
 // bytes. The reason is held to the subject's rule, at its cap and one
@@ -811,15 +811,12 @@ func TestMaxWithdrawBytesIsTheLargestNote(t *testing.T) {
 		t.Fatal("a reason one byte past the subject's cap is taken")
 	}
 	id := strings.Repeat("a", 32)
-	data, err := json.Marshal(map[string]string{"id": id, "reason": reason})
+	sec, err := withdraw.Section(id, reason)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ch := strings.Repeat("c", relayapi.MaxChannelNameBytes)
-	env, _, err := envelope.SealSections(from, to.Public(), ch, message.Body{
-		Type: message.TypeNote, Subject: "withdrawn", Thread: id, InReplyTo: id,
-		Text: "The sender withdrew this message.\n\n" + reason,
-	}, []wire.Section{{Name: "withdrawal", Data: data}})
+	env, _, err := envelope.SealSections(from, to.Public(), ch, withdraw.NoteBody(id, id, reason), []wire.Section{sec})
 	if err != nil {
 		t.Fatal(err)
 	}

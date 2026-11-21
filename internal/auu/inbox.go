@@ -569,7 +569,7 @@ func openOne(s *store.Store, r *store.Relay, m client.Message, inner *envelope.I
 	// The sections it came with, kept as they came at or under the kept
 	// size and counted over it (D31).
 	var dropped int
-	inner.Sections, dropped = keptSections(inner.Sections)
+	inner.Sections, dropped = keptSections(inner.Sections, wire.OnMessage)
 	return opening{verdict: opened, box: box, stored: &store.Stored{
 		DroppedSections: dropped,
 		RelayID:         m.ID,

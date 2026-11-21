@@ -15,6 +15,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/wire"
+	"github.com/tropeforce7/agentuucp/internal/withdraw"
 )
 
 // Source is one attachment waiting to be sealed: its metadata, and something
@@ -154,6 +155,14 @@ func buildManifests(from *identity.Identity, to []*identity.Public, id string,
 		}
 		if _, err := recipients.CheckSections(m.Sections, m.Body.Type, m.To); err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrForm, err)
+		}
+		// A withdrawal note is always an envelope: the section is known
+		// on a message alone, and a stream carrying it would be read by
+		// nobody, so it is refused here rather than sent.
+		for _, sec := range m.Sections {
+			if sec.Name == withdraw.SectionName {
+				return nil, fmt.Errorf("%w: a stream carries no %s section; a withdrawal note is an envelope", ErrForm, withdraw.SectionName)
+			}
 		}
 		ms = append(ms, m)
 	}

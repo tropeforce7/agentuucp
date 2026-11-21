@@ -1,5 +1,6 @@
-// Package withdraw is the key a sender withdraws a posted message by, and
-// the form the relay keeps of it.
+// Package withdraw is the key a sender withdraws a posted message by, the
+// form the relay keeps of it, and the section a withdrawal note carries
+// (section.go).
 //
 // The key is derived, never minted: both ends compute it from the sealed
 // bytes the relay stores. The sender computes it from the copy it sealed
@@ -16,8 +17,9 @@
 // hash of the key, which names nobody and cannot be tested against a
 // candidate sender.
 //
-// The package imports nothing of the relay's or the client's, so that the
-// one arithmetic is the same at both ends by construction.
+// The package imports nothing of the relay's or the client's, only the
+// message and wire rules the section is built from, so that the one
+// arithmetic and the one rule are the same at both ends by construction.
 package withdraw
 
 import (

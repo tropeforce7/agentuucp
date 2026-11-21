@@ -55,7 +55,7 @@ func TestASectionNotReadOnTheMessagePathIsHeldToTheKeptCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	kept, dropped := keptSections(inner.Sections)
+	kept, dropped := keptSections(inner.Sections, wire.OnMessage)
 	if dropped != 1 || len(kept) != 0 {
 		t.Fatalf("kept %d dropped %d; want the %s section of %d bytes dropped and counted", len(kept), dropped, recipients.MaxName, len(big.Data))
 	}

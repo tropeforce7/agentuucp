@@ -1058,6 +1058,14 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	if _, err := recipients.CheckSections(m.Inner.Sections, m.Inner.Body.Type, m.Inner.To); err != nil {
 		return nil, fmt.Errorf("in the record, %v", err)
 	}
+	// A withdrawal note's section is not held to its rule here (R150). A
+	// release before v0.22.0 kept a section by that name as one it did not
+	// know, whatever it said, and a record any release from v0.15.0 wrote is
+	// read by every later one: refusing it would take mail the person
+	// already holds out of every listing. So a record whose section breaks
+	// the rule loads, the section kept as its bytes, and only the mark,
+	// which runs withdraw.CheckSections itself, ever reads one as a
+	// withdrawal. The sealer and Open stay strict.
 	if err := validCopies(box, &m); err != nil {
 		return nil, fmt.Errorf("the record's copies: %v", err)
 	}

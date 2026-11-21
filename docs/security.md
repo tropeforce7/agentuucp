@@ -69,6 +69,23 @@ recipient whose channel does not keep, that says whether they have
 fetched it. It is accepted so that the sender can be told what happened.
 A withdrawal removes nothing from a recipient's machine.
 
+The note itself is an ordinary message, sealed and signed like any other:
+of type `note`, on the withdrawn message's thread and in reply to it, with
+a `withdrawal` section under the signature naming the message and the
+sender's reason, if any. The section is not critical, since a reader that
+does not know it reads a note saying the message was withdrawn, which is
+true with less said. A reader that knows it holds it to one rule on every
+path, the sealer before anything is signed and the reader once the
+signature has verified: the id is a message id and the one the note is in
+reply to, the reason is one line of at most 4,096 bytes, as a subject is,
+the note carries no attachment, and the section is never marked critical.
+A withdrawal note is always an envelope; the stream sealer refuses the
+section, and on a stream's manifest it is a name the reader does not know.
+A message saved before v0.22.0 may carry a section of that name its
+release kept unread, whatever it says. Such a record still loads and is
+listed, the section kept as its bytes, and nothing reads it as a
+withdrawal unless it passes the rule.
+
 Beside the rows, per mailbox, the three documents an owner signs and
 pushes: the channel directory, the allow list, and the card, which says
 the owner's name and two words of the owner's, `listed` and `knocks`. Each

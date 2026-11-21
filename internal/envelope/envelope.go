@@ -25,6 +25,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
 	"github.com/tropeforce7/agentuucp/internal/wire"
+	"github.com/tropeforce7/agentuucp/internal/withdraw"
 )
 
 const (
@@ -266,6 +267,11 @@ func seal(sender *identity.Identity, to []*identity.Public, channel string,
 			return nil, nil, err
 		}
 	}
+	// A withdrawal note's section, held to its rule and to the note it is
+	// on, before anything is signed.
+	if _, err := withdraw.CheckSections(sections, body); err != nil {
+		return nil, nil, err
+	}
 	id, err := NewID()
 	if err != nil {
 		return nil, nil, err
@@ -433,6 +439,12 @@ func Open(recipient *identity.Identity, env *Envelope) (*Inner, *identity.Public
 	// never carries a list nobody checked, as the stream's manifest must not.
 	if _, err := recipients.CheckSections(inner.Sections, inner.Body.Type, selfFP); err != nil {
 		return nil, nil, failWith(ErrMalformed, err, "recipients")
+	}
+	// And a withdrawal note's section, under the same signature and before
+	// the same sort, so a record handed back as needing a newer auu never
+	// carries one nobody checked.
+	if _, err := withdraw.CheckSections(inner.Sections, inner.Body); err != nil {
+		return nil, nil, failWith(ErrMalformed, err, "withdrawal")
 	}
 	// Only now, with the signature verified, is a section this build does
 	// not know judged: an unsigned record is never one that needs a newer

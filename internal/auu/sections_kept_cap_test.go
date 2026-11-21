@@ -7,6 +7,7 @@ import (
 
 	"github.com/tropeforce7/agentuucp/internal/recipients"
 	"github.com/tropeforce7/agentuucp/internal/wire"
+	"github.com/tropeforce7/agentuucp/internal/withdraw"
 )
 
 // The second review's F13, kept: every name known only off the message path
@@ -20,15 +21,28 @@ func TestSectionsKnownOnlyOffTheMessagePathAreHeldToTheKeptCap(t *testing.T) {
 	}
 	for _, name := range []string{recipients.CountName, recipients.MaxName} {
 		for _, critical := range []bool{false, true} {
-			kept, dropped := keptSections([]wire.Section{sec(name, wire.MaxKeptBytes+1, critical)})
+			kept, dropped := keptSections([]wire.Section{sec(name, wire.MaxKeptBytes+1, critical)}, wire.OnMessage)
 			if dropped != 1 || len(kept) != 0 {
 				t.Errorf("%s critical=%v one over the cap: kept %d dropped %d", name, critical, len(kept), dropped)
 			}
-			kept, dropped = keptSections([]wire.Section{sec(name, wire.MaxKeptBytes, critical)})
+			kept, dropped = keptSections([]wire.Section{sec(name, wire.MaxKeptBytes, critical)}, wire.OnMessage)
 			if dropped != 0 || len(kept) != 1 {
 				t.Errorf("%s critical=%v at the cap: kept %d dropped %d", name, critical, len(kept), dropped)
 			}
 		}
+	}
+	// A section known on a message alone, the withdrawal note's, is known
+	// whole on a message and held to the kept size on a manifest, where
+	// this build does not know it.
+	big := sec(withdraw.SectionName, wire.MaxKeptBytes+1, false)
+	if kept, dropped := keptSections([]wire.Section{big}, wire.OnMessage); dropped != 0 || len(kept) != 1 {
+		t.Errorf("a withdrawal section over the kept size on a message: kept %d dropped %d; want it kept", len(kept), dropped)
+	}
+	if kept, dropped := keptSections([]wire.Section{big}, wire.OnManifest); dropped != 1 || len(kept) != 0 {
+		t.Errorf("a withdrawal section over the kept size on a manifest: kept %d dropped %d; want it dropped", len(kept), dropped)
+	}
+	if kept, dropped := keptSections([]wire.Section{sec(withdraw.SectionName, wire.MaxKeptBytes, false)}, wire.OnManifest); dropped != 0 || len(kept) != 1 {
+		t.Errorf("a withdrawal section at the kept size on a manifest: kept %d dropped %d; want it kept", len(kept), dropped)
 	}
 	if wire.Known(recipients.CountName, wire.OnMessage|wire.OnManifest) || wire.Known(recipients.MaxName, wire.OnMessage|wire.OnManifest) {
 		t.Errorf("a request or answer section is known on a message or manifest")
