@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/stream"
 	"github.com/tropeforce7/agentuucp/internal/wire"
+	"github.com/tropeforce7/agentuucp/internal/withdraw"
 )
 
 // The outbox holds what has been sealed but not yet delivered: a stream, and
@@ -82,6 +84,22 @@ type pending struct {
 	// is held to a rule at the read and escaped wherever it is shown.
 	RefusedCode string `json:"refused_code,omitempty"`
 	Refused     string `json:"refused,omitempty"`
+	// Withdraws is the sent message a withdrawal note withdraws, for a note
+	// auu withdraw sealed and has not yet seen placed, and Reason the
+	// reason it gave, empty for none: the note is the one its body and its
+	// section are built from (envelope.SealWithdrawal), so that a second
+	// run posts the note already sealed rather than sealing another, and
+	// the sent record of the note can be written from this. A note is an
+	// envelope to one, named by its id. Both are left out of every other
+	// record, which v0.21.1 wrote as it is.
+	Withdraws string `json:"withdraws,omitempty"`
+	Reason    string `json:"reason,omitempty"`
+	// Fallback says the withdrawal route answered not-withdrawable and the
+	// note was posted by the ordinary route after it, written before that
+	// post: a run after one whose answer was lost posts it the same way
+	// again, rather than asking the withdrawal route, whose answer to the
+	// repeat would read as a replacement that never happened.
+	Fallback bool `json:"fallback,omitempty"`
 
 	// stem is the name the record's files share, as listPending read it or
 	// as the writer chose it; kind is which sealed file is beside it.
@@ -349,6 +367,11 @@ func (p *pending) validShape(copied bool) bool {
 	if len(p.Refused) > relayapi.MaxSaid || message.ValidOneLine("refused", p.Refused) != nil {
 		return false
 	}
+	// A withdrawal note is held to the rules above, every record's, and
+	// then to its own in place of a copy's or a stream's.
+	if p.Withdraws != "" || p.Reason != "" || p.Fallback {
+		return p.validNote(copied)
+	}
 	switch p.kind {
 	case kindStream:
 		// A stream crosses no relay, so its record names no path.
@@ -362,6 +385,22 @@ func (p *pending) validShape(copied bool) bool {
 	return false
 }
 
+// validNote holds a withdrawal note's record to what auu withdraw writes:
+// an envelope to one, named by its own id, naming a message id and a
+// reason under the reason's rule, whose body is exactly the note
+// withdraw.NoteBody builds for them, since the sent record of the note is
+// written from it and the mark's rule is read from what it says.
+func (p *pending) validNote(copied bool) bool {
+	if copied || p.kind != kindEnvelope || p.Upload != "" || p.Chunks != 0 || p.ChunkSize != 0 || p.Bytes < 0 {
+		return false
+	}
+	if message.ValidID(p.Withdraws) != nil || withdraw.ValidReason(p.Reason) != nil {
+		return false
+	}
+	return message.ValidID(p.Body.Thread) == nil &&
+		reflect.DeepEqual(p.Body, withdraw.NoteBody(p.Body.Thread, p.Withdraws, p.Reason))
+}
+
 // warnPending tells somebody sending a new message that an old one never
 // arrived. It is a warning and never an error: the new message is not the
 // place to make them deal with the old one.
@@ -370,11 +409,14 @@ func warnPending(s *store.Store) {
 	if err != nil || len(waiting) == 0 {
 		return
 	}
-	var streams, copies int
+	var streams, copies, notes int
 	for _, p := range waiting {
-		if p.kind == kindEnvelope {
+		switch {
+		case p.Withdraws != "":
+			notes++
+		case p.kind == kindEnvelope:
 			copies++
-		} else {
+		default:
 			streams++
 		}
 	}
@@ -384,6 +426,9 @@ func warnPending(s *store.Store) {
 	}
 	if copies > 0 {
 		kinds = append(kinds, howMany(copies, "copy", "copies"))
+	}
+	if notes > 0 {
+		kinds = append(kinds, howMany(notes, "withdrawal note", "withdrawal notes"))
 	}
 	fmt.Fprintf(os.Stderr, "warning: %s in the outbox (%s); finish with '%s send --resume' or give one up with '%s outbox drop ID'\n",
 		howMany(len(waiting), "unfinished message", "unfinished messages"), strings.Join(kinds, ", "), prog, prog)

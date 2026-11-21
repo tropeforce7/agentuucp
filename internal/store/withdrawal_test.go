@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,6 +194,169 @@ func TestLimitAWithdrawalMarkIsAWritableTime(t *testing.T) {
 		err := write(t, e.At.UTC().Format(time.RFC3339Nano))
 		if (err == nil) != want {
 			t.Errorf("a mark %s (%s): %v; want loaded %v", e.Name, e.At.UTC().Format(time.RFC3339Nano), err, want)
+		}
+	}
+}
+
+// TestLoadHoldsAWithdrawalKey: a sent record's key and its copies' keys
+// and marks, as auu send and auu withdraw write them, load; a record
+// nobody gave a key to carries no key; and each shape the sender never
+// writes is refused by name: a key on a message this machine received, a
+// key at the top of a message to several, a key that is not 64 lowercase
+// hex characters at the top or on a copy, a copy withdrawn that was never
+// placed, and a copy withdrawn on a record not marked withdrawn.
+func TestLoadHoldsAWithdrawalKey(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	key := strings.Repeat("e", 64)
+	to, third := strings.Repeat("b", 64), strings.Repeat("c", 64)
+	one := func() *Stored {
+		m := stored(strings.Repeat("1", 32), now)
+		m.WithdrawKey = key
+		return m
+	}
+	several := func() *Stored {
+		m := stored(strings.Repeat("1", 32), now)
+		m.Inner.Sections = []wire.Section{recipientsList(t, to, third)}
+		m.Withdrawn, m.WithdrawnBy = now, strings.Repeat("4", 32)
+		m.Copies = []SentCopy{
+			{Fingerprint: to, Name: "bob", RelayID: 7, WithdrawKey: key, Withdrawn: now},
+			{Fingerprint: third, Name: "carol", RelayID: 8, WithdrawKey: strings.Repeat("f", 64)},
+		}
+		return m
+	}
+	write := func(t *testing.T, box Box, m *Stored) error {
+		t.Helper()
+		s := newStore(t)
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(s.msgPath(box, m.Inner.ID)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(s.msgPath(box, m.Inner.ID), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.Load(box, m.Inner.ID)
+		return err
+	}
+	if err := write(t, Sent, one()); err != nil {
+		t.Fatalf("a message to one with its key: %v", err)
+	}
+	if err := write(t, Sent, several()); err != nil {
+		t.Fatalf("a message to two with a key per copy, one withdrawn: %v", err)
+	}
+	s := newStore(t)
+	if err := s.Save(Sent, stored(strings.Repeat("1", 32), now)); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(s.msgPath(Sent, strings.Repeat("1", 32))); err != nil || strings.Contains(string(raw), "withdraw") {
+		t.Fatalf("a record with no key carries one: %v\n%s", err, raw)
+	}
+	for _, tc := range []struct {
+		name string
+		box  Box
+		m    func() *Stored
+		says string
+	}{
+		{"a key on a received message", Inbox, one, "the record's withdrawal key: only a sent message has one"},
+		{"a key on a quarantined message", Quarantine, one, "the record's withdrawal key: only a sent message has one"},
+		{"a key at the top of a message to several", Sent, func() *Stored { m := several(); m.WithdrawKey = key; return m },
+			"the record's withdrawal key: a message to several keeps its keys with its copies"},
+		{"a key one short", Sent, func() *Stored { m := one(); m.WithdrawKey = key[:63]; return m },
+			"the record's withdrawal key: it is not 64 lowercase hex characters"},
+		{"a key in uppercase", Sent, func() *Stored { m := one(); m.WithdrawKey = strings.Repeat("E", 64); return m },
+			"the record's withdrawal key: it is not 64 lowercase hex characters"},
+		{"a copy's key one long", Sent, func() *Stored { m := several(); m.Copies[1].WithdrawKey = key + "e"; return m },
+			"copy 2's withdrawal key is not 64 lowercase hex characters"},
+		{"a copy's key not hex", Sent, func() *Stored { m := several(); m.Copies[1].WithdrawKey = strings.Repeat("g", 64); return m },
+			"copy 2's withdrawal key is not 64 lowercase hex characters"},
+		{"a copy withdrawn and never placed", Sent, func() *Stored { m := several(); m.Copies[0].RelayID = 0; return m },
+			"copy 1 is withdrawn, but was never placed or the message is not marked withdrawn"},
+		{"a copy withdrawn on a record not marked", Sent, func() *Stored {
+			m := several()
+			m.Withdrawn, m.WithdrawnBy = time.Time{}, ""
+			return m
+		}, "copy 1 is withdrawn, but was never placed or the message is not marked withdrawn"},
+	} {
+		err := write(t, tc.box, tc.m())
+		if err == nil || !strings.Contains(err.Error(), tc.says) {
+			t.Errorf("%s: %v; want the refusal saying %q", tc.name, err, tc.says)
+		}
+	}
+}
+
+// FindIn looks in the boxes it is given alone: a message in the inbox is
+// no match in the sent box, and one in the sent box is found there.
+func TestFindInLooksInTheBoxesNamed(t *testing.T) {
+	s := newStore(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	received, sent := strings.Repeat("1", 32), strings.Repeat("2", 32)
+	if err := s.Save(Inbox, stored(received, now)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(Sent, stored(sent, now)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.FindIn(received[:8], Sent); !errors.Is(err, ErrNoMatch) {
+		t.Errorf("a received message found in the sent box: %v", err)
+	}
+	if box, m, err := s.FindIn(sent[:8], Sent); err != nil || box != Sent || m.Inner.ID != sent {
+		t.Errorf("the sent message: %v %v %v", box, m, err)
+	}
+	if box, _, err := s.Find(received[:8]); err != nil || box != Inbox {
+		t.Errorf("Find still looks in the inbox: %v %v", box, err)
+	}
+}
+
+// TestLimitACopysWithdrawalIsAWritableTime: a copy's withdrawal time is
+// this machine's clock when auu withdraw sent its note, shown and never
+// ordered by, and held as the record's own mark is, by the strict decode to
+// what RFC 3339 can write: the earliest and the latest writable times load,
+// and every edge past the latest does not read at all.
+func TestLimitACopysWithdrawalIsAWritableTime(t *testing.T) {
+	s := newStore(t)
+	id := strings.Repeat("1", 32)
+	to, third := strings.Repeat("b", 64), strings.Repeat("c", 64)
+	write := func(t *testing.T, at string) error {
+		t.Helper()
+		m := stored(id, time.Now().UTC().Truncate(time.Second))
+		m.Inner.Sections = []wire.Section{recipientsList(t, to, third)}
+		m.Withdrawn, m.WithdrawnBy = time.Now().UTC().Truncate(time.Second), strings.Repeat("4", 32)
+		m.Copies = []SentCopy{{Fingerprint: to, RelayID: 7}, {Fingerprint: third, RelayID: 8}}
+		data, err := json.Marshal(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = []byte(strings.Replace(string(data), `"relay_id":7`, `"relay_id":7,"withdrawn":"`+at+`"`, 1))
+		if err := os.MkdirAll(filepath.Dir(s.msgPath(Sent, id)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(s.msgPath(Sent, id), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.Load(Sent, id)
+		if err == nil && got.Copies[0].Withdrawn.IsZero() {
+			t.Fatal("the copy's time was not read")
+		}
+		return err
+	}
+	if err := write(t, relayapi.EarliestWritable.Format(time.RFC3339Nano)); err != nil {
+		t.Errorf("a copy withdrawn at the earliest writable time: %v; want it loaded", err)
+	}
+	for _, e := range testutil.TimeEdges(relayapi.LatestWritable) {
+		want := false
+		switch e.Name {
+		case testutil.AtTheEdge, testutil.ASecondBefore, testutil.AYearPast:
+			want = true
+		case testutil.ASecondPast, testutil.ADayAhead, testutil.AYearAhead, testutil.TheEarliest,
+			testutil.OnePastYear9999, testutil.TheLatest:
+		default:
+			t.Fatalf("no answer for the edge %q", e.Name)
+		}
+		err := write(t, e.At.UTC().Format(time.RFC3339Nano))
+		if (err == nil) != want {
+			t.Errorf("a copy withdrawn %s (%s): %v; want loaded %v", e.Name, e.At.UTC().Format(time.RFC3339Nano), err, want)
 		}
 	}
 }

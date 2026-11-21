@@ -1239,6 +1239,37 @@ func (c *Client) Post(ctx context.Context, env *envelope.Envelope, channel strin
 	return resp.ID, nil
 }
 
+// Withdraw asks the relay to put note in the place of the message id in
+// the note's recipient's mailbox, under a channel, by the message's
+// withdrawal key (POST /v1/mailbox/{fp}/withdraw/{id}). The channel goes on
+// the note's outer field as Post puts it there. The answer is the note's id
+// in the mailbox. The key is a credential: it is in the body and nowhere
+// else, and no error says it.
+//
+// A 404 with relayapi.CodeNotWithdrawable is every row the key does not
+// open, alike; the caller posts the note by the ordinary route on that
+// alone. A 400 with relayapi.CodeNoteTooLarge is a note on a closed channel
+// larger than the message and the floor.
+func (c *Client) Withdraw(ctx context.Context, id int64, key string, note *envelope.Envelope, channel string) (int64, error) {
+	note.Ch = channel
+	raw, err := json.Marshal(note)
+	if err != nil {
+		return 0, err
+	}
+	body, err := json.Marshal(relayapi.WithdrawRequest{Key: key, Note: raw})
+	if err != nil {
+		return 0, err
+	}
+	var resp relayapi.PostResponse
+	if err := c.do(ctx, "POST", "/v1/mailbox/"+note.To+"/withdraw/"+strconv.FormatInt(id, 10), body, &resp, nil); err != nil {
+		return 0, err
+	}
+	if err := c.checkID("the withdrawal answer", resp.ID); err != nil {
+		return 0, err
+	}
+	return resp.ID, nil
+}
+
 // Forward hands a sealed envelope to a relay for it to carry on towards a
 // relay that is not this one.
 //

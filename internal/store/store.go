@@ -859,9 +859,21 @@ type Stored struct {
 	// left out when the message was never withdrawn, so a record nobody
 	// withdrew is byte for byte what v0.21.1 wrote; an auu before v0.22.0
 	// refuses a record that carries one, by name, its decode being strict.
+	//
+	// On a sent record the three say the sender withdrew it: when the first
+	// copy was, the note that copy was sent, and the reason given.
 	Withdrawn       time.Time `json:"withdrawn,omitzero"`
 	WithdrawnBy     string    `json:"withdrawn_by,omitempty"`
 	WithdrawnReason string    `json:"withdrawn_reason,omitempty"`
+	// WithdrawKey is a sent message's withdrawal key, withdraw.EnvelopeKey
+	// or withdraw.StreamKey of the bytes this machine posted, which the
+	// relay keeps the stored form of beside the row and auu withdraw
+	// presents to take the message back (D189). It is a credential, and
+	// reaches no output. On a message to one alone: a message to several
+	// keeps one per copy. Empty, the value the key is left out for, is a
+	// received message, a knock, a withdrawal note, and a message sent
+	// before v0.22.0.
+	WithdrawKey string `json:"withdraw_key,omitempty"`
 }
 
 // SentCopy is one copy of a sent message to several.
@@ -890,6 +902,12 @@ type SentCopy struct {
 	// copy a record from before the key holds (57c2, D140). An auu before
 	// v0.18.2 reads a record that names one as damaged, by name.
 	Relay string `json:"relay,omitempty"`
+	// WithdrawKey is the copy's withdrawal key, as Stored.WithdrawKey is a
+	// message to one's, written when the copy is placed; and Withdrawn is
+	// this machine's clock when auu withdraw sent the copy's recipient a
+	// note. Both are left out when empty (D193).
+	WithdrawKey string    `json:"withdraw_key,omitempty"`
+	Withdrawn   time.Time `json:"withdrawn,omitzero"`
 }
 
 // Box names a spool directory.
@@ -1091,6 +1109,9 @@ func (s *Store) Load(box Box, id string) (*Stored, error) {
 	if err := validWithdrawn(m.Withdrawn, m.WithdrawnBy, m.WithdrawnReason); err != nil {
 		return nil, fmt.Errorf("the record's withdrawal: %v", err)
 	}
+	if err := validWithdrawKey(box, &m); err != nil {
+		return nil, fmt.Errorf("the record's withdrawal key: %v", err)
+	}
 	if m.Newer != "" {
 		if err := wire.ValidName(m.Newer); err != nil {
 			return nil, fmt.Errorf("the record's newer section: %v", err)
@@ -1120,6 +1141,27 @@ func validWithdrawn(at time.Time, by, reason string) error {
 		return errors.New("the note that withdrew it is not a message id")
 	}
 	return withdraw.ValidReason(reason)
+}
+
+// validWithdrawKey holds a record's withdrawal key to what the sender
+// writes: none at all, or, on a sent message to one, the key's shape. A
+// message to several keeps its keys per copy, which validCopies holds, so
+// a key at the record's top beside copies was not written by this program,
+// and nor was one on a message this machine received.
+func validWithdrawKey(box Box, m *Stored) error {
+	if m.WithdrawKey == "" {
+		return nil
+	}
+	if box != Sent {
+		return errors.New("only a sent message has one")
+	}
+	if len(m.Copies) > 0 {
+		return errors.New("a message to several keeps its keys with its copies")
+	}
+	if !withdraw.Valid(m.WithdrawKey) {
+		return errors.New("it is not 64 lowercase hex characters")
+	}
+	return nil
 }
 
 // validCopies holds a sent record's copies to what the sender wrote: only
@@ -1171,6 +1213,14 @@ func validCopies(box Box, m *Stored) error {
 		}
 		if len(c.Refused) > relayapi.MaxSaid || message.ValidOneLine("refused", c.Refused) != nil {
 			return fmt.Errorf("copy %d's refusal is not one line of at most %d bytes", i+1, relayapi.MaxSaid)
+		}
+		if c.WithdrawKey != "" && !withdraw.Valid(c.WithdrawKey) {
+			return fmt.Errorf("copy %d's withdrawal key is not 64 lowercase hex characters", i+1)
+		}
+		// A copy is withdrawn only once it was placed, and the record is
+		// marked when its first copy is, in the same save.
+		if !c.Withdrawn.IsZero() && (c.RelayID == 0 || m.Withdrawn.IsZero()) {
+			return fmt.Errorf("copy %d is withdrawn, but was never placed or the message is not marked withdrawn", i+1)
 		}
 	}
 	return nil
@@ -1507,6 +1557,13 @@ func (s *Store) HandleDir() string { return s.path(handleDir) }
 var ErrNoMatch = errors.New("no message matches")
 
 func (s *Store) Find(idOrPrefix string) (Box, *Stored, error) {
+	return s.FindIn(idOrPrefix, Inbox, Sent, Quarantine)
+}
+
+// FindIn is Find in the boxes named alone, in the order given: auu
+// withdraw looks in the sent box and nowhere else, since only a message
+// this home sent is its to withdraw.
+func (s *Store) FindIn(idOrPrefix string, in ...Box) (Box, *Stored, error) {
 	if len(idOrPrefix) < 4 {
 		return "", nil, errors.New("message id prefix must be at least 4 characters")
 	}
@@ -1515,7 +1572,7 @@ func (s *Store) Find(idOrPrefix string) (Box, *Stored, error) {
 		hits  []*Stored
 		boxes []Box
 	)
-	for _, box := range []Box{Inbox, Sent, Quarantine} {
+	for _, box := range in {
 		msgs, err := s.List(box)
 		if err != nil {
 			return "", nil, err

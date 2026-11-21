@@ -17,6 +17,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/term"
 	"github.com/tropeforce7/agentuucp/internal/wire"
+	"github.com/tropeforce7/agentuucp/internal/withdraw"
 )
 
 // sealedCopy is one copy of a message to several as SealMany made it, with
@@ -183,12 +184,20 @@ func postCopy(c *client.Client, s *store.Store, p *pending) (int64, error) {
 	return postOrForward(c, &env, sendMode{channel: p.Channel, path: path, recipients: p.RecipientCount})
 }
 
-// landCopy is a copy the relay has: its outbox record and file go, and the
-// sent record says where it is.
+// landCopy is a copy the relay has: its withdrawal key is taken from the
+// sealed file while it is still there, its outbox record and file go, and
+// the sent record says where it is and keeps the key.
 func landCopy(s *store.Store, p *pending, relayID int64) {
+	key := withdrawKeyOf(s, p)
 	p.clear(s)
 	updateSentCopyOf(s, p.MessageID, p.To, func(m *store.Stored, c *store.SentCopy) {
 		c.RelayID, c.RefusedCode, c.Refused, c.Dropped = relayID, "", "", false
+		// A copy landed a second time, by a send and a resume at once,
+		// finds its file gone and makes no key: the first landing's
+		// stands.
+		if key != "" {
+			c.WithdrawKey = key
+		}
 		// The relay that gave the id, where it is not the record's: a
 		// copy moved to another, said here as well as at the move, so a
 		// stop between the move and its record still lands it named
@@ -198,6 +207,53 @@ func landCopy(s *store.Store, p *pending, relayID int64) {
 			c.Relay = p.Relay
 		}
 	})
+}
+
+// withdrawKeyOf is the withdrawal key of the sealed copy or stream p names,
+// as the relay that took it computes it from the bytes it stored: the
+// envelope's recipient and ciphertext, withdraw.EnvelopeKey, or the first
+// bytes of the stream's file, withdraw.StreamKey (D189, R146 P1). It is
+// called where the copy is placed, before the file goes, which is the one
+// point the first send, --resume and a moved copy all pass through. A file
+// that will not read gives no key, said once: the message went, and a copy
+// with no key is withdrawn by a note alone, the relay's copy staying.
+func withdrawKeyOf(s *store.Store, p *pending) string {
+	key, err := sealedKey(s, p)
+	if errors.Is(err, os.ErrNotExist) {
+		// Another process landed this copy and took its file with it.
+		return ""
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: the withdrawal key of %s to %s could not be kept (%v); "+
+			"a withdrawal of it will send the note and leave the relay's copy\n", p.MessageID[:12], p.label(), err)
+		return ""
+	}
+	return key
+}
+
+func sealedKey(s *store.Store, p *pending) (string, error) {
+	path := p.sealedPath(s)
+	if p.kind == kindEnvelope {
+		raw, err := regular.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
+		var env envelope.Envelope
+		if err := wire.Decode(raw, &env); err != nil {
+			return "", err
+		}
+		return withdraw.EnvelopeKey(env.To, env.CT), nil
+	}
+	f, err := regular.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	return withdraw.StreamKey(p.To, f, info.Size())
 }
 
 // refuseCopy is a copy the relay refused: the outbox record keeps the
@@ -298,13 +354,20 @@ type outboxJSON struct {
 	Started     time.Time `json:"started"`
 	RefusedCode string    `json:"refused_code,omitempty"`
 	Refused     string    `json:"refused,omitempty"`
+	// Withdraws is the sent message a waiting withdrawal note withdraws,
+	// whose kind is note; absent on every other entry.
+	Withdraws string `json:"withdraws,omitempty"`
 }
 
 func outboxEntry(p *pending) outboxJSON {
+	kind := p.kind
+	if p.Withdraws != "" {
+		kind = "note"
+	}
 	return outboxJSON{
-		Kind: p.kind, ID: p.MessageID, To: p.To, ToName: p.ToName, Relay: p.Relay,
+		Kind: kind, ID: p.MessageID, To: p.To, ToName: p.ToName, Relay: p.Relay,
 		Path: p.Path, Channel: p.Channel, Bytes: p.Bytes, Started: p.Started,
-		RefusedCode: p.RefusedCode, Refused: p.Refused,
+		RefusedCode: p.RefusedCode, Refused: p.Refused, Withdraws: p.Withdraws,
 	}
 }
 
@@ -373,6 +436,9 @@ func outboxLine(p *pending) string {
 }
 
 func outboxKind(p *pending) string {
+	if p.Withdraws != "" {
+		return "note"
+	}
 	if p.kind == kindEnvelope {
 		return "copy"
 	}

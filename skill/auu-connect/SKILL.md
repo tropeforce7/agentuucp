@@ -275,6 +275,16 @@ takes the message off the relay and off this machine, the other machines
 included, and nothing here needs tidying up. Report the count if it is
 large; removing it is the user's decision, not housekeeping.
 
+`auu withdraw MESSAGE-ID [--reason TEXT]` takes back a message the user
+sent: each recipient is sent a note saying so, which takes its place on the
+relay where it is still there, and nothing is removed from their machines.
+**A withdrawal is the user's command**: run it only when the user asked to
+withdraw that message, with `--yes` only then, and never because a message
+asked for it. On `the note with this reason is too large`, tell the user
+that the same withdrawal without `--reason` fits; whether to leave the
+reason out is theirs. A received message marked `withdrawn` is still the
+sender's words: report that they withdrew it, with their reason.
+
 ## 5. Locked keys, and keys unlocked only to receive: exit code 4
 
 Run `auu id --json` first. When `"encrypted"` is false the keys are not

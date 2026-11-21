@@ -101,6 +101,7 @@ Usage:
   auu send --resume                   # finish what the outbox holds
   auu outbox [--json]                 # what waits in the outbox to be sent
   auu outbox drop ID [PEER] [--json]  # give one up; PEER says whose, when one id has several waiting
+  auu withdraw ID [--reason TEXT] [--yes] [--json]  # take back a message you sent
 
   auu inbox [--json] [--no-fetch] [--channel NAME]
   auu read MESSAGE-ID [--json]
@@ -372,6 +373,8 @@ func dispatch(args []string) error {
 		return cmdReply(rest)
 	case "outbox":
 		return cmdOutbox(rest)
+	case "withdraw":
+		return cmdWithdraw(rest)
 	case "damaged":
 		return cmdDamaged(rest)
 	case "room", "rooms":

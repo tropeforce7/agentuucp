@@ -86,9 +86,10 @@ import (
 // 642 when admission counted a route's bytes, 644 when serve told an ask
 // on a channel it does not serve which channels it does (D178), 645 when
 // the relay took a withdrawal by a message's id, 650 when a withdrawal
-// note marked the message it names, with a time of its own. A walk that
+// note marked the message it names, with a time of its own, 666 when a
+// sender withdrew one, with a key and a time for each copy. A walk that
 // finds fewer is not reaching the tree.
-const floor = 650
+const floor = 666
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.

@@ -77,6 +77,7 @@ auu send --to bob --via bar TEXT                   # the same address, no bang t
 auu send --resume [--relay R]                      # finish what the outbox holds, on the relay each was opened on: from the relay's partial, or anew; --relay only moves one whose relay this home no longer has
 auu outbox [--json]                                # what waits in the outbox to be sent
 auu outbox drop ID [PEER] [--json]                 # give one up; PEER says whose, when one id has several waiting
+auu withdraw ID [--reason TEXT] [--yes] [--json]   # take back a message you sent, by the user's word alone: each recipient is sent a note, which takes its place on the relay where it is still there
 auu reply MESSAGE-ID|THREAD-ID [--all] [--subject S] [--channel NAME] [--attach FILE]... TEXT
 ```
 
@@ -564,6 +565,23 @@ is for the user)), and
 asked about, `known`, whether the user holds it, and `known_as`, their name
 for it when they do).
 
+`auu withdraw --json`: `id`, the message withdrawn, and `copies`, one per
+copy, in the record's order, a copy no relay took among them with `error`
+naming the `auu outbox drop` that gives it up, since `auu send --resume`
+would deliver it with no note: `fingerprint`, `name`, `path`
+(when by one), `note` (the id of the note sent for it), `relay_id` (the
+note's id at the relay), `replaced` (true when the note took the message's
+place on the relay), `withdrawn` (when it was marked so), `said` (the line
+that says what happened: `replaced on the relay`, `no longer on the relay,
+or not withdrawable there: the note was sent after it`, `the note went by
+PATH; ...`, `the note was sent; the relay's copy stays, since ...`, or
+`withdrawn already`), and, for a copy not withdrawn, `code` (the relay's,
+when it refused) and `error`. A sent message's `auu read --json` carries
+`withdrawn`, `withdrawn_by` and `withdrawn_reason` once it is withdrawn,
+and each of its `copies` `withdrawn`. `auu outbox --json` lists a note
+waiting for a copy with `kind` `note` and `withdraws`, the message it
+withdraws. The key a relay takes a message back by is in no output.
+
 `auu queue --json`: a list, each `id` (a row in that relay's queue, not a
 message in a mailbox), `neighbour` (the relay it goes to next, by your
 relay's name for it), `path` (what is left of the address after that, when
@@ -714,6 +732,14 @@ A refused send names what to change, and nothing was queued:
 - `channel "y" takes no mail by way of another relay` — comes back in
   `auu queue` as refused, not as an answer: the channel takes no
   forwarded mail.
+- `the channel NAME is closed, and the note with this reason is too large to
+  take the message's place there; 'auu withdraw ID' again without --reason
+  fits` — `auu withdraw` on a channel the recipient has closed: the note is
+  held to the size of the message it replaces. Tell the user; leaving the
+  reason out is theirs to decide, and nothing is retried by itself. Exit 1.
+- `N of M copies were not withdrawn; 'auu withdraw ID' takes up the rest` —
+  each copy's line says why; a refused note waits in the outbox and the
+  second run sends it.
 - `FILE changed while it was being sent; send it again` — an attachment
   sent as a stream changed between its hashing and its sealing; nothing was
   uploaded and nothing is left in the outbox. Send it again once it is

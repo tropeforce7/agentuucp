@@ -507,6 +507,78 @@ the connection lost, or the relay failing. A refusal no interval would
 change, such as a certificate the relay will not accept, ends the wait at
 once with exit 2.
 
+#### Withdrawing a message
+
+A message you sent can be taken back:
+
+*Listing 1.3d*
+```
+auu withdraw MESSAGE-ID --reason 'the figures were last year'"'"'s'
+```
+
+The id is a sent message's, whole or a unique prefix, and only the sent box
+is looked in. It asks first, naming the message and who it went to, and
+`--yes` skips the question. It needs your keys unlocked to send, as `auu
+send` does. Each recipient is sent a note of type `note`, sealed to them
+alone, on the message's thread and in reply to it, saying you withdrew
+it, with the reason after it when you give one. The reason is one line,
+held to a subject's rule, of at most 4,096 bytes. Where the relay that
+took the message still holds it, the note takes its place there, and each
+line says which happened:
+
+- `replaced on the relay`: the message is gone from the relay and the note
+  is in its place, on the same channel.
+- `no longer on the relay, or not withdrawable there: the note was sent
+  after it`: the recipient had fetched it, or removed it, so the note is
+  posted as any message is, and their `auu` marks the copy they hold.
+- `the note went by bar; only the first relay could have been asked to take
+  the message back, and it was not`: a message sent by a path is sent its
+  note by the same path, and the relays beyond the first keep what they
+  hold.
+- `the note was sent; the relay's copy stays, since ...`: a message sent
+  before this release, which kept no key to take it back by, or a relay
+  older than v0.22.0, which does not take a message back.
+
+The note posted after a message is held to every rule a post is, so a
+channel the recipient has closed or deleted since refuses it, and that copy
+is not withdrawn: the line says why. On a channel that is closed, a note is
+no larger than the message it takes the place of, or about 4.7 KB where
+that was smaller, and a note whose reason makes it larger is refused: the
+line says the same withdrawal without `--reason` fits, and nothing is
+tried again by itself. A channel whose own `max_bytes` is under the note's
+size took the message and refuses the note.
+
+A message to several is withdrawn copy by copy, each recipient's note their
+own. A copy that is refused keeps its note in the outbox, listed as a
+`note` by `auu outbox`, and a second `auu withdraw` takes up only the copies
+that are not yet withdrawn, sending the note the first run sealed rather
+than another; `auu send --resume` leaves a note to `auu withdraw`. The exit
+is 0 when every copy is withdrawn, 2 when a relay could not be reached or
+refused the note, 4 when the keys are locked, and 1 otherwise, the
+`note-too-large` refusal among them, since what changes it is the reason.
+A copy of a message to several that no relay took, still waiting in the
+outbox, is a copy not withdrawn: its line names the `auu outbox drop` that
+gives it up, since `auu send --resume` would deliver it with no note. A
+note is sealed only to somebody still on your peer list.
+
+`auu read` of a withdrawn message you sent says `!! WITHDRAWN by you on
+DATE` and the reason at the top, and each copy of a message to several
+says when it was withdrawn; `--json` carries `withdrawn`, `withdrawn_by`,
+the first note's id, and `withdrawn_reason`, and `withdrawn` on each copy.
+The note itself is a sent message of yours. The key a relay takes a message
+back by is kept in your sent record and is in no output.
+
+Refused before anything is sealed, at exit 1: an id that is no message you
+sent, a withdrawal note, a message no relay took a copy of (`auu outbox
+drop` gives up what waits), a knock, and a message already withdrawn from
+everybody.
+
+What a withdrawal cannot do: it removes nothing from anybody's machine. A
+recipient who fetched the message keeps it, marked, and one whose `auu` is
+older than v0.22.0 reads the note as a note and keeps the message
+unmarked. It cannot take back a copy a relay beyond the first holds, or a
+knock, and a withdrawal note is not withdrawn in its turn.
+
 ### 1.4 Channels
 
 A mailbox can have named sub-mailboxes, called channels, that you define and

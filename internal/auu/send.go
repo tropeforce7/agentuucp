@@ -28,6 +28,7 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/store"
 	"github.com/tropeforce7/agentuucp/internal/term"
 	"github.com/tropeforce7/agentuucp/internal/wire"
+	"github.com/tropeforce7/agentuucp/internal/withdraw"
 )
 
 type sentJSON struct {
@@ -808,6 +809,9 @@ func sendSealed(s *store.Store, id *identity.Identity, r *store.Relay, recipient
 			// row and not a mailbox's message, which is what an undeliverable
 			// coming back will name.
 			Path: store.JoinAddress(mode.path),
+			// The key the relay keeps the stored form of, from the
+			// envelope as it was posted (D189, R146 P1).
+			WithdrawKey: withdraw.EnvelopeKey(env.To, env.CT),
 		}
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: message sent but the local copy failed: %v\n", err)

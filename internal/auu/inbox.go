@@ -747,6 +747,9 @@ type copyJSON struct {
 	// Relay is the relay a copy was moved to, which its id is from once
 	// it is placed, empty for one on the message's own relay.
 	Relay string `json:"relay,omitempty"`
+	// Withdrawn is when auu withdraw sent this copy's recipient a note;
+	// absent for a copy never withdrawn. The copy's key is in no output.
+	Withdrawn time.Time `json:"withdrawn,omitzero"`
 }
 
 // printCopies says, for a sent message to several, who has it and who does
@@ -776,6 +779,9 @@ func printCopies(m *store.Stored) {
 			state = "waiting in the outbox"
 		case c.Relay != "":
 			state = "sent, on " + identity.Printable(c.Relay)
+		}
+		if !c.Withdrawn.IsZero() {
+			state += "; withdrawn " + c.Withdrawn.Local().Format(time.RFC1123)
 		}
 		fmt.Printf("%-8s %s <%s>: %s\n", head, label, c.Fingerprint[:16], state)
 	}
@@ -817,7 +823,7 @@ func toJSON(s *store.Store, box store.Box, m *store.Stored, includeText bool) me
 	for _, c := range m.Copies {
 		out.Copies = append(out.Copies, copyJSON{
 			Fingerprint: c.Fingerprint, Name: c.Name, Path: c.Path, RelayID: c.RelayID, Relay: c.Relay,
-			Code: c.RefusedCode, Error: c.Refused, Dropped: c.Dropped,
+			Code: c.RefusedCode, Error: c.Refused, Dropped: c.Dropped, Withdrawn: c.Withdrawn,
 		})
 	}
 	if m.Inner.Body.Type == message.TypeVouch && s != nil {
@@ -1353,7 +1359,11 @@ func printMessage(s *store.Store, box store.Box, m *store.Stored) {
 	// withdrew it, when this machine learned so, and the reason, escaped
 	// as a subject is. The message itself is below, as it came.
 	if !m.Withdrawn.IsZero() {
-		line := fmt.Sprintf("!! WITHDRAWN by its sender on %s", m.Withdrawn.Local().Format(time.RFC1123))
+		by := "by its sender"
+		if box == store.Sent {
+			by = "by you"
+		}
+		line := fmt.Sprintf("!! WITHDRAWN %s on %s", by, m.Withdrawn.Local().Format(time.RFC1123))
 		if m.WithdrawnReason != "" {
 			line += ": " + identity.PrintableText(m.WithdrawnReason)
 		}

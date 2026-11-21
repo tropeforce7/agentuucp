@@ -197,6 +197,21 @@ func SealSections(sender *identity.Identity, recipient *identity.Public, channel
 	return envs[0], inners[0], nil
 }
 
+// SealWithdrawal seals the note that withdraws the message id on thread,
+// sent on channel: to one recipient, always, a note to several being one of
+// these to each, with withdraw.NoteBody as its body and withdraw.Section as
+// its one section, the reason held to its rule by both. It is the one
+// builder a note is sealed with: auu withdraw seals every note through it,
+// and the relay's measurements of the largest note, MaxWithdrawBytes and
+// WithdrawFloorBytes, seal through it, so the figures are of what is sent.
+func SealWithdrawal(sender *identity.Identity, recipient *identity.Public, channel, thread, id, reason string) (*Envelope, *Inner, error) {
+	sec, err := withdraw.Section(id, reason)
+	if err != nil {
+		return nil, nil, err
+	}
+	return SealSections(sender, recipient, channel, withdraw.NoteBody(thread, id, reason), []wire.Section{sec})
+}
+
 // SealMany seals one record for several recipients (P2): one id, one time,
 // one body and one list of sections for every copy, and one seal and one
 // signature per copy, each bound to its own reader as every envelope is.

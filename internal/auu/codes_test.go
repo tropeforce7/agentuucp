@@ -156,3 +156,34 @@ func TestTheNewerCodesSayWhenTheHeldOneWasIssued(t *testing.T) {
 		}
 	}
 }
+
+// The withdrawal route's two codes, a row pair each. not-withdrawable is
+// what sends the note by the ordinary route, and nothing else does: under
+// a code nobody knows the same 404 and sentence is a refusal, said as it
+// came. note-too-large is what says to leave the reason out; under another
+// code the same 400 is said as it came.
+func TestTheWithdrawalCodesAreRead(t *testing.T) {
+	if !isNotWithdrawable(refusal(http.StatusNotFound, relayapi.CodeNotWithdrawable, relayapi.MsgNotWithdrawable)) {
+		t.Error("not-withdrawable: not read as the row the key does not open")
+	}
+	for _, other := range []*client.HTTPError{
+		refusal(http.StatusNotFound, laterKind, relayapi.MsgNotWithdrawable),
+		refusal(http.StatusNotFound, "", relayapi.MsgNotWithdrawable),
+		refusal(http.StatusBadRequest, relayapi.CodeNotWithdrawable, relayapi.MsgNotWithdrawable),
+	} {
+		if isNotWithdrawable(other) {
+			t.Errorf("%d %q with the not-withdrawable sentence: read as not-withdrawable, which would post the note", other.Status, other.Code)
+		}
+	}
+	if !isNoteTooLarge(refusal(http.StatusBadRequest, relayapi.CodeNoteTooLarge, relayapi.MsgNoteTooLarge)) {
+		t.Error("note-too-large: not read")
+	}
+	for _, other := range []*client.HTTPError{
+		refusal(http.StatusBadRequest, laterKind, relayapi.MsgNoteTooLarge),
+		refusal(http.StatusRequestEntityTooLarge, relayapi.CodeNoteTooLarge, relayapi.MsgNoteTooLarge),
+	} {
+		if isNoteTooLarge(other) {
+			t.Errorf("%d %q with the note-too-large sentence: read as note-too-large", other.Status, other.Code)
+		}
+	}
+}

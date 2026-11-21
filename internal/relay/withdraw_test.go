@@ -19,7 +19,6 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/identity"
 	"github.com/tropeforce7/agentuucp/internal/message"
 	"github.com/tropeforce7/agentuucp/internal/relayapi"
-	"github.com/tropeforce7/agentuucp/internal/wire"
 	"github.com/tropeforce7/agentuucp/internal/withdraw"
 )
 
@@ -937,8 +936,8 @@ func TestTheColumnIsWhatTheRelayHolds(t *testing.T) {
 	}
 }
 
-// MaxWithdrawBytes is the measured worst case: a note built by the
-// withdrawal section's own NoteBody and Section and sealed, a 64-byte channel name inside the seal and on the
+// MaxWithdrawBytes is the measured worst case: a note sealed by
+// envelope.SealWithdrawal, a 64-byte channel name inside the seal and on the
 // outer field, and a reason at the subject's cap of 4,096 bytes, each a
 // "<", in the text and in the withdrawal section, is exactly that many
 // bytes. The reason is held to the subject's rule, at its cap and one
@@ -974,19 +973,16 @@ func TestWithdrawFloorBytesIsTheLargestNoteWithNoReason(t *testing.T) {
 	}
 }
 
-// largestNote is a withdrawal note at every maximum but its reason, built
-// by the section's own NoteBody and Section and sealed, a 64-byte channel
-// name inside the seal and on the outer field, as the bytes a post carries.
+// largestNote is a withdrawal note at every maximum but its reason, sealed
+// by envelope.SealWithdrawal, the builder auu withdraw seals every note
+// with, a 64-byte channel name inside the seal and on the outer field, as
+// the bytes a post carries.
 func largestNote(t *testing.T, reason string) []byte {
 	t.Helper()
 	from, to := neighbourID(t, "alice"), neighbourID(t, "bob")
 	id := strings.Repeat("a", 32)
-	sec, err := withdraw.Section(id, reason)
-	if err != nil {
-		t.Fatal(err)
-	}
 	ch := strings.Repeat("c", relayapi.MaxChannelNameBytes)
-	env, _, err := envelope.SealSections(from, to.Public(), ch, withdraw.NoteBody(id, id, reason), []wire.Section{sec})
+	env, _, err := envelope.SealWithdrawal(from, to.Public(), ch, id, id, reason)
 	if err != nil {
 		t.Fatal(err)
 	}

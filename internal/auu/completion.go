@@ -96,6 +96,7 @@ var subcommands = []subcommand{
 	{name: "outbox", describe: "what waits to be sent", subs: []subcommand{
 		{name: "drop", describe: "give up something waiting in the outbox"},
 	}},
+	{name: "withdraw", describe: "take back a message you sent"},
 	{name: "inbox", describe: "fetch and list mail"},
 	{name: "read", describe: "read a message"},
 	{name: "queue", describe: "your mail still waiting to leave a relay"},

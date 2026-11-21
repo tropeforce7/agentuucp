@@ -307,14 +307,16 @@ func finishStream(s *store.Store, id *identity.Identity, r *store.Relay, p *pend
 		}
 		return sentJSON{}, transportErr(hint)
 	}
+	key := withdrawKeyOf(s, p)
 	p.clear(s)
 
 	if err := saveSent(s, &store.Stored{
-		RelayID:  relayID,
-		Relay:    r.Name,
-		Received: time.Now().UTC().Truncate(time.Second),
-		Read:     true,
-		Streamed: true,
+		RelayID:     relayID,
+		Relay:       r.Name,
+		Received:    time.Now().UTC().Truncate(time.Second),
+		Read:        true,
+		Streamed:    true,
+		WithdrawKey: key,
 		Inner: &envelope.Inner{
 			ID: p.MessageID, From: id.Fingerprint(), FromBundle: id.Public().Bundle(),
 			To: p.To, Time: p.Time, Body: p.Body, Channel: p.Channel,
@@ -383,6 +385,15 @@ func resumePending(s *store.Store, id *identity.Identity, asJSON bool, relay str
 		}
 	}
 	for _, p := range waiting {
+		// A withdrawal note is finished by the command that sealed it,
+		// which knows which route it goes by and marks the message it
+		// withdraws: resumed here it would go by the ordinary route and
+		// leave the relay's copy, with nothing marked.
+		if p.Withdraws != "" {
+			fmt.Fprintf(os.Stderr, "%s: a withdrawal note to %s waits; '%s withdraw %s' sends it\n",
+				p.MessageID[:12], p.label(), prog, p.Withdraws[:12])
+			continue
+		}
 		// A record names the relay it was opened on, or was to be posted
 		// to, and is finished there; resumeRelay says when it may move. A
 		// record from before a home could know more than one relay names

@@ -21,15 +21,12 @@ import (
 	"github.com/tropeforce7/agentuucp/internal/withdraw"
 )
 
-// sealedNote is a withdrawal note from one identity to another, as its
-// sender's client seals one, naming the message id on its thread.
+// sealedNote is a withdrawal note from one identity to another, sealed by
+// envelope.SealWithdrawal as auu withdraw seals one, naming the message id
+// on its thread.
 func sealedNote(t *testing.T, from *identity.Identity, to *identity.Public, thread, id, reason string) (raw []byte, noteID string) {
 	t.Helper()
-	sec, err := withdraw.Section(id, reason)
-	if err != nil {
-		t.Fatal(err)
-	}
-	env, inner, err := envelope.SealSections(from, to, "", withdraw.NoteBody(thread, id, reason), []wire.Section{sec})
+	env, inner, err := envelope.SealWithdrawal(from, to, "", thread, id, reason)
 	if err != nil {
 		t.Fatal(err)
 	}
