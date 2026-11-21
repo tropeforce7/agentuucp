@@ -398,6 +398,11 @@ func (r *serveRun) round(ctx context.Context, backlog, longRun bool) error {
 			}
 			continue
 		}
+		if skipped, err := r.skipWithdrawn(m); err != nil {
+			return escaped(err)
+		} else if skipped {
+			continue
+		}
 		if err := r.handle(ctx, m); err != nil {
 			return err
 		}
@@ -1224,6 +1229,81 @@ func (r *serveRun) send(m *store.Stored, ch *serveChannel, text, patch string, f
 	// holds a settled reply's form, which is never sent again.
 	os.Remove(postedFile(facts.keptDir, m.Inner.ID))
 	return nil
+}
+
+// skipWithdrawn settles an ask its sender withdrew before it was answered:
+// written down, said once on the console, since a settled entry is
+// pending no more, and listed under skipped in --json, with no reply. Only
+// the mark on the inbox record is read, never the note's text. It is asked
+// where handle would be, after pending's choice of the round's messages,
+// so a first start's backlog has been written by then, and of a message
+// handle would answer now, so one that lost its turn this round is left
+// as handle leaves it. The message stays unread for the owner.
+//
+// One never tried is written down as skipped: no turn, and no opener, so a
+// later message on a withdrawn opening ask's thread id opens it (P14). One
+// tried already is written down as given up instead (R155): its attempt
+// left the thread's directories, and a worktree in side-copy mode, which
+// a thread with no opener would hand to the next peer to name its id, so
+// it stays tried and the thread stays its opener's. An attempt cut off
+// before it was written down, by a stop, keys locked before the send or a
+// crash, is known by the directories handle makes before the handler
+// runs (attemptLeft), and is written down as tried now.
+func (r *serveRun) skipWithdrawn(m *store.Stored) (bool, error) {
+	// The record as it is now: a mark another process made since pending
+	// listed the round's messages is seen before the handler runs.
+	if m.Withdrawn.IsZero() {
+		now, err := r.s.Holding(store.Inbox, m.Inner.ID)
+		if err != nil || now == nil || now.Withdrawn.IsZero() {
+			return false, nil
+		}
+		m = now
+	}
+	ch := r.channelFor(m)
+	if ch == nil || !r.answerable(m) {
+		return false, nil
+	}
+	e := r.entry(m, ch.name)
+	switch {
+	case !e.Tried.IsZero():
+		e.GaveUp = true
+	case attemptLeft(r.root, m.Inner.Body.Thread):
+		e.Tried, e.GaveUp = time.Now().UTC().Truncate(time.Second), true
+	default:
+		e.Skipped = true
+	}
+	if err := r.led.save(); err != nil {
+		return true, err
+	}
+	r.out.Skipped = append(r.out.Skipped, r.report(m))
+	if !r.asJSON {
+		_, err := fmt.Printf("%s: %s from %s was withdrawn by its sender; skipped\n",
+			ch.name, shortID(m.Inner.ID), orNone(identity.Printable(m.SenderName)))
+		// Kept, as settle keeps it (57e).
+		if err != nil && r.writeErr == nil {
+			r.writeErr = err
+		}
+	}
+	return true, nil
+}
+
+// attemptLeft says an attempt on a thread may have left something of its
+// own under the serve directory: the thread's directory, serve's kept
+// directory for it or its side copy's worktree, any of which may outlive
+// the others when a handler or the owner removes one, is there or cannot
+// be said not to be. The thread id is held to a message id's shape before
+// the join; one that is not has none of them, since handle refuses it
+// before making one.
+func attemptLeft(root, thread string) bool {
+	if message.ValidID(thread) != nil {
+		return false
+	}
+	for _, under := range []string{"threads", "kept", "worktrees"} {
+		if _, err := os.Lstat(filepath.Join(root, under, thread)); !errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+	}
+	return false
 }
 
 // settle records a message as answered and marks it read: the reply is the

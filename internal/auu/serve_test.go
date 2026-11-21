@@ -65,6 +65,8 @@ const (
 //	say:TEXT       print TEXT to standard error
 //	args:PATH      write this program's arguments to a file, one per line
 //	remove:PATH    remove a file, as an owner taking a message back does
+//	markwithdrawn:PATH  mark the inbox record at PATH withdrawn, as a
+//	               withdrawal note fetched while the script runs does
 //	stdin:PATH     write standard input to a file
 //	reply:TEXT     write TEXT to $AUU_OUTPUT_DIR/reply.txt, as a script's reply
 //	replylink:PATH make $AUU_OUTPUT_DIR/reply.txt a link to PATH
@@ -291,6 +293,24 @@ func TestServeHelperProcess(t *testing.T) {
 				if err == nil {
 					os.WriteFile(filepath.Join(to, e.Name()), data, 0o600)
 				}
+			}
+		case "markwithdrawn":
+			data, err := os.ReadFile(arg)
+			var record map[string]any
+			if err == nil {
+				err = json.Unmarshal(data, &record)
+			}
+			if err == nil {
+				record["withdrawn"] = time.Now().UTC().Truncate(time.Second).Format(time.RFC3339)
+				record["withdrawn_by"] = strings.Repeat("e", 32)
+				data, err = json.Marshal(record)
+			}
+			if err == nil {
+				err = os.WriteFile(arg, data, 0o600)
+			}
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(9)
 			}
 		case "remove":
 			if err := os.Remove(arg); err != nil {

@@ -236,6 +236,23 @@ func (r *handleRun) applyRequest(op, target string) (string, error) {
 		case jobRunning:
 			return "", usageErrf("skip %s: its script is running; skip it once it has ended", target)
 		}
+		// A job whose message its sender withdrew is removed, as a round
+		// would remove it, and nothing is sent for it; its directories go
+		// at the next sweep. A reply whose envelope may be on the relay
+		// already is left to its own send, which alone may record it, and
+		// the job is skipped as any other.
+		if m, err := r.s.Holding(store.Inbox, target); err == nil && m != nil && !m.Withdrawn.IsZero() {
+			paths, err := r.pathsFor(job.Route, target)
+			if err != nil {
+				return "", err
+			}
+			if _, err := os.Lstat(postedFile(paths.kept, target)); job.Reply != "" || errors.Is(err, os.ErrNotExist) {
+				job.State, job.Reason, job.Review, job.RetryAt = jobRemoved, withdrawnJob, false, time.Time{}
+				job.ReplyFailures, job.ReplyTried = 0, time.Time{}
+				endedNow(job)
+				return fmt.Sprintf("skip %s: its message was withdrawn by its sender, so it is removed and nothing is sent", target), nil
+			}
+		}
 		job.State, job.By, job.Review, job.RetryAt = jobSkipped, skippedByOperator, false, time.Time{}
 		endedNow(job)
 		if job.Reply != "" {

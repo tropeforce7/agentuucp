@@ -234,6 +234,7 @@ internal/auu/serve.go (*serveRun).handle os.Rename(tmp) = network: thread id and
 internal/auu/serve.go (*serveRun).handle os.Stat(in) = network: thread id and message id, message.ValidID at Body.Validate and handle for the thread, and at envelope.Open, Store.Load and handle for the message, before the join shown by TestLimitThreadIDIsNotAPathAtServe
 internal/auu/serve.go (*serveRun).handle regular.Open(stdinPath) = network: thread id and message id, message.ValidID at Body.Validate and handle for the thread, and at envelope.Open, Store.Load and handle for the message, before the join, in serve's kept directory, which the handler is never told of shown by TestLimitThreadIDIsNotAPathAtServe
 internal/auu/serve.go (*serveRun).send os.Remove(postedFile(facts.keptDir, m.Inner.ID)) = network: thread id and message id, message.ValidID at Body.Validate and handle for the thread, and at envelope.Open, Store.Load and handle for the message, before the join, in serve's kept directory, which the handler is never told of shown by TestLimitThreadIDIsNotAPathAtServe
+internal/auu/serve.go attemptLeft os.Lstat(filepath.Join(root, under, thread)) = network: thread id, under this home's serve directory's threads, kept or worktrees directory, message.ValidID at Body.Validate and attemptLeft before the join shown by TestLimitThreadIDIsNotAPathAtWithdrawnSkip
 internal/auu/serve.go cmdServe os.MkdirAll(root) = local
 internal/auu/serve.go holder os.ReadFile(path) = local
 internal/auu/serve.go keepFromThreads os.Lstat(kept) = local

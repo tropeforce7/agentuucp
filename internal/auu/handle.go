@@ -539,6 +539,15 @@ func (r *handleRun) settleInterrupted() error {
 		if job.State != jobInterrupted || route == nil {
 			continue
 		}
+		// A message its sender withdrew since is not run again and not
+		// answered, whatever the route (P13): the attempt that was
+		// interrupted was its last.
+		if m, err := r.s.Holding(store.Inbox, id); err == nil && m != nil && !m.Withdrawn.IsZero() {
+			if err := r.removed(id, m, withdrawnJob); err != nil {
+				return err
+			}
+			continue
+		}
 		gone := job.Killed || r.cfg.SupervisorReap
 		switch {
 		case route.Idempotent && job.Attempt < route.Retries && gone:

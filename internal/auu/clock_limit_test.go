@@ -282,4 +282,23 @@ func TestLimitTheServeLedgerTimesAreThisMachinesClock(t *testing.T) {
 	if !w.holds(e.Handled) || !e.Tried.Equal(e.Handled) {
 		t.Fatalf("the telling: handled %v, tried %v; want both this machine's clock between %v and %v", e.Handled, e.Tried, w.from, w.to)
 	}
+
+	// A withdrawn ask whose attempt was cut off before it was written down
+	// is settled as given up and tried now, skipWithdrawn's, this
+	// machine's clock (R155).
+	cut := alice.ask(t, "jostle", "cut off", "question")
+	bob.run("inbox")
+	if err := os.MkdirAll(filepath.Join(bob.home, "serve", "threads", cut.Thread), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	withdrawAsk(t, alice, cut.ID)
+	w = clockFrom()
+	if report := bob.round(t); len(report.Skipped) != 1 {
+		t.Fatalf("the withdrawn ask: %+v", report)
+	}
+	w = w.closed()
+	e = bob.ledgerOf(t).Messages[cut.ID]
+	if e == nil || !e.GaveUp || !w.holds(e.Tried) || !e.Handled.IsZero() {
+		t.Fatalf("a withdrawn ask cut off wrote %+v; want given up, tried this machine's clock between %v and %v, handled none", e, w.from, w.to)
+	}
 }

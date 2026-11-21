@@ -464,6 +464,24 @@ a new expert whose mail is waiting for it, `auu serve --once --backlog`
 answers it instead. That belongs to a first start alone, and later it is
 refused.
 
+**A withdrawn ask is skipped.** An ask or follow-up whose sender withdrew
+it before it was answered, which serve knows by the mark that a fetch puts
+on the record when the withdrawal note arrives and never by the note, is
+settled with no reply, said once on the console as `jostle: ID from NAME
+was withdrawn by its sender; skipped` and listed under `skipped` in
+`--json`. Its handler is not run and it stays unread in the inbox. One
+serve never tried is written down in the ledger as skipped: it is no turn
+and opens no thread, so when a withdrawn ask was the first on its thread,
+the next message on that thread id opens it, whoever sends it. One serve
+tried already, an attempt that failed or was cut off, is written down as
+given up, `gave_up`, since its attempt left the thread's directories and,
+on a side copy, its worktree: the thread stays its opener's, and anybody
+else's message on it is left alone. An ask already answered is left as it
+was, and so are its thread's turns. A withdrawal note is a note, so serve
+does not answer it, and nor is it told the channels this expert answers
+on; a withdrawn ask on a channel serve does not answer on is told them as
+any ask there is.
+
 **Mail on a served channel stays on the relay.** Every channel keeps its
 mail there until it is removed, so that a second machine of the same
 identity reads it too, and an expert answering all year would fill its own

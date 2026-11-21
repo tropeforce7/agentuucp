@@ -168,7 +168,7 @@ A job is in one state at a time:
 | `failed` | its last attempt failed: waiting for a retry on an idempotent route with attempts left, or in `review`, which only the operator's `retry` or `skip` moves; in review it has had its reply |
 | `interrupted` | its attempt did not end of itself, stopped with the service or found running at a start; the next round runs it again or puts it in review |
 | `skipped` | by the first start, `by: first-start`, an ask that was waiting before the route existed and gets no reply; or by the operator, `by: operator`, with a reply saying so |
-| `removed` | the owner took the ask out of the inbox; nothing more is done, and no reply goes |
+| `removed` | the owner took the ask out of the inbox, or its sender withdrew it before its script ran to an end; nothing more is done, and no reply goes |
 
 The entry stays in the ledger whatever its state, since it is what stops
 a second admission of the same message.
@@ -329,7 +329,19 @@ starts, such as files that will not unpack or a program not on the
 `PATH`, is tried again at serve's backoff, up to the route's `retries`,
 and is then in review without having run. An ask the owner removes from
 the inbox is `removed`, whether its job was waiting or running; one whose
-record is there and cannot be read is a failure, never a removal. A fault
+record is there and cannot be read is a failure, never a removal. An ask
+its sender withdraws is `removed` too, with the reason "its message was
+withdrawn by its sender", when its job is `queued` or `preparing`, has
+failed and waits for a retry or for its attempts to be decided again, or
+was `interrupted`. It is removed when a round next comes to the job: at
+its turn on its route, when its retry is due, or when an interrupted job
+is settled. The withdrawal is looked at before anything else about the
+job, so no reply goes, and its directories go then. A job that waits
+behind one in review is reached by the operator's `skip`. Handle reads
+the mark that a fetch puts on the record when the note arrives, never
+the note, and a note is no ask, so it is no job. A job whose script is
+running when its ask is withdrawn finishes and its reply goes, and a job
+that has ended is left as it ended. A fault
 of the host's, a directory that cannot be made or a ledger that cannot be
 written, ends the run with the job where it was. A run that stops while a
 job is being prepared leaves it `preparing`, and the next round prepares
@@ -629,8 +641,11 @@ they were made.
   that went away is the operator's word that its script is gone.
 - `skip` ends a job that is not succeeded, skipped, removed or running,
   and its reply, saying how its last attempt ended or that it was not run,
-  goes at the next round, unless one went already. A sequential route held
-  by a job in review is moved on by its `retry` or its `skip`.
+  goes at the next round, unless one went already. A job whose ask its
+  sender withdrew is `removed` by a `skip` instead, and nothing is sent,
+  unless a reply's envelope may be on the relay already, which its own send
+  records. A sequential route held by a job in review is moved on by its
+  `retry` or its `skip`.
 - `pause` holds a route's launches: its asks are taken into the ledger and
   none is run until `resume`. A route that has not had its first round has
   nothing to pause.

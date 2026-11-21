@@ -60,8 +60,13 @@ type ledgerEntry struct {
 	// nothing to say or when nothing has been sent yet.
 	Reply    string `json:"reply"`
 	Failures int    `json:"failures"`
-	// GaveUp says the retries ran out; Skipped, that it was in the inbox
-	// before serve ever ran here.
+	// GaveUp says the retries ran out, or that its sender withdrew it after
+	// serve had tried it and before it was answered; Skipped, that it was
+	// in the inbox before serve ever ran here, or that its sender withdrew
+	// it before serve tried it (skipWithdrawn). A skipped entry is no turn
+	// and opens no thread, so a withdrawn opening ask never tried leaves
+	// its thread id to the next message on it, whoever sends it (P14); one
+	// given up on stays tried, and its thread its opener's (R155).
 	GaveUp  bool `json:"gave_up,omitempty"`
 	Skipped bool `json:"skipped,omitempty"`
 	// Newer is why a message is pending and not answered: a stream that

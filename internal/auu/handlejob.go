@@ -96,6 +96,14 @@ func (r *handleRun) runJob(ctx context.Context, id string) error {
 	defer r.mu.Unlock()
 	job := r.led.Jobs[id]
 	route := r.cfg.Routes[job.Route]
+	// A message its sender withdrew is not run, nor answered: the mark on
+	// its inbox record ends the job as removed, before the job's attempts
+	// are looked at, so a job that failed or was interrupted and is then
+	// withdrawn ends so too. A record that cannot be read is decided below,
+	// as it always was. A job already running finishes, and its reply goes.
+	if m, err := r.s.Holding(store.Inbox, id); err == nil && m != nil && !m.Withdrawn.IsZero() {
+		return r.removed(id, m, withdrawnJob)
+	}
 	// A job that has run before is run again only as a retry, decided again
 	// under the file as it is now, whatever state the way back left it in:
 	// a failed retry, one queued again after a failure before launch or a
@@ -668,8 +676,12 @@ func (r *handleRun) pathFree(why string) string {
 	return strings.ReplaceAll(why, home, "AUU_HOME")
 }
 
-// removed is a job whose message the owner took back: written down, and
-// nothing more done for it.
+// withdrawnJob is the reason a job ends with when its message was marked
+// withdrawn before it ran.
+const withdrawnJob = "its message was withdrawn by its sender"
+
+// removed is a job whose message the owner, or its sender, took back:
+// written down, and nothing more done for it.
 func (r *handleRun) removed(id string, m *store.Stored, why string) error {
 	job := r.led.Jobs[id]
 	job.State, job.Reason = jobRemoved, why
