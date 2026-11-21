@@ -4,8 +4,8 @@ For an agent, or a person, contributing to this project. The rules come from
 tests that were wrong, tests that were missing, and tests that passed for the
 wrong reason. Read `DEVELOPMENT.md` beside this file first.
 
-The bar is: `make vet test build` clean, `make race` clean, and every
-test the specification lists exists under a name a reviewer can find with
+The bar is: `make vet test build` clean for every commit, `make race`
+clean before every push, and every test the specification lists exists under a name a reviewer can find with
 grep. The specifications are the maintainers'; ask the maintainers if you lack
 one. `make race` carries `-timeout 60m`, because `internal/auu` under the race
 detector takes about ten minutes on a fast machine and longer on a CI runner,
@@ -13,6 +13,29 @@ and `go test`'s default of ten minutes would end it in a panic that says
 nothing about the code. `make test` carries `-timeout 20m` for the same
 reason: on a developer's machine `internal/auu` alone runs within about a
 minute of that default.
+
+**What runs for each commit, and what runs once before a push.** The whole
+suite uncached and the race run take most of an hour on a developer's
+machine, so they are not run for every commit of a series. Each commit
+runs `gofmt`, `go vet` on the host and with `GOOS=windows` and
+`GOOS=linux`, the Windows build of the `internal/auu` tests, the four
+enforcement tests the rules review names
+(`TestEveryFileOpenHasItsProvenanceInTheLedger`,
+`TestEveryQueryIsAConstant`, `TestEveryIntegerFromOutsideHasItsLimitTest`
+and `TestLimitNothingTheNetworkNamesIsAPath`), and `make vet test build`,
+which is the commit's one test run. Go's test cache makes it the run
+that is wanted: a package whose own files or whose dependencies changed
+runs again, `internal/auu` whole once among them when the commit reaches
+it, and a package nothing touched is answered from the cache. There is no
+separate `-count=1` run for each commit. The record names the packages
+that ran and says why they are the ones (`go list -test -f
+'{{.ImportPath}}: {{join .Deps " "}}' ./...` lists each package with what
+it depends on). Once, on the last commit
+before a push, the whole suite runs with `-count=1`, `make race` runs,
+and the container suite runs when the release needs it, which a release
+that changes the wire, the schema or what an older release meets always
+does. A fault that run finds is put right by a commit of its own, which
+runs the per-commit gate and the pre-push run again.
 
 ## What a test is for
 
@@ -1093,6 +1116,7 @@ Relay side:
 | mailbox registration | the token at register | every later signed request | a machine's certificate revoked: `TestARevokedCertificateStopsWorkingImmediately`; the identity blocked: `TestBlocks`, `TestBlockedMailboxIsNotAnOracle`, `TestABlockedIdentityMayNotForward`; token revoked after register: none |
 | courier admission (a neighbour's identity admitted as courier) | peers add | isCourierMailbox on the open, the PUT, the channels route, the watch | admission withdrawn between open and PUT: re-checked at every attempt; none as a test of its own |
 | owner documents (allow list, card, directory) | signature and issued time at the push | every post, open, forward against them | a push replaced under an open upload: `TestARevokedSendersAttemptIsRefusedBeforeItsBodyIsRead`, `TestAChannelClosedUnderAnUploadRefusesIt`; under a queued forward: none |
+| withdrawal key (the `withdraw` column) | the post, or the stream's placement, of an envelope posted here | the withdrawal route's replacement of the row | the owner's removal of the message: `TestEveryRowTheKeyDoesNotOpenIsRefusedAlike`; the mailbox deregistered, and the sender taken off the owner's allow list, between the post and the withdrawal: `TestAWithdrawalMeetsThePostsRefusalsBeforeItsKey` |
 
 Client and serve side:
 
@@ -1109,6 +1133,7 @@ Client and serve side:
 | serve worktree | the handler's first run | each later turn | survives a handler's damage in between, not a withdrawal: `TestAHandlerThatLocksItsWorktreeDirDoesNotStopTheExpert`, `TestAHandlerThatLocksItsWorktreeInGitDoesNotStopTheExpert`, `TestAHandlerThatTakesThePermissionsOffInsideItsWorktreeDoesNotStopTheExpert` |
 | key agent lock state | unlock | every seal and sign until lock | a lock mid-fetch returns the message to the queue: `TestALockedAgentMidCommandDiscardsNothing` |
 | channel directory (a peer's) | fetched and verified at the send | later sends to that peer's channels | D92 drops a bad peer; a name the relay does not have refused at the post and the recipient's channels fetched again: `TestARefusedChannelIsSaidToBe`; a channel closed between a fetch and the post: none |
+| withdrawal mark | the note's verified sender being the original's, at filing | handle's and serve's leaving the ask alone | the sender removed from the peers between the message and its note, the mark still made since a withdrawal only takes an ask away: `TestANoteFromASenderNoLongerAPeerStillMarksTheirMessage`; the mark made while a job runs or a round is under way: `TestHandleFinishesAJobWithdrawnWhileRunningAndLeavesOneEnded`, `TestServeReadsAMarkMadeDuringTheRound` |
 
 The rows marked none are the withdrawal tests to write after v0.18.0
 (S44). None of them is a finding until a test fails. A cell that says
@@ -1797,8 +1822,11 @@ and holds it to going within ten seconds.
 
 **Reproduce CI's contention before blaming CI, and reproduce the job that
 failed.** Six copies of `go test -count=2 ./...` in parallel, four rounds, is a
-closer approximation of a shared runner than one quiet run, and it is thirty
-seconds. But `make test` and `make race` are different jobs with different
+closer approximation of a shared runner than one quiet run. It was thirty
+seconds when this was first written; with `internal/auu` alone now about
+eight minutes in one quiet run, it is hours, so run it on the packages the
+change touches, `-count=2 ./internal/relay` and the like, and leave the
+whole tree to the one uncached run before a push and to CI. But `make test` and `make race` are different jobs with different
 timing: the second CI failure here was in the race job, and the load test that
 would have caught it is `for j in 1 2 3 4; do make race & done; wait`. Run the
 job that broke.
@@ -1978,13 +2006,17 @@ binaries with their version as it stamps any tagged build, and the image
 builds them in a stage of its own beside this tree's. Its rows are an old
 recipient reading a new message to several, as an envelope and as a
 stream; a new sender posting through an old relay; an old sender, with
-the old tools, on a new relay; and a channel rule met by the old build
-on both sides: its `channel ls` and directory watch on a version 2
-directory exiting 2 in its own words, for every rule and for
-`no_forwards` alone; its stream to a channel that takes none shown the
-relay's sentence under a code it does not know; a rule refused before
-any push to an old relay, naming its wire level; and a directory with no
-rule taken by the old relay as it always was (O06 to O09). Each row checks each old program's
+the old tools, on a new relay; and the withdrawal met by the old build on
+every side (O10 to O13): an old recipient reading the note as a note and
+keeping the original unmarked, a new sender withdrawing through an old
+relay as a mark, an old sender's message on a new relay stored and read
+as ever with nothing on the old side to withdraw it by, and the old `auu` refusing by name a record this
+release marked. A row that swaps in the old relay takes the database down
+to the old schema by hand and lets this tree's relay carry it back after,
+since a relay refuses a database a newer one wrote. The rows that met
+v0.17.0 with a channel rule (O06 to O09) were retired when the tag moved
+to v0.21.1: that release knows the rules, so the refusals they observed
+are no longer the previous release's. Each row checks each old program's
 version before it relies on it, so a row cannot pass against this
 tree's binary by mistake. A promise that an older build ignores or refuses by name what a
 newer one adds is tested by the older build itself, never by a fake of
@@ -2064,12 +2096,15 @@ Encrypt run — say that it is outstanding and what it needs, and record it.
 ## Before you report completion
 
 - `make vet test build` clean.
-- `make race` clean, run several times: a test that passes four times in five
-  is a failing test.
-- `go test -count=3 ./...` clean, and for anything touching sockets, goroutines
-  or the clock, several copies in parallel: `for i in 1 2 3 4 5 6; do go test
-  -count=2 ./... & done; wait`. CI is slower and more contended than your
-  machine, and that is where the ordering assumptions surface.
+- `make race` clean, once before the push, and run several times for a
+  change that touches sockets, goroutines or the clock: a test that passes
+  four times in five is a failing test.
+- `go test -count=3` clean over the packages the change touches, and for
+  anything touching sockets, goroutines or the clock, several copies in
+  parallel: `for i in 1 2 3 4 5 6; do go test -count=2 ./internal/relay &
+  done; wait`, for the packages concerned. CI is slower and more contended
+  than your machine, and that is where the ordering assumptions surface.
+  The whole tree runs once, uncached, before the push.
 - Every test the specification lists exists; grep for each.
 - Every range check is tested on both sides of both edges, one step apart.
 - Every signed parameter is tested at MIN, MAX, MIN+1, MAX-1, zero and minus

@@ -1053,7 +1053,15 @@ listing that says where their mail is, and what takes it away is the
 neighbour taking the envelope — the file and the recipient go at that
 moment, the poster's name outlasting them only until the window a report
 could arrive in has passed. A relay with no courier configuration holds
-none of it. Adding a fourth means answering the question again.
+none of it. A fourth was added when a sender learned to withdraw a
+message, and it was added by answering the same question: a row a sender
+posted keeps the stored form of its withdrawal key, the SHA-256 of a hash
+over bytes the relay already holds, because the relay must know which
+message a withdrawal names without knowing who sent it. It names nobody,
+cannot be tested against a candidate sender, and goes with the row; a
+knock, a courier's delivery, a note stored on a closed channel and a row
+stored before v0.22.0 keep none.
+Adding a fifth means answering the question again.
 
 **A service's record of what it has done is a file it writes, and nothing
 else.** `auu serve` decides what to answer from `serve/ledger.json` alone.
@@ -1279,22 +1287,28 @@ stays false and nobody downstream mistakes it for the end of a stream.
 
 **`ccx` in a constant is not a leftover: it is on the wire.** The binaries are
 `auu`, `auu-relay`, `auu-admin` and `auu-ca`, and the project is AgentUUCP,
-but eighteen constants deliberately still say `ccx` — the thirteen `ccx-*-v1`
+but nineteen constants deliberately still say `ccx` — the fourteen `ccx-*-v1`
 strings (`ccx-allow-v1`, `ccx-card-v1`, `ccx-carried-v1`,
 `ccx-channels-v1`, `ccx-chunk-v1`, `ccx-envelope-v1`, `ccx-http-v1`,
 `ccx-id-v1`, `ccx-sig-v1`, `ccx-stream-sig-v1`, `ccx-stream-v1`,
-`ccx-token-v1`, `ccx-vouch-v1`: eight under a signature, three in an HPKE `info` or a
-chunk's additional data, one under the fingerprint hash, and one over an
-envelope a relay is carrying), the `ccx1` and `ccx2` export-line
+`ccx-token-v1`, `ccx-vouch-v1`, `ccx-withdraw-v1`: eight under a signature, three in an HPKE `info` or a
+chunk's additional data, one under the fingerprint hash, one over an
+envelope a relay is carrying, and one over the sealed bytes a sender
+withdraws a message by), the `ccx1` and `ccx2` export-line
 prefixes, the `ccxt1` (read) and `ccxt2` (written) token prefixes, and the
 `X-CCX-Auth` header. Recount with `grep -rn '"ccx' --include='*.go'
-internal cmd | grep -v _test` when you add one; run on 2026-10-01 when the
-vouch's domain went in, it answered nineteen lines: the seventeen
+internal cmd | grep -v _test` when you add one; run on 2026-11-21 when the
+withdrawal's domain went in, it answered twenty lines: the eighteen
 lower-case constants, the agent's second spelling of the request domain,
 and one comment quoting the export prefix, with the header, in upper
-case, the eighteenth constant the grep does not match.
+case, the nineteenth constant the grep does not match.
 
-`ccx-carried-v1` is the one of the thirteen that is not on any wire.
+`ccx-withdraw-v1` and `ccx-carried-v1` are the two of the fourteen that
+are on no wire themselves. The withdrawal's domain is inside a key that
+is: the sender computes the key from the copy it sealed and the relay
+from the copy it stores, so the two ends must agree on the domain as on
+any format, and renaming it would leave every message sent before the
+rename impossible to withdraw. `ccx-carried-v1` is not even that.
 A relay's carried table is its own — no two relays compare hashes, and
 nothing about one ever leaves the process that made it — so what the
 domain buys is not agreement between ends but separation from every other

@@ -256,6 +256,31 @@ func TestAWithdrawalNoteMarksAQuarantinedMessage(t *testing.T) {
 	}
 }
 
+// The sender removed from the peers between the message and its note: the
+// mark is admitted by the original's verified sender, not by the peer list,
+// so the note, now a stranger's and quarantined, still marks the message in
+// the inbox that sender signed, which is the mark handle and serve read
+// (withdrawjobs_test.go holds them to it). A withdrawal only ever takes an
+// ask away from the one who sent it.
+func TestANoteFromASenderNoLongerAPeerStillMarksTheirMessage(t *testing.T) {
+	r := startResettable(t)
+	alice, bob := watchers(t, r.url)
+	alice.run("send", "--to", "bob", "--subject", "oops", "the wrong text")
+	bob.run("inbox")
+	orig := recordOf(t, bob, store.Inbox, "oops")
+	bob.run("peers", "rm", "alice")
+
+	raw, noteID := sealedNote(t, identityOf(alice), identityOf(bob).Public(), orig.Inner.Body.Thread, orig.Inner.ID, "")
+	deliver(t, r.st, bob, raw)
+	bob.run("inbox")
+	if note := bob.stored(store.Quarantine, noteID); note == nil {
+		t.Fatal("the note from a sender no longer a peer was not quarantined")
+	}
+	if m := bob.stored(store.Inbox, orig.Inner.ID); m.Withdrawn.IsZero() || m.WithdrawnBy != noteID {
+		t.Fatalf("the original after its sender's note: withdrawn %v by %q", m.Withdrawn, m.WithdrawnBy)
+	}
+}
+
 // What the mark acts on, beyond what a fetch shows: nothing for a note on a
 // stream's record, nothing for a record whose section breaks the rule (as a
 // release before v0.22.0 could have kept one, R150), nothing for a record

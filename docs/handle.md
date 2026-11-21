@@ -336,7 +336,12 @@ failed and waits for a retry or for its attempts to be decided again, or
 was `interrupted`. It is removed when a round next comes to the job: at
 its turn on its route, when its retry is due, or when an interrupted job
 is settled. The withdrawal is looked at before anything else about the
-job, so no reply goes, and its directories go then. A job that waits
+job, so no reply goes, and its directories go then. That holds for an
+interrupted job whose script is not known to have ended, one the service
+did not stop itself on a host whose `supervisor_reaps` is `false`: that
+script may still be at work when its ask is withdrawn, and should be
+written to expect its directory gone, whatever its route. A job that
+waits
 behind one in review is reached by the operator's `skip`. Handle reads
 the mark that a fetch puts on the record when the note arrives, never
 the note, and a note is no ask, so it is no job. A job whose script is
