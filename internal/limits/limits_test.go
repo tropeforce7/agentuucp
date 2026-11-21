@@ -84,9 +84,10 @@ import (
 // handle ran its first jobs, 630 when it replied to them, 631 when the
 // replies carried files, 640 when the operator's commands read the ledger,
 // 642 when admission counted a route's bytes, 644 when serve told an ask
-// on a channel it does not serve which channels it does (D178). A walk
-// that finds fewer is not reaching the tree.
-const floor = 644
+// on a channel it does not serve which channels it does (D178), 645 when
+// the relay took a withdrawal by a message's id. A walk that finds fewer
+// is not reaching the tree.
+const floor = 645
 
 // flagMethods are the *flag.FlagSet methods that define an integer or
 // duration flag; the tree has no package-level flag.Int.

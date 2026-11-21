@@ -15,13 +15,13 @@ import (
 )
 
 // Every request body the relay reads goes through decodeRequest, and the
-// rule it enforces is the same on all eleven: a field the request does not
+// rule it enforces is the same on all twelve: a field the request does not
 // have is refused by name, a section is the one place something new may
 // go, a section the relay does not know is ignored unless it is marked
 // critical, and a critical one is refused with the code a client acts on.
 // The table below holds each route to that rule through its real handler,
 // under its real signature, built on the fixture its own tests succeed
-// with, so that a twelfth body, or a route that stopped calling
+// with, so that a thirteenth body, or a route that stopped calling
 // decodeRequest, is not one the rule silently skips.
 
 // sending is one request ready to go: the good body as its fields, which a
@@ -290,6 +290,25 @@ func requestCases() []requestCase {
 			},
 		},
 		{
+			route: "withdraw", what: "withdrawal request", status: http.StatusOK,
+			start: func(t *testing.T) func(t *testing.T) sending {
+				h := newHarness(t, Config{})
+				alice, bob := neighbourID(t, "alice"), neighbourID(t, "bob")
+				h.enroll(alice, bob)
+				return func(t *testing.T) sending {
+					// A message of its own per row, since a row once
+					// replaced is not withdrawable again.
+					id, key := h.postToWithdraw(alice, bob, "")
+					return sending{
+						fields: fieldsOf(t, relayapi.WithdrawRequest{Key: key, Note: sealedTo(t, alice, bob.Public(), "withdrawn", "")}),
+						send: func(body []byte) (int, []byte) {
+							return h.do(alice, "POST", withdrawPath(bob.Fingerprint(), id), body, nil)
+						},
+					}
+				}
+			},
+		},
+		{
 			route: "streams", what: "stream request", status: http.StatusCreated,
 			start: func(t *testing.T) func(t *testing.T) sending {
 				h := newHarness(t, Config{})
@@ -311,7 +330,7 @@ func requestCases() []requestCase {
 }
 
 // TestEveryRequestTakesNothingNewButSections: the same four rows for each
-// of the eleven request bodies — the good body, the good body with a field
+// of the twelve request bodies — the good body, the good body with a field
 // it does not have, with a section the relay may ignore, and with one it
 // may not.
 func TestEveryRequestTakesNothingNewButSections(t *testing.T) {

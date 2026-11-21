@@ -272,20 +272,9 @@ func (s *Server) writeRefusal(w http.ResponseWriter, r *judged) {
 // than written, for the stream routes to judge an upload's channel again
 // after its open (R22).
 func (s *Server) judgeChannel(fp, name string, size int64, stream, forwarded bool) (string, *judged) {
-	if name == "" {
-		name = channels.Default
-	}
-	// Before the lookup, so the refusal never echoes a name longer than a
-	// directory could hold.
-	if err := channels.ValidName(name); err != nil {
-		return "", &judged{status: http.StatusBadRequest, msg: "channel " + err.Error()}
-	}
-	exists, ch, err := s.store.ChannelState(fp, name)
-	if err != nil {
-		return "", &judged{storage: true}
-	}
-	if !exists {
-		return "", &judged{status: http.StatusNotFound, code: relayapi.CodeNoSuchChannel, msg: fmt.Sprintf("no such channel %q", name)}
+	name, ch, refused := s.channelOf(fp, name)
+	if refused != nil {
+		return "", refused
 	}
 	now := s.cfg.Now()
 	if open, why := ch.OpenAt(now); !open {
@@ -304,6 +293,59 @@ func (s *Server) judgeChannel(fp, name string, size int64, stream, forwarded boo
 	// The channel's own rules, after its period and in Refuses' order. The
 	// route's own cap for this kind was judged before the channel was
 	// looked up, so these only ever tighten it.
+	return judgeRules(name, ch, size, stream, forwarded)
+}
+
+// channelOf is the name a post names held to the channel rule, default for
+// none, and the channel it names in the mailbox's directory, or the
+// refusal: a name no directory could hold, or one this mailbox's has not.
+func (s *Server) channelOf(fp, name string) (string, channels.Channel, *judged) {
+	if name == "" {
+		name = channels.Default
+	}
+	// Before the lookup, so the refusal never echoes a name longer than a
+	// directory could hold.
+	if err := channels.ValidName(name); err != nil {
+		return "", channels.Channel{}, &judged{status: http.StatusBadRequest, msg: "channel " + err.Error()}
+	}
+	exists, ch, err := s.store.ChannelState(fp, name)
+	if err != nil {
+		return "", channels.Channel{}, &judged{storage: true}
+	}
+	if !exists {
+		return "", channels.Channel{}, &judged{status: http.StatusNotFound, code: relayapi.CodeNoSuchChannel, msg: fmt.Sprintf("no such channel %q", name)}
+	}
+	return name, ch, nil
+}
+
+// judgeNote is the channel's judgement of a withdrawal note: the channel
+// exists and takes a message of the note's size, and neither its period
+// nor its streams rule is asked, since the note takes a row's place and
+// adds no row to the mailbox (D195). The note is an envelope
+// posted here, so the streams and the forwards rules could not refuse it
+// anyway; Refuses is asked with both false, and its size rule is the one
+// arithmetic a post is held to. That the channel is the row's own, which
+// the exemption from the period depends on, is the store's to ask once
+// the key has matched (Replace, R146 P7).
+//
+// It also says whether the channel is open now. A note stored on a
+// channel outside its period keeps no withdrawal key of its own, so it
+// cannot be withdrawn in turn: otherwise one message posted while the
+// channel was open would be a slot for new mail, note after note, for as
+// long as it stayed closed.
+func (s *Server) judgeNote(fp, name string, size int64) (string, bool, *judged) {
+	name, ch, refused := s.channelOf(fp, name)
+	if refused != nil {
+		return "", false, refused
+	}
+	open, _ := ch.OpenAt(s.cfg.Now())
+	name, refused = judgeRules(name, ch, size, false, false)
+	return name, open, refused
+}
+
+// judgeRules is a channel's own rules for a message of size wire bytes,
+// in Refuses' order, as a refusal or the name to store under.
+func judgeRules(name string, ch channels.Channel, size int64, stream, forwarded bool) (string, *judged) {
 	rule, why := ch.Refuses(size, stream, forwarded)
 	switch rule {
 	case channels.RuleNoStreams:

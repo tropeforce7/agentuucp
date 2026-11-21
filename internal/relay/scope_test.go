@@ -57,8 +57,13 @@ func TestTheClassifierAgreesWithTheRelay(t *testing.T) {
 		// A courier listing is read, not sent: a key unlocked to receive may
 		// ask which relays carry to this one, since that is what a recipient
 		// needs in order to admit them and be reachable at all.
-		"GET /v1/couriers":                         agent.ScopeReceive,
-		"POST /v1/mailbox/{fp}/knock":              agent.ScopeSend,
+		"GET /v1/couriers":            agent.ScopeReceive,
+		"POST /v1/mailbox/{fp}/knock": agent.ScopeSend,
+		// A withdrawal originates: it puts a note this identity sealed in
+		// the place of a message it sent, which a machine unlocked only to
+		// receive must not be able to do. Send by being absent from the
+		// receive set.
+		"POST /v1/mailbox/{fp}/withdraw/{id}":      agent.ScopeSend,
 		"POST /v1/mailbox/{fp}/streams":            agent.ScopeSend,
 		"PUT /v1/uploads/{id}":                     agent.ScopeSend,
 		"DELETE /v1/uploads/{id}":                  agent.ScopeSend,

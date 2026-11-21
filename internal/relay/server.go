@@ -234,6 +234,7 @@ func NewServer(store *Store, cfg Config) *Server {
 	s.route("GET /v1/mailbox/{fp}/card", s.authed(s.handleGetCard))
 	s.route("POST /v1/mailbox/{fp}", s.authedBody(s.postCap(), "", s.handlePost))
 	s.route("POST /v1/mailbox/{fp}/knock", s.authedBody(s.knockCap(), "", s.handleKnock))
+	s.route("POST /v1/mailbox/{fp}/withdraw/{id}", s.authedBody(relayapi.MaxWithdrawBytes+relayapi.FramingAllowance, "", s.handleWithdraw))
 	s.route("GET /v1/mailbox/{fp}", s.authed(s.handleList))
 	s.route("DELETE /v1/mailbox/{fp}/{id}", s.authed(s.handleDelete))
 
@@ -1359,23 +1360,7 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 		s.fail(w, http.StatusRequestEntityTooLarge, "envelope too large")
 		return
 	}
-	// Both post budgets are spent before the envelope is parsed or the
-	// recipient looked up, so a refused post costs the relay as little as
-	// possible.
-	if ok, retry := s.lim.posts.Allow(callerFP); !ok {
-		s.rateLimited(w, limitPosts, retry, "")
-		return
-	}
-	if ok, retry := s.lim.postBytes.AllowN(callerFP, size); !ok {
-		detail := ""
-		if burst := s.lim.postBytes.Burst(); burst > 0 && size > burst {
-			detail = fmt.Sprintf("; this message is %d bytes and a sender's whole "+
-				"post_bytes_per_hour budget is %d, so %s",
-				size, burst, relayapi.MsgWaitingWillNotHelp)
-			s.rateLimitedCode(w, limitPostBytes, retry, detail, relayapi.CodeOverBudget)
-			return
-		}
-		s.rateLimited(w, limitPostBytes, retry, detail)
+	if !s.chargePost(w, callerFP, size) {
 		return
 	}
 
@@ -1391,18 +1376,69 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 		s.fail(w, http.StatusBadRequest, "envelope is not addressed to this mailbox")
 		return
 	}
+	if !s.admitPoster(w, fp, callerFP) {
+		return
+	}
+	// After the allow list, deliberately: which channels exist is the
+	// owner's to publish to the senders they admit, and nobody else.
+	channel, ok := s.channelForPost(w, fp, env.Ch, int64(len(body)), false, false)
+	if !ok {
+		return
+	}
+	// What the row keeps of the key its sender may withdraw it by: from
+	// the recipient and the ciphertext, which are what the sender sealed,
+	// so the sender's own copy gives the same key (withdraw.EnvelopeKey).
+	// Never logged; the withdrawal route is what reads it.
+	stored := withdraw.Stored(withdraw.EnvelopeKey(env.To, env.CT))
+	s.storeOnce(w, fp, callerFP, env, func(f Forwarded) (int64, error) {
+		return s.store.Put(fp, channel, relayapi.KindEnvelope, "", stored, body, s.cfg.Limits.Quotas(), f)
+	})
+}
+
+// chargePost spends a post's two budgets, posts and post_bytes for size
+// bytes, before the body is parsed or the recipient looked up, so a refused
+// post costs the relay as little as possible. The withdrawal route spends
+// them alike, since a route that cost nothing would be a free question. It
+// reports whether the caller may go on; when not, the 429 is written.
+func (s *Server) chargePost(w http.ResponseWriter, callerFP string, size int64) bool {
+	if ok, retry := s.lim.posts.Allow(callerFP); !ok {
+		s.rateLimited(w, limitPosts, retry, "")
+		return false
+	}
+	if ok, retry := s.lim.postBytes.AllowN(callerFP, size); !ok {
+		detail := ""
+		if burst := s.lim.postBytes.Burst(); burst > 0 && size > burst {
+			detail = fmt.Sprintf("; this message is %d bytes and a sender's whole "+
+				"post_bytes_per_hour budget is %d, so %s",
+				size, burst, relayapi.MsgWaitingWillNotHelp)
+			s.rateLimitedCode(w, limitPostBytes, retry, detail, relayapi.CodeOverBudget)
+			return false
+		}
+		s.rateLimited(w, limitPostBytes, retry, detail)
+		return false
+	}
+	return true
+}
+
+// admitPoster is a post's judgement of the mailbox and the caller, in the
+// post's own words: the mailbox exists and is not blocked, is not a
+// courier's, and its allow list admits the caller. The withdrawal route
+// asks it too, before it looks at any key, so a sender the owner no longer
+// admits cannot withdraw (F6). It reports whether the caller may go on;
+// when not, the refusal is written.
+func (s *Server) admitPoster(w http.ResponseWriter, fp, callerFP string) bool {
 	exists, blocked, err := s.store.MailboxState(fp)
 	if err != nil {
 		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
-		return
+		return false
 	}
 	if !exists {
 		s.fail(w, http.StatusNotFound, "no such mailbox")
-		return
+		return false
 	}
 	if blocked {
 		s.fail(w, http.StatusForbidden, "recipient is blocked on this relay")
-		return
+		return false
 	}
 	// A mailbox that belongs to a neighbouring relay's courier refuses
 	// every sender, as a mailbox whose allow list named nobody would. The
@@ -1420,41 +1456,42 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 	// forwards only work where it is listed.
 	if s.isCourierMailbox(fp) {
 		s.fail(w, http.StatusForbidden, msgNotAllowed)
-		return
+		return false
 	}
 	allowed, err := s.store.MayPost(fp, callerFP)
 	if err != nil {
 		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
-		return
+		return false
 	}
 	if !allowed {
 		s.fail(w, http.StatusForbidden, msgNotAllowed)
-		return
+		return false
 	}
-	// After the allow list, deliberately: which channels exist is the
-	// owner's to publish to the senders they admit, and nobody else.
-	channel, ok := s.channelForPost(w, fp, env.Ch, int64(len(body)), false, false)
-	if !ok {
-		return
-	}
-	// A post is stored once by its envelope (S50): a sender whose answer
-	// was lost on the way back posts the same envelope again, and it is
-	// answered as the first was, with the first row's id, nothing stored
-	// and nothing charged. The hash is a forward's, so the same envelope
-	// is one message whichever way it came; the window is fixed, so a
-	// relay with couriers off holds a post to it too (D133), held to
-	// max_hops forward_ttls (D137); and the hash spends the poster's
-	// carried share, as a forward's does, so one poster's standing hashes
-	// stay within it, while a poster over its share is stored without the
-	// hash and never refused (D135, amended). This is the cheap answer; Put's transaction
-	// decides.
+	return true
+}
+
+// storeOnce is the post's storing sequence, which the post and the
+// withdrawal routes both run, so a repeat is answered alike on both (R146,
+// P5). put stores the message with the carried-table entry it is given.
+//
+// A post is stored once by its envelope (S50): a sender whose answer
+// was lost on the way back posts the same envelope again, and it is
+// answered as the first was, with the first row's id, nothing stored
+// and nothing charged. The hash is a forward's, so the same envelope
+// is one message whichever way it came; the window is fixed, so a
+// relay with couriers off holds a post to it too (D133), held to
+// max_hops forward_ttls (D137); and the hash spends the poster's
+// carried share, as a forward's does, so one poster's standing hashes
+// stay within it, while a poster over its share is stored without the
+// hash and never refused (D135, amended). This is the cheap answer; the
+// store's transaction decides.
+//
+// It writes the answer, the stored row's id or the one the envelope was
+// stored as before, or the refusal, and wakes the mailbox's listing once a
+// row is stored.
+func (s *Server) storeOnce(w http.ResponseWriter, fp, callerFP string, env *relayapi.Carried, put func(Forwarded) (int64, error)) {
 	now := s.cfg.Now()
 	hash := CarriedHash(env)
-	// What the row keeps of the key its sender may withdraw it by: from
-	// the recipient and the ciphertext, which are what the sender sealed,
-	// so the sender's own copy gives the same key (withdraw.EnvelopeKey).
-	// Never logged; nothing reads it until the withdrawal route.
-	stored := withdraw.Stored(withdraw.EnvelopeKey(env.To, env.CT))
 	var wrote Forwarded
 	if first, ok, err := s.store.deliveredAs(hash, now); err != nil {
 		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)
@@ -1474,16 +1511,16 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 			}
 		}()
 	}
-	put := func(f Forwarded) (int64, error) {
-		id, err := s.store.Put(fp, channel, relayapi.KindEnvelope, "", stored, body, s.cfg.Limits.Quotas(), f)
+	store := func(f Forwarded) (int64, error) {
+		id, err := put(f)
 		if err == nil {
 			wrote = f
 		}
 		return id, err
 	}
-	id, err := put(once)
+	id, err := store(once)
 	if s.roomFreed(err) || s.carriedFreed(err) {
-		id, err = put(once)
+		id, err = store(once)
 	}
 	if errors.Is(err, ErrCarried) {
 		// Posted again between the check and the transaction, and stored:
@@ -1499,16 +1536,16 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 			s.writeJSON(w, http.StatusOK, relayapi.PostResponse{ID: first})
 			return
 		}
-		id, err = put(Forwarded{})
+		id, err = store(Forwarded{})
 	}
 	if errors.Is(err, ErrCarriedFull) {
 		// The carried table at its ceiling refuses no post: the post is
 		// stored without its hash, and a retry of it is stored again
 		// (D134).
-		id, err = put(Forwarded{})
+		id, err = store(Forwarded{})
 	}
 	if s.roomFreed(err) {
-		id, err = put(Forwarded{})
+		id, err = store(Forwarded{})
 	}
 	switch {
 	case errors.Is(err, ErrMailboxFull):
@@ -1523,6 +1560,13 @@ func (s *Server) handlePost(w http.ResponseWriter, r *http.Request, body []byte,
 		return
 	case errors.Is(err, ErrNoMailbox):
 		s.fail(w, http.StatusNotFound, "no such mailbox")
+		return
+	case errors.Is(err, ErrNotWithdrawable):
+		// The withdrawal's, alike for every row the key does not open.
+		s.refuse(w, http.StatusNotFound, relayapi.RefusalNotWithdrawable)
+		return
+	case errors.Is(err, ErrNoteChannel):
+		s.fail(w, http.StatusBadRequest, "the note is not on the channel of the message it takes the place of")
 		return
 	case err != nil:
 		s.refuse(w, http.StatusInternalServerError, relayapi.RefusalStorageError)

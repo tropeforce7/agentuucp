@@ -4,6 +4,7 @@
 package relay
 
 import (
+	"crypto/subtle"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -40,6 +41,15 @@ var (
 	ErrKnocksWaiting = errors.New("relay: the mailbox has as many knocks waiting as allowed")
 	// ErrTooManyMailboxes means the relay is not accepting new registrations.
 	ErrTooManyMailboxes = errors.New("relay: mailbox limit reached")
+)
+
+// Withdrawal refusals, Replace's.
+var (
+	// ErrNotWithdrawable is a row the key does not open: none by that id
+	// in the mailbox, a knock, a row that keeps no key, or another key.
+	ErrNotWithdrawable = errors.New("relay: no message here can be withdrawn with that key")
+	// ErrNoteChannel is a note whose channel is not its message's.
+	ErrNoteChannel = errors.New("relay: the note is not on the channel of the message it takes the place of")
 )
 
 // Enrolment failures. Each becomes its own message, because "your token did
@@ -913,6 +923,36 @@ func (s *Store) Put(toFP, channel, kind, knocker, stored string, raw []byte, q Q
 		return 0, fmt.Errorf("relay: a %s row with via %q carries a withdrawal key: only an envelope posted here has one, "+
 			"and it has a key's shape", kind, f.Via)
 	}
+	// The knocker's earlier knock goes first, so the room and the cap are
+	// judged on what is left.
+	return s.storeRow(toFP, newRow{channel: channel, kind: kind, knocker: knocker, stored: stored}, raw, q, f,
+		func(tx *sql.Tx) (int64, error) { return replaceKnock(tx, toFP, kind, knocker) })
+}
+
+// newRow is what a message row is written with beside its body: the
+// channel, the kind, the knocker on a knock, and the stored withdrawal key
+// on an envelope posted here.
+type newRow struct {
+	channel, kind, knocker, stored string
+}
+
+// storeRow is how a message row is written, by Put and by Replace alike,
+// so the two store a message one way: the body to a temporary file and
+// fsynced; then, in one transaction, makeRoom's removal of the row this
+// one takes the place of, if any, the carried hash, roomFor's answer on
+// what is left, the knock cap for a knock, the row, the hash naming it,
+// the counters, and the file renamed into place before the commit; and
+// after the commit, the replaced row's file removed.
+//
+// That ordering is what makes the invariant hold: after a commit there is
+// always a file, and every crash leaves at most an unreferenced file for
+// the sweep, never a row promising a message that is not there. makeRoom
+// runs first, so that a replacement refused writes nothing, a carried
+// hash included, and so that room is judged after the row it replaces has
+// gone from it: a knock that nets to zero is never refused by a mailbox at
+// its message quota, and nor is a note in a message's place.
+func (s *Store) storeRow(toFP string, r newRow, raw []byte, q Quotas, f Forwarded,
+	makeRoom func(tx *sql.Tx) (replaced int64, err error)) (int64, error) {
 	size := int64(len(raw))
 	tmp, err := s.writeTemp(raw)
 	if err != nil {
@@ -927,6 +967,10 @@ func (s *Store) Put(toFP, channel, kind, knocker, stored string, raw []byte, q Q
 	}
 	defer tx.Rollback()
 
+	replaced, err := makeRoom(tx)
+	if err != nil {
+		return 0, err
+	}
 	// The hash goes in before anything is stored, exactly as it does when
 	// an envelope is queued for a neighbour rather than delivered: the
 	// carried table is what makes a relay never carry *or deliver* one
@@ -938,18 +982,12 @@ func (s *Store) Put(toFP, channel, kind, knocker, stored string, raw []byte, q Q
 			return 0, err
 		}
 	}
-	// The knocker's earlier knock goes first, so the room and the cap are
-	// judged on what is left.
-	replaced, err := replaceKnock(tx, toFP, kind, knocker)
-	if err != nil {
-		return 0, err
-	}
 	// Room is one question with one answer, roomFor's, and open uploads'
 	// reservations are in it: an envelope is charged as a stream is.
 	if err := roomFor(tx, toFP, size, q); err != nil {
 		return 0, err
 	}
-	if kind == relayapi.KindKnock {
+	if r.kind == relayapi.KindKnock {
 		if err := roomForKnock(tx, toFP, q); err != nil {
 			return 0, err
 		}
@@ -957,7 +995,7 @@ func (s *Store) Put(toFP, channel, kind, knocker, stored string, raw []byte, q Q
 
 	res, err := tx.Exec(`INSERT INTO messages (to_fp, received, size, kind, channel, knocker, via, withdraw)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		toFP, time.Now().UTC().Format(time.RFC3339), size, kind, channel, knocker, f.Via, stored)
+		toFP, time.Now().UTC().Format(time.RFC3339), size, r.kind, r.channel, r.knocker, f.Via, r.stored)
 	if err != nil {
 		return 0, err
 	}
@@ -995,6 +1033,61 @@ func (s *Store) Put(toFP, channel, kind, knocker, stored string, raw []byte, q Q
 	// and the startup sweep takes a file no row names.
 	if replaced != 0 {
 		s.removeMessage(toFP, replaced)
+	}
+	return id, nil
+}
+
+// Replace puts a withdrawal note in the place of row id of mailbox toFP,
+// in one transaction: the row is held to the key (replaceRow) and taken
+// out with its count and bytes, and then the note is stored exactly as
+// Put stores a post (storeRow), on the channel given, with noteStored as
+// its own column. key is withdraw.Stored of the key the caller showed.
+//
+// ErrNotWithdrawable is every row the key does not open, alike;
+// ErrNoteChannel is a note whose channel is not the row's own, asked
+// only once the key has matched. Either way nothing is written. The
+// room and the relay's other refusals are Put's.
+func (s *Store) Replace(toFP string, id int64, key, noteStored, channel string, raw []byte, q Quotas, f Forwarded) (int64, error) {
+	if !withdraw.Valid(key) || (noteStored != "" && !withdraw.Valid(noteStored)) {
+		return 0, ErrNotWithdrawable
+	}
+	return s.storeRow(toFP, newRow{channel: channel, kind: relayapi.KindEnvelope, stored: noteStored}, raw, q, f,
+		func(tx *sql.Tx) (int64, error) { return replaceRow(tx, toFP, id, key, channel) })
+}
+
+// replaceRow is Replace's removal of the row the note takes the place of,
+// inside the transaction, returning its id for its file to be removed
+// after the commit. The row must be mailbox toFP's own, not a knock, and
+// keep a column equal to key under a constant-time comparison; each of
+// those is the one ErrNotWithdrawable, so the answer says nothing about
+// which. Then its channel must be channel, the note's: the period a
+// withdrawal is spared is the row's own channel's alone (D195, R146), so
+// a note never lands on another channel by this route. The lookup is by
+// (to_fp, id), which messages_to serves, so a row two copies of one post
+// left, each with the same column (D134), is withdrawn by its own id and
+// the other stays.
+func replaceRow(tx *sql.Tx, toFP string, id int64, key, channel string) (int64, error) {
+	var size int64
+	var kind, rowChannel, column string
+	err := tx.QueryRow(`SELECT size, kind, channel, withdraw FROM messages WHERE to_fp = ? AND id = ?`, toFP, id).
+		Scan(&size, &kind, &rowChannel, &column)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, ErrNotWithdrawable
+	}
+	if err != nil {
+		return 0, err
+	}
+	if kind == relayapi.KindKnock || column == "" || subtle.ConstantTimeCompare([]byte(column), []byte(key)) != 1 {
+		return 0, ErrNotWithdrawable
+	}
+	if rowChannel != channel {
+		return 0, ErrNoteChannel
+	}
+	if _, err := tx.Exec(`DELETE FROM messages WHERE to_fp = ? AND id = ?`, toFP, id); err != nil {
+		return 0, err
+	}
+	if err := adjustCounters(tx, toFP, -1, -size); err != nil {
+		return 0, err
 	}
 	return id, nil
 }

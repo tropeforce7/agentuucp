@@ -309,6 +309,19 @@ type (
 		CT []byte `json:"ct"`
 		Ch string `json:"ch,omitempty"`
 	}
+	// WithdrawRequest asks the relay to put a note in the place of one of
+	// a mailbox's messages, POST /v1/mailbox/{fp}/withdraw/{id}. Key is
+	// the message's withdrawal key, 64 lowercase hex characters, which
+	// only somebody holding its sealed bytes can make
+	// (withdraw.EnvelopeKey); the relay compares the stored form of it
+	// with the row's and learns nothing else from it. Note is the note's
+	// outer envelope, the four fields of Carried, kept as the bytes given:
+	// it is what the relay stores, as a post's body is.
+	WithdrawRequest struct {
+		Sections
+		Key  string          `json:"key"`
+		Note json.RawMessage `json:"note"`
+	}
 	// ForwardResponse is the id of the row the relay queued, which the
 	// poster reads back in its own queue listing. A 409 carries an id too
 	// when the repeat is a retry after a lost answer: the caller's own row
@@ -496,8 +509,11 @@ func (s *Sections) SectionList() []wire.Section { return s.Sections }
 // v0.18.0: the relay takes a channel directory of version 2, whose
 // channels may carry max_bytes, no_streams and no_forwards, and enforces
 // them with CodeChannelSize, CodeChannelStreams and CodeChannelForwards.
-// A relay at 1 refuses such a directory at the push.
-const WireLevel = 2
+// A relay at 1 refuses such a directory at the push. 3 is v0.22.0: the
+// relay takes a withdrawal, POST /v1/mailbox/{fp}/withdraw/{id}, which a
+// relay below it does not have, so a sender's command posts the note by
+// the ordinary route there instead.
+const WireLevel = 3
 
 // CodeNeedsNewer is the error code of a refusal of a body that carries a
 // critical section the relay does not know (D37), and MsgNeedsNewer its one
@@ -545,7 +561,17 @@ const (
 	CodeChannelStreams  = "channel-streams"
 	CodeChannelForwards = "channel-forwards"
 	CodeChannelSize     = "channel-size"
+	// CodeNotWithdrawable is a withdrawal the relay will not make, 404
+	// with MsgNotWithdrawable: no such row in that mailbox, a knock's
+	// row, a row that keeps no key, or a key that is not the row's, all
+	// answered alike, so that nobody without the key learns anything
+	// about the mailbox. A sender acts on it by posting the note by the
+	// ordinary route.
+	CodeNotWithdrawable = "not-withdrawable"
 )
+
+// MsgNotWithdrawable is CodeNotWithdrawable's sentence.
+const MsgNotWithdrawable = "no message here can be withdrawn with that key"
 
 // MsgTooManyRecipients is the sentence of CodeTooManyRecipients: the count
 // the request carried and the number this relay takes.
@@ -587,6 +613,7 @@ var (
 	RefusalCertMismatch     = Refusal{CodeCertMismatch, MsgCertMismatch}
 	RefusalNoAdministrators = Refusal{CodeNoAdministrators, MsgNoAdministrators}
 	RefusalCourierClock     = Refusal{CodeCourierClock, MsgCourierClock}
+	RefusalNotWithdrawable  = Refusal{CodeNotWithdrawable, MsgNotWithdrawable}
 )
 
 const (
@@ -1037,6 +1064,19 @@ const (
 // registration, a certificate request, an admin token, a stream's open —
 // none of which reaches a tenth of it.
 const FramingAllowance = 1 << 16
+
+// MaxWithdrawBytes is the largest withdrawal note this client seals, as
+// it marshals one: measured at every maximum, a 64-byte channel name both
+// inside the seal and on the outer field and a reason at the subject's
+// cap of 4,096 bytes, each a "<", which encoding/json writes as six bytes
+// and writes again inside the sealed record, in the text and in the
+// withdrawal section both. The measured figure is 70,335 bytes, and a
+// test seals that note and holds it to this number exactly. The
+// withdrawal route reads a body of at most this and FramingAllowance,
+// which the key and the request's own JSON fit inside many times over.
+// It is under DefaultMaxBytes and MaxPageBytes, so a note is a row like
+// any other.
+const MaxWithdrawBytes = 70_335
 
 // MaxPageBytes is the most a relay puts in one listing page of envelopes,
 // whatever its max_bytes: the page ends before an envelope that would take

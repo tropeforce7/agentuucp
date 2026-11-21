@@ -98,9 +98,11 @@ func TestAnOverCapBodyIsRefusedAlikeForAKnownAndAnUnknownFingerprint(t *testing.
 			{"an unregistered", h.fpOf(t, "nobody")}}
 	}
 	post := func(fp string) string { return "/v1/mailbox/" + fp }
+	withdrawal := func(fp string) string { return "/v1/mailbox/" + fp + "/withdraw/1" }
 	forward := func(string) string { return "/v1/forward" }
 	failed := func(string) string { return "/v1/forward/failed" }
 	postCap := func(h *harness) int64 { return h.server.postCap() }
+	withdrawCap := func(*harness) int64 { return relayapi.MaxWithdrawBytes + relayapi.FramingAllowance }
 	forwardCap := func(h *harness) int64 { return h.server.forwardCap() }
 	reportCap := func(*harness) int64 { return relayapi.MaxReportBytes }
 
@@ -112,6 +114,7 @@ func TestAnOverCapBodyIsRefusedAlikeForAKnownAndAnUnknownFingerprint(t *testing.
 		limit func(*harness) int64
 	}{
 		{"a post", mailbox, post, postCap},
+		{"a withdrawal", mailbox, withdrawal, withdrawCap},
 		{"a forward", forwarding, forward, forwardCap},
 		{"a forward's report", forwarding, failed, reportCap},
 	} {

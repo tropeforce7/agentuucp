@@ -82,10 +82,11 @@ func TestEveryBodyCarriesSectionsAndNoRowDoes(t *testing.T) {
 			t.Errorf("row %s is no longer in relayapi.go; take it out of the list", name)
 		}
 	}
-	// The eleven of the pre-check (ruling 66); a twelfth is placed here
-	// by changing the number, which is the point of counting.
-	if requests != 11 {
-		t.Errorf("the walk found %d request bodies, want 11", requests)
+	// The eleven of the pre-check (ruling 66) and the withdrawal's of
+	// v0.22.0; a thirteenth is placed here by changing the number, which
+	// is the point of counting.
+	if requests != 12 {
+		t.Errorf("the walk found %d request bodies, want 12", requests)
 	}
 	if len(found) < 40 {
 		t.Fatalf("the walk found %d struct types; it is not reading the file", len(found))
@@ -99,7 +100,7 @@ func TestARequestFromThisBuildWritesNoSectionsKey(t *testing.T) {
 	for _, req := range []any{
 		RegisterRequest{}, AllowRequest{}, CardRequest{}, ChannelsRequest{}, ForwardRequest{},
 		ForwardFailedRequest{}, CertRequest{}, RevokeCertRequest{}, BlockRequest{},
-		RegisterTokenRequest{}, OpenStreamRequest{},
+		RegisterTokenRequest{}, OpenStreamRequest{}, WithdrawRequest{},
 	} {
 		raw, err := json.Marshal(req)
 		if err != nil {

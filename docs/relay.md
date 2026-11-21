@@ -14,6 +14,7 @@ The relay binary, its settings and limits, its certificates, and how it is admin
   - [1.8 Client certificates](#18-client-certificates)
   - [1.9 Keeping a relay private](#19-keeping-a-relay-private)
   - [1.10 Forwarding to another relay](#110-forwarding-to-another-relay)
+  - [1.11 Withdrawing a message](#111-withdrawing-a-message)
 - [2. Administering a relay](#2-administering-a-relay)
   - [2.1 Who is an administrator](#21-who-is-an-administrator)
   - [2.2 auu-admin](#22-auu-admin)
@@ -655,14 +656,19 @@ protocol's ceiling, there.
 [`docs/releases/v0.16.0.md`](releases/v0.16.0.md),
 [`docs/releases/v0.17.0.md`](releases/v0.17.0.md) and
 [`docs/releases/v0.18.0.md`](releases/v0.18.0.md) say what else changed,
-and the last takes a v0.14.0 relay straight to v0.18.0.
+and the last takes a v0.14.0 relay straight to v0.18.0. A v0.22.0 relay
+is at wire level 3 and takes a withdrawal; an earlier one has no such
+route, and a sender's note goes to it by the ordinary route, so the
+relay's copy of the message stays.
+[`docs/releases/v0.22.0.md`](releases/v0.22.0.md) says what else changed.
 
 `GET /v1/health` is exempt from all of it, so monitoring does not flap while
 the relay is under attack. Its answer says the relay's `max_bytes`,
 `knock_max_bytes`, registration mode and `wire_level`: a whole number that
 rises when a release gives the relay something a client may depend on. It
-is 1 from v0.15.0 and 2 from v0.18.0, which takes a version 2 channel
-directory and enforces its rules. `auu` refuses a relay's health answer without it. The
+is 1 from v0.15.0, 2 from v0.18.0, which takes a version 2 channel
+directory and enforces its rules, and 3 from v0.22.0, which takes a
+withdrawal (section 1.11). `auu` refuses a relay's health answer without it. The
 most recipients a message to several may name, `max_recipients` as it is in
 force, comes in a section of the answer, `max-recipients`, rather than a
 field, so that an `auu` from before it reads the answer still. So does,
@@ -735,6 +741,7 @@ status and the request. The codes this release writes:
 | `no-administrators` | 403 | the relay has no administrators |
 | `courier-clock` | 503 | a neighbour's courier whose clock is more than a minute and at most five from this relay's (past five its request is a `401`, as anyone's is): `this relay's clock and yours differ by more than a minute; relays keep to the minute`, with `Retry-After: 60` |
 | `too-many-recipients` | 413 | a copy of a message to more recipients than `max_recipients`, naming both numbers |
+| `not-withdrawable` | 404 | a withdrawal whose key opens no row of that mailbox: `no message here can be withdrawn with that key` |
 
 An owner document, the allow list, the card or the channel directory,
 is refused `400` with no code when it was issued more than five minutes
@@ -1710,6 +1717,81 @@ read, so the whole list is one answer. A relay with no `courier` block answers
 an empty list rather than an error. It forwards nothing, and that is an
 answer. A line added to or removed from the file shows up in the next answer
 without a restart, as it does everywhere else the file is read.
+
+### 1.11 Withdrawing a message
+
+A sender may withdraw a message it posted, and a short note takes its
+place: `POST /v1/mailbox/{fp}/withdraw/{id}`, signed as a post is, whose
+body is `{"key": …, "note": …}`. The key is the message's withdrawal key,
+64 lowercase hex characters, which only somebody holding the message's
+sealed bytes can make; the note is the note's outer envelope, the four
+fields a post carries, stored as given. The answer is a post's, the
+note's row id.
+
+The key is derived, never minted, so no answer carries one. It is SHA-256
+under the domain `ccx-withdraw-v1` over the recipient's fingerprint and
+the envelope's ciphertext, each length-prefixed, or over a stream's first
+4,096 bytes. Beside every message posted to it, and every stream placed,
+the relay keeps the SHA-256 of that key in the `withdraw` column of its
+`messages` table; a knock, a message a courier delivered and every row
+from before v0.22.0 keep the empty string, and none of them can be
+withdrawn. The column is in no answer and on no log line.
+
+The route reads at most 70,335 bytes of note and 64 KiB of framing:
+70,335 is the largest withdrawal note, measured with a 64-byte channel
+name and a reason at its cap. It runs in the post's order, each
+step refusing before the next, and each refusal is the post's own:
+
+1. The certificate, the signature and the body's cap, as on every route.
+2. The id, a positive integer, or `400`.
+3. The sender's `posts_per_minute` and `post_bytes_per_hour` budgets for
+   the body's size, as a post spends them, before anything is parsed: a
+   refused withdrawal costs what a refused post costs.
+4. The request read strictly, the key's shape, and the note as a post's
+   envelope is read, addressed to the mailbox in the path and no larger
+   than `max_bytes`.
+5. The mailbox there and not blocked, not a courier's, and admitting the
+   sender; the note's channel there in the owner's directory and the note
+   within its `max_bytes`. The channel's period is not asked, and nor is
+   `no_streams`: the note takes a row's place and adds no row to the
+   mailbox, so a message posted while its channel was open can be
+   withdrawn after it closes. A note stored on a channel outside its
+   period keeps no withdrawal key of its own and cannot be withdrawn in
+   turn, so the period is spared once for each message and a message is
+   never a way to deliver new mail to a closed channel. A channel whose
+   `max_bytes` is under the note's size took the message and refuses its
+   note.
+6. The store, in one transaction. The row must be that mailbox's, not a
+   knock, and keep the stored form of the key shown. Every row the key
+   does not open is the one answer, `404` with `not-withdrawable`, so
+   nobody without the key learns anything about a mailbox. Then the note
+   must be on the row's own channel, refused `400` otherwise, so the
+   period it is spared is that channel's alone. The row goes with its
+   count and its bytes, and the note is stored as a post is, under a new
+   id above the message's, with room judged after the message has gone:
+   a mailbox at its message count takes the note, and a note larger
+   than its message into a mailbox with no room for the difference is
+   `507` with nothing changed. The message's file is removed after the
+   commit; a crash before that leaves a file no row names, which the
+   sweep at the next start takes.
+
+A withdrawal is stored once by its note, as a post is by its envelope: one
+whose answer was lost and is asked again, or whose note is then posted by
+the ordinary route, is answered with the note's row and nothing stored.
+That holds when the note was stored with its carried hash. A sender over
+its carried share, or a relay whose carried table is at its ceiling, has
+the note stored without one, as a post is; a repeat then finds the row
+gone and is `404`, and the note posted after it by the ordinary route is
+stored a second time.
+
+The holder of the right key learns one thing no other route says:
+whether the relay still held the message. For a recipient whose channel
+does not keep, that says whether they have fetched it.
+
+What a withdrawal does not do: it removes nothing from a recipient's
+machine, and a message that went by way of another relay is not removed
+by this route, since the relay it was delivered at is not the one its
+sender posts to.
 
 ## 2. Administering a relay
 

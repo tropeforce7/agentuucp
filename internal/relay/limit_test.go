@@ -132,7 +132,7 @@ func TestLimitListingParameters(t *testing.T) {
 	}
 }
 
-// TestLimitMessageIDInPath: the id in a delete or a blob path is
+// TestLimitMessageIDInPath: the id in a delete, a blob or a withdrawal path is
 // positive: zero, a negative, the type's minimum, the text one past the
 // type's maximum, a sign inside the digits and a digit outside ASCII are
 // each 400 "bad message id" before the store is asked; a plus sign and
@@ -155,6 +155,23 @@ func TestLimitMessageIDInPath(t *testing.T) {
 			if status != http.StatusNotFound {
 				t.Errorf("%s %s: %d %s; want 404", route.method, id, status, body)
 			}
+		}
+	}
+	// The withdrawal's id, the same rule before the budgets and the body
+	// are read; the two that reach the store meet no row, the one
+	// not-withdrawable.
+	note := sealedTo(t, alice, bob.Public(), "withdrawn", "")
+	req := relayapi.WithdrawRequest{Key: strings.Repeat("a", 64), Note: note}
+	for _, id := range []string{"0", "-1", "-0", strconv.FormatInt(math.MinInt64, 10), "9223372036854775808", "1-2", "\u0661", "0x1", "%201"} {
+		status, body := h.do(alice, "POST", "/v1/mailbox/"+bob.Fingerprint()+"/withdraw/"+id, req, nil)
+		if status != http.StatusBadRequest || !strings.Contains(errorText(t, body), "bad message id") {
+			t.Errorf("a withdrawal of %s: %d %s; want 400 bad message id", id, status, body)
+		}
+	}
+	for _, id := range []string{"+1", "9223372036854775807"} {
+		status, body := h.do(alice, "POST", "/v1/mailbox/"+bob.Fingerprint()+"/withdraw/"+id, req, nil)
+		if e := refusal(t, body); status != http.StatusNotFound || e.Code != relayapi.CodeNotWithdrawable {
+			t.Errorf("a withdrawal of %s: %d %s; want 404 not-withdrawable", id, status, body)
 		}
 	}
 }

@@ -52,6 +52,23 @@ already. The database alone does not give it. A knock, a message delivered
 by another relay's courier, whose ciphertext every relay it crossed
 holds, and every message stored before v0.22.0 keep none.
 
+A withdrawal is the one route that reads the key. The caller shows it,
+with a note, and the relay compares the stored form of what it was shown
+with the row's, under a constant-time comparison, and puts the note in
+the row's place in one transaction. The route is a post in every other
+respect: signed, charged to the caller's post budgets, held to the
+mailbox's allow list and to the note's channel, refused for a mailbox
+that is blocked or a courier's. What it does not ask is who the caller
+is beside that: the relay does not know who sent the message, and the
+key is what proves it, since only somebody holding the sealed bytes can
+make it. Every row the key does not open, whatever the reason, is the
+one `404` under `not-withdrawable`, so nobody without the key learns
+anything about a mailbox. The holder of the right key learns one thing
+no other route says: whether the relay still held the message. For a
+recipient whose channel does not keep, that says whether they have
+fetched it. It is accepted so that the sender can be told what happened.
+A withdrawal removes nothing from a recipient's machine.
+
 Beside the rows, per mailbox, the three documents an owner signs and
 pushes: the channel directory, the allow list, and the card, which says
 the owner's name and two words of the owner's, `listed` and `knocks`. Each
@@ -954,6 +971,14 @@ the box. The relay sees that you posted to Bob, and stores no sender —
 except on a knock, whose row names its knocker for as long as the row
 lives, which is the one exception above.
 
+**The withdrawal key, of each form.** For an envelope it is SHA-256 under
+`ccx-withdraw-v1` over `to` and `ct`, each preceded by its length as eight
+bytes, which is the carried hash's framing under another domain, so the
+same bytes never give one value for both. The channel is left out, as it
+is from the carried hash: it is outside the seal. A sender computes it
+from the envelope it sealed, and the relay from the envelope it parsed,
+so a post spaced differently by a hop on the way gives the same key.
+
 **The version, outside and in.** A message is version 1, or version 2 when it
 carries a section its sender marked critical: a part a reader that does not
 understand it must not read past. A reader from before sections refuses any
@@ -1431,7 +1456,8 @@ version it does not know, since what the version means is between the
 sender and the recipient. The relay's
 `wire_level` on its health answer says what it can do: 2 from v0.18.0,
 which takes a version 2 channel directory, whose channels may carry a
-rule an older relay refuses at the push, and enforces its rules. And a refusal is
+rule an older relay refuses at the push, and enforces its rules; 3 from
+v0.22.0, which takes a withdrawal. And a refusal is
 told apart by its `code`, never by its words, so a relay may change its
 words and add codes without a client misreading either.
 [`docs/client.md`](client.md) says what this means for a person upgrading,
@@ -1745,6 +1771,17 @@ receiver's disk still spells as one is refused where the file is opened,
 as the manifest's fault. Two Unicode normalisations of one name, on APFS,
 are such a pair. So the stream is kept under `damaged/` and acknowledged
 rather than met again at every fetch.
+
+**A stream's withdrawal key is over its first 4,096 bytes**, with the
+recipient's fingerprint, under the framing an envelope's is under, and
+not over the whole stream: a stream is up to gigabytes, and the relay
+computes the key as it places one, from its file's first bytes, so the
+placement reads 4 KiB and never the whole. That is enough because those
+bytes begin with `enc`, the seal's own 1120-byte encapsulation, which is
+another value for every seal, so two streams' keys differ wherever their
+payloads are the same, and the recipient's fingerprint inside the hash
+keeps two recipients' copies apart as well. The sender computes it from
+the sealed file it uploads, byte for byte the bytes the relay writes.
 
 Three things fall out of that shape:
 
