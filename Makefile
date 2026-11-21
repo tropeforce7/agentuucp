@@ -15,8 +15,12 @@ ARCH ?= amd64
 relay-linux:
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) $(GO) build -o $(BIN)/linux_$(ARCH)/auu-relay ./cmd/auu-relay
 
+# go test's default timeout is ten minutes for each package, and
+# internal/auu alone now runs within about a minute of it, so a slow
+# machine ends a passing run in a panic that says nothing about the code.
+# Twenty is the margin; a test that hangs is still stopped and named by go.
 test:
-	$(GO) test ./...
+	$(GO) test -timeout 20m ./...
 
 race:
 	$(GO) test -race -count=1 -timeout 60m ./...

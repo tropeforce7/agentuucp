@@ -10,7 +10,9 @@ grep. The specifications are the maintainers'; ask the maintainers if you lack
 one. `make race` carries `-timeout 60m`, because `internal/auu` under the race
 detector takes about ten minutes on a fast machine and longer on a CI runner,
 and `go test`'s default of ten minutes would end it in a panic that says
-nothing about the code.
+nothing about the code. `make test` carries `-timeout 20m` for the same
+reason: on a developer's machine `internal/auu` alone runs within about a
+minute of that default.
 
 ## What a test is for
 
